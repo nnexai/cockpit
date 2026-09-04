@@ -1,0 +1,504 @@
+{
+  "run_id": "run-20260904T214621Z",
+  "initial_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+  "current_integration_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+  "stage": "S01",
+  "selected_stories": [
+    "CLEAN-01",
+    "BOOT-01",
+    "TERM-01",
+    "TERM-02",
+    "TERM-03",
+    "REPAIR-01",
+    "REPAIR-02",
+    "REPAIR-03",
+    "REPAIR-04",
+    "REPAIR-05",
+    "CLEAN-05",
+    "CLEAN-02",
+    "CLEAN-03",
+    "CLEAN-04",
+    "FND-01",
+    "FND-02",
+    "FND-03",
+    "PANE-01",
+    "LIFE-01",
+    "LIFE-02",
+    "LIFE-03",
+    "LIFE-04",
+    "CTX-01",
+    "PANE-02",
+    "VIEW-01",
+    "VIEW-02",
+    "REF-01",
+    "REF-02",
+    "VIEW-03",
+    "CTX-02",
+    "SRC-01",
+    "SRC-02",
+    "SRC-03",
+    "REV-01",
+    "REV-02",
+    "SRC-04",
+    "SRC-05"
+  ],
+  "parked_stories": [
+    "active Kitty TGP",
+    "PANE-03",
+    "SRC-06",
+    "OPT-01",
+    "OPT-02",
+    "OPT-03",
+    "OPT-04",
+    "OPT-05",
+    "OPT-06",
+    "OPT-07",
+    "OPT-08",
+    "OPT-09",
+    "OPT-10",
+    "OPT-11",
+    "OPT-12",
+    "OPT-13",
+    "side-by-side diff",
+    "larger follow-up cleanup"
+  ],
+  "stories": {
+    "CLEAN-01": {
+      "status": "verified",
+      "stage": "S00",
+      "goals": [
+        "G00A"
+      ]
+    },
+    "BOOT-01": {
+      "status": "running",
+      "stage": "S01",
+      "goals": [
+        "G00B"
+      ],
+      "implementation": "Rust/frontend migration settled; generated TypeScript regenerated; Main running integrated frontend/Rust checks. Runtime remains gated by G00A repair."
+    },
+    "TERM-01": {
+      "status": "not_started",
+      "stage": "S02",
+      "goals": [
+        "G01"
+      ]
+    },
+    "TERM-02": {
+      "status": "not_started",
+      "stage": "S02",
+      "goals": [
+        "G01"
+      ]
+    },
+    "TERM-03": {
+      "status": "not_started",
+      "stage": "S02",
+      "goals": [
+        "G01"
+      ]
+    },
+    "REPAIR-01": {
+      "status": "not_started",
+      "stage": "S03",
+      "goals": [
+        "G02"
+      ]
+    },
+    "REPAIR-02": {
+      "status": "not_started",
+      "stage": "S03",
+      "goals": [
+        "G02"
+      ]
+    },
+    "REPAIR-03": {
+      "status": "not_started",
+      "stage": "S03",
+      "goals": [
+        "G02"
+      ]
+    },
+    "REPAIR-04": {
+      "status": "not_started",
+      "stage": "S03",
+      "goals": [
+        "G02"
+      ]
+    },
+    "REPAIR-05": {
+      "status": "not_started",
+      "stage": "S03",
+      "goals": [
+        "G02"
+      ]
+    },
+    "CLEAN-05": {
+      "status": "not_started",
+      "stage": "S04",
+      "goals": [
+        "G03"
+      ]
+    },
+    "CLEAN-02": {
+      "status": "not_started",
+      "stage": "S04",
+      "goals": [
+        "G03"
+      ]
+    },
+    "CLEAN-03": {
+      "status": "not_started",
+      "stage": "S04",
+      "goals": [
+        "G03"
+      ]
+    },
+    "CLEAN-04": {
+      "status": "not_started",
+      "stage": "S04",
+      "goals": [
+        "G03"
+      ]
+    },
+    "FND-01": {
+      "status": "not_started",
+      "stage": "S05",
+      "goals": [
+        "G04"
+      ]
+    },
+    "FND-02": {
+      "status": "not_started",
+      "stage": "S05",
+      "goals": [
+        "G04"
+      ]
+    },
+    "FND-03": {
+      "status": "not_started",
+      "stage": "S05",
+      "goals": [
+        "G04"
+      ]
+    },
+    "PANE-01": {
+      "status": "not_started",
+      "stage": "S05",
+      "goals": [
+        "G04"
+      ]
+    },
+    "LIFE-01": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "LIFE-02": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "LIFE-03": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "LIFE-04": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "CTX-01": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "PANE-02": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "VIEW-01": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "VIEW-02": {
+      "status": "not_started",
+      "stage": "S06",
+      "goals": [
+        "G05"
+      ]
+    },
+    "REF-01": {
+      "status": "not_started",
+      "stage": "S07",
+      "goals": [
+        "G06"
+      ]
+    },
+    "REF-02": {
+      "status": "not_started",
+      "stage": "S07",
+      "goals": [
+        "G06"
+      ]
+    },
+    "VIEW-03": {
+      "status": "not_started",
+      "stage": "S07",
+      "goals": [
+        "G06"
+      ]
+    },
+    "CTX-02": {
+      "status": "not_started",
+      "stage": "S08",
+      "goals": [
+        "G07"
+      ]
+    },
+    "SRC-01": {
+      "status": "not_started",
+      "stage": "S08",
+      "goals": [
+        "G07"
+      ]
+    },
+    "SRC-02": {
+      "status": "not_started",
+      "stage": "S08",
+      "goals": [
+        "G07"
+      ]
+    },
+    "SRC-03": {
+      "status": "not_started",
+      "stage": "S08",
+      "goals": [
+        "G07"
+      ]
+    },
+    "REV-01": {
+      "status": "not_started",
+      "stage": "S09",
+      "goals": [
+        "G08"
+      ]
+    },
+    "REV-02": {
+      "status": "not_started",
+      "stage": "S09",
+      "goals": [
+        "G08"
+      ]
+    },
+    "SRC-04": {
+      "status": "not_started",
+      "stage": "S10",
+      "goals": [
+        "G09"
+      ]
+    },
+    "SRC-05": {
+      "status": "not_started",
+      "stage": "S10",
+      "goals": [
+        "G09"
+      ]
+    }
+  },
+  "workers": [
+    {
+      "id": "StableInventory",
+      "role": "scout",
+      "status": "completed",
+      "owned_paths": [],
+      "result": "Pinned release contract corrected; /tmp master source rejected."
+    },
+    {
+      "id": "LunaRunGuards",
+      "role": "luna-implementer",
+      "status": "completed",
+      "owned_paths": [
+        "scripts/verify/resource_guard.py",
+        "scripts/verify/test_resource_guard.py"
+      ]
+    },
+    {
+      "id": "TerraStableTransport",
+      "role": "terra-implementer",
+      "model": "openai-codex/gpt-5.6-terra:high",
+      "status": "completed",
+      "owned_paths": [
+        "crates/**/src/**",
+        "crates/**/tests/**",
+        "src-tauri/src/**"
+      ],
+      "exclusions": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "generated TypeScript"
+      ]
+    },
+    {
+      "id": "LunaStableFrontend",
+      "role": "luna-implementer",
+      "model": "openai-codex/gpt-5.6-luna:high",
+      "status": "completed",
+      "owned_paths": [
+        "src/app/App.tsx",
+        "src/app/App.test.ts",
+        "src/app/TerminalPane.tsx",
+        "src/app/sessionReducer.test.ts",
+        "src/client/CockpitClient.ts",
+        "src/client/browser.ts",
+        "src/client/native.ts",
+        "src/client/client.test.ts"
+      ]
+    },
+    {
+      "id": "TerraGuardReview",
+      "role": "terra-reviewer",
+      "status": "completed",
+      "verdict": "REJECT",
+      "owned_paths": []
+    },
+    {
+      "id": "TerraGuardRepair",
+      "role": "terra-implementer",
+      "status": "completed",
+      "owned_paths": [
+        "scripts/verify/resource_guard.py",
+        "scripts/verify/test_resource_guard.py"
+      ]
+    },
+    {
+      "id": "LunaStartupInventory",
+      "role": "luna-implementer",
+      "status": "running",
+      "owned_paths": [
+        "scripts/verify/startup-inventory",
+        "scripts/verify/startup_inventory.py"
+      ]
+    },
+    {
+      "id": "LunaTemporalFixture",
+      "role": "luna-implementer",
+      "status": "running",
+      "owned_paths": [
+        "scripts/verify/terminal_fixture.py",
+        "scripts/verify/temporal_detector.py",
+        "scripts/verify/test_temporal_detector.py"
+      ]
+    }
+  ],
+  "tested_hashes": {
+    "baseline_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+    "G00A": {
+      "scripts/verify/resource_guard.py": "a7f24ea5c7d0cfdfebbd7769e6b5b971ca0bdb581b9a399eed8b088c4d04687c",
+      "scripts/verify/test_resource_guard.py": "4b77caa10a887bb1518206356d6121b0f891afe7e388ccaad4612b1db6828ccf"
+    }
+  },
+  "evidence": [
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/source-baseline.tar",
+      "sha256": "3aa905d01e185284ce48c31ecfcddcbaa8435e74366038e124ba505a0ed59dcf",
+      "kind": "immutable source baseline"
+    }
+  ],
+  "failures": [
+    {
+      "stage": "S00",
+      "goal": "G00A",
+      "command": "python -m unittest discover -s scripts/verify -p test_resource_guard.py -v",
+      "exit_status": 1,
+      "error": "IndentationError in test_resource_guard.py:17",
+      "status": "resolved",
+      "owner": "LunaRunGuards",
+      "resolution": "11 guard unit tests passed; independent safety review still blocks G00A."
+    },
+    {
+      "stage": "S00",
+      "goal": "G00A",
+      "kind": "independent_review",
+      "status": "resolved",
+      "owner": "TerraGuardRepair",
+      "findings": [
+        "Generic argv permits installation/remote/mode bypass",
+        "Ambient XDG_STATE_HOME escape",
+        "Cleaned resource reuse",
+        "Protected hardlink identity aliases",
+        "Missing real dispatch negatives"
+      ]
+    },
+    {
+      "stage": "S02",
+      "goal": "G01",
+      "kind": "stable_capability_gap",
+      "status": "investigating",
+      "owner": "Main",
+      "finding": "Stable direct attach has no target-relative structured mouse or app mode projection; global InputEvents coordinates require metadata absent from pane.layout."
+    }
+  ],
+  "external_blocks": [],
+  "protected_user_work": [],
+  "observations": [
+    {
+      "id": "OBS-001",
+      "requirement": "Use installed Homebrew Herdr, never .local/bin/herdr",
+      "status": "verified"
+    },
+    {
+      "id": "OBS-002",
+      "requirement": "Archive .local/bin/herdr so it cannot shadow Homebrew",
+      "status": "verified",
+      "evidence": {
+        "archive": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/archived-executables/herdr-local-protocol22",
+        "sha256": "32c977c413bbf005216cfa9585a0c1cfb403753dc70933a81b1e3d8bc5abb70f",
+        "path_resolution": "/home/linuxbrew/.linuxbrew/bin/herdr",
+        "same_inode": true
+      }
+    },
+    {
+      "id": "OBS-003",
+      "requirement": "User installed wayland-utils; use for read-only compositor discovery",
+      "status": "verified",
+      "basis": "user-reported installation"
+    },
+    {
+      "id": "OBS-004",
+      "requirement": "Use WebUI first for behavioral feedback; native AppImage startup and simple compatibility smokes suffice",
+      "status": "verified",
+      "basis": "explicit user verification scope override"
+    }
+  ],
+  "verification_policy": {
+    "primary_behavior_client": "browser",
+    "native_requirement": "AppImage startup and simple compatibility smoke tests",
+    "overrides": "Repeated full native behavioral/temporal scenarios in plan 16 are superseded by OBS-004. Preserve required browser behavioral assertions.",
+    "protected_default_unchanged": true
+  },
+  "decisions": [
+    {
+      "id": "BOOT-preparation",
+      "decision": "Read-only inventory complete. BOOT source migration proceeds independently while S00 guards repair; runtime dispatch and G00B acceptance remain blocked until G00A passes."
+    }
+  ]
+}

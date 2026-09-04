@@ -1,0 +1,68 @@
+{
+  "goal_id": "G01",
+  "status": "INCONCLUSIVE",
+  "run_id": "run-20260904T214621Z",
+  "tested_source_commit": null,
+  "delivery_commit": null,
+  "required_subchecks": [],
+  "commands": [
+    {
+      "argv": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/verify",
+        "-p",
+        "test_temporal_detector.py",
+        "-v"
+      ],
+      "exit_status": 0,
+      "tests_passed": 5,
+      "assertion_scope": "Synthetic frame controls only; production decode cadence/fixture validity rejected on review"
+    },
+    {
+      "argv": [
+        "python",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/temporal-detector-pre-cadence-fix.py",
+        "--input",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-5fps.mkv",
+        "--marker-roi",
+        "0,0,32,32",
+        "--expected-cadence-ms",
+        "16.6666667",
+        "--report",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-before.json"
+      ],
+      "exit_status": 0,
+      "expected_status": 2,
+      "assertion": "False-positive cadence acceptance reproduced: actual5fps was reported60fps.",
+      "result": "FAIL"
+    }
+  ],
+  "identities": {},
+  "assertions": [],
+  "artifacts": [
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/temporal-detector-pre-cadence-fix.py",
+      "sha256": "0dd2f38d4047a508d6cbc7c92e41f0c1812300cf26df10587f134594cb19638c",
+      "kind": "pre-fix decoder source"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-5fps.mkv",
+      "sha256": "fbb78053c96cdd7925719ca4dc52ecec9bb02a1046c5e3159a55d12353c62df4",
+      "kind": "5fps negative control"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-before.json",
+      "sha256": "48a529052205fb1fe5dd118a65e8d455dc1eef559e1508418840d656236ae48a",
+      "kind": "invalid pre-fix PASS report preserved as failure evidence"
+    }
+  ],
+  "unresolved_limitations": [
+    "BOOT/G00B runtime prerequisite pending.",
+    "Stable target has no verified safe per-pane application mouse route.",
+    "Temporal fixture must preserve marker/build history; decoder must use real PTS and bounded streaming before capture acceptance."
+  ]
+}

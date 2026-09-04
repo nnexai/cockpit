@@ -1,0 +1,47 @@
+{
+  "source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+  "commands": [
+    {
+      "argv": [
+        "bun",
+        "run",
+        "typecheck"
+      ],
+      "exit_status": 0
+    },
+    {
+      "argv": [
+        "bun",
+        "run",
+        "test"
+      ],
+      "exit_status": 0,
+      "test_files": 3,
+      "tests_passed": 55
+    },
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace"
+      ],
+      "exit_status": 0,
+      "tests_passed": 83,
+      "suites": 18
+    },
+    {
+      "argv": [
+        "cargo",
+        "check",
+        "-p",
+        "cockpit-tauri"
+      ],
+      "exit_status": 0
+    }
+  ],
+  "native_dependencies": {
+    "gtk+-3.0": "3.24.52",
+    "webkit2gtk-4.1": "2.52.5"
+  },
+  "source_changed_during_baseline": false
+}

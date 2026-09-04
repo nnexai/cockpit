@@ -1,0 +1,37 @@
+{
+  "source_archive": {
+    "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-v0.8.2.tar.gz",
+    "sha256": "60453051025ee44ebf055d26cdaf665a0accd99a992cddd22c166a26c49cd161",
+    "root": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-0.8.2"
+  },
+  "executable": {
+    "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+    "sha256": "450cb7b1c67fa8c8312653917bbe1cd89a5223c2248e6c87f680907ade93f621",
+    "version": "0.8.2",
+    "protocol": 20,
+    "schema_version": 1,
+    "schema_path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/homebrew-stable-schema.json",
+    "schema_sha256": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150",
+    "source_archive": {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-v0.8.2.tar.gz",
+      "sha256": "60453051025ee44ebf055d26cdaf665a0accd99a992cddd22c166a26c49cd161",
+      "root": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-0.8.2"
+    }
+  },
+  "protocol": 20,
+  "schema_version": 1,
+  "client_shell_endpoint": false,
+  "wire": {
+    "framing": "u32 little-endian length plus bincode standard, exact consumption",
+    "max_frame_bytes": 2097152,
+    "hello": "ClientMessage::Hello, tag0, launch_mode TerminalAttach, encoding TerminalAnsi",
+    "input": "Input tag1, AttachScroll tag6; structured InputEvents tag7 routes app coordinates, not pane-relative direct input",
+    "mouse_risk": "Direct attach raw input writes unconditionally; do not synthesize unconditional SGR. Stable app coordinates and capture must be reconciled before advertised mouse acceptance."
+  },
+  "targeting": {
+    "explicit_session_ignores_socket_environment": true,
+    "socket_derivation": "XDG_CONFIG_HOME/herdr/sessions/<session>/herdr.sock",
+    "config_path_does_not_select_socket_root": true
+  },
+  "rejected_evidence": "/tmp/herdr-cockpit-master is not the pinned release; generation1 endpoint claims withdrawn"
+}

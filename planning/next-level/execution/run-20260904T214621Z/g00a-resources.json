@@ -1,0 +1,111 @@
+{
+  "run_id": "run-20260904T214621Z",
+  "protected_session": "default",
+  "allowed_sessions": [
+    {
+      "name": "run-20260904T214621Z-boot",
+      "owner": "run-20260904T214621Z",
+      "xdg_config_home": "/tmp/cockpit-214621Z-gqhguyl2/config",
+      "config_path": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/config.toml",
+      "socket_path": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/sessions/run-20260904T214621Z-boot/herdr.sock",
+      "status": "planned",
+      "xdg_state_home": "/tmp/cockpit-214621Z-gqhguyl2/state"
+    }
+  ],
+  "naming_policy": "run-20260904T214621Z-<scenario>",
+  "executables": {
+    "superseded_inventory_only": {
+      "path": "/home/nnex/.local/bin/herdr",
+      "sha256": "32c977c413bbf005216cfa9585a0c1cfb403753dc70933a81b1e3d8bc5abb70f",
+      "permitted": false,
+      "archived_path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/archived-executables/herdr-local-protocol22",
+      "original_path_absent": true,
+      "archive_authorization": "Explicit user request to archive .local/bin/herdr",
+      "inode_preserved": true,
+      "mode": "0o755"
+    },
+    "selected": {
+      "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+      "sha256": "450cb7b1c67fa8c8312653917bbe1cd89a5223c2248e6c87f680907ade93f621",
+      "version": "0.8.2",
+      "protocol": 20,
+      "schema_version": 1,
+      "schema_path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/homebrew-stable-schema.json",
+      "schema_sha256": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150",
+      "source_archive": {
+        "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-v0.8.2.tar.gz",
+        "sha256": "60453051025ee44ebf055d26cdaf665a0accd99a992cddd22c166a26c49cd161",
+        "root": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-0.8.2"
+      }
+    }
+  },
+  "resources": [
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z",
+      "owner": "run-20260904T214621Z",
+      "kind": "durable evidence",
+      "cleanup": "retain evidence"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/archived-executables/herdr-local-protocol22",
+      "owner": "run-20260904T214621Z",
+      "kind": "user-authorized executable archive",
+      "sha256": "32c977c413bbf005216cfa9585a0c1cfb403753dc70933a81b1e3d8bc5abb70f",
+      "cleanup": "retain; restore only with explicit user authorization"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-tools",
+      "owner": "run-20260904T214621Z",
+      "kind": "isolated native display binaries",
+      "packages": [
+        {
+          "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-packages/xdotool-3.20211022.1-10.fc44.x86_64.rpm",
+          "sha256": "3929732cd97c4ee487fba43b8b9b1a3d0a7c5a7d873db5d6eedfc60b6811fe07",
+          "extract_exit": 0,
+          "stderr": ""
+        },
+        {
+          "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-packages/xorg-x11-server-Xvfb-21.1.24-1.fc44.x86_64.rpm",
+          "sha256": "32ec1cc4d345055fe7aed63e3404cfef26bc219f89006a39acf24225b7c1f998",
+          "extract_exit": 0,
+          "stderr": ""
+        },
+        {
+          "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-packages/xorg-x11-server-common-21.1.24-1.fc44.x86_64.rpm",
+          "sha256": "adb7ff667f6f65eabb845c201721224a0d81aae1caf39368e70d19139843ee92",
+          "extract_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "cleanup": "retain tool binaries for repeatable evidence"
+    },
+    {
+      "kind": "native test display",
+      "owner": "run-20260904T214621Z",
+      "display": ":191",
+      "hub_name": "cockpit-run-xvfb",
+      "status": "ready",
+      "cleanup": "hub stop cockpit-run-xvfb"
+    },
+    {
+      "path": "/tmp/cockpit-214621Z-gqhguyl2",
+      "owner": "run-20260904T214621Z",
+      "kind": "runtime fixture root",
+      "cleanup": "remove only after guarded sessions stopped and ownership receipt matches"
+    },
+    {
+      "kind": "isolated Herdr configuration",
+      "path": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/config.toml",
+      "owner": "run-20260904T214621Z",
+      "sha256": "aed61540732b52dcc95428db3d55a91b8a6ae50b1b30a5a1b56272344453d4a4",
+      "cleanup": "remove with owned runtime root after session stop"
+    }
+  ],
+  "cleanup_outcomes": [],
+  "resource_root": "/tmp/cockpit-214621Z-gqhguyl2",
+  "protected_config_path": "/home/nnex/.config/herdr/config.toml",
+  "protected_socket_path": "/home/nnex/.config/herdr/herdr.sock",
+  "forbidden_executable_paths": [
+    "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/archived-executables/herdr-local-protocol22"
+  ]
+}

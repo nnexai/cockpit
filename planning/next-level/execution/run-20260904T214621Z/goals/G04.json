@@ -1,0 +1,15 @@
+{
+  "goal_id": "G04",
+  "status": "INCONCLUSIVE",
+  "run_id": "run-20260904T214621Z",
+  "tested_source_commit": null,
+  "delivery_commit": null,
+  "required_subchecks": [],
+  "commands": [],
+  "identities": {},
+  "assertions": [],
+  "artifacts": [],
+  "unresolved_limitations": [
+    "Not yet executed."
+  ]
+}

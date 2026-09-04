@@ -1,0 +1,147 @@
+{
+  "goal_id": "G00A",
+  "status": "PASS",
+  "run_id": "run-20260904T214621Z",
+  "tested_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+  "delivery_commit": null,
+  "required_subchecks": [
+    {
+      "id": "stable_identity",
+      "status": "PASS"
+    },
+    {
+      "id": "immutable_source_baseline",
+      "status": "PASS"
+    },
+    {
+      "id": "protected_user_work_inventory",
+      "status": "PASS"
+    },
+    {
+      "id": "tool_inventory",
+      "status": "PASS"
+    },
+    {
+      "id": "fail_closed_runtime_guard",
+      "status": "PASS"
+    },
+    {
+      "id": "independent_safety_review",
+      "status": "PASS"
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/verify",
+        "-p",
+        "test_resource_guard.py",
+        "-v"
+      ],
+      "exit_status": 1,
+      "error": "test module import IndentationError at line17; repair pending"
+    },
+    {
+      "argv": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/verify",
+        "-p",
+        "test_resource_guard.py",
+        "-v"
+      ],
+      "exit_status": 0,
+      "tests_passed": 11,
+      "assertion_scope": "Initial guard mechanics only; insufficient against independent review findings"
+    },
+    {
+      "argv": [
+        "python",
+        "scripts/verify/resource_guard.py",
+        "--ledger",
+        "planning/next-level/execution/run-20260904T214621Z/resources.json",
+        "--run-id",
+        "run-20260904T214621Z",
+        "--session",
+        "run-20260904T214621Z-boot"
+      ],
+      "exit_status": 0,
+      "assertion_scope": "Report-only CLI returned selected Homebrew identity and expected isolated endpoint; no dispatch"
+    },
+    {
+      "argv": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/verify",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "exit_status": 0,
+      "tests_passed": 26,
+      "relevant_guard_tests_passed": 17,
+      "other_tests": "9 synthetic temporal tests are not G01 runtime acceptance"
+    }
+  ],
+  "identities": {
+    "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+    "sha256": "450cb7b1c67fa8c8312653917bbe1cd89a5223c2248e6c87f680907ade93f621",
+    "version": "0.8.2",
+    "protocol": 20,
+    "schema_version": 1,
+    "schema_path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/homebrew-stable-schema.json",
+    "schema_sha256": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150"
+  },
+  "assertions": [
+    "Pinned Homebrew stable0.8.2 protocol20/schema1 and release source identities match.",
+    "Protocol22 historical commit remains ancestor of baseline.",
+    "No Herdr runtime mutation or frontend smoke occurred during startup inventory.",
+    "Explicit allowed ledger session resolves to run-owned configuration/state; missing/default/foreign targets reject.",
+    "Global update/remote/config/selector bypasses, shared writable/foreign roots, symlink/hardlink aliases and cleaned resource reuse reject before invocation plan."
+  ],
+  "artifacts": [
+    {
+      "path": "inventory.json"
+    },
+    {
+      "path": "baseline-checks.json"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/source-baseline.tar",
+      "sha256": "3aa905d01e185284ce48c31ecfcddcbaa8435e74366038e124ba505a0ed59dcf",
+      "kind": "immutable source baseline"
+    },
+    {
+      "path": "guard-cli-evidence.json",
+      "sha256": "be280df382a2db1e5f218a5f27de20eec2fcc7d4facc13917ef39f5606311bf5"
+    }
+  ],
+  "unresolved_limitations": [],
+  "tested_source_hashes": {
+    "scripts/verify/resource_guard.py": "a7f24ea5c7d0cfdfebbd7769e6b5b971ca0bdb581b9a399eed8b088c4d04687c",
+    "scripts/verify/test_resource_guard.py": "4b77caa10a887bb1518206356d6121b0f891afe7e388ccaad4612b1db6828ccf"
+  },
+  "tested_ledger": {
+    "path": "g00a-resources.json",
+    "sha256": "8b94952e4adf5dfbf3a5c31b63c3abbac9f901d04f3beaba178c55fbd74f7594"
+  },
+  "review": {
+    "agent": "TerraGuardReview",
+    "verdict": "ACCEPT",
+    "reviewed_hashes": {
+      "scripts/verify/resource_guard.py": "a7f24ea5c7d0cfdfebbd7769e6b5b971ca0bdb581b9a399eed8b088c4d04687c",
+      "scripts/verify/test_resource_guard.py": "4b77caa10a887bb1518206356d6121b0f891afe7e388ccaad4612b1db6828ccf"
+    }
+  }
+}

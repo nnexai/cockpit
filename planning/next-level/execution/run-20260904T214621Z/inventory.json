@@ -1,0 +1,190 @@
+{
+  "run_id": "run-20260904T214621Z",
+  "base": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+  "preexisting_work": [],
+  "source_archive": {
+    "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/source-baseline.tar",
+    "sha256": "3aa905d01e185284ce48c31ecfcddcbaa8435e74366038e124ba505a0ed59dcf",
+    "kind": "immutable source baseline"
+  },
+  "selected_executable": {
+    "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+    "sha256": "450cb7b1c67fa8c8312653917bbe1cd89a5223c2248e6c87f680907ade93f621",
+    "version": "0.8.2",
+    "protocol": 20,
+    "schema_version": 1,
+    "schema_path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/homebrew-stable-schema.json",
+    "schema_sha256": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150"
+  },
+  "commands": [
+    {
+      "argv": [
+        "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+        "--version"
+      ],
+      "exit_status": 0,
+      "stdout": "herdr 0.8.2\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+        "--session",
+        "default",
+        "status",
+        "server",
+        "--json"
+      ],
+      "exit_status": 0,
+      "stdout": "{\"status\":\"running\",\"running\":true,\"version\":\"0.8.2\",\"protocol\":20,\"capabilities\":{\"live_handoff\":true,\"detached_server_daemon\":true},\"compatible\":true,\"socket\":\"/home/nnex/.config/herdr/herdr.sock\",\"session\":null,\"restart_needed\":false}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "bun",
+        "--version"
+      ],
+      "exit_status": 0,
+      "stdout": "1.3.14\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "node",
+        "--version"
+      ],
+      "exit_status": 0,
+      "stdout": "v26.8.1\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "cargo",
+        "--version"
+      ],
+      "exit_status": 0,
+      "stdout": "cargo 1.98.0 (797e8a9bc 2026-08-05)\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "rustc",
+        "--version"
+      ],
+      "exit_status": 0,
+      "stdout": "rustc 1.98.0 (88d9e12ae 2026-08-18)\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "ffmpeg",
+        "-version"
+      ],
+      "exit_status": 0,
+      "stdout": "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers\nbuilt with gcc 16 (GCC)\nconfiguration: --prefix=/usr --bindir=/usr/bin --datadir=/usr/share/ffmpeg --docdir=/usr/share/doc/ffmpeg --incdir=/usr/include/ffmpeg --libdir=/usr/lib64 --mandir=/usr/share/man --arch=x86_64 --optflags='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wno-error=incompatible-pointer-types -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1 -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer ' --extra-cflags=-I/usr/include/decklink --extra-cxxflags=-I/usr/include/decklink --extra-ldflags='-Wl,-z,relro -Wl,--as-needed -Wl,-z,pack-relative-relocs -Wl,-z,now -specs=/usr/lib/rpm/redhat/redhat-hardened-ld -specs=/usr/lib/rpm/redhat/redhat-hardened-ld-errors -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1 -Wl,--build-id=sha1 -specs=/usr/lib/rpm/redhat/redhat-package-notes ' --disable-htmlpages --disable-static --disable-stripping --enable-pic --enable-shared --enable-gpl --enable-version3 --enable-amf --enable-avcodec --enable-avdevice --enable-avfilter --enable-avformat --enable-alsa --enable-bzlib --enable-chromaprint --disable-cuda-nvcc --enable-cuvid --enable-decklink --enable-frei0r --enable-gcrypt --enable-gmp --enable-gnutls --enable-gray --enable-iconv --enable-ladspa --enable-lcms2 --enable-libaom --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --disable-libdavs2 --enable-libdc1394 --enable-libdvdnav --enable-libdvdread --enable-libfdk-aac --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libgme --enable-libharfbuzz --enable-libgsm --enable-libiec61883 --enable-libilbc --enable-libjack --enable-libjxl --enable-libklvanc --disable-liblensfun --disable-liblcevc-dec --enable-liblc3 --enable-libmodplug --enable-libmp3lame --enable-libmysofa --disable-libnpp --enable-libopencore-amrnb --enable-libopencore-amrwb --disable-libopencv --enable-liboapv --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-libplacebo --enable-libpulse --enable-libqrencode --disable-libquirc --enable-librabbitmq --enable-librav1e --enable-librist --enable-librsvg --enable-librubberband --enable-libshaderc --disable-libshine --enable-libsmbclient --enable-libsnappy --enable-libsvtav1 --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --disable-libtensorflow --enable-libtesseract --enable-libtheora --disable-libtorch --disable-libuavs3d --enable-libtwolame --enable-libv4l2 --enable-libvidstab --enable-libvmaf --enable-libvo-amrwbenc --enable-libvorbis --enable-libvpl --enable-libvpx --enable-libwebp --disable-libxavs2 --disable-libxavs --enable-libxcb --enable-libxcb-shape --enable-libxcb-shm --enable-libxcb-xfixes --enable-libxeveb --enable-libxevdb --enable-libxml2 --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-lto --enable-lv2 --enable-lzma --enable-manpages --enable-nvdec --enable-nvenc --enable-openal --disable-openssl --enable-pthreads --enable-sdl2 --enable-shared --enable-swresample --enable-swscale --enable-v4l2-m2m --enable-vaapi --enable-vapoursynth --enable-vdpau --enable-vulkan --enable-xlib --enable-zlib --enable-muxers --enable-demuxers --enable-hwaccels --disable-encoders --disable-decoders --disable-decoder='h264,hevc,vc1,vvc' --enable-encoder=',a64multi,a64multi5,aac,libfdk_aac,ac3,adpcm_adx,adpcm_argo,adpcm_g722,adpcm_g726,adpcm_g726le,adpcm_ima_alp,adpcm_ima_amv,adpcm_ima_apm,adpcm_ima_qt,adpcm_ima_ssi,adpcm_ima_wav,adpcm_ima_ws,adpcm_ms,adpcm_swf,adpcm_yamaha,alac,alias_pix,amv,anull,apng,ass,asv1,asv2,av1_amf,av1_nvenc,av1_qsv,av1_vaapi,bitpacked,bmp,cinepak,cljr,dca,dfpwm,dnxhd,dnxhr,dpx,dvbsub,dvdsub,dvvideo,exr,ffv1,ffvhuff,flac,flashsv,flashsv2,flv,g723_1,gif,h261,h263,h263_v4l2m2m,h263p,h264_amf,h264_nvenc,h264_qsv,h264_v4l2m2m,h264_vaapi,hap,hdr,hevc_amf,hevc_nvenc,hevc_qsv,hevc_v4l2m2m,hevc_vaapi,huffyuv,ilbc,jpeg2000,jpegls,libaom,libaom_av1,libcodec2,libgsm,libgsm_ms,libilbc,libjxl,liblc3,libmp3lame,liboapv,libopencore_amrnb,libopenh264,libopenjpeg,libopus,librav1e,libspeex,libsvtav1,libtheora,libtwolame,libvo_amrwbenc,libvorbis,libvpx_vp8,libvpx_vp9,libwebp,libwebp_anim,libxeve,libxvid,mjpeg,mjpeg_qsv,mjpeg_vaapi,mlp,movtext,mp2,mp2fixed,mpeg1video,mpeg2_qsv,mpeg2_vaapi,mpeg2video,mpeg4,mpeg4_v4l2m2m,msmpeg4v2,msmpeg4v3,msvideo1,nellymoser,opus,pam,pbm,pcm_alaw,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le,pcm_mulaw,pcm_s16be,pcm_s16be_planar,pcm_s16le,pcm_s16le_planar,pcm_s24be,pcm_s24le,pcm_s24le_planar,pcm_s32be,pcm_s32le,pcm_s32le_planar,pcm_s8,pcm_s8_planar,pcm_u16be,pcm_",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "google-chrome",
+        "--version"
+      ],
+      "exit_status": 0,
+      "stdout": "Google Chrome 152.0.7977.82 \n",
+      "stderr": ""
+    }
+  ],
+  "architecture_owners": {
+    "serializable_contracts": [
+      "crates/cockpit-protocol/src/v1.rs",
+      "crates/cockpit-protocol/src/typescript.rs",
+      "src/protocol/generated/v1.ts"
+    ],
+    "core_policy": [
+      "crates/cockpit-core/src/lib.rs"
+    ],
+    "herdr_json_transport_and_operations": [
+      "crates/cockpit-herdr/src/cli.rs"
+    ],
+    "herdr_terminal_wire": [
+      "crates/cockpit-herdr/src/terminal_wire.rs"
+    ],
+    "browser_host": [
+      "crates/cockpit-host/src/server.rs"
+    ],
+    "native_host": [
+      "src-tauri/src/lib.rs"
+    ],
+    "client_contract_and_transports": [
+      "src/client/CockpitClient.ts",
+      "src/client/browser.ts",
+      "src/client/native.ts"
+    ],
+    "session_state": [
+      "src/app/sessionReducer.ts"
+    ],
+    "focus_layout_composition": [
+      "src/app/App.tsx"
+    ],
+    "terminal_presentation_input": [
+      "src/app/TerminalPane.tsx"
+    ],
+    "styling": [
+      "src/app/styles.css"
+    ]
+  },
+  "capability_preparation": {
+    "browser": {
+      "mode": "new headless about:blank tab; no Cockpit frontend smoke",
+      "viewport": [
+        1440,
+        900
+      ],
+      "device_scale_factor": 1.25
+    },
+    "native": {
+      "gtk": "3.24.52",
+      "webkitgtk": "2.52.5",
+      "display_env_available": false,
+      "safe_recovery": "Run-owned Xvfb and xdotool packages; no system installation"
+    },
+    "quality_providers": {
+      "cargo_llvm_cov": "not installed",
+      "cargo_mutants": "not installed",
+      "note": "S04 will pin/install under run-owned tools, then probe; absence is not a green metric result"
+    }
+  },
+  "preserved_history": {
+    "protocol22_commit": "7e8fe25546ce5fa9364cab100522af6d63343e4a",
+    "argv": [
+      "git",
+      "merge-base",
+      "--is-ancestor",
+      "7e8fe25546ce5fa9364cab100522af6d63343e4a",
+      "HEAD"
+    ],
+    "exit_status": 0,
+    "recovery_commits": [
+      "34459ab",
+      "582792e"
+    ]
+  },
+  "read_only_compositor": {
+    "argv": [
+      "wayland-info",
+      "-i",
+      "wl_output"
+    ],
+    "environment": {
+      "WAYLAND_DISPLAY": "wayland-1"
+    },
+    "exit_status": 0,
+    "resolution": [
+      2880,
+      1920
+    ],
+    "refresh_hz": 120,
+    "scale": 2,
+    "input_dispatched": false
+  }
+}

@@ -1,0 +1,64 @@
+[
+  {
+    "argv": [
+      "python",
+      "scripts/verify/resource_guard.py",
+      "--ledger",
+      "planning/next-level/execution/run-20260904T214621Z/resources.json",
+      "--run-id",
+      "run-20260904T214621Z",
+      "--session",
+      "run-20260904T214621Z-boot"
+    ],
+    "exit_status": 0,
+    "expected_exit_status": 0,
+    "stdout": "{\"cleanup\": false, \"effective\": {\"config_path\": \"/tmp/cockpit-214621Z-gqhguyl2/config/herdr/config.toml\", \"executable\": {\"path\": \"/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr\", \"protocol\": 20, \"schema_version\": 1, \"sha256\": \"450cb7b1c67fa8c8312653917bbe1cd89a5223c2248e6c87f680907ade93f621\", \"version\": \"0.8.2\"}, \"socket_path\": \"/tmp/cockpit-214621Z-gqhguyl2/config/herdr/sessions/run-20260904T214621Z-boot/herdr.sock\", \"xdg_config_home\": \"/tmp/cockpit-214621Z-gqhguyl2/config\", \"xdg_state_home\": \"/tmp/cockpit-214621Z-gqhguyl2/state\"}, \"run_id\": \"run-20260904T214621Z\", \"session\": {\"name\": \"run-20260904T214621Z-boot\", \"owner\": \"run-20260904T214621Z\", \"status\": \"planned\"}, \"status\": \"ok\"}",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "python",
+      "scripts/verify/resource_guard.py",
+      "--ledger",
+      "planning/next-level/execution/run-20260904T214621Z/resources.json",
+      "--run-id",
+      "run-20260904T214621Z",
+      "--session",
+      "default"
+    ],
+    "exit_status": 2,
+    "expected_exit_status": 2,
+    "stdout": "",
+    "stderr": "resource_guard: rejected: the protected default session is not a test target"
+  },
+  {
+    "argv": [
+      "python",
+      "scripts/verify/resource_guard.py",
+      "--ledger",
+      "planning/next-level/execution/run-20260904T214621Z/resources.json",
+      "--run-id",
+      "run-20260904T214621Z",
+      "--session",
+      "foreign-session"
+    ],
+    "exit_status": 2,
+    "expected_exit_status": 2,
+    "stdout": "",
+    "stderr": "resource_guard: rejected: session is not recorded uniquely in allowed_sessions"
+  },
+  {
+    "argv": [
+      "python",
+      "scripts/verify/resource_guard.py",
+      "--ledger",
+      "planning/next-level/execution/run-20260904T214621Z/resources.json",
+      "--run-id",
+      "run-20260904T214621Z"
+    ],
+    "exit_status": 2,
+    "expected_exit_status": 2,
+    "stdout": "",
+    "stderr": "usage: resource_guard.py [-h] --ledger LEDGER --run-id RUN_ID\n                         --session SESSION [--cleanup]\nresource_guard.py: error: the following arguments are required: --session"
+  }
+]
