@@ -373,3 +373,5 @@ Prime the cleanup with deterministic quality infrastructure (CLEAN-05): pinned t
 ## 12. Stability before expansion
 
 The reported terminal redraw flicker reopens the custom protocol-22 and renderer choice. Establish a temporal reproduction and a reliable daily-use build before cleanup or feature expansion; Kitty support remains desired but must pass the same stability gate. `planning/next-level/13-terminal-stability.md` compares repair and stable-compatible alternatives without presuming a downgrade is already verified. `research/next-level-existing-code-review.md` records additional current-code failures and planned corrections. No feature, renderer repair, or installed-server change is part of this planning task.
+
+The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Follow `planning/next-level/13-terminal-stability.md`; do not reopen this choice or silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16.

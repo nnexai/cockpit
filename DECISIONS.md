@@ -216,3 +216,11 @@ The user reports repeated whole-view dark frames during redraw, especially activ
 The final code review also calls for separately verified state-ordering, stream-transition, input/attachment, and request-lifetime repairs before behavior-preserving cleanup. Future quality metrics must exercise production state paths, not duplicate unused reducers. See `research/next-level-existing-code-review.md`.
 
 Scrolling is included in that first stability gate: viewport continuity, scroll position during incoming output, responsiveness, and flicker with and without images. It is not deferred as UI polish.
+
+## Selected stable Herdr target, 2026-09-04
+
+The user chose to give up the custom protocol-22 path for now, preserving it in committed history, and explicitly requires retaining mouse click handling. Stable Herdr is the default target for the next implementation. Commit `7e8fe25546ce5fa9364cab100522af6d63343e4a` preserves protocol-22/TGP work; `34459ab` and `582792e` contain pre-22 input/mouse work to evaluate and retain. Verify stable capabilities instead of assuming a historical protocol version. Required migration gates include native/browser pane clicks/focus, application mouse events, and scrolling. Terminal TGP may remain parked; Context GUI Markdown/Mermaid/images remain in scope. No current installation or running server is changed during planning.
+
+## Orchestrator startup constraint
+
+The user will downgrade the Herdr default session to stable before starting the implementation orchestrator. Astra runs inside that default session; it must never restart, upgrade/downgrade, close, or send test input to it. The current frontend will initially be incompatible, so BOOT-01 restores the actual stable protocol/transport first, then runtime smokes run only in explicit disposable sessions. A current-frontend or old protocol-22 smoke is not a bootstrap prerequisite.

@@ -1,3 +1,5 @@
+Current selection: the user subsequently chose stable Herdr as the default and parked protocol 22, while requiring mouse handling to be preserved. [13-terminal-stability.md](13-terminal-stability.md) supersedes the alternatives in this review.
+
 # Final design review
 
 Reviewed 2026-09-04 against `8fac660`. Planning only. This review records recommendations, distinguishes existing decisions from proposed refinements, and does not authorize application changes.

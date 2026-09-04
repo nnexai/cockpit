@@ -1,10 +1,12 @@
 # Delivery sequence and parallel work
 
+Execution authority: use [15-execution-timeline.md](15-execution-timeline.md) for the final stage order and selected scope, [14](14-existing-code-repairs.md) for detailed repairs, and [16](16-verification-goals.md) for completion gates. The user selected stable Herdr with retained mouse support; protocol 22 is parked. Older wave labels below are supporting detail.
+
 This is an implementation sequence for later work. The current task delivers plans and mockups only. Estimates are rough engineering effort, not deadlines; they assume one integrator and up to three bounded contributors familiar with Rust and React. Runtime discoveries can change the sequence at the named gates.
 
 ## Terminal stability and existing-code repairs first
 
-The user reports severe whole-view flicker during terminal redraw, including active agent output and `/pets`; images may amplify it but are not the only suspected trigger. [TERM-01/02](13-terminal-stability.md) now precedes the milestones below. The custom protocol-22 build and renderer are not an accepted stable baseline. Reproduce and compare compatible build pairs, then select a bounded repair or stable fallback without changing the user’s running setup during planning. Re-probe downstream capabilities if the Herdr target changes.
+The user reports severe whole-view flicker during terminal redraw, including active agent output and `/pets`; images may amplify it but are not the only suspected trigger. [TERM-01/02](13-terminal-stability.md) now precedes the milestones below. The custom protocol-22 build and renderer are not an accepted stable baseline. Reproduce and compare compatible build pairs, then migrate to verified stable Herdr with retained mouse handling without changing the user’s running setup during planning. Re-probe downstream capabilities if the Herdr target changes.
 
 The [existing-code review](../../research/next-level-existing-code-review.md) also identifies ordering, sequence validation, input routing, attachment identity, and request-lifetime repairs. Capture them in CLEAN-01, fix them as separately reviewed correctness increments, and only then preserve the corrected behavior through extraction. Frontend ordering/input and Rust request/attachment work can proceed in separate lanes once shared protocol/renderer ownership is fixed.
 

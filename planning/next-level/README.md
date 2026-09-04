@@ -4,6 +4,8 @@ Prepared 2026-09-04 against commit `7e8fe25`. Planning and HTML prototypes only.
 
 Status: selected direction is detect-and-replace for real Herdr extension panes. Initial planning verification is complete. No extension IPC, plugin changes, or Herdr-server changes are required.
 
+The final implementation order and selected scope are authoritative in [15](15-execution-timeline.md), with measurable acceptance in [16](16-verification-goals.md). Stable Herdr is selected. The user downgrades before execution; BOOT-01 fixes frontend compatibility before runtime smoke, and the orchestrator protects its `default` session.
+
 ## Start here
 
 1. [Architecture and shared contracts](01-architecture-and-contracts.md): authority, identities, configuration, transport, and storage boundaries.
@@ -22,7 +24,11 @@ Status: selected direction is detect-and-replace for real Herdr extension panes.
 
 12. [Final design review](12-final-design-review.md): recommended restructurings, targeted rewrites, scope tradeoffs, and a real-task checkpoint.
 
-13. [Terminal stability and compatibility decision](13-terminal-stability.md): whole-view redraw flicker, temporal acceptance, and stable Herdr versus custom protocol-22 tradeoffs.
+13. [Terminal stability and compatibility decision](13-terminal-stability.md): stable protocol bootstrap, whole-view redraw flicker, mouse preservation, and temporal acceptance.
+
+14. [Existing-code repairs](14-existing-code-repairs.md): ordering, input, attachment identity, deadlines, compatibility, and error handling.
+15. [Final execution timeline](15-execution-timeline.md): selected and parked scope, dependencies, parallel ownership, and autonomous decisions.
+16. [Verification goals](16-verification-goals.md): required scenarios, pass/fail/inconclusive rules, and evidence artifacts.
 
 ## Confirmed scope from the planning interview
 
@@ -38,7 +44,7 @@ The existing dense graphical workbench is the visual starting point. Spaces and 
 
 ## Main loop and optional scope
 
-Begin with the separately scoped CLEAN maintainability increment. A usable main delivery then includes FND-01-03, PANE-01-02, LIFE-01-04, CTX-01-02, SRC-01-03, VIEW-01-03, and REF-01-02. It must support manually created context without a functioning provider. It must support an agent terminal without context, and context without a currently available agent.
+Begin with stable compatibility, terminal stability, and correctness repairs, followed by the separately scoped CLEAN maintainability increment. A usable main delivery then includes FND-01-03, PANE-01-02, LIFE-01-04, CTX-01-02, SRC-01-03, VIEW-01-03, and REF-01-02. It must support manually created context without a functioning provider. It must support an agent terminal without context, and context without a currently available agent.
 
 The complete graphical review replacement has its own REV-01/02 stories. It can follow the main Context loop and does not depend on remote review downloads. A future TUI backport is PANE-03. Review/MR ingestion, wiki, and telemetry have their own stories, SRC-04-06. They are fully planned but can ship after the Gitea issue path. Provider expansion, settings, history, inbox extensions, optional automation, credentials, remote access, packaging, and release accessibility are separate selectable blocks in the optional plan. “Optional” means not required for the main loop, not forgotten or implicitly approved for implementation.
 
@@ -78,4 +84,4 @@ The maintainability pass includes deterministic feedback before new feature work
 
 ## Final scrutiny and changed priority
 
-[Existing-code findings](../../research/next-level-existing-code-review.md) include reproduced stale-snapshot and generation-transition handling failures, an unused tested attachment path, and concrete input/transport lifecycle concerns. The user also reported severe redraw flicker. Stabilize the terminal and revisit the custom Herdr target before cleanup/features. Current protocol-22 research remains evidence for that build only; it does not prove stable-release compatibility or visual reliability. No repairs or installation changes were performed during planning.
+[Existing-code findings](../../research/next-level-existing-code-review.md) include reproduced stale-snapshot and generation-transition handling failures, an unused tested attachment path, and concrete input/transport lifecycle concerns. The user also reported severe redraw flicker. Restore compatibility with the user-installed stable Herdr first, then stabilize the terminal before cleanup/features. Preserve protocol-22 work in Git and preserve mouse handling on stable. Current protocol-22 research remains evidence for that build only; it does not prove stable-release compatibility or visual reliability. No repairs or installation changes were performed during planning.
