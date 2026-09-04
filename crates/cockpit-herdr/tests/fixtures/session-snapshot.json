@@ -1,0 +1,75 @@
+{
+  "id": "cockpit-fixture",
+  "result": {
+    "type": "session_snapshot",
+    "snapshot": {
+      "version": "0.8.2",
+      "protocol": 20,
+      "focused_workspace_id": "space-a",
+      "focused_tab_id": "tab-a",
+      "focused_pane_id": "pane-a",
+      "workspaces": [
+        {
+          "workspace_id": "space-a",
+          "label": "Development",
+          "number": 1,
+          "tab_count": 1,
+          "pane_count": 1,
+          "focused": true
+        }
+      ],
+      "tabs": [
+        {
+          "tab_id": "tab-a",
+          "workspace_id": "space-a",
+          "label": "Shell",
+          "number": 1,
+          "pane_count": 1,
+          "focused": true
+        }
+      ],
+      "panes": [
+        {
+          "pane_id": "pane-a",
+          "terminal_id": "term-a",
+          "workspace_id": "space-a",
+          "tab_id": "tab-a",
+          "terminal_title_stripped": "\u001b[31m\u001b]hidden\u0007\u001b[0m\u0000",
+          "terminal_title": "Fallback terminal",
+          "focused": true,
+          "agent": "assistant",
+          "agent_status": "working",
+          "revision": 7
+        }
+      ],
+      "layouts": [
+        {
+          "workspace_id": "space-a",
+          "tab_id": "tab-a",
+          "zoomed": false,
+          "focused_pane_id": "pane-a",
+          "area": { "x": 0, "y": 0, "width": 120, "height": 40 },
+          "panes": [
+            {
+              "pane_id": "pane-a",
+              "focused": true,
+              "rect": { "x": 0, "y": 0, "width": 120, "height": 40 }
+            }
+          ]
+        }
+      ],
+      "agents": [
+        {
+          "pane_id": "pane-a",
+          "workspace_id": "space-a",
+          "tab_id": "tab-a",
+          "agent": "assistant",
+          "agent_status": "working",
+          "terminal_title_stripped": "\u001b[32m\u001b[0m",
+          "terminal_title": "\u001b]agent hidden\u0007Agent fallback",
+          "focused": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "cockpit-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+cockpit-protocol = { path = "../cockpit-protocol" }
+tokio.workspace = true
+
+[lints]
+workspace = true

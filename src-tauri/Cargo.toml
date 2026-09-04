@@ -1,0 +1,20 @@
+[package]
+name = "cockpit-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+publish = false
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+cockpit-core = { path = "../crates/cockpit-core" }
+cockpit-herdr = { path = "../crates/cockpit-herdr" }
+cockpit-protocol = { path = "../crates/cockpit-protocol" }
+uuid.workspace = true
+tauri.workspace = true
+tokio.workspace = true
+base64.workspace = true
+serde_json.workspace = true
