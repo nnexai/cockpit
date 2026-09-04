@@ -14,9 +14,10 @@ export function appendPendingControlCommand(queue: TerminalCommand[], command: T
 export type TerminalPaneProps = {
   client: CockpitClient;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows">;
+  selected: boolean;
   controlAllowed: boolean;
   pendingControl?: boolean;
-  onRelease?: () => void;
+  onSelect?: () => void;
   onRetry?: () => void;
   onResync?: () => void;
   onClosed?: () => void;
@@ -35,7 +36,20 @@ function decodeFrame(bytes: string): Uint8Array {
 function commandInput(text: string | null, bytes: string | null): TerminalCommand {
   return { type: "terminal.input", text, bytes };
 }
-export function TerminalPane({ client, request, controlAllowed, pendingControl = false, onRelease, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+
+type TerminalBounds = Pick<DOMRect, "left" | "top" | "width" | "height">;
+export function terminalCellPosition(clientX: number, clientY: number, bounds: TerminalBounds, cols: number, rows: number): { column: number; row: number } {
+  const safeCols = Math.max(1, Math.floor(cols));
+  const safeRows = Math.max(1, Math.floor(rows));
+  const column = bounds.width > 0 ? Math.floor((clientX - bounds.left) / bounds.width * safeCols) : 0;
+  const row = bounds.height > 0 ? Math.floor((clientY - bounds.top) / bounds.height * safeRows) : 0;
+  return {
+    column: Math.max(0, Math.min(safeCols - 1, column)),
+    row: Math.max(0, Math.min(safeRows - 1, row)),
+  };
+}
+
+export function TerminalPane({ client, request, selected, controlAllowed, pendingControl = false, onSelect, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
@@ -46,11 +60,19 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
   const lastSequence = useRef<bigint | null>(null);
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
+  const [controlRequested, setControlRequested] = useState(controlAllowed || pendingControl);
+  const controlRequestedRef = useRef(controlAllowed || pendingControl);
   const flushPending = () => {
     const stream = streamRef.current;
     if (ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0) return;
     pendingCommands.current.forEach((command) => stream.send(command));
     pendingCommands.current = [];
+  };
+  const requestControl = () => {
+    if (!selected) onSelect?.();
+    if (controlRequestedRef.current) return;
+    controlRequestedRef.current = true;
+    setControlRequested(true);
   };
 
   useEffect(() => {
@@ -81,41 +103,55 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
     const terminal = terminalRef.current;
     if (!terminal) return;
     const sendInput = (command: TerminalCommand) => {
-      if (ownership === "owned" && streamRef.current) streamRef.current.send(command);
-      else if (pendingControl) pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
+      if (ownershipRef.current === "owned" && streamRef.current) streamRef.current.send(command);
+      else if (controlRequestedRef.current) pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
     };
     const data = terminal.onData((text) => sendInput(commandInput(text, null)));
     const binary = terminal.onBinary((bytes) => sendInput(commandInput(null, btoa(bytes))));
     const resize = terminal.onResize(({ cols, rows }) => {
-      if (ownership === "owned" && streamRef.current) streamRef.current.send({ type: "terminal.resize", cols, rows, cell_width_px: 0, cell_height_px: 0 });
-    });
-    const wheel = (event: WheelEvent) => {
-      if (ownership !== "owned" || !streamRef.current || event.deltaY === 0) return;
-      event.preventDefault();
-      const fontSize = typeof terminal.options.fontSize === "number" ? terminal.options.fontSize : 13;
-      const lines = Math.min(65535, Math.max(1, Math.ceil(Math.abs(event.deltaY) / Math.max(1, fontSize))));
+      if (ownershipRef.current !== "owned" || !streamRef.current) return;
+      const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
       streamRef.current.send({
+        type: "terminal.resize",
+        cols,
+        rows,
+        cell_width_px: bounds ? Math.max(0, Math.round(bounds.width / Math.max(1, cols))) : 0,
+        cell_height_px: bounds ? Math.max(0, Math.round(bounds.height / Math.max(1, rows))) : 0,
+      });
+    });
+    terminal.attachCustomWheelEventHandler((event) => {
+      if (event.deltaY === 0) return true;
+      event.preventDefault();
+      requestControl();
+      const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect()
+        ?? hostRef.current?.getBoundingClientRect();
+      const position = bounds ? terminalCellPosition(event.clientX, event.clientY, bounds, terminal.cols, terminal.rows) : { column: 0, row: 0 };
+      const cellHeight = bounds && terminal.rows > 0 ? bounds.height / terminal.rows : (typeof terminal.options.fontSize === "number" ? terminal.options.fontSize : 13);
+      sendInput({
         type: "terminal.scroll",
         direction: event.deltaY < 0 ? "up" : "down",
-        lines,
+        lines: Math.min(65535, Math.max(1, Math.ceil(Math.abs(event.deltaY) / Math.max(1, cellHeight)))),
         source: "wheel",
-        column: null,
-        row: null,
-        modifiers: 0,
+        column: position.column,
+        row: position.row,
+        modifiers: (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0),
       });
-    };
-    hostRef.current?.addEventListener("wheel", wheel, { passive: false });
+      return false;
+    });
     return () => {
       data.dispose();
       binary.dispose();
       resize.dispose();
-      hostRef.current?.removeEventListener("wheel", wheel);
+      terminal.attachCustomWheelEventHandler(() => true);
     };
-  }, [ownership, pendingControl]);
+  }, [selected, onSelect]);
 
   useEffect(() => {
-    if (!pendingControl && !controlAllowed && ownership !== "owned") pendingCommands.current = [];
-  }, [pendingControl, controlAllowed, ownership]);
+    if ((controlAllowed || pendingControl) && !controlRequestedRef.current) {
+      controlRequestedRef.current = true;
+      setControlRequested(true);
+    }
+  }, [controlAllowed, pendingControl]);
 
   useEffect(() => {
     ownershipRef.current = ownership;
@@ -127,18 +163,12 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
 
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (pendingControl && !controlAllowed) {
-      setError(null);
-      ownershipRef.current = "pending";
-      setOwnership("pending");
-      return;
-    }
     if (!terminal) return;
-    const mode = controlAllowed ? "control" : "observe";
+    const mode = controlRequested ? "control" : "observe";
     const openRequest: TerminalOpenRequest = {
       ...request,
       mode,
-      takeover: controlAllowed,
+      takeover: controlRequested,
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
     };
@@ -147,16 +177,15 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
     lastSequence.current = null;
     setError(null);
     setClosed(false);
-    ownershipRef.current = controlAllowed ? "pending" : "observing";
+    ownershipRef.current = controlRequested ? "pending" : "observing";
     setOwnership(ownershipRef.current);
-    const fail = (code: string, message: string, releaseControl = false) => {
+    const fail = (code: string, message: string) => {
       pendingCommands.current = [];
       cancelled = true;
       setError({ code, message });
       ownershipRef.current = "released";
       setOwnership("released");
       streamRef.current = null;
-      if (releaseControl) onRelease?.();
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
@@ -195,7 +224,7 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
             terminal.reset();
           }
           terminal.write(text);
-          if (controlAllowed) { ownershipRef.current = "owned"; setOwnership("owned"); flushPending(); }
+          if (controlRequested) { ownershipRef.current = "owned"; setOwnership("owned"); flushPending(); }
         } catch {
           fail("terminal_frame", "Terminal sent an invalid frame");
         }
@@ -211,7 +240,6 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
         setError(null);
         setOwnership("released");
         streamRef.current = null;
-        onRelease?.();
         onClosed?.();
         if (stream) registerStream?.(stream, false);
         stream?.close();
@@ -233,24 +261,15 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
       fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
     });
     return () => {
-      const shouldRelease = controlAllowed && stream !== null && !cancelled;
       cancelled = true;
-      if (shouldRelease && stream) {
-        try {
-          stream.send({ type: "terminal.release" });
-        } catch {
-          // The transport may already have closed during cancellation.
-        }
-        onRelease?.();
-      }
       if (streamRef.current === stream) streamRef.current = null;
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, request.session_id, request.pane_id, controlAllowed, pendingControl, attempt, registerStream]);
+  }, [client, request.session_id, request.pane_id, controlRequested, attempt, registerStream]);
 
   return (
-    <div className="terminal-host" ref={hostRef} aria-label={`Terminal ${request.pane_id}`}>
+    <div className="terminal-host" ref={hostRef} aria-label={`Terminal ${request.pane_id}`} onPointerDownCapture={(event) => { if (event.button === 0) requestControl(); }}>
       {closed ? (
         <div className="terminal-overlay" role="status">
           <span>The terminal process has closed.</span>
@@ -261,8 +280,8 @@ export function TerminalPane({ client, request, controlAllowed, pendingControl =
         <div className="terminal-overlay" role="alert">
           <span>{error.message}</span>
           <button type="button" className="recovery-button" onClick={() => {
+            setAttempt((value) => value + 1);
             if (error.code === "conflict" || error.code === "lost") onRetry?.();
-            else setAttempt((value) => value + 1);
           }}>{error.code === "conflict" || error.code === "lost" ? "Retry control" : "Retry"}</button>
           <button type="button" className="recovery-button" onClick={onResync}>Resync</button>
         </div>

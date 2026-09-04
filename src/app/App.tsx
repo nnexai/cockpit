@@ -145,7 +145,20 @@ export function projectedPaneRect(layout: TabLayout | undefined, paneId: string)
 
 export function tabDropInsertionIndex(sourceIndex: number, targetIndex: number, afterTarget: boolean): number | null {
   if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return null;
-  return targetIndex + (afterTarget ? 1 : 0);
+  const insertionIndex = targetIndex + (afterTarget ? 1 : 0);
+  const finalIndex = insertionIndex > sourceIndex ? insertionIndex - 1 : insertionIndex;
+  return finalIndex === sourceIndex ? null : insertionIndex;
+}
+
+export function spaceDropBeforeId(spaces: Space[], sourceId: string, targetId: string, afterTarget: boolean): string | null | undefined {
+  const sourceIndex = spaces.findIndex((space) => space.id === sourceId);
+  if (sourceIndex < 0 || sourceId === targetId) return undefined;
+  const remaining = spaces.filter((space) => space.id !== sourceId);
+  const targetIndex = remaining.findIndex((space) => space.id === targetId);
+  if (targetIndex < 0) return undefined;
+  const insertionIndex = targetIndex + (afterTarget ? 1 : 0);
+  if (insertionIndex === sourceIndex) return undefined;
+  return remaining[insertionIndex]?.id ?? null;
 }
 
 function describeError(error: unknown, fallback: string): StatusError {
@@ -313,7 +326,8 @@ export function canSwitchSessions(sessionCount: number): boolean {
 }
 
 export function tabLabelIsRedundant(label: string, displayedNumber: number): boolean {
-  return label.trim() === String(displayedNumber);
+  const trimmed = label.trim();
+  return trimmed === String(displayedNumber) || /^\d+$/.test(trimmed);
 }
 
 export function contextMenuPosition(
@@ -431,9 +445,17 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
       const status = spaceStatus(space.agent_status);
       const displayLabel = row.label;
       return <div className={`resource-row space-tree-row space-tree-${row.kind}${row.branch && row.kind !== "child" ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
-        onDragStart={(event) => { if (!busy) event.dataTransfer.setData("application/x-cockpit-space", space.id); }}
-        onDragOver={(event) => { if (!busy) event.preventDefault(); }}
-        onDrop={(event) => { if (busy) return; event.preventDefault(); const id = event.dataTransfer.getData("application/x-cockpit-space"); if (id && id !== space.id) mutate(`space:${id}`, { type: "space_move_block", space_ids: [id], before_space_id: space.id }); }}
+        onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); } }}
+        onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
+        onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+        onDrop={(event) => {
+          if (busy) return;
+          event.preventDefault();
+          const fallback = event.dataTransfer.getData("text/plain");
+          const id = event.dataTransfer.getData("application/x-cockpit-space") || (fallback.startsWith("space:") ? fallback.slice(6) : "");
+          const beforeSpaceId = spaceDropBeforeId(spaces, id, space.id, event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2);
+          if (beforeSpaceId !== undefined) mutate(`space:${id}`, { type: "space_move_block", space_ids: [id], before_space_id: beforeSpaceId });
+        }}
         onContextMenu={(event) => onContext(event, { kind: "space", id: space.id })}>
         {row.kind === "parent" && row.repositoryKey
           ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}>{row.expanded ? "⌄" : "›"}</button>
@@ -468,22 +490,33 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
   mutate: Mutate;
 }) {
   return <nav className="tab-strip" role="tablist" aria-label="Tabs">{tabs.map((tab, index) => {
-    const displayedNumber = tab.number || index + 1;
+    const displayedNumber = index + 1;
+    const redundantLabel = tabLabelIsRedundant(tab.label, displayedNumber);
+    const accessibleLabel = redundantLabel ? `Tab ${displayedNumber}` : `Tab ${displayedNumber}: ${tab.label}`;
     return <div className={`tab-item${tab.id === selectedTabId ? " is-selected" : ""}`} key={tab.id} draggable={!busy && editingId !== tab.id}
-      onDragStart={(event) => { if (!busy) event.dataTransfer.setData("application/x-cockpit-tab", tab.id); }}
-      onDragOver={(event) => { if (!busy) event.preventDefault(); }}
-      onDrop={(event) => { if (busy) return; event.preventDefault(); const id = event.dataTransfer.getData("application/x-cockpit-tab"); if (!id || id === tab.id) return; const insertion = tabDropInsertionIndex(tabs.findIndex((candidate) => candidate.id === id), index, event.clientX >= event.currentTarget.getBoundingClientRect().left + event.currentTarget.getBoundingClientRect().width / 2); if (insertion !== null) mutate(`tab:${id}`, { type: "tab_move", tab_id: id, insert_index: insertion }); }}
+      onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); } }}
+      onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
+      onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+      onDrop={(event) => {
+        if (busy) return;
+        event.preventDefault();
+        const fallback = event.dataTransfer.getData("text/plain");
+        const id = event.dataTransfer.getData("application/x-cockpit-tab") || (fallback.startsWith("tab:") ? fallback.slice(4) : "");
+        if (!id || id === tab.id) return;
+        const insertion = tabDropInsertionIndex(tabs.findIndex((candidate) => candidate.id === id), index, event.clientX >= event.currentTarget.getBoundingClientRect().left + event.currentTarget.getBoundingClientRect().width / 2);
+        if (insertion !== null) mutate(`tab:${id}`, { type: "tab_move", tab_id: id, insert_index: insertion });
+      }}
       onContextMenu={(event) => onContext(event, { kind: "tab", id: tab.id })}>
       {editingId === tab.id
         ? <InlineRename label={tab.label} ariaLabel={`Rename tab ${tab.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`tab:${tab.id}`, { type: "tab_rename", tab_id: tab.id, label }); if (accepted) onEdit(null); return accepted; }} />
-        : <button type="button" disabled={busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={`Tab ${tab.label}`} className="tab-button" title={tab.label} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{tabLabelIsRedundant(tab.label, displayedNumber) ? null : <span className="tab-label">{tab.label}</span>}</button>}
+        : <button type="button" disabled={busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
     <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button>
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, pendingControl, onSelect, onContext, onRelease, request, client, registerStream, onRetry, onResync, mutate, style }: {
+function PaneView({ pane, label, selected, showLabel, controlAllowed, pendingControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
   pane: Pane;
   label: string;
   selected: boolean;
@@ -492,11 +525,9 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, pendingCon
   pendingControl: boolean;
   onSelect: () => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
-  onRelease: () => void;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows">;
   client: CockpitClient;
   registerStream: (stream: TerminalStream, active: boolean) => void;
-  onRetry: () => void;
   onResync: () => void;
   mutate: Mutate;
   style: { left: string; top: string; width: string; height: string };
@@ -504,10 +535,9 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, pendingCon
   const title = pane.title || label;
   const closePane = () => { if (window.confirm(`Close ${title}?`)) mutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }); };
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
-    onPointerDownCapture={(event) => { if (event.button === 0 && !controlAllowed && !pendingControl) onSelect(); }}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
-    <div className="terminal-surface"><TerminalPane client={client} request={request} controlAllowed={controlAllowed} pendingControl={pendingControl} onRelease={onRelease} onRetry={onRetry} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
+    <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} pendingControl={pendingControl} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
   </section>;
 }
 
@@ -608,9 +638,9 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetry, onRetryMutation
   </aside>;
 }
 
-function Workbench({ client, state, sessions, selection, confirmedPaneId: confirmedPaneIdProp, mutations, onSession, onFocus, onRelease, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
+function Workbench({ client, state, sessions, selection, confirmedPaneId: confirmedPaneIdProp, mutations, onSession, onFocus, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; confirmedPaneId: string | null; mutations: MutationCoordinatorState;
-  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onRelease: () => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
+  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
 }) {
   const snapshot = state.snapshot;
   const confirmedPaneId = state.sync === "live" ? confirmedPaneIdProp : null;
@@ -698,15 +728,12 @@ function Workbench({ client, state, sessions, selection, confirmedPaneId: confir
     if (menu.target.kind === "space") {
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
-      const index = spaces.indexOf(space);
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled || index === 0} onClick={() => menuAction(() => onMutate(`space:${space.id}`, { type: "space_move_block", space_ids: [space.id], before_space_id: spaces[index - 1]?.id ?? null }))}>Move up</button><button role="menuitem" type="button" disabled={disabled || index === spaces.length - 1} onClick={() => menuAction(() => onMutate(`space:${space.id}`, { type: "space_move_block", space_ids: [space.id], before_space_id: spaces[index + 2]?.id ?? null }))}>Move down</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button></ContextMenu>;
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button></ContextMenu>;
     }
     if (menu.target.kind === "tab") {
       const tab = allTabs.find((candidate) => candidate.id === menu.target.id);
       if (!tab) return null;
-      const siblings = tabsForSpace(allTabs, tab.space_id);
-      const index = siblings.indexOf(tab);
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled || index === 0} onClick={() => menuAction(() => onMutate(`tab:${tab.id}`, { type: "tab_move", tab_id: tab.id, insert_index: index - 1 }))}>Move left</button><button role="menuitem" type="button" disabled={disabled || index === siblings.length - 1} onClick={() => menuAction(() => onMutate(`tab:${tab.id}`, { type: "tab_move", tab_id: tab.id, insert_index: index + 2 }))}>Move right</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeTab(tab))}>Close</button></ContextMenu>;
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeTab(tab))}>Close</button></ContextMenu>;
     }
     const pane = snapshot?.panes.find((candidate) => candidate.id === menu.target.id);
     if (!pane) return null;
@@ -720,7 +747,7 @@ function Workbench({ client, state, sessions, selection, confirmedPaneId: confir
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === confirmedPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} pendingControl={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} onSelect={() => focusPane(pane)} onContext={openContext} onRelease={onRelease} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onRetry={() => focusPane(pane)} onResync={onReconnect} mutate={onMutate} style={style} />
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === confirmedPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} pendingControl={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -898,7 +925,6 @@ export function App({ client }: { client: CockpitClient }) {
     const intent = focusIntent.current;
     if (intent) focus(intent.request, intent.location);
   };
-  const releaseControl = () => setConfirmedPaneId(null);
   const refreshSessions = useCallback(async () => {
     const response = await client.sessions();
     if (mountedRef.current) {
@@ -915,5 +941,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} confirmedPaneId={confirmedPaneId} mutations={mutations} onSession={switchSession} onFocus={focus} onRelease={releaseControl} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
+  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} confirmedPaneId={confirmedPaneId} mutations={mutations} onSession={switchSession} onFocus={focus} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
 }

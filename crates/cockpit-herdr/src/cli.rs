@@ -2367,6 +2367,14 @@ mod tests {
                 json!({"workspace_id": "s1", "label": "Tab", "focus": true}),
             ),
             (
+                ResourceMutationRequest::TabCreate {
+                    space_id: "s1".into(),
+                    label: None,
+                },
+                "tab.create",
+                json!({"workspace_id": "s1", "focus": true}),
+            ),
+            (
                 ResourceMutationRequest::TabRename {
                     tab_id: "t1".into(),
                     label: "Tab".into(),

@@ -17,12 +17,13 @@ import {
   scheduleFocusFallback,
   reconcileSessionChoice,
   prefixCommandForKey,
+  spaceDropBeforeId,
   tabDropInsertionIndex,
   projectSpaceTree,
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
-import { appendPendingControlCommand, MAX_PENDING_CONTROL_COMMANDS } from "./TerminalPane";
+import { appendPendingControlCommand, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
@@ -154,13 +155,24 @@ describe("mutation coordination", () => {
   });
 });
 
-describe("tab insertion boundaries", () => {
-  it("uses Herdr pre-removal boundaries for keyboard and pointer reorder", () => {
-    expect(tabDropInsertionIndex(0, 1, false)).toBe(1);
+describe("resource drop boundaries", () => {
+  it("uses Herdr pre-removal tab insertion boundaries without sending no-ops", () => {
+    expect(tabDropInsertionIndex(0, 1, false)).toBeNull();
     expect(tabDropInsertionIndex(0, 1, true)).toBe(2);
+    expect(tabDropInsertionIndex(0, 2, false)).toBe(2);
+    expect(tabDropInsertionIndex(0, 2, true)).toBe(3);
     expect(tabDropInsertionIndex(2, 0, false)).toBe(0);
     expect(tabDropInsertionIndex(2, 0, true)).toBe(1);
     expect(tabDropInsertionIndex(1, 1, true)).toBeNull();
+  });
+
+  it("converts Space target halves to Herdr before anchors", () => {
+    const spaces = ["a", "b", "c"].map((id) => space(id, id));
+    expect(spaceDropBeforeId(spaces, "a", "b", false)).toBeUndefined();
+    expect(spaceDropBeforeId(spaces, "a", "b", true)).toBe("c");
+    expect(spaceDropBeforeId(spaces, "c", "a", false)).toBe("a");
+    expect(spaceDropBeforeId(spaces, "c", "a", true)).toBe("b");
+    expect(spaceDropBeforeId(spaces, "b", "b", true)).toBeUndefined();
   });
 });
 
@@ -170,10 +182,17 @@ describe("desktop command routing", () => {
     expect(contextMenuPosition(-20, -10, 800, 600, 208, 320)).toEqual({ x: 8, y: 8 });
   });
 
-  it("omits a tab label which only repeats its visible number", () => {
+  it("omits Herdr's numeric automatic tab labels", () => {
     expect(tabLabelIsRedundant("1", 1)).toBe(true);
-    expect(tabLabelIsRedundant(" 1 ", 1)).toBe(true);
+    expect(tabLabelIsRedundant(" 5 ", 4)).toBe(true);
     expect(tabLabelIsRedundant("shell", 1)).toBe(false);
+  });
+
+  it("maps wheel pointers to bounded zero-based terminal cells", () => {
+    const bounds = { left: 100, top: 50, width: 800, height: 400 };
+    expect(terminalCellPosition(500, 250, bounds, 80, 20)).toEqual({ column: 40, row: 10 });
+    expect(terminalCellPosition(99, 49, bounds, 80, 20)).toEqual({ column: 0, row: 0 });
+    expect(terminalCellPosition(999, 999, bounds, 80, 20)).toEqual({ column: 79, row: 19 });
   });
 
 
