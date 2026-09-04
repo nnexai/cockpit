@@ -62,7 +62,11 @@ export type TerminalScrollDirection = "up" | "down";
 
 export type TerminalScrollSource = "wheel" | "page_key";
 
-export type TerminalCommand = { "type": "terminal.input", text: string | null, bytes: string | null, } | { "type": "terminal.resize", cols: number, rows: number, cell_width_px: number, cell_height_px: number, } | { "type": "terminal.scroll", direction: TerminalScrollDirection, lines: number, source: TerminalScrollSource, column: number | null, row: number | null, modifiers: number, } | { "type": "terminal.release" };
+export type TerminalMouseButton = "left" | "right" | "middle";
+
+export type TerminalMouseKind = "down" | "up" | "drag" | "moved";
+
+export type TerminalCommand = { "type": "terminal.input", text: string | null, bytes: string | null, } | { "type": "terminal.resize", cols: number, rows: number, cell_width_px: number, cell_height_px: number, } | { "type": "terminal.scroll", direction: TerminalScrollDirection, lines: number, source: TerminalScrollSource, column: number | null, row: number | null, modifiers: number, } | { "type": "terminal.mouse", kind: TerminalMouseKind, button: TerminalMouseButton | null, column: number, row: number, modifiers: number, } | { "type": "terminal.release" };
 
 export type TerminalOwnershipState = "pending" | "observing" | "owned" | "conflict" | "released" | "lost";
 

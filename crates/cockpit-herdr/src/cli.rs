@@ -1038,6 +1038,16 @@ impl HerdrCliAdapter {
         }
     }
 
+    fn client_socket_path(&self, session_id: &str) -> Result<PathBuf, InspectionError> {
+        let api_socket = self.socket_path(session_id)?;
+        let stem = api_socket
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("herdr");
+        let parent = api_socket.parent().unwrap_or_else(|| Path::new(""));
+        Ok(parent.join(format!("{stem}-client.sock")))
+    }
+
     async fn socket_request(
         &self,
         session_id: &str,
@@ -1649,6 +1659,14 @@ impl HerdrCliAdapter {
                 "terminal dimensions must be greater than zero",
             ));
         }
+        if request.mode == TerminalMode::Control {
+            let stream_id = format!(
+                "terminal-{}",
+                NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)
+            );
+            let socket_path = self.client_socket_path(&request.session_id)?;
+            return crate::terminal_wire::open_terminal(&socket_path, request, stream_id).await;
+        }
         let cols = request.cols.to_string();
         let rows = request.rows.to_string();
         let mut args = vec![
@@ -1981,6 +1999,7 @@ async fn terminal_task(
                         TerminalCommand::Input { .. }
                             | TerminalCommand::Resize { .. }
                             | TerminalCommand::Scroll { .. }
+                            | TerminalCommand::Mouse { .. }
                     );
                     if mutation && (mode == TerminalMode::Observe || !ownership_announced) {
                         let message = if mode == TerminalMode::Observe {

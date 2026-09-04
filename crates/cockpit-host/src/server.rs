@@ -28,7 +28,7 @@ use cockpit_core::{
 use cockpit_protocol::v1::{
     ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
     SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalMode,
-    TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+    TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
 };
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
@@ -755,12 +755,24 @@ async fn run_terminal_socket(
                                 break;
                             }
                         };
-                        match commands.try_send(command) {
-                            Ok(()) => {}
-                            Err(_) => {
-                                let _ = send_terminal_error(&mut socket, &request, &stream_id, "terminal_backpressure", "Terminal command queue is full").await;
-                                break;
+                        let lossy_motion = matches!(
+                            &command,
+                            TerminalCommand::Mouse {
+                                kind: TerminalMouseKind::Moved | TerminalMouseKind::Drag,
+                                ..
                             }
+                        );
+                        if lossy_motion {
+                            match commands.try_send(command) {
+                                Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    let _ = send_terminal_error(&mut socket, &request, &stream_id, "terminal_closed", "Terminal command channel closed").await;
+                                    break;
+                                }
+                            }
+                        } else if commands.send(command).await.is_err() {
+                            let _ = send_terminal_error(&mut socket, &request, &stream_id, "terminal_closed", "Terminal command channel closed").await;
+                            break;
                         }
                     }
                     Some(Ok(Message::Binary(_))) => {
@@ -806,7 +818,9 @@ async fn run_terminal_socket(
                         | TerminalStreamMessage::Disconnected { .. }
                         | TerminalStreamMessage::Error { .. }
                         | TerminalStreamMessage::Ownership {
-                            state: TerminalOwnershipState::Lost,
+                            state:
+                                TerminalOwnershipState::Lost
+                                | TerminalOwnershipState::Conflict,
                             ..
                         }
                 );

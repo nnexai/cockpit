@@ -85,6 +85,8 @@ describe("client DTO parsers", () => {
     expect(() => parseSessionStreamMessage({ type: "snapshot", session_id: "session-1", generation: 1, sequence: 1, snapshot: { ...snapshot, session_id: "other" } })).toThrow(CockpitClientError);
     expect(() => parseTerminalCommand({ type: "terminal.input", text: null, bytes: null })).toThrow(/exactly one/);
     expect(() => parseTerminalCommand({ type: "terminal.input", text: null, bytes: "not base64" })).toThrow(CockpitClientError);
+    expect(parseTerminalCommand({ type: "terminal.mouse", kind: "down", button: "left", column: 12, row: 7, modifiers: 0 })).toEqual({ type: "terminal.mouse", kind: "down", button: "left", column: 12, row: 7, modifiers: 0 });
+    expect(() => parseTerminalCommand({ type: "terminal.mouse", kind: "moved", button: "left", column: 12, row: 7, modifiers: 0 })).toThrow(CockpitClientError);
     expect(() => parseTerminalOpenRequest({ session_id: "../session", pane_id: "pane-1", mode: "observe", takeover: false, cols: 80, rows: 24 })).toThrow(/invalid target/);
     expect(() => parseTerminalOpenRequest({ session_id: "session-1", pane_id: "pane/child", mode: "observe", takeover: false, cols: 80, rows: 24 })).toThrow(/invalid target/);
   });
@@ -188,7 +190,11 @@ describe("browser CockpitClient", () => {
     const stream = await open;
     socket.message(JSON.stringify({ type: "ownership", session_id: "s_1", pane_id: "w1A:p1", stream_id: "stream-1", state: "owned", message: null }));
     stream.send({ type: "terminal.input", text: "hello", bytes: null });
-    expect(socket.sent).toEqual([JSON.stringify({ type: "terminal.input", text: "hello", bytes: null })]);
+    stream.send({ type: "terminal.mouse", kind: "down", button: "left", column: 12, row: 7, modifiers: 0 });
+    expect(socket.sent).toEqual([
+      JSON.stringify({ type: "terminal.input", text: "hello", bytes: null }),
+      JSON.stringify({ type: "terminal.mouse", kind: "down", button: "left", column: 12, row: 7, modifiers: 0 }),
+    ]);
     stream.close();
     stream.close();
     expect(socket.readyState).toBe(3);

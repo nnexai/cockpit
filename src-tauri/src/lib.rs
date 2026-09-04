@@ -707,7 +707,7 @@ async fn cockpit_terminal_open(
                     | TerminalStreamMessage::Disconnected { .. }
                     | TerminalStreamMessage::Error { .. }
                     | TerminalStreamMessage::Ownership {
-                        state: TerminalOwnershipState::Lost,
+                        state: TerminalOwnershipState::Lost | TerminalOwnershipState::Conflict,
                         ..
                     }
             );

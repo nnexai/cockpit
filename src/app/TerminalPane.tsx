@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
-import type { TerminalCommand, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
+import type { TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
 
 
 export const MAX_PENDING_CONTROL_COMMANDS = 64;
@@ -13,8 +13,10 @@ export function appendPendingControlCommand(queue: TerminalCommand[], command: T
 export type TerminalPaneProps = {
   client: CockpitClient;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows">;
+  herdrRect: { x: number; y: number; width: number; height: number } | null;
   selected: boolean;
   controlAllowed: boolean;
+  controlPending: boolean;
   onRequestControl?: () => void;
   onControlLost?: () => void;
   onSelect?: () => void;
@@ -36,6 +38,18 @@ function decodeFrame(bytes: string): Uint8Array {
 function applicationFontSize(): number {
   const fontSize = Number.parseFloat(globalThis.getComputedStyle(document.body).fontSize);
   return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16;
+}
+
+export function createCockpitTerminal(fontSize = applicationFontSize()): Terminal {
+  return new Terminal({
+    convertEol: false,
+    cursorBlink: false,
+    fontFamily: '"IosevkaTerm Nerd Font Mono", "FiraCode Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
+    fontSize,
+    theme: { background: "#0c1016", foreground: "#d8dee8" },
+    scrollback: 5000,
+    vtExtensions: { kittyKeyboard: true },
+  });
 }
 
 function commandInput(text: string | null, bytes: string | null): TerminalCommand {
@@ -65,6 +79,38 @@ export function terminalCellPosition(clientX: number, clientY: number, bounds: T
   };
 }
 
+type TerminalPointer = Pick<PointerEvent, "clientX" | "clientY" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey">;
+export function terminalMouseButton(button: number): TerminalMouseButton | null {
+  if (button === 0) return "left";
+  if (button === 1) return "middle";
+  if (button === 2) return "right";
+  return null;
+}
+
+export function terminalModifierBits(event: Pick<PointerEvent, "shiftKey" | "ctrlKey" | "altKey" | "metaKey">): number {
+  return (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+}
+
+export function terminalMouseCommand(
+  kind: TerminalMouseKind,
+  button: TerminalMouseButton | null,
+  event: TerminalPointer,
+  bounds: TerminalBounds,
+  cols: number,
+  rows: number,
+  herdrRect: { x: number; y: number; width: number; height: number },
+): TerminalCommand {
+  const position = terminalCellPosition(event.clientX, event.clientY, bounds, cols, rows);
+  return {
+    type: "terminal.mouse",
+    kind,
+    button,
+    column: Math.max(0, Math.min(65535, Math.floor(herdrRect.x + position.column), Math.floor(herdrRect.x + Math.max(1, herdrRect.width) - 1))),
+    row: Math.max(0, Math.min(65535, Math.floor(herdrRect.y + position.row), Math.floor(herdrRect.y + Math.max(1, herdrRect.height) - 1))),
+    modifiers: terminalModifierBits(event),
+  };
+}
+
 export function shouldObserveAfterControlLoss(
   controlRequested: boolean,
   ownership: TerminalOwnershipState,
@@ -72,7 +118,7 @@ export function shouldObserveAfterControlLoss(
   return controlRequested && (ownership === "conflict" || ownership === "lost");
 }
 
-export function TerminalPane({ client, request, selected, controlAllowed, onRequestControl, onControlLost, onSelect, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, herdrRect, selected, controlAllowed, controlPending, onRequestControl, onControlLost, onSelect, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
@@ -86,9 +132,19 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
   const pendingCommands = useRef<TerminalCommand[]>([]);
   const [controlRequested, setControlRequested] = useState(controlAllowed);
   const controlRequestedRef = useRef(controlAllowed);
+  const controlRequestPendingRef = useRef(false);
+  const controlAllowedRef = useRef(controlAllowed);
+  controlAllowedRef.current = controlAllowed;
+  const activeMouseButton = useRef<TerminalMouseButton | null>(null);
+  const lastMouseMotionAt = useRef(0);
+  const sendInput = (command: TerminalCommand) => {
+    if (!controlAllowedRef.current && !controlRequestPendingRef.current) return;
+    if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) streamRef.current.send(command);
+    else pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
+  };
   const flushPending = () => {
     const stream = streamRef.current;
-    if (ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0) return;
+    if (!controlAllowedRef.current || !controlRequestedRef.current || ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0) return;
     pendingCommands.current.forEach((command) => stream.send(command));
     pendingCommands.current = [];
   };
@@ -96,31 +152,45 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
     terminalRef.current?.focus();
     onRequestControl?.();
     if (!selected) onSelect?.();
-    if (controlRequestedRef.current) return;
-    controlRequestedRef.current = true;
-    setControlRequested(true);
+    if (controlAllowedRef.current && controlRequestedRef.current) return;
+    controlRequestPendingRef.current = true;
+    controlRequestedRef.current = false;
+    setControlRequested(false);
   };
 
   useEffect(() => {
     if (!hostRef.current) return;
-    const terminal = new Terminal({
-      convertEol: false,
-      customGlyphs: true,
-      cursorBlink: false,
-      fontFamily: '"IosevkaTerm Nerd Font Mono", "FiraCode Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
-      fontSize: applicationFontSize(),
-      theme: { background: "#0c1016", foreground: "#d8dee8" },
-      scrollback: 5000,
-    });
+    const terminal = createCockpitTerminal();
     terminal.open(hostRef.current);
     let disposed = false;
     let fit: { fit(): void } | null = null;
-    void Promise.all([import("@xterm/addon-fit"), import("@xterm/addon-canvas")]).then(([{ FitAddon }, { CanvasAddon }]) => {
+    void import("@xterm/addon-fit").then(async ({ FitAddon }) => {
       if (disposed) return;
       const addon = new FitAddon();
       fit = addon;
       terminal.loadAddon(addon);
-      terminal.loadAddon(new CanvasAddon());
+      try {
+        const [{ WebglAddon }, { ImageAddon }] = await Promise.all([
+          import("@xterm/addon-webgl"),
+          import("@xterm/addon-image"),
+        ]);
+        if (disposed) return;
+        const webglAddon = new WebglAddon();
+        terminal.loadAddon(webglAddon);
+        const imageAddon = new ImageAddon({
+          kittySupport: true,
+          sixelSupport: false,
+          iipSupport: false,
+        });
+        terminal.loadAddon(imageAddon);
+        webglAddon.onContextLoss(() => {
+          imageAddon.dispose();
+          webglAddon.dispose();
+        });
+      } catch {
+        // The built-in renderer remains usable when WebGL is unavailable.
+      }
+      if (disposed) return;
       addon.fit();
       setTerminalReady(true);
     }).catch(() => undefined);
@@ -138,10 +208,6 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    const sendInput = (command: TerminalCommand) => {
-      if (ownershipRef.current === "owned" && streamRef.current) streamRef.current.send(command);
-      else if (controlRequestedRef.current) pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
-    };
     const data = terminal.onData((text) => sendInput(commandInput(text, null)));
     const binary = terminal.onBinary((bytes) => sendInput(commandInput(null, btoa(bytes))));
     terminal.attachCustomKeyEventHandler((event) => {
@@ -152,7 +218,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
       return false;
     });
     const resize = terminal.onResize(({ cols, rows }) => {
-      if (ownershipRef.current !== "owned" || !streamRef.current) return;
+      if (!controlAllowedRef.current || ownershipRef.current !== "owned" || !streamRef.current) return;
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
       streamRef.current.send({
         type: "terminal.resize",
@@ -177,7 +243,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
         source: "wheel",
         column: position.column,
         row: position.row,
-        modifiers: (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0),
+        modifiers: terminalModifierBits(event),
       });
       return false;
     });
@@ -190,11 +256,24 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
     };
   }, [selected, onSelect]);
   useEffect(() => {
-    if (controlAllowed && !controlRequestedRef.current) {
-      controlRequestedRef.current = true;
-      setControlRequested(true);
+    if (controlAllowed) {
+      controlRequestPendingRef.current = false;
+      if (!controlRequestedRef.current) {
+        controlRequestedRef.current = true;
+        setControlRequested(true);
+      }
+      return;
     }
-  }, [controlAllowed]);
+    if (!controlPending) {
+      controlRequestPendingRef.current = false;
+      pendingCommands.current = [];
+      activeMouseButton.current = null;
+    }
+    if (controlRequestedRef.current) {
+      controlRequestedRef.current = false;
+      setControlRequested(false);
+    }
+  }, [controlAllowed, controlPending]);
 
 
 
@@ -245,6 +324,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
       if (stream) registerStream?.(stream, false);
       stream?.close();
       controlRequestedRef.current = false;
+      controlRequestPendingRef.current = false;
       setControlRequested(false);
       onControlLost?.();
     };
@@ -328,8 +408,63 @@ export function TerminalPane({ client, request, selected, controlAllowed, onRequ
     };
   }, [client, request.session_id, request.pane_id, controlRequested, terminalReady, attempt, registerStream]);
 
+  const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
+    const terminal = terminalRef.current;
+    if (!terminal || !herdrRect) return;
+    const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect()
+      ?? hostRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    sendInput(terminalMouseCommand(kind, button, event, bounds, terminal.cols, terminal.rows, herdrRect));
+  };
   return (
-    <div className="terminal-host" ref={hostRef} aria-label={`Terminal ${request.pane_id}`} onPointerDownCapture={(event) => { if (event.button === 0) requestControl(); }}>
+    <div
+      className="terminal-host"
+      ref={hostRef}
+      aria-label={`Terminal ${request.pane_id}`}
+      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
+      onPointerDownCapture={(event) => {
+        const button = terminalMouseButton(event.button);
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        requestControl();
+        lastMouseMotionAt.current = 0;
+        activeMouseButton.current = button;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        sendPointerMouse("down", button, event);
+      }}
+      onPointerMoveCapture={(event) => {
+        if (event.timeStamp - lastMouseMotionAt.current < 16) return;
+        lastMouseMotionAt.current = event.timeStamp;
+        const button = activeMouseButton.current;
+        sendPointerMouse(button ? "drag" : "moved", button, event);
+        if (button) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+      onPointerUpCapture={(event) => {
+        const button = terminalMouseButton(event.button);
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        sendPointerMouse("up", button, event);
+        activeMouseButton.current = null;
+        lastMouseMotionAt.current = 0;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={(event) => {
+        const button = activeMouseButton.current;
+        if (button) {
+          event.preventDefault();
+          event.stopPropagation();
+          sendPointerMouse("up", button, event);
+        }
+        activeMouseButton.current = null;
+        lastMouseMotionAt.current = 0;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+    >
       {closed ? (
         <div className="terminal-overlay" role="status">
           <span>The terminal process has closed.</span>

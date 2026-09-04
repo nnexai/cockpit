@@ -64,7 +64,7 @@ The adapter owns:
 - unknown fields/events without loss of diagnostics;
 - stale state when ordering cannot be proven.
 
-Use the documented `herdr terminal session observe/control` subprocess stream for terminals. Do not reimplement the undocumented binary handshake in this phase. Decode newline JSON terminal frames, base64 ANSI bytes, size, sequence, full/incremental state, closed reason, input, resize, scroll, release, one-controller ownership, and explicit takeover conflicts.
+Use the documented `herdr terminal session observe` subprocess stream for read-only terminals. Writable attachments use the Herdr 0.8.2/protocol-20 client socket so input, resize, scroll, release, one-controller ownership, takeover conflicts, and structured pointer events retain Herdr TUI semantics. Keep the private handshake version-gated and covered by exact wire fixtures.
 
 ### Core
 
@@ -106,7 +106,7 @@ Initial visible UI:
 - xterm.js only for panes visible in the selected tab;
 - inline pending, stale, disconnected, unsupported, takeover, and failed states.
 
-Use `@xterm/xterm` and `@xterm/addon-fit` only after the terminal stream contract exists. Herdr remains PTY, process, focus, ownership, and scrollback authority. The magic escape path must run before xterm input or Cockpit shortcuts.
+Use matching `@xterm/xterm` beta packages for Kitty keyboard and graphics support. Initialize Fit and WebGL before terminal attachment, load the image addon only with WebGL, and retain xterm's built-in text renderer as the fallback. Herdr remains PTY, process, focus, ownership, and scrollback authority. The magic escape path must run before xterm input or Cockpit shortcuts.
 
 ## Implementation order
 

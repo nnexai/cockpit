@@ -537,12 +537,14 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, onRequestControl, onControlLost, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
+function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, herdrRect, onRequestControl, onControlLost, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
   pane: Pane;
   label: string;
   selected: boolean;
   showLabel: boolean;
   controlAllowed: boolean;
+  controlPending: boolean;
+  herdrRect: { x: number; y: number; width: number; height: number } | null;
   onRequestControl: () => void;
   onControlLost: () => void;
   onSelect: () => void;
@@ -559,7 +561,7 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, onRequestC
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
-    <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} onRequestControl={onRequestControl} onControlLost={onControlLost} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
+    <div className="terminal-surface"><TerminalPane client={client} request={request} herdrRect={herdrRect} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} onRequestControl={onRequestControl} onControlLost={onControlLost} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
   </section>;
 }
 
@@ -768,7 +770,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, mutation
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} onRequestControl={() => onRequestControl(pane.id)} onControlLost={() => onControlLost(pane.id)} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} herdrRect={rectangle ?? null} onRequestControl={() => onRequestControl(pane.id)} onControlLost={() => onControlLost(pane.id)} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -879,7 +881,7 @@ export function App({ client }: { client: CockpitClient }) {
     const next = authoritativeSelection(state.snapshot);
     setSelection(next);
     const intent = focusIntent.current;
-    if (intent && intent.epoch === state.epoch && intent.token === state.focusToken && !state.focusPending) {
+    if (intent && intent.epoch === state.epoch && intent.token === state.focusToken && !state.focusPending && !state.focusError) {
       focusFallbackCancel.current?.();
       focusFallbackCancel.current = null;
       setFocusDelayed(false);
@@ -888,7 +890,7 @@ export function App({ client }: { client: CockpitClient }) {
     } else if (!intent && controlPaneId !== null && next.paneId !== controlPaneId) {
       setControlPaneId(null);
     }
-  }, [state.snapshot, state.epoch, state.focusPending, state.focusToken, controlPaneId]);
+  }, [state.snapshot, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId]);
   const switchSession = (id: string) => { sessionStream.current?.close(); sessionStream.current = null; focusFallbackCancel.current?.(); focusFallbackCancel.current = null; setFocusDelayed(false); focusIntent.current = null; mutationTokenRef.current += 1; mutationPendingRef.current = false; dispatchMutation({ type: "reset" }); setSelection({ spaceId: null, tabId: null, paneId: null }); setControlPaneId(null); controlInitializedEpoch.current = null; dispatch({ type: "switch", sessionId: id }); };
   const focus = (request: FocusRequest, location: Selection) => {
     const sessionId = state.sessionId;
@@ -908,7 +910,13 @@ export function App({ client }: { client: CockpitClient }) {
       focusFallbackCancel.current = scheduleFocusFallback(
         () => mountedRef.current && stateRef.current.epoch === epoch && stateRef.current.sessionId === sessionId && focusTokenRef.current === token && stateRef.current.focusPending !== null,
         () => setFocusDelayed(true),
-        () => { recoveryResyncRef.current = true; setResyncAttempt((value) => value + 1); },
+        () => {
+          focusFallbackCancel.current = null;
+          setFocusDelayed(false);
+          dispatch({ type: "focus/error", epoch, sessionId, token, code: "focus_timeout", message: "Herdr did not confirm this focus request" });
+          recoveryResyncRef.current = true;
+          setResyncAttempt((value) => value + 1);
+        },
       );
     }, (error: unknown) => {
       if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || focusTokenRef.current !== token) return;

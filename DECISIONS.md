@@ -88,9 +88,13 @@ This records the decisions made during the architecture refinement interview. It
 
 - Herdr owns the PTY, process, terminal state, and writable-owner arbitration. xterm.js owns rendering and browser-side input capture only.
 - Attachment uses Herdr’s terminal stream semantics, not a Cockpit-created PTY.
+- Read-only attachments use Herdr’s documented terminal-session stream. Writable attachments use the Herdr 0.8.2/protocol-20 binary client socket because the JSON terminal-session wrapper cannot carry structured mouse events. The private wire dependency is version-gated and fixture-tested; it is not a second PTY or terminal authority.
 - xterm.js renderers are mounted only for panes visible in the selected tab. Hidden tabs detach renderers/subscriptions while Herdr processes continue running.
-- The Fit and Canvas addons initialize before stream attachment. Cockpit fits the renderer first and sends the resulting rows and columns in the initial attachment request; this avoids an initial 80×24 frame and preserves continuous box-drawing glyphs.
+- The Fit and WebGL addons initialize before stream attachment. Cockpit fits the renderer first and sends the resulting rows and columns in the initial attachment request; this avoids an initial 80x24 frame. WebGL failure falls back to xterm's built-in text renderer instead of blocking attachment.
 - Focused xterm forwards ordinary input only after writable ownership is confirmed. `Shift+Enter` sends a bare line-feed; Herdr’s magic escape key still takes precedence.
+- Pointer down, up, drag, and motion are sent as Herdr structured input events after writable ownership. Herdr performs pane hit-testing, selection, and application mouse-mode routing; Cockpit does not force xterm mouse modes or send raw SGR reports at shell prompts.
+- Kitty keyboard negotiation is always enabled in xterm.js. A terminal application still controls whether enhanced key reporting is active by sending the Kitty set, push, or pop sequences.
+- The image addon enables Kitty graphics only while WebGL is active. Cockpit disables SIXEL and iTerm image handling, and removes Kitty image handling if the WebGL context is lost.
 - The initially focused pane and an explicit local selection/click may request writable takeover. If another client subsequently takes focus or ownership, Cockpit immediately falls back to observation and must not reclaim control until the user acts locally again.
 - A control loss is an attachment transition, not a terminal-process closure. The last frame remains visible and observation continues.
 - Attach/reconnect failure leaves the resource visible with stale/disconnected status, retry, and resync; the Herdr process is not silently closed.

@@ -24,7 +24,7 @@ import {
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
-import { appendPendingControlCommand, MAX_PENDING_CONTROL_COMMANDS, shouldObserveAfterControlLoss, terminalCellPosition, terminalModifiedEnterInput } from "./TerminalPane";
+import { appendPendingControlCommand, createCockpitTerminal, MAX_PENDING_CONTROL_COMMANDS, shouldObserveAfterControlLoss, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
@@ -55,6 +55,44 @@ describe("terminal ownership", () => {
     expect(terminalModifiedEnterInput({ ...event, shiftKey: false })).toBeNull();
     expect(terminalModifiedEnterInput({ ...event, ctrlKey: true })).toBeNull();
     expect(terminalModifiedEnterInput({ ...event, type: "keyup" })).toBeNull();
+  });
+
+  it("negotiates Kitty keyboard reporting with terminal applications", async () => {
+    const terminal = createCockpitTerminal(16);
+    const data = vi.fn();
+    terminal.onData(data);
+
+    await new Promise<void>((resolve) => terminal.write("\u001b[?u", resolve));
+
+    expect(data).toHaveBeenCalledWith("\u001b[?0u");
+    terminal.dispose();
+  });
+
+  it("maps browser pointer coordinates into Herdr pane coordinates", () => {
+    const event = { clientX: 110, clientY: 70, shiftKey: true, ctrlKey: false, altKey: true, metaKey: false };
+    const command = terminalMouseCommand(
+      "down",
+      "left",
+      event,
+      { left: 10, top: 20, width: 800, height: 400 },
+      80,
+      40,
+      { x: 26, y: 1, width: 94, height: 39 },
+    );
+
+    expect(command).toEqual({
+      type: "terminal.mouse",
+      kind: "down",
+      button: "left",
+      column: 36,
+      row: 6,
+      modifiers: 5,
+    });
+    expect(terminalMouseCommand("moved", null, { ...event, clientX: 10_000, clientY: 10_000 }, { left: 10, top: 20, width: 800, height: 400 }, 80, 40, { x: 26, y: 1, width: 20, height: 10 })).toMatchObject({ column: 45, row: 10 });
+    expect(terminalMouseButton(0)).toBe("left");
+    expect(terminalMouseButton(1)).toBe("middle");
+    expect(terminalMouseButton(2)).toBe("right");
+    expect(terminalMouseButton(3)).toBeNull();
   });
 });
 

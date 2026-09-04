@@ -478,6 +478,17 @@ export function parseTerminalCommand(value: unknown): TerminalCommand {
     if ((value.direction !== "up" && value.direction !== "down") || !isU32(value.lines) || (value.source !== "wheel" && value.source !== "page_key") || !(value.column === null || isU16(value.column)) || !(value.row === null || isU16(value.row)) || !isU8(value.modifiers)) return malformed("Terminal scroll command is malformed");
     return { type: "terminal.scroll", direction: value.direction, lines: value.lines, source: value.source, column: value.column, row: value.row, modifiers: value.modifiers };
   }
+  if (value.type === "terminal.mouse") {
+    const kind = value.kind;
+    const button = value.button;
+    if ((kind !== "down" && kind !== "up" && kind !== "drag" && kind !== "moved") || !isU16(value.column) || !isU16(value.row) || !isU8(value.modifiers)) return malformed("Terminal mouse command is malformed");
+    if (kind === "moved") {
+      if (button !== null) return malformed("Terminal mouse command is malformed");
+      return { type: "terminal.mouse", kind, button: null, column: value.column, row: value.row, modifiers: value.modifiers };
+    }
+    if (button !== "left" && button !== "right" && button !== "middle") return malformed("Terminal mouse command is malformed");
+    return { type: "terminal.mouse", kind, button, column: value.column, row: value.row, modifiers: value.modifiers };
+  }
   if (value.type === "terminal.release") return { type: "terminal.release" };
   return malformed("Terminal command has an unknown type");
 }

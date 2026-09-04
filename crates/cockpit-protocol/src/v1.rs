@@ -387,6 +387,25 @@ pub enum TerminalScrollSource {
     PageKey,
 }
 
+/// Mouse button forwarded through Herdr's structured input path.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalMouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// Mouse event kind forwarded through Herdr's structured input path.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalMouseKind {
+    Down,
+    Up,
+    Drag,
+    Moved,
+}
+
 /// A command sent to a Herdr terminal stream.
 ///
 /// Input commands intentionally have one shared wire tag. Exactly one of
@@ -413,6 +432,14 @@ pub enum TerminalCommand {
         source: TerminalScrollSource,
         column: Option<u16>,
         row: Option<u16>,
+        modifiers: u8,
+    },
+    #[ts(rename = "terminal.mouse")]
+    Mouse {
+        kind: TerminalMouseKind,
+        button: Option<TerminalMouseButton>,
+        column: u16,
+        row: u16,
         modifiers: u8,
     },
     #[ts(rename = "terminal.release")]
@@ -474,7 +501,12 @@ impl TerminalCommand {
             Self::Scroll { lines, .. } if !(1..=MAX_TERMINAL_SCROLL_LINES).contains(lines) => {
                 return Err("terminal.scroll lines must be between 1 and 65535");
             }
-            Self::Scroll { .. } | Self::Release => {}
+            Self::Mouse { kind, button, .. }
+                if matches!(kind, TerminalMouseKind::Moved) == button.is_some() =>
+            {
+                return Err("terminal.mouse button does not match event kind");
+            }
+            Self::Scroll { .. } | Self::Mouse { .. } | Self::Release => {}
         }
         Ok(())
     }
@@ -506,6 +538,15 @@ enum TerminalCommandWire {
         column: Option<u16>,
         #[serde(default)]
         row: Option<u16>,
+        modifiers: u8,
+    },
+    #[serde(rename = "terminal.mouse")]
+    Mouse {
+        kind: TerminalMouseKind,
+        #[serde(default)]
+        button: Option<TerminalMouseButton>,
+        column: u16,
+        row: u16,
         modifiers: u8,
     },
     #[serde(rename = "terminal.release")]
@@ -540,6 +581,19 @@ impl TryFrom<TerminalCommandWire> for TerminalCommand {
                 direction,
                 lines,
                 source,
+                column,
+                row,
+                modifiers,
+            },
+            TerminalCommandWire::Mouse {
+                kind,
+                button,
+                column,
+                row,
+                modifiers,
+            } => Self::Mouse {
+                kind,
+                button,
                 column,
                 row,
                 modifiers,
@@ -584,6 +638,19 @@ impl Serialize for TerminalCommand {
                 direction: *direction,
                 lines: *lines,
                 source: *source,
+                column: *column,
+                row: *row,
+                modifiers: *modifiers,
+            },
+            Self::Mouse {
+                kind,
+                button,
+                column,
+                row,
+                modifiers,
+            } => TerminalCommandWire::Mouse {
+                kind: *kind,
+                button: *button,
                 column: *column,
                 row: *row,
                 modifiers: *modifiers,

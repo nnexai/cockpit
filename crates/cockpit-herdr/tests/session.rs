@@ -11,7 +11,7 @@ use cockpit_protocol::v1::{
     TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
 };
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 
 #[cfg(unix)]
@@ -620,11 +620,48 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
 #[cfg(unix)]
 #[tokio::test]
 async fn maps_controller_takeover_to_ownership_loss() {
-    let fixture = script(
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"terminal.frame\",\"seq\":1,\"encoding\":\"ansi\",\"width\":80,\"height\":24,\"full\":true,\"bytes\":\"\"}' '{\"type\":\"terminal.closed\",\"reason\":\"terminal attach taken over\"}'\n",
-    );
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-handoff-{}.sock", temp_id()));
+    let client_socket = socket.with_file_name(format!(
+        "{}-client.sock",
+        socket.file_stem().unwrap().to_string_lossy()
+    ));
+    let listener = UnixListener::bind(&client_socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let hello_size = stream.read_u32_le().await.unwrap() as usize;
+        let mut hello = vec![0; hello_size];
+        stream.read_exact(&mut hello).await.unwrap();
+        assert_eq!(hello, [0, 20, 80, 24, 0, 0, 1, 0, 2]);
+
+        let welcome = [0, 20, 1, 0];
+        stream
+            .write_all(&(welcome.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&welcome).await.unwrap();
+
+        let control_size = stream.read_u32_le().await.unwrap() as usize;
+        let mut control = vec![0; control_size];
+        stream.read_exact(&mut control).await.unwrap();
+        assert_eq!(control, [9, 5, b'w', b'1', b':', b'p', b'1', 1]);
+
+        let terminal = [2, 1, 80, 24, 1, 0];
+        stream
+            .write_all(&(terminal.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&terminal).await.unwrap();
+        let reason = b"terminal attach taken over";
+        let mut shutdown = vec![4, 1, reason.len() as u8];
+        shutdown.extend_from_slice(reason);
+        stream
+            .write_all(&(shutdown.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&shutdown).await.unwrap();
+    });
     let config =
-        HerdrCliConfig::from_options(Some(fixture.clone()), Some("handoff".into()), None).unwrap();
+        HerdrCliConfig::from_options(None, Some("handoff".into()), Some(socket.clone())).unwrap();
     let request = TerminalOpenRequest {
         session_id: "handoff".into(),
         pane_id: "w1:p1".into(),
@@ -663,7 +700,8 @@ async fn maps_controller_takeover_to_ownership_loss() {
             }
         ] if message == "terminal attach taken over"
     ));
-    drop(fs::remove_file(fixture));
+    server.await.unwrap();
+    drop(fs::remove_file(client_socket));
 }
 
 #[test]
