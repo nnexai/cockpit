@@ -54,29 +54,31 @@ This records the decisions made during the architecture refinement interview. It
 
 ### Primary surface
 
-- The first screen is a Herdr-TUI-like session dashboard.
+- The first screen uses the Herdr TUI as its semantic and operational baseline, not as a skin to reproduce indefinitely.
+- Preserve Herdr’s resource model, hierarchy, focus semantics, attention ordering, terminal behavior, and supported operations before introducing intentional Cockpit departures.
+- Cockpit may depart from the TUI where a graphical desktop workbench improves supervision, discoverability, direct manipulation, or ownership clarity. A departure must not create a second authority for Herdr-owned state.
 - The sidebar has:
   - scrollable hierarchical Spaces at the top;
   - an Agents section below, acting as Herdr’s attention queue.
 - The main area shows tabs for the selected Space and fills available space.
 - Spaces and agent/process entries use Herdr-native terminology and identifiers at the UI level where practical.
-- The initial UI milestone is a real Herdr session mirror with read and attach behavior.
-- The initial Cockpit foundation acceptance is the Herdr mirror plus real terminal attach/input, Herdr-semantic focus/layout controls, schema-gated socket access, and a working `cockpit serve` browser gateway.
+- The initial Cockpit foundation is the real Herdr mirror plus terminal attach/input, Herdr-semantic focus/layout controls, schema-gated socket access, and a working `cockpit serve` browser gateway.
 
 ### State and inbox
 
 - Spaces and agents mirror Herdr entities directly.
 - Agent state is Herdr-authoritative: blocked, working, done, idle, and related Herdr states where available.
 - State indicators include transition detail/freshness where available and do not rely on color alone.
-- The persistent Agents sidebar preserves Herdr attention ordering.
+- The persistent Agents sidebar follows Herdr priority ordering: blocked, done, working, idle, then unknown; equal-priority entries use newest state transition first.
 - There is no separate inbox popup in the initial scope.
 - Agent history/resumable closed conversations are deferred.
 - Inbox/triage mutations are performed through Herdr; Cockpit does not persist local acknowledgement state.
 
 ### Navigation and interaction
 
-- Clicking a Space, tab, pane, or agent sends the corresponding Herdr focus operation and updates local selection from Herdr state.
-- Agent selection focuses its owning pane and attaches the terminal view as appropriate.
+- Semantic focus, DOM keyboard focus, and writable terminal ownership are distinct state. Cockpit synchronizes them deliberately rather than inferring one from another.
+- Clicking a Space, tab, pane, or agent sends the corresponding Herdr focus operation. Confirmed selection follows Herdr’s response/event; agent selection resolves to its owning pane.
+- A local pane selection or terminal click records local control intent. An authoritative focus change or ownership loss from another client clears that intent.
 - Space hierarchy supports direct tree operations, including selection, expand/collapse, create, rename, reparent, reorder, close, context menus, and drag/drop where Herdr supports them.
 - Tab/pane layout editing supports Herdr-backed core operations.
 - The interaction authority is Herdr semantics with GUI presentation. Space tree operations support native Herdr mouse behavior where available; pane/layout actions are primarily shortcut-driven.
@@ -84,12 +86,13 @@ This records the decisions made during the architecture refinement interview. It
 
 ### Terminal attachment
 
-- Herdr owns the PTY and process. xterm.js owns only rendering and user interaction.
+- Herdr owns the PTY, process, terminal state, and writable-owner arbitration. xterm.js owns rendering and browser-side input capture only.
 - Attachment uses Herdr’s terminal stream semantics, not a Cockpit-created PTY.
-- xterm.js renderers are mounted for panes visible in the selected tab. Hidden tabs unsubscribe/detach renderers while Herdr processes continue running.
-- Herdr remains authoritative for terminal scrollback/current screen state.
-- Focused xterm owns ordinary terminal input. Herdr’s magic escape key takes precedence.
-- The current decision is automatic takeover when selecting a pane whose writable attachment belongs to another client. This is intentionally risky: it can steal input/resize ownership from a native Herdr client or another Cockpit window.
+- xterm.js renderers are mounted only for panes visible in the selected tab. Hidden tabs detach renderers/subscriptions while Herdr processes continue running.
+- The Fit and Canvas addons initialize before stream attachment. Cockpit fits the renderer first and sends the resulting rows and columns in the initial attachment request; this avoids an initial 80×24 frame and preserves continuous box-drawing glyphs.
+- Focused xterm forwards ordinary input only after writable ownership is confirmed. `Shift+Enter` sends a bare line-feed; Herdr’s magic escape key still takes precedence.
+- The initially focused pane and an explicit local selection/click may request writable takeover. If another client subsequently takes focus or ownership, Cockpit immediately falls back to observation and must not reclaim control until the user acts locally again.
+- A control loss is an attachment transition, not a terminal-process closure. The last frame remains visible and observation continues.
 - Attach/reconnect failure leaves the resource visible with stale/disconnected status, retry, and resync; the Herdr process is not silently closed.
 - Errors are inline on the affected resource. Toasts may supplement but are not the only error surface.
 
@@ -164,7 +167,7 @@ This records the decisions made during the architecture refinement interview. It
 
 ## Known risks
 
-1. **Automatic takeover is disruptive.** Herdr documents one writable terminal owner and explicit takeover semantics. The current choice is automatic takeover on selection, which can steal input/resize ownership from a native Herdr client or another Cockpit window.
+1. **Initial attachment can still take control.** The initially focused pane and explicit local selections request writable takeover. This may displace another client once, but external focus/ownership loss clears Cockpit’s control intent and prevents a reclaim loop until another local user action.
 2. **Herdr compatibility needs tested release data.** Target the documented latest API, capture schema fixtures and real smoke tests for the supported release range, and reject incompatible required capabilities clearly.
 3. **Accessibility is intentionally best effort for this personal proof of concept, not a gate for broader distribution.**
 4. **No index/scratchpad means context membership is derived from the companion tree and frontmatter; human-created files are displayed but not managed by Cockpit.**

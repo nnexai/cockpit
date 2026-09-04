@@ -25,6 +25,26 @@ Cockpit window
 
 Herdr calls its API resources workspaces; the UI calls them Spaces, as required by [CONTEXT.md](../CONTEXT.md) and [DECISIONS.md](../DECISIONS.md). Do not invent project, room, task, or conversation as synonyms.
 
+## Relationship to the Herdr TUI
+
+Herdr TUI parity is the starting constraint, not Cockpit’s product destination.
+
+- Copy semantics before appearance: resource hierarchy, authoritative focus, attention priority, terminal ownership, shortcuts, and mutation behavior must remain recognizable and correct.
+- Use the TUI as a regression oracle when Cockpit has no deliberate alternative. Matching its ordering and branch geometry is preferable to inventing a nearly equivalent convention.
+- Depart deliberately where a desktop surface can provide better supervision: persistent overview, direct manipulation, visible ownership, larger readable type, pointer targeting, and resource-local recovery.
+- Never trade correctness for graphical polish. A Cockpit interaction still resolves through Herdr and reconciles from authoritative state.
+- Do not preserve TUI density when it harms legibility. Typography and geometry are semantic design tokens; tune those tokens as a system instead of scattering component-local overrides.
+- Judge new behavior by the resulting work loop: identify attention, navigate to the right resource, understand keyboard ownership, act, and recover without losing context.
+
+Future changes should state whether they preserve a Herdr behavior, expose it more clearly, or intentionally replace its interaction. Intentional replacements belong in `DECISIONS.md`.
+
+For each intentional evolution, record:
+
+1. the current Herdr/Cockpit behavior and concrete friction;
+2. the desired user-visible behavior;
+3. which Herdr authority and compatibility constraints remain fixed;
+4. the observable acceptance scenario in a disposable real session.
+
 ## Reference study and what Cockpit takes from it
 
 This is a synthesis, not a skin of another product.
@@ -306,13 +326,13 @@ Error copy says what failed and what remains safe. Example: `Rename was not appl
 
 ## Herdr behavior constraints that the visual design must respect
 
-These constraints come from the confirmed architecture in [CONTEXT.md](../CONTEXT.md#43-state-and-interaction), [DECISIONS.md](../DECISIONS.md#terminal-attachment), and Herdr's [direct attach documentation](https://github.com/SuperCodeAgents/herdr-terminal#direct-agent-attach).
+These constraints come from the confirmed architecture in [CONTEXT.md](../CONTEXT.md#53-state-and-interaction), [DECISIONS.md](../DECISIONS.md#terminal-attachment), and Herdr's [direct attach documentation](https://github.com/SuperCodeAgents/herdr-terminal#direct-agent-attach).
 
 1. Herdr owns sessions, Spaces, tabs, pane layout, PTYs, processes, focus, agent state, ordering, and terminal scrollback. Cockpit renders and requests; it does not manufacture a parallel truth.
 2. Selecting a Space, tab, pane, or agent sends a Herdr focus operation. Selection chrome follows the acknowledged response or event. A pending click may show progress but not confirmed selection.
 3. xterm.js renders Herdr's server-owned terminal. It does not start a replacement PTY. Attach receives current rendered state and then live ANSI frames where supported.
 4. Only visible panes in the selected tab keep renderers/subscriptions. A hidden tab detaches its renderer while its Herdr process continues. UI copy must never equate hidden, detached, or disconnected with stopped.
-5. One writable client owns terminal input and resize. The current product decision requests automatic takeover when a user selects a pane owned elsewhere. Show `Taking input ownership...` before writable confirmation and `Input owned by another client` on failure. Never accept typing into a pane that has not confirmed ownership.
+5. One writable client owns terminal input and resize. The initially focused pane and explicit local selection/click may request takeover. After external focus or ownership loss, Cockpit observes without reclaiming until another local action. Never accept typing into a pane that has not confirmed ownership.
 6. Herdr's magic escape key wins over GUI shortcuts. Focus styling must make terminal keyboard ownership obvious.
 7. A sequence gap, reconnect, or stale cache triggers resnapshot and resubscription. Preserve last-known content with a stale marker until replacement, rather than animating local guesses into place.
 8. Attach failure leaves the resource visible with retry and resync. It must not silently close or clear the Herdr process.
@@ -387,9 +407,10 @@ The sidebar has its own Spaces/Agents splitter. The pane lines shown above are H
 
 - [ ] The pane contains a real xterm.js renderer attached to Herdr, with no mocked prompt or rewritten command blocks.
 - [ ] Focused xterm receives ordinary input only after writable ownership is confirmed.
-- [ ] Automatic takeover has a visible pending and failure state.
+- [ ] External ownership loss preserves observation without a reclaim loop; an explicit local action can request control again.
 - [ ] Herdr's magic escape key has priority over GUI shortcuts.
 - [ ] Hidden tabs detach renderers without any stopped-process visual.
+- [ ] Fit and Canvas initialize before attachment, initial dimensions match pane bounds, and box-drawing glyphs remain continuous at zoom.
 - [ ] Disconnect preserves last rendered output, removes the live-cursor implication, and offers Retry attach and Resync.
 
 ### Spaces and Agents

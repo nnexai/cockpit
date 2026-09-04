@@ -156,28 +156,31 @@ Workspace creation, context hydration, and concrete provider ingestion follow th
 
 ### 5.2 Information architecture
 
-The first screen resembles the native Herdr TUI:
+The first screen uses the native Herdr TUI as a behavioral baseline:
 
 - a top-level Herdr session selector;
 - a scrollable hierarchical **Spaces** section in the sidebar;
-- an **Agents** section below Spaces;
+- an **Agents** attention queue below Spaces;
 - a main view containing tabs for the selected Space;
 - terminal panes arranged according to the selected tab’s Herdr layout.
 
-The UI uses Herdr-native labels such as Spaces, Agents, tabs, and panes. The Herdr API’s workspace terminology remains an internal mapping detail.
+This is baseline parity, not a permanent imitation target. Cockpit preserves Herdr semantics and authority while deliberately evolving the presentation toward a dense graphical operations workbench.
 
-The Agents section is Herdr’s attention queue. It is not a separate Cockpit task database. Agent ordering and acknowledgement/triage state come from Herdr or its installed integration.
+The UI uses Herdr-native labels such as Spaces, Agents, tabs, and panes. The Herdr API’s workspace terminology remains an internal mapping detail. Agent ordering follows Herdr priority mode—blocked, done, working, idle, then unknown—with newest state transition first inside a priority.
 
 ### 5.3 State and interaction
 
 Herdr is authoritative for agent state. The client renders Herdr’s state categories, including blocked, working, done, idle, and other supported states, with transition detail and freshness when available.
 
-Clicking a Space, tab, pane, or agent:
+User-initiated selection of a Space, tab, pane, or agent:
 
+- records local intent;
 - sends the corresponding Herdr focus operation;
-- updates local selection from Herdr’s response/event;
+- updates confirmed selection from Herdr’s response/event;
 - focuses the owning resource;
-- attaches the terminal renderer when terminal content is selected.
+- attaches the terminal renderer when terminal content is selected and visible.
+
+Semantic focus, DOM keyboard focus, and writable terminal ownership remain separate. An external authoritative focus change supersedes local intent.
 
 The client supports Herdr-semantic hierarchy operations:
 
@@ -190,17 +193,19 @@ The behavioral authority is Herdr; the presentation is graphical. Pane/layout ac
 
 ### 5.4 Terminal attachment and scalability
 
-Herdr owns every PTY and process. xterm.js owns only terminal rendering and input interaction.
+Herdr owns every PTY, process, current terminal state, and writable-owner arbitration. xterm.js owns rendering and browser-side input capture only.
 
-- Selecting a pane attaches to Herdr’s server-owned terminal stream.
+- Visible panes attach to Herdr’s server-owned terminal streams.
+- Fit and Canvas rendering initialize before attachment. The initial attachment uses fitted rows and columns rather than xterm’s fallback dimensions.
 - Herdr sends the current rendered terminal state followed by live ANSI frames where supported.
-- Normal terminal input goes to the focused xterm and then Herdr.
-- The magic escape key is handled with Herdr priority.
+- Normal terminal input goes to the focused xterm and then Herdr only after writable ownership is confirmed.
+- `Shift+Enter` sends a bare line-feed. The Herdr magic escape key retains higher priority.
 - Only panes visible in the selected tab keep active xterm renderers/subscriptions.
 - Hidden tabs detach UI renderers without stopping Herdr processes.
 - Herdr remains authoritative for scrollback/current screen state.
 - On reconnect or stale state, the client requests an authoritative view and resubscribes.
-- If another client owns writable attachment, the current proof-of-concept behavior automatically requests takeover on selection. This may steal input/resize ownership from another client.
+- The initially focused pane and explicit local selection/click may request takeover. If another client takes focus or ownership afterward, Cockpit falls back to observation and does not request control again until another local user action.
+- Ownership loss is not process closure. Keep the terminal visible, continue observing, and preserve the last frame.
 - Attach failure leaves the pane visible with stale/disconnected state, retry, and resync. It never silently closes the Herdr process.
 
 The client loads hierarchy metadata for all resources. It does not require an xterm.js DOM instance or live output subscription for every pane.

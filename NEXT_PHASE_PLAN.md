@@ -79,7 +79,7 @@ Invariants:
 - an event gap or malformed transition marks state stale and triggers resync;
 - attach failure never closes a pane or process;
 - only panes visible in the selected tab may hold terminal streams;
-- automatic takeover remains the accepted proof-of-concept behavior and is visible as pending/success/failure.
+- the initially focused pane and explicit local actions may request takeover; external ownership loss falls back to observation and cannot trigger an automatic reclaim loop.
 
 ### Hosts
 
@@ -132,7 +132,7 @@ Tests must cover:
 - focus intent versus authoritative confirmation;
 - unknown event and malformed frame handling;
 - visible-pane attach/dispose/remount;
-- one-controller conflict and automatic takeover transitions;
+- one-controller takeover, external ownership loss, observer continuity, and explicit local reacquisition;
 - terminal input/resize/release only after ownership;
 - equivalent browser and native adapter mapping;
 - inline stale/disconnected/error state reducers.

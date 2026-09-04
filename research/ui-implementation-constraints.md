@@ -31,22 +31,42 @@ A local click may indicate intent immediately, but it must not overwrite a newer
 
 Do not infer focus from DOM focus alone. Keyboard focus (which button/input currently receives browser events) and Herdr semantic focus (which workspace/tab/pane Herdr considers focused) are related but distinct state that must be synchronized deliberately.
 
-### 3. One writable terminal owner; takeover is a known hazard
+### 3. Writable ownership follows local intent
 
-Herdr owns the PTY and process. xterm.js owns terminal rendering and browser interaction only; it must not create a parallel PTY, own process lifetime, or treat its local buffer as canonical. Terminal attachment uses Herdr’s stream semantics, including authoritative current screen/scrollback followed by live output where supported.
+Herdr owns the PTY, process, terminal state, and writable-owner arbitration. xterm.js owns rendering and browser interaction only; it must not create a parallel PTY, own process lifetime, or treat its local buffer as canonical. Terminal attachment uses Herdr’s stream semantics, including authoritative current screen/scrollback followed by live output where supported.
 
-There is one writable attachment owner for a terminal. The current product decision is **automatic takeover when selecting a pane whose writable attachment belongs to another client**. This is intentionally risky: selection can steal input and resize ownership from a native Herdr client or another Cockpit window ([DECISIONS.md “Terminal attachment”](../DECISIONS.md)). Implementers must therefore:
+There is one writable attachment owner for a terminal. Cockpit keeps three concepts separate:
+
+- **semantic focus** — the workspace/tab/pane Herdr reports as focused;
+- **DOM focus** — the browser element currently receiving keyboard or pointer events;
+- **control intent** — whether the local user has asked Cockpit to own the selected terminal.
+
+The initially focused pane and a local selection or terminal click may request writable takeover. If another client subsequently takes semantic focus or terminal ownership, Cockpit must clear local control intent, reopen or retain an observer attachment, and continue rendering. It must not request control again until another local user action. Implementers must:
 
 - make ownership/attachment status observable in resource state;
+- focus xterm before forwarding the pointer gesture that requested control;
 - route ordinary input and resize only from the focused writable attachment;
 - serialize or reject input while attach/takeover is pending;
-- handle ownership loss as a normal state transition, not as a process failure;
-- never close/kill a Herdr process because attachment failed or a pane became hidden;
+- handle ownership loss as a normal attachment transition, not process closure;
+- preserve the last rendered frame and observer updates after ownership loss;
+- never close or kill a Herdr process because attachment failed or a pane became hidden;
 - preserve a visible retry/resync path when takeover or attach fails.
 
-This is not permission to add a competing confirmation flow or silently change the product decision. Any future change from automatic takeover requires an explicit product decision because it changes multi-client behavior.
-
 xterm.js-specific consequence: `Terminal.onData` and `Terminal.onBinary` are user-input hooks whose returned disposables stop listening; `Terminal.onResize` reports viewport size changes, and `Terminal.dispose()` releases the terminal instance ([xterm.js Terminal API](https://xtermjs.org/docs/api/terminal/classes/terminal/)). Forward those signals through `CockpitClient` with pane/session identity and ownership checks. Do not send raw DOM keyboard events directly to a backend.
+
+`Shift+Enter` is an intentional Cockpit input mapping: send one bare LF character and suppress xterm’s ordinary Enter handling for that key combination. Unmodified Enter and all other terminal keys retain normal xterm/Herdr behavior.
+
+### 3.1 Renderer readiness and glyph continuity
+
+The renderer must be initialized before its stream:
+
+1. create and open xterm;
+2. load the version-compatible Fit and Canvas addons;
+3. fit to the actual pane bounds;
+4. only then attach to Herdr using the fitted rows and columns;
+5. refit from `ResizeObserver` when pane geometry changes.
+
+Canvas rendering and xterm custom glyphs are required for continuous box-drawing characters used heavily by OMP and other terminal applications. Do not switch back to the DOM renderer or independently upgrade xterm/addon major versions without a zoomed visual check of multi-row vertical lines, junctions, and corners. A renderer that shows text but introduces one-pixel seams is a regression.
 
 ### 4. Visible-pane subscription lifetime
 
@@ -155,8 +175,9 @@ Accessibility is best effort in this proof of concept, but these behaviors are s
 - [ ] Snapshot/event cursor, gap detection, reconnect, and resnapshot/resubscription behavior are explicit.
 - [ ] Space/tab/pane/Agent selection sends Herdr focus and updates from authoritative result/event; DOM focus is not treated as semantic focus.
 - [ ] Hierarchy/layout mutations use capability-gated Herdr operations, stable IDs, authoritative ordering, and no local layout algorithm.
-- [ ] Exactly one writable terminal attachment is honored per pane; automatic takeover behavior and its disruptive ownership loss are represented and handled.
+- [ ] Exactly one writable terminal attachment is honored per pane; external ownership loss falls back to observation without a reclaim loop, and an explicit local action can take control again.
 - [ ] xterm.js is renderer/input glue only; no Cockpit PTY/process or authoritative scrollback exists.
+- [ ] Fit and Canvas initialize before stream attachment; initial rows/columns match pane bounds and box-drawing glyphs remain continuous at zoom.
 - [ ] Terminal renderers and live subscriptions exist only for visible panes in the selected tab; disposal is idempotent and remount resyncs.
 - [ ] Ordinary input/resize is routed through `CockpitClient` with pane/session/owner checks.
 - [ ] Magic escape is intercepted with Herdr priority before terminal input or GUI shortcuts.
