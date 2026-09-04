@@ -18,7 +18,7 @@ export type TabSummary = { id: string, space_id: string, label: string, number: 
 
 export type PaneSummary = { id: string, terminal_id: string, space_id: string, tab_id: string, title: string | null, focused: boolean, agent: string | null, agent_status: string, revision: number, };
 
-export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, focused: boolean, };
+export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, focused: boolean, state_change_seq: number, };
 
 export type LayoutRect = { x: number, y: number, width: number, height: number, };
 

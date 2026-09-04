@@ -28,7 +28,7 @@ use cockpit_core::{
 use cockpit_protocol::v1::{
     ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
     SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalMode,
-    TerminalOpenRequest, TerminalStreamMessage,
+    TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
 };
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
@@ -805,6 +805,10 @@ async fn run_terminal_socket(
                     TerminalStreamMessage::Closed { .. }
                         | TerminalStreamMessage::Disconnected { .. }
                         | TerminalStreamMessage::Error { .. }
+                        | TerminalStreamMessage::Ownership {
+                            state: TerminalOwnershipState::Lost,
+                            ..
+                        }
                 );
                 if !send_json(&mut socket, &message).await || terminal_end { break; }
             }

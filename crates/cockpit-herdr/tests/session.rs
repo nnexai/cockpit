@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use cockpit_core::{HerdrAdapter, SessionChange};
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
-use cockpit_protocol::v1::{PaneSummary, ResourceMutationRequest, SessionSnapshotResponse};
+use cockpit_protocol::v1::{
+    PaneSummary, ResourceMutationRequest, SessionSnapshotResponse, TerminalMode,
+    TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -611,6 +614,55 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     };
     let error = adapter.open_terminal(&request).await.unwrap_err();
     assert_eq!(error.code, "invalid_pane_id");
+    drop(fs::remove_file(fixture));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn maps_controller_takeover_to_ownership_loss() {
+    let fixture = script(
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"terminal.frame\",\"seq\":1,\"encoding\":\"ansi\",\"width\":80,\"height\":24,\"full\":true,\"bytes\":\"\"}' '{\"type\":\"terminal.closed\",\"reason\":\"terminal attach taken over\"}'\n",
+    );
+    let config =
+        HerdrCliConfig::from_options(Some(fixture.clone()), Some("handoff".into()), None).unwrap();
+    let request = TerminalOpenRequest {
+        session_id: "handoff".into(),
+        pane_id: "w1:p1".into(),
+        mode: TerminalMode::Control,
+        takeover: true,
+        cols: 80,
+        rows: 24,
+    };
+    let mut terminal = HerdrCliAdapter::new(config)
+        .open_terminal(&request)
+        .await
+        .unwrap();
+    let mut messages = Vec::new();
+    while let Ok(Some(message)) =
+        tokio::time::timeout(Duration::from_secs(1), terminal.messages.recv()).await
+    {
+        messages.push(message);
+    }
+
+    assert!(matches!(
+        messages.as_slice(),
+        [
+            TerminalStreamMessage::Ownership {
+                state: TerminalOwnershipState::Pending,
+                ..
+            },
+            TerminalStreamMessage::Ownership {
+                state: TerminalOwnershipState::Owned,
+                ..
+            },
+            TerminalStreamMessage::Frame { full: true, .. },
+            TerminalStreamMessage::Ownership {
+                state: TerminalOwnershipState::Lost,
+                message: Some(message),
+                ..
+            }
+        ] if message == "terminal attach taken over"
+    ));
     drop(fs::remove_file(fixture));
 }
 

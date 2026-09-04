@@ -128,6 +128,7 @@ fn session_dtos_use_exact_snake_case_wire_fields() {
             status: "running".to_owned(),
             title: None,
             focused: true,
+            state_change_seq: 42,
         }],
     };
 
@@ -194,7 +195,8 @@ fn session_dtos_use_exact_snake_case_wire_fields() {
                 "name": "builder",
                 "status": "running",
                 "title": null,
-                "focused": true
+                "focused": true,
+                "state_change_seq": 42
             }]
         })
     );

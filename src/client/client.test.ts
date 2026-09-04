@@ -71,6 +71,8 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
 describe("client DTO parsers", () => {
   it("strictly validates session and terminal contracts", () => {
     expect(parseSessionListResponse(sessions)).toEqual(sessions);
+    const legacyAgent = { pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "working", title: null, focused: true };
+    expect(parseSessionSnapshotResponse({ ...snapshot, agents: [legacyAgent] }).agents[0]?.state_change_seq).toBe(0);
     expect(() => parseSessionSnapshotResponse({ ...snapshot, session_id: undefined })).toThrow(CockpitClientError);
     expect(() => parseSessionSnapshotResponse({
       ...snapshot,

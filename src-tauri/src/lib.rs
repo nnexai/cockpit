@@ -8,13 +8,15 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use cockpit_core::{
-    CockpitService, InspectionError, SessionChange, SessionSubscription, TerminalSession,
+    CockpitService, HerdrAdapter, InspectionError, SessionChange, SessionSubscription,
+    TerminalSession,
 };
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
 use cockpit_protocol::v1::{
     CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
     ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse, SessionStreamMessage,
-    StatusResponse, TerminalCommand, TerminalOpenRequest, TerminalStreamMessage,
+    StatusResponse, TerminalCommand, TerminalOpenRequest, TerminalOwnershipState,
+    TerminalStreamMessage,
 };
 use tauri::{State, ipc::Channel};
 use tokio::sync::mpsc;
@@ -704,6 +706,10 @@ async fn cockpit_terminal_open(
                 TerminalStreamMessage::Closed { .. }
                     | TerminalStreamMessage::Disconnected { .. }
                     | TerminalStreamMessage::Error { .. }
+                    | TerminalStreamMessage::Ownership {
+                        state: TerminalOwnershipState::Lost,
+                        ..
+                    }
             );
             if channel
                 .send(localize_terminal_message(message, &task_stream_id))
@@ -775,12 +781,21 @@ async fn cockpit_stream_cancel(
 pub fn run() {
     let config =
         HerdrCliConfig::from_options(None, None, None).expect("failed to load Herdr configuration");
-    let inspector = Arc::new(HerdrCliAdapter::new(config));
+    let inspector = Arc::new(HerdrCliAdapter::new(config).with_server_autostart());
+    let startup_inspector = Arc::clone(&inspector);
     let service = CockpitService::new(CockpitMode::Normal, inspector);
 
     tauri::Builder::default()
         .manage(service)
         .manage(StreamRegistry::new())
+        .setup(move |_app| {
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = startup_inspector.inspect().await {
+                    eprintln!("failed to initialize Herdr: {error}");
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             cockpit_status,
             cockpit_sessions,

@@ -67,7 +67,8 @@
           "agent_status": "working",
           "terminal_title_stripped": "\u001b[32m\u001b[0m",
           "terminal_title": "\u001b]agent hidden\u0007Agent fallback",
-          "focused": true
+          "focused": true,
+          "state_change_seq": 42
         }
       ]
     }

@@ -110,6 +110,8 @@ pub struct AgentSummary {
     pub status: String,
     pub title: Option<String>,
     pub focused: bool,
+    #[ts(type = "number")]
+    pub state_change_seq: u64,
 }
 
 /// A rectangle in a tab's pane layout.

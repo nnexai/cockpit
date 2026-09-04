@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary, TabLayout, TerminalCommand } from "../protocol/generated/v1";
+import type { AgentSummary, ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary, TabLayout, TerminalCommand } from "../protocol/generated/v1";
 import {
   authoritativeMutationSnapshot,
   authoritativeSelection,
@@ -11,6 +11,7 @@ import {
   moveDestinationLabel,
   mutationCoordinatorReducer,
   projectedPaneIds,
+  orderAgentsByHerdrPriority,
   nextModalFocusIndex,
   projectedPaneRect,
   resizeRequest,
@@ -23,7 +24,7 @@ import {
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
-import { appendPendingControlCommand, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition } from "./TerminalPane";
+import { appendPendingControlCommand, MAX_PENDING_CONTROL_COMMANDS, shouldObserveAfterControlLoss, terminalCellPosition, terminalModifiedEnterInput } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
@@ -40,6 +41,55 @@ function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSna
     agents: [],
   };
 }
+
+describe("terminal ownership", () => {
+  it("continues observing after another client takes control", () => {
+    expect(shouldObserveAfterControlLoss(true, "lost")).toBe(true);
+    expect(shouldObserveAfterControlLoss(true, "conflict")).toBe(true);
+    expect(shouldObserveAfterControlLoss(false, "lost")).toBe(false);
+  });
+
+  it("sends Shift+Enter as the bare line feed preserved by Herdr", () => {
+    const event = { type: "keydown", key: "Enter", shiftKey: true, ctrlKey: false, altKey: false, metaKey: false };
+    expect(terminalModifiedEnterInput(event)).toBe("\n");
+    expect(terminalModifiedEnterInput({ ...event, shiftKey: false })).toBeNull();
+    expect(terminalModifiedEnterInput({ ...event, ctrlKey: true })).toBeNull();
+    expect(terminalModifiedEnterInput({ ...event, type: "keyup" })).toBeNull();
+  });
+});
+
+describe("agent ordering", () => {
+  it("matches Herdr's priority sort by status then latest state change", () => {
+    const agent = (pane_id: string, status: string, state_change_seq: number): AgentSummary => ({
+      pane_id,
+      space_id: "space-1",
+      tab_id: "tab-1",
+      name: pane_id,
+      status,
+      title: null,
+      focused: false,
+      state_change_seq,
+    });
+    const agents = [
+      agent("idle", "idle", 100),
+      agent("working-old", "working", 10),
+      agent("done", "done", 1),
+      agent("blocked", "blocked", 1),
+      agent("working-new", "working", 20),
+    ];
+    expect(orderAgentsByHerdrPriority(agents).map(({ pane_id }) => pane_id)).toEqual([
+      "blocked",
+      "done",
+      "working-new",
+      "working-old",
+      "idle",
+    ]);
+    expect(orderAgentsByHerdrPriority([
+      { ...agent("older-wire-shape", "idle", 0), focused: false },
+      { ...agent("focused-wire-shape", "idle", 0), focused: true },
+    ]).map(({ pane_id }) => pane_id)).toEqual(["focused-wire-shape", "older-wire-shape"]);
+  });
+});
 
 function space(id: string, label: string, git: SpaceGitSummary | null = null, agentStatus = "idle"): SpaceSummary {
   return { id, label, number: 1, tab_count: 0, pane_count: 0, focused: false, agent_status: agentStatus, git };

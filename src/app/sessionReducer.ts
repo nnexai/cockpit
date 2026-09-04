@@ -119,7 +119,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       };
     case "snapshot/request":
       return current(state, action.epoch, action.sessionId)
-        ? { ...state, sync: "loading", syncError: null }
+        ? { ...state, sync: "loading" }
         : state;
     case "snapshot/received":
       if (!current(state, action.epoch, action.sessionId)) return state;

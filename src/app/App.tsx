@@ -187,6 +187,26 @@ function stateClass(status: string): string {
   }
 }
 
+function agentStatusPriority(status: string): number {
+  switch (stateClass(status)) {
+    case "blocked": return 4;
+    case "done": return 3;
+    case "working": return 2;
+    case "idle": return 1;
+    default: return 0;
+  }
+}
+
+export function orderAgentsByHerdrPriority(agents: Agent[]): Agent[] {
+  return agents
+    .map((agent, index) => ({ agent, index }))
+    .sort((left, right) => agentStatusPriority(right.agent.status) - agentStatusPriority(left.agent.status)
+      || right.agent.state_change_seq - left.agent.state_change_seq
+      || Number(right.agent.focused) - Number(left.agent.focused)
+      || left.index - right.index)
+    .map(({ agent }) => agent);
+}
+
 export type SpaceTreeRow = {
   kind: "top-level" | "parent" | "child";
   space: Space;
@@ -440,7 +460,7 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
   };
   return <section className="sidebar-section spaces-section" aria-labelledby="spaces-heading">
     <div className="sidebar-section-heading"><h2 id="spaces-heading">spaces</h2></div>
-    <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row) => {
+    <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row, index) => {
       const space = row.space;
       const status = spaceStatus(space.agent_status);
       const displayLabel = row.label;
@@ -457,22 +477,23 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
           if (beforeSpaceId !== undefined) mutate(`space:${id}`, { type: "space_move_block", space_ids: [id], before_space_id: beforeSpaceId });
         }}
         onContextMenu={(event) => onContext(event, { kind: "space", id: space.id })}>
-        {row.kind === "parent" && row.repositoryKey
-          ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}>{row.expanded ? "⌄" : "›"}</button>
-          : row.kind === "child" ? <span className="space-connector" aria-hidden="true">{row.connector}</span> : null}
+        {row.kind === "child" ? <span className={`space-connector${rows[index - 1]?.kind === "parent" ? " is-first" : ""}${row.connector === "└─" ? " is-last" : ""}`} aria-hidden="true" /> : null}
         {editingId === space.id
           ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
           : <button type="button" disabled={busy} className="resource-select" title={displayLabel} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
             <span className="resource-icon" aria-hidden="true">{status.glyph}</span>
             <span className="space-details"><span className="resource-label">{displayLabel}</span>{row.kind !== "child" && row.branch ? <span className="space-branch">{row.branch}</span> : null}</span>
           </button>}
+        {row.kind === "parent" && row.repositoryKey
+          ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}>{row.expanded ? "⌄" : "›"}</button>
+          : null}
       </div>;
     })}</div>
   </section>;
 }
-
 function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]; spaces: Space[]; tabs: Tab[]; selection: Selection; onSelect: (agent: Agent) => void }) {
-  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">agents</h2></div><div className="agent-list">{agents.length === 0 ? <p className="empty-row">Inbox empty</p> : agents.map((agent) => {
+  const orderedAgents = orderAgentsByHerdrPriority(agents);
+  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">agents</h2></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
     const location = [spaces.find((space) => space.id === agent.space_id)?.label, tabs.find((tab) => tab.id === agent.tab_id)?.label].filter(Boolean).join(" · ");
     return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(agent.status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name].filter(Boolean).join(" · ")}><span className="agent-state" aria-hidden="true">{stateGlyph(agent.status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span></span></button>;
   })}</div></section>;
@@ -516,13 +537,14 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, pendingControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
+function PaneView({ pane, label, selected, showLabel, controlAllowed, onRequestControl, onControlLost, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
   pane: Pane;
   label: string;
   selected: boolean;
   showLabel: boolean;
   controlAllowed: boolean;
-  pendingControl: boolean;
+  onRequestControl: () => void;
+  onControlLost: () => void;
   onSelect: () => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows">;
@@ -537,7 +559,7 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, pendingCon
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
-    <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} pendingControl={pendingControl} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
+    <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} onRequestControl={onRequestControl} onControlLost={onControlLost} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
   </section>;
 }
 
@@ -638,12 +660,11 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetry, onRetryMutation
   </aside>;
 }
 
-function Workbench({ client, state, sessions, selection, confirmedPaneId: confirmedPaneIdProp, mutations, onSession, onFocus, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
-  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; confirmedPaneId: string | null; mutations: MutationCoordinatorState;
-  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
+function Workbench({ client, state, sessions, selection, controlPaneId, mutations, onSession, onFocus, onRequestControl, onControlLost, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
+  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; mutations: MutationCoordinatorState;
+  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onRequestControl: (paneId: string) => void; onControlLost: (paneId: string) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
 }) {
   const snapshot = state.snapshot;
-  const confirmedPaneId = state.sync === "live" ? confirmedPaneIdProp : null;
   const spaces = snapshot?.spaces ?? [];
   const allTabs = snapshot?.tabs ?? [];
   const tabs = tabsForSpace(allTabs, selection.spaceId);
@@ -747,7 +768,7 @@ function Workbench({ client, state, sessions, selection, confirmedPaneId: confir
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === confirmedPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} pendingControl={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} onRequestControl={() => onRequestControl(pane.id)} onControlLost={() => onControlLost(pane.id)} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -770,10 +791,11 @@ export function App({ client }: { client: CockpitClient }) {
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
   const [mutations, dispatchMutation] = useReducer(mutationCoordinatorReducer, initialMutationCoordinatorState);
   const [selection, setSelection] = useState<Selection>({ spaceId: null, tabId: null, paneId: null });
-  const [confirmedPaneId, setConfirmedPaneId] = useState<string | null>(null);
+  const [controlPaneId, setControlPaneId] = useState<string | null>(null);
   const sessionStream = useRef<{ close(): void } | null>(null);
   const focusTokenRef = useRef(0);
   const focusIntent = useRef<{ epoch: number; token: number; request: FocusRequest; location: Selection } | null>(null);
+  const controlInitializedEpoch = useRef<number | null>(null);
   const focusFallbackCancel = useRef<(() => void) | null>(null);
   const [focusDelayed, setFocusDelayed] = useState(false);
   const mutationTokenRef = useRef(0);
@@ -794,14 +816,16 @@ export function App({ client }: { client: CockpitClient }) {
       sessionStream.current?.close();
       sessionStream.current = null;
       setSelection({ spaceId: null, tabId: null, paneId: null });
-      setConfirmedPaneId(null);
+      setControlPaneId(null);
+      controlInitializedEpoch.current = null;
       return;
     }
     if (!state.sessionId || !sessions.some((session) => session.id === state.sessionId)) {
       const preferred = sessions.find((session) => session.is_default) ?? sessions[0];
       dispatch({ type: "switch", sessionId: preferred.id });
       setSelection({ spaceId: null, tabId: null, paneId: null });
-      setConfirmedPaneId(null);
+      setControlPaneId(null);
+      controlInitializedEpoch.current = null;
     }
   }, [compatible, sessionsLoaded, sessions, state.sessionId]);
   useEffect(() => {
@@ -825,12 +849,15 @@ export function App({ client }: { client: CockpitClient }) {
           focusIntent.current = null;
         }
         dispatch({ type: "snapshot/received", epoch, sessionId, snapshot });
+        if (controlInitializedEpoch.current !== epoch) {
+          controlInitializedEpoch.current = epoch;
+          setControlPaneId(snapshot.focused_pane_id);
+        }
         if (recovering) {
           dispatchMutation({ type: "reset" });
           mutationPendingRef.current = false;
           recoveryResyncRef.current = false;
         }
-        setConfirmedPaneId(snapshot.focused_pane_id);
         const stream = await client.subscribeSession(sessionId, (message: SessionStreamMessage) => dispatch({ type: "stream/message", epoch, sessionId, message }), (error: unknown) => { if (!active) return; const described = describeError(error, "Session stream disconnected"); dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "stream_disconnected", message: described.message }); });
         if (active) sessionStream.current = stream; else stream.close();
       } catch (error: unknown) {
@@ -856,11 +883,13 @@ export function App({ client }: { client: CockpitClient }) {
       focusFallbackCancel.current?.();
       focusFallbackCancel.current = null;
       setFocusDelayed(false);
-      setConfirmedPaneId(next.paneId);
+      setControlPaneId(next.paneId);
       focusIntent.current = null;
+    } else if (!intent && controlPaneId !== null && next.paneId !== controlPaneId) {
+      setControlPaneId(null);
     }
-  }, [state.snapshot, state.epoch, state.focusPending, state.focusToken]);
-  const switchSession = (id: string) => { sessionStream.current?.close(); sessionStream.current = null; focusFallbackCancel.current?.(); focusFallbackCancel.current = null; setFocusDelayed(false); focusIntent.current = null; mutationTokenRef.current += 1; mutationPendingRef.current = false; dispatchMutation({ type: "reset" }); setSelection({ spaceId: null, tabId: null, paneId: null }); setConfirmedPaneId(null); dispatch({ type: "switch", sessionId: id }); };
+  }, [state.snapshot, state.epoch, state.focusPending, state.focusToken, controlPaneId]);
+  const switchSession = (id: string) => { sessionStream.current?.close(); sessionStream.current = null; focusFallbackCancel.current?.(); focusFallbackCancel.current = null; setFocusDelayed(false); focusIntent.current = null; mutationTokenRef.current += 1; mutationPendingRef.current = false; dispatchMutation({ type: "reset" }); setSelection({ spaceId: null, tabId: null, paneId: null }); setControlPaneId(null); controlInitializedEpoch.current = null; dispatch({ type: "switch", sessionId: id }); };
   const focus = (request: FocusRequest, location: Selection) => {
     const sessionId = state.sessionId;
     if (!sessionId) return;
@@ -871,7 +900,6 @@ export function App({ client }: { client: CockpitClient }) {
     focusFallbackCancel.current = null;
     setFocusDelayed(false);
     focusIntent.current = { epoch, token, request, location };
-    setConfirmedPaneId(null);
     dispatch({ type: "focus/request", epoch, sessionId, request, token });
     void client.focus(sessionId, request).then((response) => {
       if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || focusTokenRef.current !== token) return;
@@ -911,7 +939,7 @@ export function App({ client }: { client: CockpitClient }) {
       dispatch({ type: "snapshot/received", epoch, sessionId, snapshot, preserveStream: true });
       if (focusFromSnapshot && snapshot.focused_pane_id) {
         setSelection(authoritativeSelection(snapshot));
-        setConfirmedPaneId(snapshot.focused_pane_id);
+        setControlPaneId(snapshot.focused_pane_id);
       }
     }).catch((error: unknown) => {
       if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || mutationTokenRef.current !== token) return;
@@ -920,6 +948,8 @@ export function App({ client }: { client: CockpitClient }) {
     });
     return accepted;
   }, [client]);
+  const requestPaneControl = useCallback((paneId: string) => setControlPaneId(paneId), []);
+  const releasePaneControl = useCallback((paneId: string) => setControlPaneId((current) => current === paneId ? null : current), []);
   const retryMutation = (operation: MutationOperation) => { mutate(operation.key, operation.request, operation.focusFromSnapshot); };
   const retryFocus = () => {
     const intent = focusIntent.current;
@@ -941,5 +971,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} confirmedPaneId={confirmedPaneId} mutations={mutations} onSession={switchSession} onFocus={focus} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
+  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} mutations={mutations} onSession={switchSession} onFocus={focus} onRequestControl={requestPaneControl} onControlLost={releasePaneControl} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
 }

@@ -59,6 +59,56 @@ async fn installed_schema_fixture_is_compatible() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn autostart_launches_a_missing_server_before_inspection() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let id = temp_id();
+    let root = std::env::temp_dir();
+    let script = root.join(format!("cockpit-herdr-autostart-{id}.sh"));
+    let marker = root.join(format!("cockpit-herdr-autostart-{id}.ready"));
+    let log = root.join(format!("cockpit-herdr-autostart-{id}.log"));
+    let schema = include_str!("fixtures/herdr-0.8.2-protocol-20-schema-1.json");
+    let script_body = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  *'status server --json') if [ -f '{}' ]; then printf '%s' '{{\"version\":\"0.8.2\",\"protocol\":20}}'; else printf '%s' '{{\"status\":\"not_running\",\"running\":false,\"version\":null,\"protocol\":null}}'; fi;;\n  *'api schema --json') printf '%s' '{}';;\n  *server) touch '{}';;\nesac\n",
+        log.display(),
+        marker.display(),
+        schema.replace('\'', "'\\''"),
+        marker.display(),
+    );
+    fs::write(&script, script_body).unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).unwrap();
+
+    let config = HerdrCliConfig::from_options(Some(script.clone()), None, None).unwrap();
+    let result = HerdrCliAdapter::new(config)
+        .with_server_autostart()
+        .inspect()
+        .await
+        .unwrap();
+
+    assert!(matches!(result, HerdrCompatibility::Compatible { .. }));
+    assert_eq!(
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "status server --json",
+            "status server --json",
+            "server",
+            "status server --json",
+            "api schema --json"
+        ]
+    );
+
+    drop(fs::remove_file(marker));
+    drop(fs::remove_file(log));
+    drop(fs::remove_file(script));
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn version_protocol_schema_and_method_mismatches_are_incompatible() {
     let schema = r#"{"schema_version":1,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}},{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"events.subscribe"}}}]}}}"#;
     assert!(
@@ -180,6 +230,30 @@ fn options_override_environment_without_mutating_process_environment() {
     .unwrap();
     assert_eq!(config.executable, PathBuf::from("option-herdr"));
     assert_eq!(config.session.as_deref(), Some("option-session"));
+}
+
+#[cfg(unix)]
+#[test]
+fn default_executable_is_found_outside_a_desktop_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let id = temp_id();
+    let home = std::env::temp_dir().join(format!("cockpit-herdr-home-{id}"));
+    let executable = home.join(".linuxbrew/bin/herdr");
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    fs::write(&executable, "#!/bin/sh\n").unwrap();
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&executable, permissions).unwrap();
+
+    let mut env = BTreeMap::new();
+    env.insert("HOME".into(), home.display().to_string());
+    env.insert("PATH".into(), "/usr/bin:/bin".into());
+    let config = HerdrCliConfig::from_options_with_environment(None, None, None, &env).unwrap();
+
+    assert_eq!(config.executable(), executable);
+
+    drop(fs::remove_dir_all(home));
 }
 
 #[test]

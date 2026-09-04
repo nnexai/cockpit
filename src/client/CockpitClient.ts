@@ -234,7 +234,8 @@ function isTabLayout(value: unknown): value is TabLayout {
     isBoolean(value.zoomed)
   );
 }
-function isAgentSummary(value: unknown): value is AgentSummary {
+type AgentSummaryWire = Omit<AgentSummary, "state_change_seq"> & { state_change_seq?: number };
+function isAgentSummary(value: unknown): value is AgentSummaryWire {
   return (
     isRecord(value) &&
     isString(value.pane_id) &&
@@ -243,7 +244,8 @@ function isAgentSummary(value: unknown): value is AgentSummary {
     isString(value.name) &&
     isString(value.status) &&
     isNullableString(value.title) &&
-    isBoolean(value.focused)
+    isBoolean(value.focused) &&
+    (value.state_change_seq === undefined || isU64(value.state_change_seq))
   );
 }
 
@@ -282,7 +284,8 @@ export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotRes
   return {
     session_id: value.session_id, version: value.version, protocol: value.protocol,
     focused_space_id: value.focused_space_id, focused_tab_id: value.focused_tab_id, focused_pane_id: value.focused_pane_id,
-    spaces: value.spaces, tabs: value.tabs, panes: value.panes, layouts: value.layouts, agents: value.agents,
+    spaces: value.spaces, tabs: value.tabs, panes: value.panes, layouts: value.layouts,
+    agents: value.agents.map((agent) => ({ ...agent, state_change_seq: agent.state_change_seq ?? 0 })),
   };
 }
 

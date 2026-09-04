@@ -27,6 +27,22 @@
   --idle: #57c78b;
   --terminal-bg: #0c1016;
   --terminal-fg: #d8dee8;
+  --font-size-2xs: 0.6875rem;
+  --font-size-xs: 0.8125rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 0.9375rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.1875rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.4375rem;
+  --line-height-none: 1;
+  --line-height-tight: 1.15;
+  --line-height-snug: 1.3;
+  --line-height-normal: 1.4;
+  --line-height-relaxed: 1.45;
+  --space-tree-trunk-offset: 37px;
+  --space-tree-child-indent: 47px;
+  --tab-strip-height: 31px;
   --radius-control: 4px;
 }
 
@@ -47,8 +63,8 @@ body {
   overflow: hidden;
   background: var(--app-bg);
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-relaxed);
 }
 
 button,
@@ -139,7 +155,7 @@ summary:focus-visible {
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .terminal-host {
@@ -170,7 +186,7 @@ summary:focus-visible {
   border: 1px solid var(--blocked);
   background: var(--surface);
   color: var(--blocked);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .terminal-overlay span {
@@ -183,7 +199,7 @@ summary:focus-visible {
 
 .terminal-overlay code {
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .focus-pending {
@@ -198,12 +214,12 @@ summary:focus-visible {
   padding: 4px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .connection-mark {
   color: var(--idle);
-  font-size: 9px;
+  font-size: var(--font-size-2xs);
 }
 
 .is-disconnected .connection-mark {
@@ -221,7 +237,7 @@ summary:focus-visible {
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -241,8 +257,8 @@ summary:focus-visible {
   gap: 2px 8px;
   color: var(--text-muted);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
 }
 
 .metadata-item {
@@ -300,7 +316,7 @@ summary:focus-visible {
 .sidebar-section-heading h2 {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
 }
@@ -308,7 +324,7 @@ summary:focus-visible {
 .section-count {
   color: var(--text-muted);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .space-list,
@@ -354,7 +370,7 @@ summary:focus-visible {
 .tab-meta {
   color: var(--text-muted);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .empty-row {
@@ -364,7 +380,7 @@ summary:focus-visible {
   margin: 0;
   padding: 0 8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-md);
 }
 
 .agent-row {
@@ -384,7 +400,7 @@ summary:focus-visible {
 .agent-state {
   width: 16px;
   flex: 0 0 16px;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   text-align: center;
 }
 
@@ -403,7 +419,7 @@ summary:focus-visible {
   overflow: hidden;
   color: var(--text-secondary);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -412,7 +428,7 @@ summary:focus-visible {
 .pane-state,
 .focus-label {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .state-blocked .agent-state,
@@ -456,7 +472,7 @@ summary:focus-visible {
   padding: 4px 12px;
   border-bottom: 1px solid var(--working);
   color: var(--working);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .workarea-heading {
@@ -469,7 +485,7 @@ summary:focus-visible {
 
 .heading-kicker {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
 }
@@ -478,7 +494,7 @@ summary:focus-visible {
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: 16px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -579,7 +595,7 @@ summary:focus-visible {
 .local-view-label {
   flex: 0 1 auto;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -616,7 +632,7 @@ summary:focus-visible {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .pane-view.is-selected .pane-header {
@@ -639,7 +655,7 @@ summary:focus-visible {
 
 .pane-id {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .focus-label {
@@ -665,9 +681,9 @@ summary:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 13px;
+  font-size: var(--font-size-base);
   font-weight: 400;
-  line-height: 1.35;
+  line-height: var(--line-height-normal);
 }
 
 .pane-placeholder,
@@ -699,7 +715,7 @@ summary:focus-visible {
   border-top: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--blocked);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .pane-retry-notice span {
@@ -710,12 +726,12 @@ summary:focus-visible {
 
 .pane-retry-notice code {
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .pane-notice code {
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .compatibility-main {
@@ -736,8 +752,8 @@ summary:focus-visible {
 
 .notice h1 {
   margin: 0 0 8px;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-snug);
 }
 
 .notice p {
@@ -755,7 +771,7 @@ summary:focus-visible {
   margin-bottom: 16px;
   color: var(--blocked);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .notice-error {
@@ -836,7 +852,7 @@ summary:focus-visible {
   display: grid;
   gap: 2px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .resource-menu input,
@@ -914,7 +930,7 @@ summary:focus-visible {
 
 .mutation-pending {
   color: var(--working);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .mutation-error {
@@ -925,7 +941,7 @@ summary:focus-visible {
   border: 1px solid var(--blocked);
   background: var(--surface-raised);
   color: var(--blocked);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .tabs-admin {
@@ -1000,7 +1016,7 @@ summary:focus-visible {
   display: block;
   padding: 4px 8px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .resize-layer {
@@ -1068,7 +1084,7 @@ summary:focus-visible {
   background: var(--surface-raised);
   color: var(--working);
   box-shadow: 0 4px 18px rgb(0 0 0 / 35%);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
   pointer-events: none;
 }
 
@@ -1123,7 +1139,7 @@ summary:focus-visible {
 
 .sidebar-section-heading h2 {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   letter-spacing: 0;
 }
@@ -1139,12 +1155,19 @@ summary:focus-visible {
   padding: 4px 10px;
 }
 
-.resource-icon {
+.resource-icon,
+.agent-state {
+  width: 14px;
+  flex: 0 0 14px;
   color: var(--idle);
-  font-size: 11px;
+  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-none);
+  text-align: center;
 }
 
 .space-tree-row {
+  position: relative;
   align-items: stretch;
 }
 
@@ -1153,19 +1176,16 @@ summary:focus-visible {
   min-height: 38px;
 }
 
-.space-tree-child {
-  padding-left: 12px;
-}
 
 .space-chevron {
-  width: 22px;
-  flex: 0 0 22px;
-  padding: 0 0 0 7px;
+  width: 26px;
+  flex: 0 0 26px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 15px;
-  line-height: 1;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-none);
   cursor: pointer;
 }
 
@@ -1178,16 +1198,39 @@ summary:focus-visible {
 }
 
 .space-connector {
-  width: 26px;
-  flex: 0 0 26px;
-  align-self: center;
+  position: relative;
+  width: var(--space-tree-child-indent);
+  flex: 0 0 var(--space-tree-child-indent);
+  align-self: stretch;
   color: var(--text-muted);
-  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
-  text-align: right;
+  pointer-events: none;
 }
 
-.space-tree-parent .resource-select,
+.space-connector::before {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: var(--space-tree-trunk-offset);
+  border-left: 1px solid currentColor;
+  content: "";
+}
+
+.space-connector::after {
+  position: absolute;
+  top: 50%;
+  left: var(--space-tree-trunk-offset);
+  width: 10px;
+  border-top: 1px solid currentColor;
+  content: "";
+}
+.space-connector.is-first::before {
+  top: 50%;
+}
+
+.space-connector.is-last::before {
+  bottom: 50%;
+}
+
 .space-tree-child .resource-select {
   padding-left: 4px;
 }
@@ -1209,17 +1252,17 @@ summary:focus-visible {
 .agent-name {
   color: var(--text-secondary);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 400;
-  line-height: 12px;
+  line-height: var(--line-height-tight);
 }
 
 .space-branch {
   overflow: hidden;
   color: var(--text-muted);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 9px;
-  line-height: 11px;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1255,7 +1298,7 @@ summary:focus-visible {
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -1280,33 +1323,38 @@ summary:focus-visible {
 }
 
 .agent-context {
-  font-size: 10px;
-  line-height: 12px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-tight);
 }
-
 .main-workarea {
   background: var(--terminal-bg);
 }
 
 .tab-strip {
-  min-height: 29px;
-  flex: 0 0 29px;
+  min-height: var(--tab-strip-height);
+  flex: 0 0 var(--tab-strip-height);
   align-items: stretch;
+  overflow-y: hidden;
+  scrollbar-width: none;
   padding-left: 4px;
   border-bottom-color: var(--border);
   background: var(--surface);
 }
 
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
 .tab-item {
   min-width: 42px;
   max-width: 150px;
-  border-bottom-width: 1px;
+  height: calc(var(--tab-strip-height) - 1px);
 }
 
 .tab-button {
   width: auto;
   min-width: 42px;
-  height: 28px;
+  height: calc(var(--tab-strip-height) - 1px);
   gap: 6px;
   padding: 0 8px;
   border: 0;
@@ -1320,19 +1368,19 @@ summary:focus-visible {
 .tab-number {
   color: var(--text-primary);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .tab-label {
   max-width: 90px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-sm);
 }
 
 .tab-add {
-  width: 29px;
-  flex: 0 0 29px;
-  font-size: 15px;
+  width: var(--tab-strip-height);
+  flex: 0 0 var(--tab-strip-height);
+  font-size: var(--font-size-lg);
 }
 
 .tab-strip .inline-rename {
@@ -1367,8 +1415,8 @@ summary:focus-visible {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
-  font-size: 10px;
-  line-height: 15px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
@@ -1460,7 +1508,7 @@ summary:focus-visible {
 .command-overlay h2,
 .chooser-overlay h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-base);
   font-weight: 500;
 }
 
@@ -1525,7 +1573,7 @@ summary:focus-visible {
 kbd {
   color: var(--text-primary);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .chooser-overlay {
@@ -1576,7 +1624,7 @@ kbd {
   background: var(--surface-raised);
   color: var(--text-primary);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .recovery-panel {
@@ -1585,9 +1633,10 @@ kbd {
   bottom: 12px;
   z-index: 55;
   display: grid;
-  width: min(420px, calc(100vw - 24px));
+  width: min(640px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
   gap: 1px;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--blocked);
   border-radius: 6px;
   background: var(--surface-raised);
@@ -1599,20 +1648,22 @@ kbd {
   min-height: 34px;
   align-items: center;
   gap: 7px;
+  flex-wrap: wrap;
   padding: 5px 7px;
 }
 
 .recovery-panel span {
   min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 320px;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .recovery-panel code {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 
 .recovery-panel button {

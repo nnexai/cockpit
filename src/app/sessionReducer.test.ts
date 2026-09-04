@@ -46,6 +46,14 @@ describe("sessionReducer", () => {
     expect(state.syncError?.code).toBe("stream_gap");
   });
 
+  it("keeps the recovery error visible while a resync is loading", () => {
+    let state = ready("one");
+    state = sessionReducer(state, { type: "stream/error", epoch: state.epoch, sessionId: "one", code: "malformed_response", message: "Bad snapshot" });
+    const loading = sessionReducer(state, { type: "snapshot/request", epoch: state.epoch, sessionId: "one" });
+    expect(loading.sync).toBe("loading");
+    expect(loading.syncError).toEqual(state.syncError);
+  });
+
   it("adopts an authoritative snapshot while preserving a live stream", () => {
     const state = ready("one");
     const authoritative = snapshot("one", "pane-2");

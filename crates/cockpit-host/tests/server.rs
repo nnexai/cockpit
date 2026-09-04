@@ -235,6 +235,7 @@ fn snapshot() -> SessionSnapshotResponse {
             status: "working".to_owned(),
             title: Some("Terminal".to_owned()),
             focused: true,
+            state_change_seq: 42,
         }],
     }
 }

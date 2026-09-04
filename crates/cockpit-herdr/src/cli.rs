@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -55,6 +58,8 @@ const MAX_SESSION_NAME: usize = 96;
 const MAX_TERMINAL_LINE: usize = 1024 * 1024;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
+const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVER_START_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
@@ -96,7 +101,7 @@ impl HerdrCliConfig {
     ) -> Result<Self, ConfigError> {
         let executable = executable
             .or_else(|| nonempty(environment.get("COCKPIT_HERDR_EXECUTABLE")).map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("herdr"));
+            .unwrap_or_else(|| default_herdr_executable(environment));
         let session = session.or_else(|| nonempty(environment.get("COCKPIT_HERDR_SESSION")));
         if let Some(session_name) = session.as_deref()
             && !valid_session_name(session_name)
@@ -135,8 +140,61 @@ impl HerdrCliConfig {
 fn nonempty(value: Option<&String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty()).cloned()
 }
+
+fn default_herdr_executable(environment: &BTreeMap<String, String>) -> PathBuf {
+    let executable_name = format!("herdr{}", std::env::consts::EXE_SUFFIX);
+    if let Some(path) = environment.get("PATH") {
+        for directory in std::env::split_paths(path) {
+            let candidate = directory.join(&executable_name);
+            if is_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+    }
+
+    if let Some(home) = nonempty(environment.get("HOME")).map(PathBuf::from) {
+        for relative in [".local/bin", ".linuxbrew/bin", ".cargo/bin"] {
+            let candidate = home.join(relative).join(&executable_name);
+            if is_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+    }
+
+    for directory in [
+        "/home/linuxbrew/.linuxbrew/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+    ] {
+        let candidate = Path::new(directory).join(&executable_name);
+        if is_executable_file(&candidate) {
+            return candidate;
+        }
+    }
+
+    PathBuf::from(executable_name)
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
 fn malformed(message: impl Into<String>) -> InspectionError {
     InspectionError::new("malformed_json", message)
+}
+
+fn server_not_running(status: &Value) -> bool {
+    status.get("running").and_then(Value::as_bool) == Some(false)
+        || status.get("status").and_then(Value::as_str) == Some("not_running")
 }
 fn structured_error(value: &Value) -> Result<Option<InspectionError>, InspectionError> {
     let Some(error) = value.get("error") else {
@@ -438,6 +496,16 @@ fn parse_snapshot(
             let context = format!("snapshot.agents[{index}]");
             let object = object(value, &context)?;
             let title = sanitized_title(object, &context)?;
+            let state_change_seq = object
+                .get("state_change_seq")
+                .map(|_| required_u64(object, "state_change_seq", &context))
+                .transpose()?
+                .unwrap_or_default();
+            if state_change_seq > MAX_SAFE_REVISION {
+                return Err(malformed(format!(
+                    "{context}.state_change_seq exceeds JavaScript safe integer range"
+                )));
+            }
             Ok(AgentSummary {
                 pane_id: required_string(object, "pane_id", &context)?,
                 space_id: required_string(object, "workspace_id", &context)?,
@@ -446,6 +514,7 @@ fn parse_snapshot(
                 status: required_string(object, "agent_status", &context)?,
                 title,
                 focused: required_bool(object, "focused", &context)?,
+                state_change_seq,
             })
         })
         .collect::<Result<Vec<_>, InspectionError>>()?;
@@ -775,6 +844,8 @@ fn sanitized_title(
 #[derive(Debug, Clone)]
 pub struct HerdrCliAdapter {
     config: HerdrCliConfig,
+    autostart_server: bool,
+    server_start: Arc<Mutex<()>>,
 }
 
 fn valid_pane_id(pane_id: &str) -> bool {
@@ -801,7 +872,25 @@ enum EventConnectionEnd {
 
 impl HerdrCliAdapter {
     pub fn new(config: HerdrCliConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            autostart_server: false,
+            server_start: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn with_server_autostart(mut self) -> Self {
+        self.autostart_server = true;
+        self
+    }
+
+    fn should_start_server(&self, error: &InspectionError) -> bool {
+        self.autostart_server
+            && self.config.socket().is_none()
+            && matches!(
+                error.code.as_str(),
+                "execution_failed" | "server_not_running"
+            )
     }
 
     pub fn config(&self) -> &HerdrCliConfig {
@@ -1013,6 +1102,90 @@ impl HerdrCliAdapter {
         }
     }
 
+    async fn start_server_and_wait(&self, session: Option<&str>) -> Result<Value, InspectionError> {
+        let mut child = self
+            .command(session, &["server"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                InspectionError::new(
+                    "server_start_failed",
+                    format!("failed to start Herdr server: {error}"),
+                )
+            })?;
+        let deadline = tokio::time::Instant::now() + SERVER_START_TIMEOUT;
+        let mut last_error: InspectionError;
+
+        loop {
+            tokio::time::sleep(SERVER_START_POLL_INTERVAL).await;
+            match self
+                .run_json_for(session, &["status", "server", "--json"])
+                .await
+            {
+                Ok(status) if !server_not_running(&status) => {
+                    tokio::spawn(async move {
+                        let _ = child.wait().await;
+                    });
+                    return Ok(status);
+                }
+                Ok(_) => {
+                    last_error =
+                        InspectionError::new("server_not_running", "Herdr server is not running");
+                }
+                Err(error) => last_error = error,
+            }
+            if let Some(status) = child.try_wait().map_err(|error| {
+                InspectionError::new(
+                    "server_start_failed",
+                    format!("could not monitor Herdr server startup: {error}"),
+                )
+            })? {
+                return Err(InspectionError::new(
+                    "server_start_failed",
+                    format!(
+                        "Herdr server exited before becoming ready ({status}); {}",
+                        last_error.message
+                    ),
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(InspectionError::new(
+                    "server_start_timeout",
+                    format!(
+                        "Herdr server did not become ready within {} seconds; {}",
+                        SERVER_START_TIMEOUT.as_secs(),
+                        last_error.message
+                    ),
+                ));
+            }
+        }
+    }
+
+    async fn inspect_with_server_autostart(
+        &self,
+        session: Option<&str>,
+    ) -> Result<HerdrCompatibility, InspectionError> {
+        let initial = match self.inspect_inner(session).await {
+            Ok(compatibility) => return Ok(compatibility),
+            Err(error) => error,
+        };
+        if !self.should_start_server(&initial) {
+            return Err(initial);
+        }
+
+        let _start_guard = self.server_start.lock().await;
+        match self.inspect_inner(session).await {
+            Ok(compatibility) => Ok(compatibility),
+            Err(error) if self.should_start_server(&error) => {
+                let status = self.start_server_and_wait(session).await?;
+                self.inspect_status(session, status).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     async fn inspect_inner(
         &self,
         session: Option<&str>,
@@ -1020,6 +1193,20 @@ impl HerdrCliAdapter {
         let status = self
             .run_json_for(session, &["status", "server", "--json"])
             .await?;
+        if server_not_running(&status) {
+            return Err(InspectionError::new(
+                "server_not_running",
+                "Herdr server is not running",
+            ));
+        }
+        self.inspect_status(session, status).await
+    }
+
+    async fn inspect_status(
+        &self,
+        session: Option<&str>,
+        status: Value,
+    ) -> Result<HerdrCompatibility, InspectionError> {
         let (version, protocol) = status_fields(&status)
             .ok_or_else(|| malformed("Herdr status omitted top-level version or protocol"))?;
         if version != REQUIRED_VERSION {
@@ -1733,8 +1920,31 @@ async fn terminal_task(
                                 }
                                 Some("terminal.closed") => {
                                     closed = true;
-                                    let reason = value.get("reason").and_then(Value::as_str).unwrap_or("closed");
-                                    let _ = sender.send(TerminalStreamMessage::Closed { session_id: session_id.clone(), pane_id: pane_id.clone(), stream_id: stream_id.clone(), reason: sanitize_terminal_text(reason) }).await;
+                                    let reason = sanitize_terminal_text(
+                                        value
+                                            .get("reason")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("closed"),
+                                    );
+                                    let message = if mode == TerminalMode::Control
+                                        && reason.eq_ignore_ascii_case("terminal attach taken over")
+                                    {
+                                        TerminalStreamMessage::Ownership {
+                                            session_id: session_id.clone(),
+                                            pane_id: pane_id.clone(),
+                                            stream_id: stream_id.clone(),
+                                            state: TerminalOwnershipState::Lost,
+                                            message: Some(reason),
+                                        }
+                                    } else {
+                                        TerminalStreamMessage::Closed {
+                                            session_id: session_id.clone(),
+                                            pane_id: pane_id.clone(),
+                                            stream_id: stream_id.clone(),
+                                            reason,
+                                        }
+                                    };
+                                    let _ = sender.send(message).await;
                                     break;
                                 }
                                 Some(record_type) => {
@@ -2118,7 +2328,8 @@ fn mutation_call(request: &ResourceMutationRequest) -> (&'static str, Value) {
 #[async_trait]
 impl HerdrAdapter for HerdrCliAdapter {
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
-        self.inspect_inner(self.config.session()).await
+        self.inspect_with_server_autostart(self.config.session())
+            .await
     }
 
     async fn inspect_session(
