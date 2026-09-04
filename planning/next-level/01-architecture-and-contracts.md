@@ -38,7 +38,7 @@ Acceptance: CLI and native launch with the same config and overrides report iden
 
 ## FND-02: shared operations and transport contract
 
-Required. Freeze this contract before parallel backend, host, and UI implementation.
+Required. Freeze shared identity/error/operation conventions and the operation contracts needed by the next vertical slice before its parallel backend, host, and UI implementation. The table is the complete planned inventory; optional/later families do not need generated stubs at M0.
 
 Add protocol modules as needed, re-exported through `v1`: `repository`, `workspace_setup`, `context`, `sources`, `comments`, and `operations`. Keep the existing generated-file path until a deliberate exporter change is independently verified. Proposed DTO names below must not be confused with installed Herdr methods.
 
@@ -75,8 +75,8 @@ Use the following distinct identities:
 - `HerdrResourceRef`: endpoint identity, named session, workspace/tab/pane IDs as applicable, plus the current client session epoch. Live authority always comes from Herdr.
 - `CompanionId`: random identifier in an owned companion manifest. The manifest records repository/worktree provenance and its association evidence. It does not assert whether a Space is currently live.
 - `SourceId`: provider instance plus resource kind and canonical identifier, or local repository identity plus selected snapshot mode. Provider name alone cannot distinguish two Gitea installations.
-- `FileRef`: companion ID, normalized relative path, source ID if managed, revision/content hash, and size. The client never supplies an unrestricted absolute read path.
-- `DraftBatchId`: client/window identity plus session epoch, Space and tab identity, and random batch ID. Drafts from different tabs/windows never merge implicitly.
+- `FileRef`: a tagged authorized root reference (`companion` with CompanionId, or `checkout` with RepositoryId and verified checkout identity), normalized relative path, source ID if managed, revision/content hash, and size. Git review revisions additionally identify commit/index/worktree source and old/new side. Each variant has its own containment and provenance checks. The client never supplies an unrestricted absolute read path.
+- `DraftBatchId`: a stable random batch ID, persisted owner/window identity, source provenance, and last-known Space/tab/pane location. A separate live attachment records the current endpoint/session epoch and verified identities. The epoch guards messages and paste eligibility, not durable identity. Restore disconnected batches as detached until provenance is revalidated. Drafts from different tabs/windows never merge implicitly.
 
 Store context and operation ownership adjacent to the owned resource or beneath the configured Cockpit state root. Operation journals are receipts for effects performed by Cockpit, not a session/workspace registry. Reopening an association requires a fresh Herdr provenance check. Session names and reusable `w1` IDs alone never authorize reading or removing a companion.
 

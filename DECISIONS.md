@@ -208,3 +208,11 @@ This records the decisions made during the architecture refinement interview. It
 - Retain the quick comment interactions. Remove the persistent comments bottom panel: show an unsent-comment count in the Context/Reviewr pane header and open the batch overview only on click or a GUI shortcut.
 - Render unsent selected-line comments inline; whole-file comments or rendered-document comments may appear below the file. These views and the overview share draft state. Sent comments leave the unsent views; rejected/unknown delivery retains them.
 - Pane/ellipsis controls and source setup need later refinement. Their current mock appearance is not a chosen final design.
+
+## Reopened terminal stability decision, 2026-09-04
+
+The user reports repeated whole-view dark frames during redraw, especially active agent output and Codex `/pets`, with Kitty images making the regression prominent. Protocol 22 and the current renderer describe the installed implementation; they are no longer assumed to be the correct stable baseline for future work. Preserve Herdr authority, but compare a bounded presentation repair with a verified stable Herdr-compatible path. Keep Kitty graphics as a goal without requiring a flickering daily-use default. No running server or installed binary is changed by this planning decision. The evidence and acceptance gate are in `planning/next-level/13-terminal-stability.md`.
+
+The final code review also calls for separately verified state-ordering, stream-transition, input/attachment, and request-lifetime repairs before behavior-preserving cleanup. Future quality metrics must exercise production state paths, not duplicate unused reducers. See `research/next-level-existing-code-review.md`.
+
+Scrolling is included in that first stability gate: viewport continuity, scroll position during incoming output, responsiveness, and flicker with and without images. It is not deferred as UI polish.

@@ -17,15 +17,17 @@ same-tab agent input. Pasting never submits; the user performs submission in the
 
 * Context reads are read-only and bounded. The viewer never executes a file, Mermaid diagram,
   image, HTML, SVG, PDF, shell command, or arbitrary URL.
-* Every displayed file is a `FileRef` with companion identity, normalized relative path, source
-  identity, immutable revision/content hash, size, and status. A readable absolute companion path
+* Every displayed file is a `FileRef` with an authorized companion or checkout root identity,
+  normalized relative path, source identity, immutable revision/content hash, size, and status.
+  Git review references also identify the original revision and old/new side. A readable absolute companion path
   may be shown as metadata or offered through an approved host-mediated external-open action; the
   client never turns it into an unrestricted read path.
 * Source mode is the authority for comments. A line comment stores the immutable source revision,
   exact 1-based `start_line`/`end_line`, and exact original lines including frontmatter. A full-file
   comment stores the same revision and an explicit `whole_file` anchor without embedding the file body. External changes invalidate
   the draft; they never silently rebase or replace its quoted lines.
-* Draft batches are scoped by client/window, Herdr session epoch, Space, and tab. A new tab or
+* Draft batches have stable persisted IDs and owner/source provenance. Their live attachment is
+  scoped by client/window, current Herdr session epoch, Space, and tab. A new tab or
   session never inherits or merges drafts. The main implementation persists drafts under the
   Cockpit state root by default so a restart does not lose review work; persistence is user-owned
   local state and stores no credentials. Writes are atomic and protected by the FND-03 lock.
@@ -130,9 +132,10 @@ for collection and preview.
 `comments.list/upsert/remove/preview`; `src/app/context/CommentDrafts.tsx`; persistent state under
 the configured Cockpit state root (exact directory chosen by FND-01).
 
-**Draft shape:** `{draft_id, batch_id, session_epoch, space_id, tab_id, file_ref, revision,
+**Draft shape:** `{draft_id, batch_id, owner_identity, last_known_location, live_attachment, file_ref, revision,
 source_kind, start_line, end_line, selected_lines, comment_text, updated_at}`. `selected_lines` is
-the exact source text, including frontmatter and original newline normalization metadata. Full-file
+the exact source text, including frontmatter and original newline normalization metadata.
+`live_attachment` holds epoch/Space/tab/pane proof and is unset after restart until revalidated. Full-file
 comments set `start_line = null`, `end_line = null`, `selected_lines = []`, and `source_kind = whole_file`. They contain path/revision and comment only; only explicit line selections embed source text.
 
 **Implementation steps:** comment whole file or a contiguous line range; capture the current

@@ -2,6 +2,12 @@
 
 This is an implementation sequence for later work. The current task delivers plans and mockups only. Estimates are rough engineering effort, not deadlines; they assume one integrator and up to three bounded contributors familiar with Rust and React. Runtime discoveries can change the sequence at the named gates.
 
+## Terminal stability and existing-code repairs first
+
+The user reports severe whole-view flicker during terminal redraw, including active agent output and `/pets`; images may amplify it but are not the only suspected trigger. [TERM-01/02](13-terminal-stability.md) now precedes the milestones below. The custom protocol-22 build and renderer are not an accepted stable baseline. Reproduce and compare compatible build pairs, then select a bounded repair or stable fallback without changing the user’s running setup during planning. Re-probe downstream capabilities if the Herdr target changes.
+
+The [existing-code review](../../research/next-level-existing-code-review.md) also identifies ordering, sequence validation, input routing, attachment identity, and request-lifetime repairs. Capture them in CLEAN-01, fix them as separately reviewed correctness increments, and only then preserve the corrected behavior through extraction. Frontend ordering/input and Rust request/attachment work can proceed in separate lanes once shared protocol/renderer ownership is fixed.
+
 ## Milestones
 
 | Milestone | Stories | User-visible result | Required gate |
@@ -20,7 +26,9 @@ M1 does not need a provider. A user-created Markdown file in the companion is en
 
 ```mermaid
 flowchart TD
-  CLEAN[CLEAN priming] --> F1
+  TERM[TERM stability and transport decision] --> REPAIR[Bounded existing-code repairs]
+  REPAIR --> CLEAN[CLEAN priming]
+  CLEAN --> F1
   F1[FND-01 config and capabilities] --> F2[FND-02 operations and protocol]
   F1 --> F3[FND-03 identity and storage]
   F2 --> L1[LIFE-01 repository catalog]
@@ -156,3 +164,5 @@ After committing this initial plan, build one consolidated workflow mock coverin
 Every implementation lane consumes the same pinned quality policy and stable JSON/human reports from [CLEAN-05](11-quality-gates.md). Run fast checks while editing, changed-function complexity/coverage before handoff, and bounded mutation checks for changed production logic before completion. A Luna agent at high reasoning can own these bounded changes when contracts and patterns are clear; the integrator still owns behavioral acceptance, scope, and exceptions. Passing a metric does not replace native/browser/Herdr proof or architectural review.
 
 Legacy debt is baselined explicitly so this infrastructure does not demand a whole-project rewrite. New code must satisfy the selected thresholds; touched legacy code must not regress. Unmapped coverage, missing tools, failing baseline tests, and incomplete mutation execution remain visible incomplete results, never an empty green report.
+
+The earlier feature/cleanup estimates exclude TERM stabilization and the newly identified existing-code repairs. Re-estimate after the temporal reproduction and target selection; do not conceal this work inside the previous cleanup estimate. Quality tooling probes and static architecture inventory may proceed during diagnosis, but feature integration waits for the stable baseline.

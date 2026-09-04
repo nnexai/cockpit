@@ -369,3 +369,7 @@ The full plan is `planning/next-level/README.md`. Begin with a separately scoped
 Keep this a personal tool that is easy to change in code. Prefer clear owning modules and small interfaces over a generic plugin/workflow framework. The cleanup plan names concrete seams and a code-tweaking guide; it must preserve current Herdr runtime behavior before feature additions.
 
 Prime the cleanup with deterministic quality infrastructure (CLEAN-05): pinned test/coverage/complexity tools, per-function CRAP with a proposed new-code ceiling of 8 and preferred target of 6, changed-code mutation tests, and machine-readable failures for implementation agents. Establish a reviewed legacy baseline rather than requiring a rewrite. Coverage mapping and tool failures must be reported as incomplete, not passed. Detailed policy and adoption probes live in `planning/next-level/11-quality-gates.md`.
+
+## 12. Stability before expansion
+
+The reported terminal redraw flicker reopens the custom protocol-22 and renderer choice. Establish a temporal reproduction and a reliable daily-use build before cleanup or feature expansion; Kitty support remains desired but must pass the same stability gate. `planning/next-level/13-terminal-stability.md` compares repair and stable-compatible alternatives without presuming a downgrade is already verified. `research/next-level-existing-code-review.md` records additional current-code failures and planned corrections. No feature, renderer repair, or installed-server change is part of this planning task.

@@ -2,6 +2,8 @@
 
 Status: proposed planning milestone; no implementation. This plan keeps the current Herdr behavior and the feature plan independent. It uses Module, Interface, Depth, Seam, Adapter, Leverage, and Locality as design terms.
 
+The current renderer has a reported severe redraw regression. [Terminal stabilization](13-terminal-stability.md) and [existing-code repairs](../../research/next-level-existing-code-review.md) precede preservation of that behavior. CLEAN-01 captures the failures; correctness fixes are separate increments rather than silently mixed into extraction.
+
 ## Purpose and sequencing
 
 Cockpit is a personal primary tool, so the useful measure is how many owning modules a small behavior change crosses. Do a short priming milestone before feature implementation, then keep the larger cleanup elective. The priming work should establish seams and characterization checks around existing contracts; it should not become a rewrite or a generic plugin framework.
@@ -81,7 +83,7 @@ Parallel lanes are frontend (CLEAN-02), Herdr Adapter (CLEAN-03), and guide/test
 
 Audit `src/app/styles.css` against the actual component tree. Consolidate repeated typography/state/spacing definitions into existing semantic variables, group rules by current owning view, and remove a rule only after proving it unused by native and browser rendering. Do not re-theme the application during extraction. Keep the terminal canvas, image layering, cell metrics, hover borders, and focused-pane geometry unchanged in before/after screenshots.
 
-Review tests that assert implementation-shaped exports from `App.tsx`. Move their imports to the owning module and retain behavioral assertions. Replace brittle source-string checks only when a behavior-level test covers the same regression. Do not dilute the existing protocol fixtures or remove difficult tests merely because extraction makes them inconvenient. No new general test harness is required.
+Review tests that assert implementation-shaped exports from `App.tsx`. Move their imports to the owning module and retain behavioral assertions. The current review found no production dispatcher for the reducer attachment cases. Move their useful coverage onto the actual terminal controller and mounted lifecycle before removing the unused state path. Do not dilute the existing protocol fixtures or remove difficult tests merely because extraction makes them inconvenient. No new general test harness is required.
 
 A bounded priming target is CLEAN-01 plus the CLEAN-05 quality gate, focus/keymap/layout ownership from CLEAN-02, request/method mapping separation from CLEAN-03, and the code map/token audit from CLEAN-04. Timebox discovery to a focused increment, estimated 3–6 person-days for cleanup/runtime proof plus a provisional 3–5 for CLEAN-05 tooling and mapping probes. Defer extra terminal-wire decomposition until an actual feature or defect benefits from it. Re-estimate from the baseline rather than promising a line-count reduction.
 

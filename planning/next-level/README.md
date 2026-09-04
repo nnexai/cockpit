@@ -20,6 +20,10 @@ Status: selected direction is detect-and-replace for real Herdr extension panes.
 
 11. [Deterministic quality gates](11-quality-gates.md): CLEAN-05 coverage/complexity/CRAP reporting, mutation testing, pinned tools, and changed-code agent feedback.
 
+12. [Final design review](12-final-design-review.md): recommended restructurings, targeted rewrites, scope tradeoffs, and a real-task checkpoint.
+
+13. [Terminal stability and compatibility decision](13-terminal-stability.md): whole-view redraw flicker, temporal acceptance, and stable Herdr versus custom protocol-22 tradeoffs.
+
 ## Confirmed scope from the planning interview
 
 The user requested a thorough plan for all missing features, including implementation instructions, a sequence, explicit parallel work, UI designs conveyed through HTML mocks, and a commit containing the completed planning artifacts. No feature implementation is authorized in this task.
@@ -71,3 +75,7 @@ Reviewed with three bounded Luna research/review lanes and root integration. Loc
 ## Quality infrastructure addition
 
 The maintainability pass includes deterministic feedback before new feature work: a proposed CRAP target of at most 8 for new functions (6 as a preferred target), reviewed legacy baselines, coverage checks, and mutation testing. [Tooling research](../../research/next-level-quality-gates.md) records the formula, compatibility evidence, and adoption probes. The infrastructure is planned, not installed or implemented by this task.
+
+## Final scrutiny and changed priority
+
+[Existing-code findings](../../research/next-level-existing-code-review.md) include reproduced stale-snapshot and generation-transition handling failures, an unused tested attachment path, and concrete input/transport lifecycle concerns. The user also reported severe redraw flicker. Stabilize the terminal and revisit the custom Herdr target before cleanup/features. Current protocol-22 research remains evidence for that build only; it does not prove stable-release compatibility or visual reliability. No repairs or installation changes were performed during planning.
