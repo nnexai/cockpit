@@ -117,7 +117,7 @@ Selectable after REV-01, PANE-02, VIEW-01 source rendering, and REF-01/02. Sourc
 
 Proposed files: `src/app/review/{ReviewPane,ChangedFiles,DiffView,ReviewComments}.tsx`, review reducer/client mappings, and shared comment components. Reuse Context typography, source gutters, selection, queue, and payload preview. Both features use Cockpit-owned durable review/comment state.
 
-Show changed files with status and scope, a unified diff, old/new source gutters, inline comments, and a collapsible collected-comment tray. Whole-file and selected-line comments work across files. Add keyboard next/previous file/hunk, source view, expand unchanged lines under limits, and refresh. Side-by-side diff is a separately deferrable renderer inside this story; unified diff must be complete first.
+Show changed files with status and scope, a unified diff, old/new source gutters, inline unsent comments, and a header comment count opening an on-demand batch overview. Do not reserve a persistent bottom panel for comments. Whole-file and selected-line comments work across files. Add keyboard next/previous file/hunk, source view, expand unchanged lines under limits, and refresh. Side-by-side diff is a separately deferrable renderer inside this story; unified diff must be complete first.
 
 The target picker lists Herdr-detected agents in the same actual tab. Sending uses REF-02's acknowledged paste-only operation. No provider comment posting, Git mutation, or automatic agent submission is part of review. A review/MR URL can set the comparison suggestion and attach context, but the GUI requires a verified local repo/revision match before using remote positions as local anchors.
 

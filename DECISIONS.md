@@ -194,3 +194,17 @@ This records the decisions made during the architecture refinement interview. It
 - Plan every missing/deferred capability as a separate story, but do not make distribution, multi-user access, credentials infrastructure, or provider breadth prerequisites for the local main loop.
 - A local primary repository is required for setup; an issue/review URL is optional. Additional already-discovered local repositories can be explicitly snapshotted into context. Arbitrary URL downloading and remote cloning remain outside the current main scope.
 - The selected UI supersedes the first HTML dock study. Final plans, dependencies, code cleanup, and graphical pane mocks are in `planning/next-level/README.md`.
+
+## Agent quality feedback, 2026-09-04
+
+- The maintainability pass must establish deterministic test and metric feedback for later code-writing agents, including bounded Luna-high implementation work when contracts and patterns are clear. This task plans that infrastructure only.
+- CRAP 6–8 is the user-proposed local target, not a quoted industry standard. Proposed enforcement: new functions at most 8, preferred target 6; touched legacy code must not regress against an explicit reviewed baseline. Missing per-function coverage mapping is inconclusive.
+- Add mutation testing alongside complexity and coverage. Preserve outcome categories and expose survivors, uncovered mutations, timeouts, invalid mutants, skips, and tool failures. Do not count every non-survivor as a successful kill.
+- Pin tools and inputs, provide actionable stable reports, and keep baseline/exception changes reviewable. Metrics support behavioral tests and design review; they do not certify maintainability by themselves. See `planning/next-level/11-quality-gates.md`.
+- The second workflow mock proposes direct explicit paste to the visible same-tab agent, with optional preview/always-preview. This remains a discussion proposal until the interaction checkpoint resolves it.
+
+## Comment interaction checkpoint, 2026-09-04
+
+- Retain the quick comment interactions. Remove the persistent comments bottom panel: show an unsent-comment count in the Context/Reviewr pane header and open the batch overview only on click or a GUI shortcut.
+- Render unsent selected-line comments inline; whole-file comments or rendered-document comments may appear below the file. These views and the overview share draft state. Sent comments leave the unsent views; rejected/unknown delivery retains them.
+- Pane/ellipsis controls and source setup need later refinement. Their current mock appearance is not a chosen final design.

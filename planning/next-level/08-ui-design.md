@@ -43,14 +43,14 @@ Reference window is 1440×900; minimum full workbench is 1024×640. Pane widths 
 
 ## Context pane
 
-Default internal arrangement: header, toolbar, file tree beside document, and a collapsible comments tray. The pane fills its Herdr rectangle.
+Default internal arrangement: header with an unsent-comment count, toolbar, and file tree beside document. Unsent range comments appear inline; whole-file comments appear below the file. The pane fills its Herdr rectangle.
 
 - Pane header uses existing pane chrome. Label `Context` when the companion root is selected, or `Files` for a repository file root. A small `GUI` marker distinguishes the replacement without exposing implementation jargon throughout the UI.
 - Toolbar has root selector, breadcrumb, Rendered/Source toggle, Search, and full-file comment action. File metadata is collapsed by default with source identity and freshness visible.
 - Tree defaults to 200-232px where space permits and can resize internally. Actual folders are shown; managed issue/wiki/repository roots get type/status glyphs. `notes` is a normal user folder, not a generated scratchpad. Symlinks/unsupported entries remain visible with their reason.
 - Document measure is bounded for Markdown but left-aligned within its area. Source can scroll horizontally. Large trees and source files are paginated/virtualized within finite read limits.
-- At pane width below 640px, collapse the file tree into a toolbar popover. At below 420px, put secondary actions in a menu and show the comments tray as a local overlay. The document remains scrollable and the pane header remains usable. Offer Herdr zoom; never silently zoom or change its layout.
-- Comments tray starts collapsed when empty. With drafts, show count and the latest item, allow expansion, and retain the target/paste affordance. At reduced pane height, collapse it to a count/action row rather than obscure the document.
+- At pane width below 640px, collapse the file tree into a toolbar popover. At below 420px, put secondary actions in a menu and open the requested comments overview as a local overlay. The document remains scrollable and the pane header remains usable. Offer Herdr zoom; never silently zoom or change its layout.
+- No persistent comments bottom panel. Show `N comments` in the Context/Reviewr header. Click it or use the GUI comments shortcut to open an overview across files, with edit/remove, same-tab target selection, optional preview, and explicit paste. Keep reading unobstructed until the overview is requested. Inline and file-bottom comments show only unsent drafts; accepted delivery removes them from that view while retaining the receipt/history.
 
 Opening a file requests a bounded revision-bearing read. Show the breadcrumb and loading row immediately, but do not show the previous file's content under the new name. A late response cannot replace a newer file selection. Refresh retains the selected file and scroll when its identity matches; removed files show the retained excerpt and a missing-file state.
 
@@ -68,7 +68,7 @@ Click a source gutter line, Shift-click another for a contiguous range, then use
 
 Each collected item shows the comment, path, side/range if relevant, and a stale marker when source bytes changed. Select an item to revisit its captured source; edit and remove are local item actions. Collect across any eligible files in the same pane's root/context. Full-file comments include no entire file body. Selected-line comments retain the exact excerpt and numbers.
 
-`Preview & paste` opens the exact outgoing text and the target selector. Only Herdr-detected agents in this real tab appear. Preselect the last locally used same-tab agent if still valid; otherwise select the sole candidate or require a choice. If none exists, keep the batch and show `No agent in this tab`, with copy preview available. Never silently pick an agent from another tab or spawn one.
+`N comments` opens the batch overview and target selector; Preview opens the exact outgoing text. Preserve the quick paste shortcut for an already established same-tab target, and identify the target in accessible help/feedback. If that target becomes invalid or ambiguous, open the overview for selection instead of guessing. Only Herdr-detected agents in this real tab appear. Preselect the last locally used same-tab agent if still valid; otherwise select the sole candidate or require a choice. If none exists, keep the batch and show `No agent in this tab`, with copy preview available. Never silently pick an agent from another tab or spawn one.
 
 The payload shows an actual absolute companion/worktree path that the agent can open, source revision, comment, and numbered excerpt where selected. For deleted/old-side content it explicitly says which revision/side the excerpt describes. Preview displays any removed terminal control characters and actual byte size.
 
@@ -82,7 +82,7 @@ Top row: comparison scope, base ref where relevant, revision/dirty summary, Refr
 
 Unified diff is the first renderer. Use separate old/new gutters and understated addition/deletion backgrounds; source text remains readable without color. Deleted-line comments carry the old side, not a fictional current file line. Hunk headers are navigable. Binary/submodule/mode-only changes receive summaries and whole-file comments. Large-diff limits show `More omitted` with a bounded next-page action.
 
-Comments can appear inline and in the collection tray, referencing one shared draft object. `All files` is a local pane action when the user needs full-file inspection; it does not change the global workbench. Provider review snapshots remain separate context files until an explicit local-revision match exists.
+Comments can appear inline and in the on-demand collection overview, referencing one shared draft object. `All files` is a local pane action when the user needs full-file inspection; it does not change the global workbench. Provider review snapshots remain separate context files until an explicit local-revision match exists.
 
 `Show terminal view` displays the original Reviewr TUI. If GUI drafts exist, show `Your Cockpit comments stay saved here; the terminal view has its own state.` Do not export/import private TUI comments or add a bridge. Switching back restores Cockpit's own selection and drafts.
 
@@ -137,3 +137,11 @@ Recovery has a compact list of partial setup, missing companion, orphaned contex
 Preserve Herdr magic escape and existing navigation; add context/review shortcuts in the owning keymap module with GUI-focus guards. Define discoverable actions first, then bind keys after checking current Herdr/Cockpit conflicts. Source selection, comment save/cancel, tree navigation, menu actions, and payload review must all work by keyboard. Escape closes the innermost transient UI after Herdr's higher-priority escape contract is handled.
 
 Mock validation checks layout and simulated interactions only. Implementation acceptance uses real `cockpit serve` and native WebKit with disposable sessions. It must observe extension detection, exact pane geometry, visible-only renderers, no GUI-to-TUI input leakage, shared terminal surface continuity, source line fidelity, read-only Git/files, and actual paste-without-submit behavior. Compare against the original Herdr TUI at normal and minimum window sizes.
+
+## Second interaction checkpoint
+
+After the initial plan commit, [the consolidated workflow lab](mocks/workflow.html) tests the entire daily loop. [Checkpoint notes](10-interaction-checkpoint.md) specify candidate shortcuts, focus boundaries, action targets, and the proposed direct explicit paste default with optional preview. These are discussion proposals; the established pane-replacement architecture remains unchanged.
+
+### Second-checkpoint feedback
+
+The user likes the quick interactions. Replace the always-present comments panel with the pane-header count and requested overview. Render unsent range comments near their source lines and whole-file comments below the file; rendered documents may group that file’s comments below its content. Pane/ellipsis button styling and source setup feel awkward and remain a separate visual/interaction refinement, not approved final UI. Preserve the efficient comment loop while revisiting those surfaces.

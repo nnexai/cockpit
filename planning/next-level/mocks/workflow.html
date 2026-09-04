@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cockpit · workflow discussion</title>
+  <link rel="stylesheet" href="workflow.css">
+</head>
+<body>
+  <header class="prototype-bar">
+    <div><b>Cockpit workflow lab</b><span>Interactive planning mock · sample files and simulated Herdr actions</span></div>
+    <nav aria-label="Prototype tools">
+      <select id="scenario" aria-label="Prototype scenario">
+        <option value="normal">Normal workflow</option>
+        <option value="two-agents">Two agents in this tab</option>
+        <option value="no-agent">No agent in this tab</option>
+        <option value="changed">Source changed after selection</option>
+        <option value="unknown">Next paste result unknown</option>
+        <option value="rejected">Next paste rejected</option>
+        <option value="disconnected">Herdr disconnected</option>
+      </select>
+      <button data-action="help">Keys & gestures</button>
+      <button data-action="planned">All planned blocks</button>
+      <button data-action="reset">Reset</button>
+    </nav>
+  </header>
+  <div class="workbench">
+    <aside class="sidebar">
+      <button class="session" data-action="session"><span class="accent">▧</span> development <span id="connection" class="status green">Connected</span></button>
+      <div class="spaces">
+        <div class="section-title">Spaces <button data-action="setup" title="Set up a task Space">＋</button></div>
+        <div class="tree-parent">⌄ Cockpit</div>
+        <button class="space selected" data-space="Context workflow">├ Context workflow <span class="amber">!</span></button>
+        <div class="branch">feat/context-workflow</div>
+        <button class="space" data-space="Terminal polish">└ Terminal polish</button>
+        <button class="space" data-space="md-search">› md-search</button>
+        <button class="space" data-space="Herdr">› Herdr</button>
+      </div>
+      <div class="agents">
+        <div class="section-title">Agents <span>3</span></div>
+        <button class="agent" data-action="agent"><span><b class="amber">! OMP</b><small>Context workflow / main</small></span><span class="amber">Blocked</span></button>
+        <button class="agent" data-action="other-agent"><span><b class="accent">✓ Reviewer</b><small>Terminal polish / main</small></span><span class="accent">Done</span></button>
+        <button class="agent" data-action="other-agent"><span><b class="green">↻ Codex</b><small>md-search / main</small></span><span class="green">Working</span></button>
+      </div>
+    </aside>
+    <main>
+      <div class="tabs"><button class="tab active" data-action="main-tab">main</button><button class="tab" data-action="other-tab">scratch</button><button class="tab" data-action="new-tab" title="New Herdr tab">＋</button><div class="grow"></div><button data-action="quick-open" title="Open a file · Ctrl+P in the GUI">Open file <kbd>Ctrl P</kbd></button><button data-action="palette" title="Commands · Ctrl+Shift+P in the GUI">Commands</button><button data-action="open-pane">＋ Pane</button></div>
+      <div id="location-notice" class="inline-notice hidden"></div>
+      <div id="panes" class="panes layout-right">
+        <section id="agent-pane" class="pane agent-pane" aria-label="OMP terminal pane">
+          <header class="pane-header" draggable="true" data-pane="agent"><span class="amber">!</span><b id="agent-title">OMP</b><span class="muted">Blocked</span><div class="grow"></div><span class="tiny">Herdr pane</span><button data-action="agent-menu" title="Agent pane actions">⋮</button></header>
+          <div id="terminal-output" class="terminal-output" tabindex="0"><b class="accent">Context workflow</b><p class="muted">~/worktrees/cockpit/context-workflow</p><p>The context viewer is ready for review.</p><p><span class="green">✓</span> File discovery<br><span class="green">✓</span> Source revisions<br><span class="amber">?</span> Comment delivery</p><p>Should refreshing a source change an existing comment's excerpt?</p><p class="muted">Waiting for your references.</p></div>
+          <div class="terminal-input"><label for="agent-input">OMP input <span id="agent-input-state">No text pasted</span></label><textarea id="agent-input" placeholder="Simulated agent input. Paste inserts text; Enter submits only in this mock."></textarea></div>
+        </section>
+        <section id="gui-pane" class="pane gui-pane active-pane" aria-label="Graphical file viewer pane">
+          <header class="pane-header" draggable="true" data-pane="gui"><span class="accent">▧</span><b id="gui-title">Context</b><span class="tag">GUI</span><div class="grow"></div><button data-action="toggle-comments" id="comments-toggle" title="Collected comments · Ctrl+Shift+M"><span id="draft-count">0</span> <span id="comment-noun">comments</span></button><button data-action="sources">Sources <span class="accent">3</span></button><button data-action="gui-menu" title="Right-click the pane header for layout and renderer actions">Pane ▾</button></header>
+          <div class="file-toolbar"><button id="root-button" data-action="root">Companion ▾</button><span id="breadcrumb" class="mono grow"></span><button id="view-toggle" data-action="toggle-source" title="Toggle rendered/source · Alt+Enter in the GUI">Source</button><button data-action="file-comment" title="Comment on whole file · Shift+C on source">＋ Comment</button></div>
+          <div id="review-toolbar" class="review-toolbar hidden"><label for="review-scope">Compare</label><select id="review-scope"><option value="unstaged">Unstaged vs index</option><option value="staged">Staged vs HEAD</option><option value="branch">Branch vs base</option></select><span class="muted tiny">Local read-only diff · fixture</span><button data-action="refresh">Refresh</button></div>
+          <div class="reading-area">
+            <nav id="file-tree" class="file-tree" aria-label="Files"></nav>
+            <div class="document-area">
+              <div id="document" class="document" tabindex="0" aria-label="File content"></div>
+              <div id="selection-bar" class="selection-bar hidden"><span id="selection-label"></span><button data-action="selection-comment">Comment <kbd>C</kbd></button><button data-action="clear-selection" aria-label="Clear line selection">×</button></div>
+            </div>
+          </div>
+          <div id="drop-zones" class="drop-zones hidden" aria-label="Pane move targets"><button data-drop="left">Move left</button><button data-drop="right">Move right</button><button data-drop="below">Move below</button></div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <dialog id="command-dialog" class="picker"><input id="command-query" aria-label="Find command or file" autocomplete="off"><div id="command-results" role="listbox"></div><p class="dialog-hint">↑ ↓ choose · Enter open · Escape return</p></dialog>
+  <dialog id="comment-dialog"><h2 id="comment-heading">Add comment</h2><p id="comment-anchor" class="mono muted"></p><textarea id="comment-text" placeholder="What should the agent know?" aria-label="Comment text"></textarea><div class="dialog-actions"><span class="muted tiny">Ctrl+Enter saves · Escape cancels</span><span class="grow"></span><button data-close="comment-dialog">Cancel</button><button class="primary" data-action="save-comment">Collect comment</button></div></dialog>
+  <dialog id="comments-dialog" class="wide-dialog" aria-labelledby="comments-title"><h2 id="comments-title">Collected comments</h2><p class="muted">Unsent references across files in this tab. Edit or remove them here; file comments also appear beside their content.</p><span class="tiny muted" id="draft-state">Saved locally in this mock</span><div id="draft-list" class="draft-list"></div><div class="paste-row"><select id="target" aria-label="Same-tab agent target"><option value="omp">OMP · main · Blocked</option></select><button class="primary" id="paste-button" data-action="paste" title="Paste comments · Ctrl+Shift+Enter">Paste to OMP <kbd>⇧ Ctrl ↵</kbd></button></div><div id="delivery-status" class="delivery-status" role="status">Collect references, then paste when ready.</div><div class="dialog-actions"><button data-close="comments-dialog">Keep reading</button><span class="grow"></span><button data-action="preview">Preview exact text</button></div></dialog>
+  <dialog id="preview-dialog" class="wide-dialog"><h2>Outgoing references</h2><p class="muted">The target stays in this tab. Paste adds the text to its input without submitting.</p><pre id="payload"></pre><div class="dialog-actions"><span id="payload-size" class="muted tiny"></span><span class="grow"></span><button data-close="preview-dialog">Keep reviewing</button><button class="primary" data-action="paste-confirmed">Paste once</button></div></dialog>
+  <dialog id="setup-dialog" class="wide-dialog"><h2>Set up a task Space</h2><p class="muted">Repository first. Add an issue or review link if useful.</p><div class="form-grid"><label>Local repository<select id="setup-repo"><option value="cockpit">Cockpit</option><option value="md-search">md-search</option><option value="herdr">Herdr</option></select></label><label>Task name<input id="setup-name" value="Context workflow"></label></div><label>Issue / review URL · optional<input id="setup-url" placeholder="https://forge.example/team/cockpit/issues/142"></label><details id="setup-options"><summary>Worktree and context options <span class="muted">· defaults ready</span></summary><div class="form-grid"><label>Worktree<select id="setup-mode"><option value="create">Create a branch worktree</option><option value="open">Open an existing local worktree</option></select></label><label>Branch<input id="setup-branch" value="feat/context-workflow"></label></div><label class="check"><input type="checkbox" id="setup-local" checked>Include local Herdr repository snapshot</label><label class="check"><input type="checkbox" id="setup-context" checked>Open the file-viewer pane as Context</label><p class="muted tiny">Reflink when available, otherwise an independent copy. You start agents manually. New Cockpit-created terminals receive the companion path.</p></details><div id="setup-summary" class="inline-notice hidden"></div><div class="dialog-actions"><span class="muted tiny">Ctrl+Enter reviews, then starts</span><span class="grow"></span><button data-close="setup-dialog">Cancel</button><button id="setup-submit" class="primary" data-action="setup-review">Review setup</button></div></dialog>
+  <dialog id="details-dialog" class="wide-dialog"><h2 id="details-title"></h2><div id="details-body"></div><div class="dialog-actions"><button data-close="details-dialog">Close</button></div></dialog>
+  <div id="context-menu" class="context-menu hidden" role="menu"></div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <div id="prefix-indicator" class="prefix-indicator hidden">Ctrl+B · next key</div>
+  <script src="workflow.js"></script>
+</body>
+</html>

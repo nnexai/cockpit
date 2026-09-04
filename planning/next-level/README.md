@@ -16,6 +16,10 @@ Status: selected direction is detect-and-replace for real Herdr extension panes.
 8. [UI design](08-ui-design.md) and [interactive mock index](mocks/index.html): final pane, setup, review, and recovery designs. All data and terminal activity are simulated.
 9. [Maintainability pass](09-maintainability.md): separate pre-feature cleanup, a personal code-tweaking guide, and optional follow-up cleanup.
 
+10. [Second interaction checkpoint](10-interaction-checkpoint.md) and [consolidated workflow lab](mocks/workflow.html): keyboard/mouse efficiency, fast setup, collected comments, and delivery outcomes.
+
+11. [Deterministic quality gates](11-quality-gates.md): CLEAN-05 coverage/complexity/CRAP reporting, mutation testing, pinned tools, and changed-code agent feedback.
+
 ## Confirmed scope from the planning interview
 
 The user requested a thorough plan for all missing features, including implementation instructions, a sequence, explicit parallel work, UI designs conveyed through HTML mocks, and a commit containing the completed planning artifacts. No feature implementation is authorized in this task.
@@ -63,3 +67,7 @@ Cockpit is intended to become the user's primary way of engaging with local proj
 ## Initial-plan validation
 
 Reviewed with three bounded Luna research/review lanes and root integration. Local Markdown links and whitespace checks pass. Chromium exercised the final initial mocks at 1440×900 and 1024×640, with no horizontal page overflow or JavaScript errors, plus selected comment, placement, fallback, setup/retry, and teardown interactions. No application build/test or live feature smoke is claimed: production code was not changed, and feature runtime probes are planned acceptance work.
+
+## Quality infrastructure addition
+
+The maintainability pass includes deterministic feedback before new feature work: a proposed CRAP target of at most 8 for new functions (6 as a preferred target), reviewed legacy baselines, coverage checks, and mutation testing. [Tooling research](../../research/next-level-quality-gates.md) records the formula, compatibility evidence, and adoption probes. The infrastructure is planned, not installed or implemented by this task.

@@ -6,7 +6,7 @@ This is an implementation sequence for later work. The current task delivers pla
 
 | Milestone | Stories | User-visible result | Required gate |
 |---|---|---|---|
-| M−1: maintainability priming | CLEAN-01-04 bounded first pass | Clear code ownership and a short personal tweak/test loop, same behavior | Existing gates and before/after disposable runtime proof |
+| M−1: maintainability priming | CLEAN-01-05 bounded first pass | Clear code ownership and a short personal tweak/test loop, same behavior | Existing gates, deterministic changed-code quality reports, and before/after disposable runtime proof |
 | M0: contracts and runtime probes | FND-01-03, PANE-01, first LIFE-03/REF-02 probes | Known config/capabilities; proven env and paste paths | Disposable Herdr probes establish context-env handoff and paste-without-submit before building their UI promises |
 | M1: useful local context | LIFE-01-03, CTX-01, PANE-02, VIEW-01-02, LIFE-04 | Create/open task worktree, attach context, browse local Markdown/Mermaid, safely remove owned resources | End-to-end native/browser lifecycle, partial recovery, provenance and deletion tests |
 | M2: reference loop | REF-01-02, VIEW-03 | Collect comments across files, search context, paste to same-tab agent | Real multi-file payload, focus changes, reconnect uncertainty, no Enter |
@@ -62,7 +62,7 @@ The early LIFE-03 environment and REF-02 paste probes are deliberately ahead of 
 
 ### Wave −1: prime maintainability
 
-Run CLEAN-01 first. Then allow the bounded frontend and Rust extractions in CLEAN-02/03 in parallel with one integrator. Finish the CLEAN-04 code map/style audit and real regression check before widening the central files. No new feature DTOs, dependencies, or presentation changes belong in this increment. Rough effort: 3-6 person-days; larger follow-up cleanup stays elective.
+Run CLEAN-01 first to record behavior and existing checks. Prime [CLEAN-05 quality infrastructure](11-quality-gates.md) next: pin tools, verify metric mappings, establish a reviewed legacy baseline, and prove failures with known bad fixtures. This gives cleanup and feature agents deterministic feedback before they broaden the central files. Tool compatibility and coverage adapters can be investigated alongside CLEAN-01; one integrator owns dependency/configuration changes and the final gate. Then run the bounded frontend and Rust extractions in CLEAN-02/03 in parallel, using those gates. Finish CLEAN-04 code map/style audit and the real regression check. No new feature DTOs or presentation changes belong in this increment; test/metric dependencies are explicitly within CLEAN-05. Rough effort: 3–6 person-days for cleanup plus a provisional 3–5 for quality infrastructure, subject to the Rust/TypeScript adapter probes. Larger follow-up cleanup stays elective.
 
 ### Wave 0: freeze the smallest useful contracts
 
@@ -99,7 +99,7 @@ Integrate comment UI with the actual target terminal before expanding provider s
 
 REV-01 local review core can run beside source ingestion; REV-02 follows renderer/comment contracts and its local diff fixtures. It is independent of remote reviews. After SRC-01's contracts stabilize, Gitea reviews and wiki can proceed independently. Telemetry needs a selected source/provider and its own redaction/volume contract. Settings can proceed once config validation is stable. Packaging can proceed after the native application gates are reliable. Remote access and credentials are deliberately separate architectural work and must not be slipped into a “small settings” change.
 
-M0-M3 is approximately 28-48 person-days before contingency, including the added extension detection/replacement work. The separate CLEAN priming estimate is 3-6 person-days. Re-estimate REV-01/02 after a local-diff spike; an initial range is 6-10 person-days independent of remote review adapters. Parallelism reduces elapsed time but does not divide it by the number of contributors: protocol review, integration, real runtime checks, and recovery fixes are serial work. Re-estimate after M0 with measured uncertainties.
+M0-M3 is approximately 28-48 person-days before contingency, including the added extension detection/replacement work. The separate CLEAN priming estimate is 3–6 person-days for cleanup plus 3–5 for CLEAN-05 metric/test infrastructure; re-estimate if source-to-function mapping needs another tool. Re-estimate REV-01/02 after a local-diff spike; an initial range is 6-10 person-days independent of remote review adapters. Parallelism reduces elapsed time but does not divide it by the number of contributors: protocol review, integration, real runtime checks, and recovery fixes are serial work. Re-estimate after M0 with measured uncertainties.
 
 ## Contract and Git ownership
 
@@ -150,3 +150,9 @@ Rollback of a code release must not erase companion files, snapshots, or drafts.
 ## Interaction-design follow-up
 
 After committing this initial plan, build one consolidated workflow mock covering the planned main loop and graphical review. Use it for a second user discussion focused on reducing repeated clicks, GUI-scoped keyboard navigation/shortcuts, sensible mouse gestures, target selection, and pane behavior. This is a planning/design increment, not feature implementation. Its outcomes update 08-ui-design.md and the affected stories without reopening established Herdr authority or detect-and-replace decisions.
+
+## Deterministic feedback for implementation agents
+
+Every implementation lane consumes the same pinned quality policy and stable JSON/human reports from [CLEAN-05](11-quality-gates.md). Run fast checks while editing, changed-function complexity/coverage before handoff, and bounded mutation checks for changed production logic before completion. A Luna agent at high reasoning can own these bounded changes when contracts and patterns are clear; the integrator still owns behavioral acceptance, scope, and exceptions. Passing a metric does not replace native/browser/Herdr proof or architectural review.
+
+Legacy debt is baselined explicitly so this infrastructure does not demand a whole-project rewrite. New code must satisfy the selected thresholds; touched legacy code must not regress. Unmapped coverage, missing tools, failing baseline tests, and incomplete mutation execution remain visible incomplete results, never an empty green report.

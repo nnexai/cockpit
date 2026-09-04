@@ -60,11 +60,21 @@ Keep formatting/lint commands in package and Cargo scripts rather than inventing
 
 Acceptance: a new contributor can run one documented command set; tests identify the contract they protect; failure output names the owning Module. A render rule, keybinding, or error policy change has one obvious edit location. CLEAN-04 can follow CLEAN-02/03 and should be reviewed before feature stories consume the new seams.
 
+### CLEAN-05: deterministic quality infrastructure
+
+Before feature agents begin, add the local quality report and changed-code gate described in [the implementable CLEAN-05 story](11-quality-gates.md), with evidence and tool constraints recorded in [its research note](../../research/next-level-quality-gates.md). The gate owns no product behavior. It reads the staged, unstaged, and untracked source diff against an explicit base, records content hashes and exact tool versions, and writes a reviewable local JSON report.
+
+The gate combines per-function complexity with trustworthy line/region coverage using `CRAP(m) = c^2 * (1 - coverage)^3 + c`. A new function must stay at CRAP `<= 8`, with `6-8` shown as an aspirational review band, and new executable logic must meet the independent 90% line/region coverage floor. Changed legacy functions ratchet against their explicit baseline without regression; existing debt remains visible and requires a reviewed exception. Hard, warn, and info outcomes, missing coverage, and mutation outcomes are defined in the linked story. Missing coverage or an unjoinable function map is inconclusive and never becomes zero coverage.
+
+Use the repository's pinned Rust toolchain and Node/Vitest loop. Rust coverage and mutation use the probed `cargo-llvm-cov`/`cargo-mutants` adapters; TypeScript coverage uses Vitest under Node and complexity uses a pinned ESLint complexity JSON report, with Stryker's Vitest runner for mutation. These providers are not installed today, so CLEAN-05 begins with read-only probes and reports blockers rather than installing them. Changed-scope mutation is the default; full mutation is local, manual or scheduled opt-in. The report retains killed, survived, no-coverage, timeout, compile-error, skipped, and inconclusive counts, and uses stable numeric exits for agents.
+
+Dependency: CLEAN-01's behavior baseline and tool inventory. Integration order is probe/pin, report contract, changed-scope resolution, coverage/complexity joins, mutation adapters, baseline ratchet, package commands, then one changed-code run. CLEAN-05 is a priming dependency of the feature lanes and does not authorize source or dependency changes by itself.
+
 ## Delivery shape
 
-Priming milestone: CLEAN-01 map plus the smallest safe extractions from CLEAN-02 and CLEAN-03, with characterization checks and no visual change. Feature work can then proceed through the established FND/CTX/LIFE seams. The later cleanup elective may deepen Modules where repeated changes show poor Locality; it should be cancelled when a proposed extraction only moves lines or increases indirection.
+Priming milestone: CLEAN-01 map, CLEAN-05 quality gate, plus the smallest safe extractions from CLEAN-02 and CLEAN-03, with characterization checks and no visual change. Feature work can then proceed through the established FND/CTX/LIFE seams. The later cleanup elective may deepen Modules where repeated changes show poor Locality; it should be cancelled when a proposed extraction only moves lines or increases indirection.
 
-Parallel lanes are frontend (CLEAN-02), Herdr Adapter (CLEAN-03), and guide/test loop (CLEAN-04) after CLEAN-01. One integration owner updates protocol exports, generated TypeScript, client Interfaces, host/native composition, manifests, and lockfiles. Integration is complete only when typecheck, Rust checks, existing tests, characterization checks, and the disposable real smoke all pass.
+Parallel lanes are frontend (CLEAN-02), Herdr Adapter (CLEAN-03), and guide/test loop (CLEAN-04) after CLEAN-05 has primed the changed-code gate. One integration owner updates protocol exports, generated TypeScript, client Interfaces, host/native composition, manifests, and lockfiles. Integration is complete only when typecheck, Rust checks, existing tests, characterization checks, and the disposable real smoke all pass.
 
 
 ## Concrete style and test cleanup
@@ -73,7 +83,7 @@ Audit `src/app/styles.css` against the actual component tree. Consolidate repeat
 
 Review tests that assert implementation-shaped exports from `App.tsx`. Move their imports to the owning module and retain behavioral assertions. Replace brittle source-string checks only when a behavior-level test covers the same regression. Do not dilute the existing protocol fixtures or remove difficult tests merely because extraction makes them inconvenient. No new general test harness is required.
 
-A bounded priming target is CLEAN-01 plus focus/keymap/layout ownership from CLEAN-02, request/method mapping separation from CLEAN-03, and the code map/token audit from CLEAN-04. Timebox discovery to a focused increment, estimated 3-6 person-days including runtime proof. Defer extra terminal-wire decomposition until an actual feature or defect benefits from it. Re-estimate from the baseline rather than promising a line-count reduction.
+A bounded priming target is CLEAN-01 plus the CLEAN-05 quality gate, focus/keymap/layout ownership from CLEAN-02, request/method mapping separation from CLEAN-03, and the code map/token audit from CLEAN-04. Timebox discovery to a focused increment, estimated 3–6 person-days for cleanup/runtime proof plus a provisional 3–5 for CLEAN-05 tooling and mapping probes. Defer extra terminal-wire decomposition until an actual feature or defect benefits from it. Re-estimate from the baseline rather than promising a line-count reduction.
 
 ## Personal tweak map to publish in CODE_GUIDE.md
 
