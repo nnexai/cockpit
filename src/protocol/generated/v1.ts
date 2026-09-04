@@ -6,7 +6,9 @@ export type HerdrIdentity = { version: string, protocol: number, schema_version:
 
 export type HerdrCompatibility = { "status": "compatible", identity: HerdrIdentity, } | { "status": "incompatible", identity: HerdrIdentity | null, code: string, message: string, } | { "status": "unavailable", code: string, message: string, };
 
-export type StatusResponse = { protocol_version: string, cockpit_version: string, mode: CockpitMode, herdr: HerdrCompatibility, };
+export type CockpitCapabilities = { terminal_mouse_input: boolean, };
+
+export type StatusResponse = { protocol_version: string, cockpit_version: string, mode: CockpitMode, capabilities: CockpitCapabilities, herdr: HerdrCompatibility, };
 
 export type ErrorResponse = { code: string, message: string, };
 

@@ -6,8 +6,8 @@ use std::process;
 use ts_rs::{Config, TS};
 
 use crate::v1::{
-    AgentSummary, CockpitMode, ErrorResponse, FocusKind, FocusRequest, FocusResponse,
-    HerdrCompatibility, HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination,
+    AgentSummary, CockpitCapabilities, CockpitMode, ErrorResponse, FocusKind, FocusRequest,
+    FocusResponse, HerdrCompatibility, HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination,
     PaneOutputResponse, PaneResizeDirection, PaneSplitDirection, PaneSummary, PaneZoomMode,
     ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
     SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitSummary, SpaceSummary,
@@ -25,6 +25,7 @@ pub fn render_v1() -> String {
         CockpitMode::decl(&config),
         HerdrIdentity::decl(&config),
         HerdrCompatibility::decl(&config),
+        CockpitCapabilities::decl(&config),
         StatusResponse::decl(&config),
         ErrorResponse::decl(&config),
         SpaceGitSummary::decl(&config),

@@ -24,7 +24,7 @@ import {
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
-import { appendPendingControlCommand, createCockpitTerminal, MAX_PENDING_CONTROL_COMMANDS, shouldObserveAfterControlLoss, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
+import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, shouldObserveAfterControlLoss, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
@@ -93,6 +93,29 @@ describe("terminal ownership", () => {
     expect(terminalMouseButton(1)).toBe("middle");
     expect(terminalMouseButton(2)).toBe("right");
     expect(terminalMouseButton(3)).toBeNull();
+  });
+
+  it("gates every structured pointer command on host capability", () => {
+    const send = vi.fn();
+    const event = { clientX: 110, clientY: 70, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false };
+    const bounds = { left: 10, top: 20, width: 800, height: 400 };
+    const rect = { x: 26, y: 1, width: 94, height: 39 };
+    const events = [
+      ["down", "left"],
+      ["moved", null],
+      ["drag", "left"],
+      ["up", "left"],
+    ] as const;
+
+    for (const [kind, button] of events) {
+      expect(forwardTerminalMouse(false, send, kind, button, event, bounds, 80, 40, rect)).toBe(false);
+    }
+    expect(send).not.toHaveBeenCalled();
+
+    for (const [kind, button] of events) {
+      expect(forwardTerminalMouse(true, send, kind, button, event, bounds, 80, 40, rect)).toBe(true);
+    }
+    expect(send.mock.calls.map(([command]) => command.kind)).toEqual(["down", "moved", "drag", "up"]);
   });
 });
 

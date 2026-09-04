@@ -17,6 +17,7 @@ export type TerminalPaneProps = {
   selected: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
+  terminalMouseInput: boolean;
   onRequestControl?: () => void;
   onControlLost?: () => void;
   onSelect?: () => void;
@@ -111,6 +112,22 @@ export function terminalMouseCommand(
   };
 }
 
+export function forwardTerminalMouse(
+  enabled: boolean,
+  send: (command: TerminalCommand) => void,
+  kind: TerminalMouseKind,
+  button: TerminalMouseButton | null,
+  event: TerminalPointer,
+  bounds: TerminalBounds,
+  cols: number,
+  rows: number,
+  herdrRect: { x: number; y: number; width: number; height: number },
+): boolean {
+  if (!enabled) return false;
+  send(terminalMouseCommand(kind, button, event, bounds, cols, rows, herdrRect));
+  return true;
+}
+
 export function shouldObserveAfterControlLoss(
   controlRequested: boolean,
   ownership: TerminalOwnershipState,
@@ -118,7 +135,7 @@ export function shouldObserveAfterControlLoss(
   return controlRequested && (ownership === "conflict" || ownership === "lost");
 }
 
-export function TerminalPane({ client, request, herdrRect, selected, controlAllowed, controlPending, onRequestControl, onControlLost, onSelect, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, herdrRect, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onControlLost, onSelect, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
@@ -414,7 +431,7 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
     const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect()
       ?? hostRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    sendInput(terminalMouseCommand(kind, button, event, bounds, terminal.cols, terminal.rows, herdrRect));
+    forwardTerminalMouse(terminalMouseInput, sendInput, kind, button, event, bounds, terminal.cols, terminal.rows, herdrRect);
   };
   return (
     <div

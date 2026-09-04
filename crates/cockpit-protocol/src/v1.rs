@@ -35,12 +35,20 @@ pub enum HerdrCompatibility {
     },
 }
 
+/// Capabilities exposed by the current Cockpit server.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct CockpitCapabilities {
+    pub terminal_mouse_input: bool,
+}
+
 /// Status returned by every Cockpit host transport.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct StatusResponse {
     pub protocol_version: String,
     pub cockpit_version: String,
     pub mode: CockpitMode,
+    #[serde(default)]
+    pub capabilities: CockpitCapabilities,
     pub herdr: HerdrCompatibility,
 }
 

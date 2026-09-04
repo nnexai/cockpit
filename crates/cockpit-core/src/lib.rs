@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cockpit_protocol::v1::{
-    CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, PaneMoveDestination,
-    ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
+    CockpitCapabilities, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility,
+    PaneMoveDestination, ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
     SessionSnapshotResponse, StatusResponse, TerminalCommand, TerminalOpenRequest,
     TerminalStreamMessage,
 };
@@ -137,6 +137,9 @@ impl CockpitService {
             protocol_version: "1".to_owned(),
             cockpit_version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: self.mode,
+            capabilities: CockpitCapabilities {
+                terminal_mouse_input: true,
+            },
             herdr,
         }
     }

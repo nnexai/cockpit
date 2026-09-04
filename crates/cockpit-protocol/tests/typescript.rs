@@ -4,13 +4,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cockpit_protocol::typescript::{check, render_v1, write_atomic};
 use cockpit_protocol::v1::{
-    AgentSummary, CockpitMode, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility,
-    HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination, PaneOutputResponse,
-    PaneResizeDirection, PaneSplitDirection, PaneSummary, PaneZoomMode, ResourceMutationRequest,
-    SessionListResponse, SessionSnapshotResponse, SessionStreamMessage, SessionSummary,
-    SpaceGitSummary, SpaceSummary, StatusResponse, TabLayout, TabSummary, TerminalCommand,
-    TerminalMode, TerminalOpenRequest, TerminalScrollDirection, TerminalScrollSource,
-    TerminalStreamMessage,
+    AgentSummary, CockpitCapabilities, CockpitMode, FocusKind, FocusRequest, FocusResponse,
+    HerdrCompatibility, HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination,
+    PaneOutputResponse, PaneResizeDirection, PaneSplitDirection, PaneSummary, PaneZoomMode,
+    ResourceMutationRequest, SessionListResponse, SessionSnapshotResponse, SessionStreamMessage,
+    SessionSummary, SpaceGitSummary, SpaceSummary, StatusResponse, TabLayout, TabSummary,
+    TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalScrollDirection,
+    TerminalScrollSource, TerminalStreamMessage,
 };
 use serde_json::json;
 
@@ -37,6 +37,9 @@ fn compatibility_uses_stable_status_tag() {
         protocol_version: "1".to_owned(),
         cockpit_version: "0.1.0".to_owned(),
         mode: CockpitMode::Test,
+        capabilities: CockpitCapabilities {
+            terminal_mouse_input: true,
+        },
         herdr: HerdrCompatibility::Unavailable {
             code: "live_inspection_disabled".to_owned(),
             message: "live Herdr inspection is disabled in test mode".to_owned(),
@@ -49,6 +52,9 @@ fn compatibility_uses_stable_status_tag() {
             "protocol_version": "1",
             "cockpit_version": "0.1.0",
             "mode": "test",
+            "capabilities": {
+                "terminal_mouse_input": true
+            },
             "herdr": {
                 "status": "unavailable",
                 "code": "live_inspection_disabled",
@@ -56,6 +62,23 @@ fn compatibility_uses_stable_status_tag() {
             }
         })
     );
+}
+
+#[test]
+fn legacy_status_defaults_capabilities() {
+    let response: StatusResponse = serde_json::from_value(json!({
+        "protocol_version": "1",
+        "cockpit_version": "0.1.0",
+        "mode": "normal",
+        "herdr": {
+            "status": "unavailable",
+            "code": "test",
+            "message": "test"
+        }
+    }))
+    .expect("legacy status parses");
+
+    assert!(!response.capabilities.terminal_mouse_input);
 }
 
 #[test]
@@ -637,7 +660,6 @@ fn check_reports_missing_file_as_drift() {
     assert!(!target.exists());
     remove_temporary_directory(directory);
 }
-
 #[test]
 fn compatible_status_round_trips() {
     let compatibility = HerdrCompatibility::Compatible {
@@ -660,6 +682,7 @@ fn typescript_rendering_is_deterministic() {
         "CockpitMode",
         "HerdrIdentity",
         "HerdrCompatibility",
+        "CockpitCapabilities",
         "StatusResponse",
         "ErrorResponse",
         "SpaceGitSummary",

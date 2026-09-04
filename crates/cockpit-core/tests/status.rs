@@ -242,6 +242,7 @@ async fn test_mode_never_calls_adapter() {
     assert!(
         matches!(status.herdr, HerdrCompatibility::Unavailable { ref code, .. } if code == "live_inspection_disabled")
     );
+    assert!(status.capabilities.terminal_mouse_input);
     assert_eq!(
         service.sessions().await.unwrap_err().code,
         "live_inspection_disabled"
@@ -264,10 +265,12 @@ async fn normal_status_and_sessions_use_installation_compatibility_cache() {
     let calls = adapter.inspect_calls.clone();
     let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
 
+    let status = service.status().await;
     assert!(matches!(
-        service.status().await.herdr,
+        status.herdr,
         HerdrCompatibility::Compatible { .. }
     ));
+    assert!(status.capabilities.terminal_mouse_input);
     assert!(service.sessions().await.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

@@ -199,7 +199,7 @@ Herdr owns every PTY, process, current terminal state, and writable-owner arbitr
 - Fit and WebGL rendering initialize before attachment. The initial attachment uses fitted rows and columns rather than xterm's fallback dimensions. If WebGL is unavailable or lost, the pane keeps working with xterm's built-in text renderer.
 - Herdr sends the current rendered terminal state followed by live ANSI frames where supported.
 - Normal terminal input goes to the focused xterm and then Herdr only after writable ownership is confirmed.
-- Pointer events use Herdr’s structured protocol-20 input path with authoritative pane coordinates. Herdr decides whether a click focuses/selects terminal content or becomes an application mouse report; Cockpit does not synthesize unconditional SGR input.
+- Pointer events use Herdr’s structured protocol-20 input path with authoritative pane coordinates. Herdr decides whether a click focuses/selects terminal content or becomes an application mouse report; Cockpit does not synthesize unconditional SGR input. Hosts advertise this command capability in status; a newer frontend connected to a legacy host disables pointer forwarding instead of terminating the terminal stream with an unsupported command.
 - `Shift+Enter` sends a bare line-feed. The Herdr magic escape key retains higher priority.
 - Kitty keyboard negotiation is enabled. Applications must request enhanced reporting; applications that do not request it keep legacy keyboard encoding.
 - WebGL-backed panes load the image addon with Kitty graphics enabled. The current xterm.js implementation accepts direct inline image transmission but not animations, file transfer, or shared-memory transfer.

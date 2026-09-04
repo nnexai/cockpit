@@ -537,13 +537,14 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, herdrRect, onRequestControl, onControlLost, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
+function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, terminalMouseInput, herdrRect, onRequestControl, onControlLost, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
   pane: Pane;
   label: string;
   selected: boolean;
   showLabel: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
+  terminalMouseInput: boolean;
   herdrRect: { x: number; y: number; width: number; height: number } | null;
   onRequestControl: () => void;
   onControlLost: () => void;
@@ -561,7 +562,7 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
-    <div className="terminal-surface"><TerminalPane client={client} request={request} herdrRect={herdrRect} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} onRequestControl={onRequestControl} onControlLost={onControlLost} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
+    <div className="terminal-surface"><TerminalPane client={client} request={request} herdrRect={herdrRect} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} terminalMouseInput={terminalMouseInput} onRequestControl={onRequestControl} onControlLost={onControlLost} onSelect={onSelect} onRetry={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
   </section>;
 }
 
@@ -662,8 +663,8 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetry, onRetryMutation
   </aside>;
 }
 
-function Workbench({ client, state, sessions, selection, controlPaneId, mutations, onSession, onFocus, onRequestControl, onControlLost, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
-  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; mutations: MutationCoordinatorState;
+function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, onSession, onFocus, onRequestControl, onControlLost, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
+  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
   onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onRequestControl: (paneId: string) => void; onControlLost: (paneId: string) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
 }) {
   const snapshot = state.snapshot;
@@ -770,7 +771,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, mutation
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} herdrRect={rectangle ?? null} onRequestControl={() => onRequestControl(pane.id)} onControlLost={() => onControlLost(pane.id)} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} herdrRect={rectangle ?? null} onRequestControl={() => onRequestControl(pane.id)} onControlLost={() => onControlLost(pane.id)} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -979,5 +980,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} mutations={mutations} onSession={switchSession} onFocus={focus} onRequestControl={requestPaneControl} onControlLost={releasePaneControl} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
+  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} onSession={switchSession} onFocus={focus} onRequestControl={requestPaneControl} onControlLost={releasePaneControl} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
 }

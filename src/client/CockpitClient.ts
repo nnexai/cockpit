@@ -1,5 +1,6 @@
 import type {
   AgentSummary,
+  CockpitCapabilities,
   ErrorResponse,
   FocusRequest,
   FocusResponse,
@@ -248,28 +249,44 @@ function isAgentSummary(value: unknown): value is AgentSummaryWire {
     (value.state_change_seq === undefined || isU64(value.state_change_seq))
   );
 }
+function parseHerdrCompatibility(value: unknown): StatusResponse["herdr"] {
+  if (!isRecord(value) || !isString(value.status)) return malformed("Status response is missing required fields");
+  if (value.status === "compatible") {
+    if (!isIdentity(value.identity)) return malformed("Compatible Herdr status has no valid identity");
+    return { status: "compatible", identity: value.identity };
+  }
+  if (value.status === "incompatible") {
+    if (!isString(value.code) || !isString(value.message) || !(value.identity === null || isIdentity(value.identity))) {
+      return malformed("Incompatible Herdr status is missing required fields");
+    }
+    return { status: "incompatible", identity: value.identity, code: value.code, message: value.message };
+  }
+  if (value.status === "unavailable") {
+    if (!isString(value.code) || !isString(value.message)) return malformed("Unavailable Herdr status is missing required fields");
+    return { status: "unavailable", code: value.code, message: value.message };
+  }
+  return malformed(`Unknown Herdr status: ${value.status}`);
+}
 
 /** Validate untrusted transport data before it crosses the client seam. */
 export function parseStatusResponse(value: unknown): StatusResponse {
-  if (!isRecord(value) || !isString(value.protocol_version) || !isString(value.cockpit_version) || !isRecord(value.herdr) || !isString(value.herdr.status)) {
+  if (!isRecord(value) || !isString(value.protocol_version) || !isString(value.cockpit_version)) {
     return malformed("Status response is missing required fields");
   }
-  const herdr = value.herdr;
-  if (herdr.status === "compatible") {
-    if (!isIdentity(herdr.identity)) return malformed("Compatible Herdr status has no valid identity");
-  } else if (herdr.status === "incompatible") {
-    if (!isString(herdr.code) || !isString(herdr.message) || !(herdr.identity === null || isIdentity(herdr.identity))) {
-      return malformed("Incompatible Herdr status is missing required fields");
-    }
-  } else if (herdr.status === "unavailable") {
-    if (!isString(herdr.code) || !isString(herdr.message)) return malformed("Unavailable Herdr status is missing required fields");
-  } else return malformed(`Unknown Herdr status: ${herdr.status}`);
+  const hasCapabilities = Object.prototype.hasOwnProperty.call(value, "capabilities");
+  const capabilities: CockpitCapabilities = !hasCapabilities
+    ? { terminal_mouse_input: false }
+    : isRecord(value.capabilities) && isBoolean(value.capabilities.terminal_mouse_input)
+      ? { terminal_mouse_input: value.capabilities.terminal_mouse_input }
+      : malformed("Status response capabilities are invalid");
+  const herdr = parseHerdrCompatibility(value.herdr);
   if (value.mode !== "normal" && value.mode !== "test") return malformed("Status response is missing required fields");
   return {
     protocol_version: value.protocol_version,
     cockpit_version: value.cockpit_version,
     mode: value.mode,
-    herdr: herdr as StatusResponse["herdr"],
+    capabilities,
+    herdr,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   parseResourceMutationRequest,
   parseResourceMutationResponse,
   parseSessionSnapshotResponse,
+  parseStatusResponse,
   parseTerminalCommand,
   parseTerminalOpenRequest,
   parseTerminalStreamMessage,
@@ -29,7 +30,7 @@ const snapshot: CockpitSessionSnapshot = {
   layouts: [{ space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 80, height: 24 }, focused_pane_id: "pane-1", panes: [{ pane_id: "pane-1", focused: true, rect: { x: 0, y: 0, width: 80, height: 24 } }], zoomed: false }],
   agents: [],
 };
-const status = { protocol_version: "v1", cockpit_version: "0.1.0", mode: "normal" as const, herdr: { status: "unavailable" as const, code: "test", message: "test" } };
+const status = { protocol_version: "v1", cockpit_version: "0.1.0", mode: "normal" as const, capabilities: { terminal_mouse_input: true }, herdr: { status: "unavailable" as const, code: "test", message: "test" } };
 const sessions = { sessions: [{ id: "session-1", label: "Main", is_default: true, running: true }] };
 
 class FakeSocket implements BrowserWebSocket {
@@ -69,6 +70,13 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
 }
 
 describe("client DTO parsers", () => {
+  it("normalizes legacy and validates status capabilities", () => {
+    const legacy = { protocol_version: "v1", cockpit_version: "0.1.0", mode: "normal", herdr: status.herdr };
+    expect(parseStatusResponse(legacy).capabilities).toEqual({ terminal_mouse_input: false });
+    expect(parseStatusResponse(status).capabilities).toEqual({ terminal_mouse_input: true });
+    expect(() => parseStatusResponse({ ...legacy, capabilities: { terminal_mouse_input: "yes" } })).toThrow(CockpitClientError);
+    expect(() => parseStatusResponse({ ...legacy, capabilities: undefined })).toThrow(CockpitClientError);
+  });
   it("strictly validates session and terminal contracts", () => {
     expect(parseSessionListResponse(sessions)).toEqual(sessions);
     const legacyAgent = { pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "working", title: null, focused: true };
