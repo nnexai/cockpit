@@ -2,6 +2,8 @@
 
 Status: complete. The browser session mirror is implemented and verified end to end against a disposable named Herdr session. Native command/channel parity is implemented, covered by shared contract tests, compiled against the Fedora Tauri stack, and smoke-tested in the real Tauri app against a separate pinned session.
 
+Protocol-20 attachment details below record the completed phase and are superseded by `DECISIONS.md`: current terminal attachment requires protocol 22 and the generation-1 client-shell endpoint.
+
 ## Goal
 
 Turn the verified status path into the first useful Cockpit screen: one selected Herdr session, an authoritative Spaces and Agents mirror, Herdr tabs and pane layout, and one real visible terminal attachment. Native and browser clients must observe the same `CockpitClient` behavior.

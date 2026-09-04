@@ -24,13 +24,13 @@ import {
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
-import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, shouldObserveAfterControlLoss, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
+import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, sharedSurfaceDimension, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
     session_id: sessionId,
     version: "0.8.2",
-    protocol: 20,
+    protocol: 22,
     focused_space_id: "space-1",
     focused_tab_id: "tab-1",
     focused_pane_id: focusedPaneId,
@@ -42,12 +42,6 @@ function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSna
   };
 }
 
-describe("terminal ownership", () => {
-  it("continues observing after another client takes control", () => {
-    expect(shouldObserveAfterControlLoss(true, "lost")).toBe(true);
-    expect(shouldObserveAfterControlLoss(true, "conflict")).toBe(true);
-    expect(shouldObserveAfterControlLoss(false, "lost")).toBe(false);
-  });
 
   it("sends Shift+Enter as the bare line feed preserved by Herdr", () => {
     const event = { type: "keydown", key: "Enter", shiftKey: true, ctrlKey: false, altKey: false, metaKey: false };
@@ -68,7 +62,7 @@ describe("terminal ownership", () => {
     terminal.dispose();
   });
 
-  it("maps browser pointer coordinates into Herdr pane coordinates", () => {
+  it("maps browser pointer coordinates into pane-local terminal coordinates", () => {
     const event = { clientX: 110, clientY: 70, shiftKey: true, ctrlKey: false, altKey: true, metaKey: false };
     const command = terminalMouseCommand(
       "down",
@@ -77,18 +71,17 @@ describe("terminal ownership", () => {
       { left: 10, top: 20, width: 800, height: 400 },
       80,
       40,
-      { x: 26, y: 1, width: 94, height: 39 },
     );
 
     expect(command).toEqual({
       type: "terminal.mouse",
       kind: "down",
       button: "left",
-      column: 36,
-      row: 6,
+      column: 10,
+      row: 5,
       modifiers: 5,
     });
-    expect(terminalMouseCommand("moved", null, { ...event, clientX: 10_000, clientY: 10_000 }, { left: 10, top: 20, width: 800, height: 400 }, 80, 40, { x: 26, y: 1, width: 20, height: 10 })).toMatchObject({ column: 45, row: 10 });
+    expect(terminalMouseCommand("moved", null, { ...event, clientX: 10_000, clientY: 10_000 }, { left: 10, top: 20, width: 800, height: 400 }, 80, 40)).toMatchObject({ column: 79, row: 39 });
     expect(terminalMouseButton(0)).toBe("left");
     expect(terminalMouseButton(1)).toBe("middle");
     expect(terminalMouseButton(2)).toBe("right");
@@ -99,7 +92,6 @@ describe("terminal ownership", () => {
     const send = vi.fn();
     const event = { clientX: 110, clientY: 70, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false };
     const bounds = { left: 10, top: 20, width: 800, height: 400 };
-    const rect = { x: 26, y: 1, width: 94, height: 39 };
     const events = [
       ["down", "left"],
       ["moved", null],
@@ -108,16 +100,15 @@ describe("terminal ownership", () => {
     ] as const;
 
     for (const [kind, button] of events) {
-      expect(forwardTerminalMouse(false, send, kind, button, event, bounds, 80, 40, rect)).toBe(false);
+      expect(forwardTerminalMouse(false, send, kind, button, event, bounds, 80, 40)).toBe(false);
     }
     expect(send).not.toHaveBeenCalled();
 
     for (const [kind, button] of events) {
-      expect(forwardTerminalMouse(true, send, kind, button, event, bounds, 80, 40, rect)).toBe(true);
+      expect(forwardTerminalMouse(true, send, kind, button, event, bounds, 80, 40)).toBe(true);
     }
     expect(send.mock.calls.map(([command]) => command.kind)).toEqual(["down", "moved", "drag", "up"]);
   });
-});
 
 describe("agent ordering", () => {
   it("matches Herdr's priority sort by status then latest state change", () => {
@@ -383,6 +374,12 @@ describe("desktop command routing", () => {
     expect(queue).toHaveLength(MAX_PENDING_CONTROL_COMMANDS);
     expect(queue[0]).toMatchObject({ text: "3" });
     expect(queue.at(-1)).toMatchObject({ text: String(MAX_PENDING_CONTROL_COMMANDS + 2) });
+  });
+
+  it("scales pane fits into shared ClientShell surface dimensions", () => {
+    expect(sharedSurfaceDimension(50, 120, 40)).toBe(150);
+    expect(sharedSurfaceDimension(0, 120, 40)).toBe(1);
+    expect(sharedSurfaceDimension(65535, 120, 1)).toBe(4096);
   });
 });
 

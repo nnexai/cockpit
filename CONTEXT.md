@@ -193,22 +193,20 @@ The behavioral authority is Herdr; the presentation is graphical. Pane/layout ac
 
 ### 5.4 Terminal attachment and scalability
 
-Herdr owns every PTY, process, current terminal state, and writable-owner arbitration. xterm.js owns rendering and browser-side input capture only.
+Herdr owns every PTY, process, terminal model, and client-shell surface. xterm.js owns browser rendering and input capture only.
 
-- Visible panes attach to Herdr’s server-owned terminal streams.
-- Fit and WebGL rendering initialize before attachment. The initial attachment uses fitted rows and columns rather than xterm's fallback dimensions. If WebGL is unavailable or lost, the pane keeps working with xterm's built-in text renderer.
-- Herdr sends the current rendered terminal state followed by live ANSI frames where supported.
-- Normal terminal input goes to the focused xterm and then Herdr only after writable ownership is confirmed.
-- Pointer events use Herdr’s structured protocol-20 input path with authoritative pane coordinates. Herdr decides whether a click focuses/selects terminal content or becomes an application mouse report; Cockpit does not synthesize unconditional SGR input. Hosts advertise this command capability in status; a newer frontend connected to a legacy host disables pointer forwarding instead of terminating the terminal stream with an unsupported command.
+- A selected Cockpit tab uses one Herdr generation-1 client-shell endpoint for its complete visible surface. Every visible pane subscribes to that shared endpoint; Cockpit does not open a direct terminal socket per pane.
+- Client-shell `PaneSurface` and `Patch` messages are authoritative for terminal cells, styling, cursor state, pane rectangles, and graphics. Cockpit slices those surface updates into the corresponding visible xterm renderers.
+- Herdr’s JSON API remains authoritative for hierarchy discovery and resource mutations. Terminal rendering, surface geometry, and targeted pane input use the protocol-22 client-shell endpoint.
+- The initial client-shell attach uses the fitted shared surface dimensions and measured cell pixels rather than xterm's fallback dimensions.
+- Cockpit converts Herdr graphics assets and placements into Kitty direct-transmission commands for xterm's image addon. SIXEL, iTerm images, animation, file transfer, and shared-memory transfer remain unsupported.
+- Image rendering uses xterm's built-in renderer because the xterm WebGL addon paints its opaque canvas above the image addon's Kitty layer.
+- Normal text, pointer, and scroll input are sent as targeted Herdr client-shell pane input only when local Cockpit control intent allows it. Herdr performs pane hit-testing and application mouse-mode routing; Cockpit does not synthesize unconditional SGR input.
 - `Shift+Enter` sends a bare line-feed. The Herdr magic escape key retains higher priority.
 - Kitty keyboard negotiation is enabled. Applications must request enhanced reporting; applications that do not request it keep legacy keyboard encoding.
-- WebGL-backed panes load the image addon with Kitty graphics enabled. The current xterm.js implementation accepts direct inline image transmission but not animations, file transfer, or shared-memory transfer.
-- Only panes visible in the selected tab keep active xterm renderers/subscriptions.
-- Hidden tabs detach UI renderers without stopping Herdr processes.
-- Herdr remains authoritative for scrollback/current screen state.
-- On reconnect or stale state, the client requests an authoritative view and resubscribes.
-- The initially focused pane and explicit local selection/click may request takeover. If another client takes focus or ownership afterward, Cockpit falls back to observation and does not request control again until another local user action.
-- Ownership loss is not process closure. Keep the terminal visible, continue observing, and preserve the last frame.
+- Only panes visible in the selected tab keep active xterm renderers/subscriptions. Hidden tabs detach UI renderers without stopping Herdr processes.
+- Herdr remains authoritative for scrollback and current screen state. Reconnect requests a fresh full client-shell surface before applying patches.
+- Client-shell attachment does not provide the old exclusive takeover/loss transitions. Cockpit keeps semantic focus, local control intent, and terminal process lifetime separate.
 - Attach failure leaves the pane visible with stale/disconnected state, retry, and resync. It never silently closes the Herdr process.
 
 The client loads hierarchy metadata for all resources. It does not require an xterm.js DOM instance or live output subscription for every pane.

@@ -6,7 +6,7 @@ function snapshot(sessionId: string, pane = "pane-1", focused = pane): SessionSn
   return {
     session_id: sessionId,
     version: "0.8.2",
-    protocol: 20,
+    protocol: 22,
     focused_space_id: "space-1",
     focused_tab_id: "tab-1",
     focused_pane_id: focused,

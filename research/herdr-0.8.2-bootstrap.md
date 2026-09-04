@@ -2,6 +2,8 @@
 
 Target inspected: installed `herdr 0.8.2` on the local Linux workstation. No workspace, pane, terminal, session, or server mutation was issued. `herdr status server` and `herdr api snapshot` are read-only observations.
 
+This is a historical observation of the former protocol-20 installation. It does not describe the current Cockpit runtime target, which is protocol 22 with the generation-1 client-shell endpoint.
+
 ## Sources and observed commands
 
 Installed CLI observations:

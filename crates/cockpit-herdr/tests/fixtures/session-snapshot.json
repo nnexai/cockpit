@@ -4,7 +4,7 @@
     "type": "session_snapshot",
     "snapshot": {
       "version": "0.8.2",
-      "protocol": 20,
+      "protocol": 22,
       "focused_workspace_id": "space-a",
       "focused_tab_id": "tab-a",
       "focused_pane_id": "pane-a",

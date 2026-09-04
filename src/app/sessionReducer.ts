@@ -250,6 +250,15 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           },
         };
       }
+      if (message.type === "graphics") {
+        return {
+          ...state,
+          attachments: {
+            ...state.attachments,
+            [action.paneId]: { ...old, error: null },
+          },
+        };
+      }
       const nextOwnership = message.type === "ownership" ? message.state : old.ownership;
       const error = message.type === "error" || message.type === "disconnected"
         ? errorOf(message.code, message.message)
@@ -270,8 +279,31 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
   }
 }
 
-export function makeTerminalRequest(sessionId: string, paneId: string, mode: "observe" | "control", takeover: boolean, cols: number, rows: number): TerminalOpenRequest {
-  return { session_id: sessionId, pane_id: paneId, mode, takeover, cols, rows };
+export function makeTerminalRequest(
+  clientSurfaceId: string,
+  sessionId: string,
+  paneId: string,
+  mode: "observe" | "control",
+  cols: number,
+  rows: number,
+  cellWidthPx: number,
+  cellHeightPx: number,
+  surfaceCols: number,
+  surfaceRows: number,
+): TerminalOpenRequest {
+  return {
+    client_surface_id: clientSurfaceId,
+    session_id: sessionId,
+    pane_id: paneId,
+    mode,
+    takeover: false,
+    cols,
+    rows,
+    cell_width_px: cellWidthPx,
+    cell_height_px: cellHeightPx,
+    surface_cols: surfaceCols,
+    surface_rows: surfaceRows,
+  };
 }
 
 export type { FocusRequest, SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalOpenRequest, TerminalStreamMessage };

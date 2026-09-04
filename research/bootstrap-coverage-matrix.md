@@ -2,6 +2,8 @@
 
 This report is an independent review aid for `BOOTSTRAP_PLAN.md`. It traces the confirmed architecture that repository bootstrap work can affect. It does not authorize implementation beyond the current foundation. The bootstrap must produce working behavior, not empty crates or files that merely reserve names.
 
+This matrix records bootstrap-era constraints. Its protocol-20 terminal rows are superseded by `DECISIONS.md` and the protocol-22 generation-1 client-shell implementation.
+
 ## Coverage matrix
 
 | ID | Confirmed requirement and source | Must-have bootstrap evidence | Forbidden shortcuts | Timing and deferral rationale |

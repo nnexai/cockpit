@@ -2,6 +2,8 @@
 
 Status: implementation authority for the initial repository bootstrap only.
 
+Terminal-attachment details in this completed bootstrap record are historical. Current runtime authority is `DECISIONS.md`: Herdr protocol 22 with the generation-1 client-shell endpoint.
+
 This phase proves the repository shape and one real end-to-end status operation. It does not claim the Herdr session mirror, terminal attachment, or workspace lifecycle is implemented. Those begin in the next phase.
 
 ## Decisions

@@ -280,8 +280,13 @@ const MAX_TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 struct TerminalQuery {
     mode: TerminalMode,
     takeover: bool,
+    client_surface_id: String,
     cols: u16,
     rows: u16,
+    cell_width_px: u32,
+    cell_height_px: u32,
+    surface_cols: u16,
+    surface_rows: u16,
 }
 
 async fn session_events(
@@ -302,19 +307,29 @@ async fn terminal_ws(
     AxumPath((session_id, pane_id)): AxumPath<(String, String)>,
     Query(query): Query<TerminalQuery>,
 ) -> Response {
-    if !valid_session_id(&session_id) || !valid_resource_id(&pane_id) {
+    if !valid_session_id(&session_id)
+        || !valid_resource_id(&pane_id)
+        || !valid_resource_id(&query.client_surface_id)
+    {
         return bad_request("invalid_terminal_target", "Invalid terminal target");
     }
-    if !valid_dimensions(query.cols, query.rows) {
+    if !valid_dimensions(query.cols, query.rows)
+        || !valid_dimensions(query.surface_cols, query.surface_rows)
+    {
         return bad_request("invalid_terminal_dimensions", "Invalid terminal dimensions");
     }
     let request = TerminalOpenRequest {
+        client_surface_id: query.client_surface_id,
         session_id,
         pane_id,
         mode: query.mode,
         takeover: query.takeover,
         cols: query.cols,
         rows: query.rows,
+        cell_width_px: query.cell_width_px,
+        cell_height_px: query.cell_height_px,
+        surface_cols: query.surface_cols,
+        surface_rows: query.surface_rows,
     };
     let session = match service.open_terminal(&request).await {
         Ok(session) => session,

@@ -8,11 +8,10 @@ use std::sync::{
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 
 use async_trait::async_trait;
-use base64::Engine;
 use cockpit_core::{
     HerdrAdapter, InspectionError, SessionChange, SessionSubscription, TerminalSession,
 };
@@ -21,15 +20,14 @@ use cockpit_protocol::v1::{
     LayoutPane, LayoutRect, PaneMoveDestination, PaneResizeDirection, PaneSplitDirection,
     PaneSummary, PaneZoomMode, ResourceMutationRequest, ResourceMutationResponse,
     SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary,
-    TabLayout, TabSummary, TerminalCommand, TerminalMode, TerminalOpenRequest,
-    TerminalOwnershipState, TerminalStreamMessage,
+    TabLayout, TabSummary, TerminalOpenRequest,
 };
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 
 use crate::schema::{schema_fields, status_fields};
 pub const REQUIRED_VERSION: &str = "0.8.2";
-pub const REQUIRED_PROTOCOL: u32 = 20;
+pub const REQUIRED_PROTOCOL: u32 = 22;
 pub const REQUIRED_SCHEMA_VERSION: u32 = 1;
 const REQUIRED_METHODS: [&str; 20] = [
     "ping",
@@ -846,6 +844,7 @@ pub struct HerdrCliAdapter {
     config: HerdrCliConfig,
     autostart_server: bool,
     server_start: Arc<Mutex<()>>,
+    endpoint_registry: crate::terminal_wire::EndpointRegistry,
 }
 
 fn valid_pane_id(pane_id: &str) -> bool {
@@ -876,6 +875,7 @@ impl HerdrCliAdapter {
             config,
             autostart_server: false,
             server_start: Arc::new(Mutex::new(())),
+            endpoint_registry: crate::terminal_wire::EndpointRegistry::default(),
         }
     }
 
@@ -1653,88 +1653,17 @@ impl HerdrCliAdapter {
                 "pane ID contains unsupported characters",
             ));
         }
-        if request.cols == 0 || request.rows == 0 {
-            return Err(InspectionError::new(
-                "invalid_terminal_dimensions",
-                "terminal dimensions must be greater than zero",
-            ));
-        }
-        if request.mode == TerminalMode::Control {
-            let stream_id = format!(
-                "terminal-{}",
-                NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)
-            );
-            let socket_path = self.client_socket_path(&request.session_id)?;
-            return crate::terminal_wire::open_terminal(&socket_path, request, stream_id).await;
-        }
-        let cols = request.cols.to_string();
-        let rows = request.rows.to_string();
-        let mut args = vec![
-            "terminal",
-            "session",
-            match request.mode {
-                TerminalMode::Observe => "observe",
-                TerminalMode::Control => "control",
-            },
-            request.pane_id.as_str(),
-            "--cols",
-            cols.as_str(),
-            "--rows",
-            rows.as_str(),
-        ];
-        if request.mode == TerminalMode::Control && request.takeover {
-            args.push("--takeover");
-        }
-        let mut command = self.command(Some(&request.session_id), &args);
-        command
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn().map_err(|error| {
-            InspectionError::new(
-                "terminal_attach_failed",
-                format!("failed to execute Herdr terminal session: {error}"),
-            )
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            InspectionError::new("terminal_attach_failed", "terminal stdout unavailable")
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            InspectionError::new("terminal_attach_failed", "terminal stderr unavailable")
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            InspectionError::new("terminal_attach_failed", "terminal stdin unavailable")
-        })?;
-        let (sender, receiver) = mpsc::channel(64);
-        let (commands, mut command_receiver) = mpsc::channel(32);
+        request
+            .validate()
+            .map_err(|message| InspectionError::new("invalid_terminal_dimensions", message))?;
         let stream_id = format!(
             "terminal-{}",
             NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)
         );
-        let task_context = TerminalTaskContext {
-            session_id: request.session_id.clone(),
-            pane_id: request.pane_id.clone(),
-            stream_id: stream_id.clone(),
-            mode: request.mode,
-        };
-        tokio::spawn(async move {
-            terminal_task(
-                &mut child,
-                stdout,
-                stderr,
-                stdin,
-                &mut command_receiver,
-                sender,
-                task_context,
-            )
-            .await;
-        });
-        Ok(TerminalSession {
-            stream_id,
-            messages: receiver,
-            commands,
-        })
+        let socket_path = self.client_socket_path(&request.session_id)?;
+        self.endpoint_registry
+            .open(&socket_path, request, stream_id)
+            .await
     }
 }
 
@@ -1823,287 +1752,6 @@ fn known_event(event: &str, data: &Value, snapshot: &SessionSnapshotResponse) ->
             .is_some_and(|pane_id| snapshot.panes.iter().any(|pane| pane.id == pane_id));
     }
     false
-}
-
-struct TerminalTaskContext {
-    session_id: String,
-    pane_id: String,
-    stream_id: String,
-    mode: TerminalMode,
-}
-async fn terminal_task(
-    child: &mut Child,
-    stdout: tokio::process::ChildStdout,
-    stderr: tokio::process::ChildStderr,
-    mut stdin: ChildStdin,
-    commands: &mut mpsc::Receiver<TerminalCommand>,
-    sender: mpsc::Sender<TerminalStreamMessage>,
-    context: TerminalTaskContext,
-) {
-    let TerminalTaskContext {
-        session_id,
-        pane_id,
-        stream_id,
-        mode,
-    } = context;
-    let mut output = BufReader::new(stdout);
-    let mut output_line = String::new();
-    let stderr_reader = BufReader::new(stderr);
-    let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::with_capacity(16 * 1024);
-        let mut limited = stderr_reader.take((16 * 1024 + 1) as u64);
-        limited.read_to_end(&mut bytes).await.map_err(|_| {
-            InspectionError::new("bounded_output", "Herdr terminal diagnostics failed")
-        })?;
-        if bytes.len() > 16 * 1024 {
-            return Err(InspectionError::new(
-                "bounded_output",
-                "Herdr terminal diagnostics exceed configured limit",
-            ));
-        }
-        Ok::<String, InspectionError>(String::from_utf8_lossy(&bytes).into_owned())
-    });
-    let mut previous_seq: Option<u64> = None;
-    let mut closed = false;
-    let mut ended_with_error = false;
-    let mut ownership_announced = mode == TerminalMode::Observe;
-    let mut ownership = if mode == TerminalMode::Observe {
-        TerminalOwnershipState::Observing
-    } else {
-        TerminalOwnershipState::Pending
-    };
-    let _ = sender
-        .send(TerminalStreamMessage::Ownership {
-            session_id: session_id.clone(),
-            pane_id: pane_id.clone(),
-            stream_id: stream_id.clone(),
-            state: ownership,
-            message: None,
-        })
-        .await;
-    loop {
-        tokio::select! {
-                line = read_bounded_line(&mut output, &mut output_line, MAX_TERMINAL_LINE) => {
-                    match line {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            let value: Value = match serde_json::from_str(&output_line) {
-                                Ok(value) => value,
-                                Err(_) => {
-                                    ended_with_error = true;
-                                    let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "malformed_terminal", "terminal stream record is invalid")).await;
-                                    break;
-                                }
-                            };
-                            match value.get("type").and_then(Value::as_str) {
-                                Some("terminal.frame") => {
-                                    let seq = match value.get("seq").and_then(|v| v.as_u64()) {
-                                        Some(seq) => seq,
-                                        None => { ended_with_error = true; let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "malformed_terminal", "terminal frame sequence is invalid")).await; break; }
-                                    };
-                                    if let Some(previous) = previous_seq
-                                        && seq != previous.saturating_add(1)
-                                    {
-                                        ended_with_error = true;
-                                        let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "terminal_sequence_error", "terminal frame sequence is not consecutive")).await;
-                                        break;
-                                    }
-                                    let encoding = value.get("encoding").and_then(Value::as_str);
-                                    let width = value.get("width").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok());
-                                    let height = value.get("height").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok());
-                                    let full = value.get("full").and_then(Value::as_bool);
-                                    let encoded = value.get("bytes").and_then(Value::as_str);
-                                    let (Some(encoding), Some(width), Some(height), Some(full), Some(encoded)) = (encoding, width, height, full, encoded) else {
-                                        ended_with_error = true;
-                                        let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "malformed_terminal", "terminal frame fields are invalid")).await;
-                                        break;
-                                    };
-                                    if previous_seq.is_none() && !full {
-                                        ended_with_error = true;
-                                        let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "terminal_baseline_required", "terminal stream must begin with a full frame")).await;
-                                        break;
-                                    }
-                                    if encoding != "ansi" || base64::engine::general_purpose::STANDARD.decode(encoded).is_err() {
-                                        ended_with_error = true;
-                                        let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "malformed_terminal", "terminal frame encoding is invalid")).await;
-                                        break;
-                                    }
-                                    previous_seq = Some(seq);
-                                    if mode == TerminalMode::Control && !ownership_announced {
-                                        ownership_announced = true;
-                                        ownership = TerminalOwnershipState::Owned;
-                                        let _ = sender.send(TerminalStreamMessage::Ownership { session_id: session_id.clone(), pane_id: pane_id.clone(), stream_id: stream_id.clone(), state: ownership, message: None }).await;
-                                    }
-                                    let _ = sender.send(TerminalStreamMessage::Frame { session_id: session_id.clone(), pane_id: pane_id.clone(), stream_id: stream_id.clone(), seq: seq.to_string(), encoding: encoding.to_owned(), width, height, full, bytes: encoded.to_owned() }).await;
-                                }
-                                Some("terminal.closed") => {
-                                    closed = true;
-                                    let reason = sanitize_terminal_text(
-                                        value
-                                            .get("reason")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("closed"),
-                                    );
-                                    let message = if mode == TerminalMode::Control
-                                        && reason.eq_ignore_ascii_case("terminal attach taken over")
-                                    {
-                                        TerminalStreamMessage::Ownership {
-                                            session_id: session_id.clone(),
-                                            pane_id: pane_id.clone(),
-                                            stream_id: stream_id.clone(),
-                                            state: TerminalOwnershipState::Lost,
-                                            message: Some(reason),
-                                        }
-                                    } else {
-                                        TerminalStreamMessage::Closed {
-                                            session_id: session_id.clone(),
-                                            pane_id: pane_id.clone(),
-                                            stream_id: stream_id.clone(),
-                                            reason,
-                                        }
-                                    };
-                                    let _ = sender.send(message).await;
-                                    break;
-                                }
-                                Some(record_type) => {
-                                    ended_with_error = true;
-                                    let bounded_type: String = record_type.chars().take(64).collect();
-                                    let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "unsupported_terminal_record", &format!("unsupported terminal record: {bounded_type}"))).await;
-                                    break;
-                                }
-                                None => {
-                                    ended_with_error = true;
-                                    let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "malformed_terminal", "terminal stream record type is required")).await;
-                                    break;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            ended_with_error = true;
-                            let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "bounded_output", "terminal frame line exceeds configured limit or is unterminated")).await;
-                            break;
-                        }
-                    }
-                }
-                command = commands.recv() => {
-                    let Some(command) = command else { break; };
-                    if command.validate().is_err() { let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "invalid_terminal_command", "terminal command is invalid")).await; continue; }
-                    if let TerminalCommand::Input { bytes: Some(encoded), .. } = &command
-                        && base64::engine::general_purpose::STANDARD.decode(encoded).is_err()
-                    {
-                        let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "invalid_terminal_command", "terminal input bytes are not valid base64")).await;
-                        continue;
-                    }
-                    let mutation = matches!(
-                        &command,
-                        TerminalCommand::Input { .. }
-                            | TerminalCommand::Resize { .. }
-                            | TerminalCommand::Scroll { .. }
-                            | TerminalCommand::Mouse { .. }
-                    );
-                    if mutation && (mode == TerminalMode::Observe || !ownership_announced) {
-                        let message = if mode == TerminalMode::Observe {
-                            "terminal observe stream is read-only"
-                        } else {
-                            "terminal control is pending ownership"
-                        };
-                        let _ = sender
-                            .send(terminal_error(
-                                &session_id,
-                                &pane_id,
-                                &stream_id,
-                                "terminal_command_rejected",
-                                message,
-                            ))
-                            .await;
-                        continue;
-                    }
-                    let release = matches!(command, TerminalCommand::Release);
-                    match serde_json::to_string(&command) {
-                        Ok(mut line) => {
-                            line.push('\n');
-                            if stdin.write_all(line.as_bytes()).await.is_err() { break; }
-                            if release {
-                                let _ = sender.send(TerminalStreamMessage::Ownership {
-                                    session_id: session_id.clone(),
-                                    pane_id: pane_id.clone(),
-                                    stream_id: stream_id.clone(),
-                                    state: TerminalOwnershipState::Released,
-                                    message: None,
-                                }).await;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            let _ = sender.send(terminal_error(&session_id, &pane_id, &stream_id, "invalid_terminal_command", "terminal command could not be encoded")).await;
-                        }
-                    }
-            }
-        }
-    }
-    drop(stdin);
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-    let stderr = match stderr_task.await {
-        Ok(Ok(stderr)) => stderr,
-        Ok(Err(error)) => {
-            ended_with_error = true;
-            let _ = sender
-                .send(terminal_error(
-                    &session_id,
-                    &pane_id,
-                    &stream_id,
-                    &error.code,
-                    &error.message,
-                ))
-                .await;
-            String::new()
-        }
-        Err(_) => String::new(),
-    };
-    if !closed && !ended_with_error {
-        let lower = stderr.to_ascii_lowercase();
-        if (lower.contains("already controlled"))
-            || (lower.contains("control") && lower.contains("owned"))
-            || (lower.contains("takeover") && lower.contains("required"))
-        {
-            let _ = sender
-                .send(terminal_error(
-                    &session_id,
-                    &pane_id,
-                    &stream_id,
-                    "terminal_ownership_conflict",
-                    "terminal ownership is held by another client",
-                ))
-                .await;
-        } else {
-            let _ = sender
-                .send(TerminalStreamMessage::Disconnected {
-                    session_id,
-                    pane_id,
-                    stream_id,
-                    code: "terminal_attach_failed".into(),
-                    message: "terminal stream disconnected".into(),
-                })
-                .await;
-        }
-    }
-}
-
-fn terminal_error(
-    session_id: &str,
-    pane_id: &str,
-    stream_id: &str,
-    code: &str,
-    message: &str,
-) -> TerminalStreamMessage {
-    TerminalStreamMessage::Error {
-        session_id: session_id.to_owned(),
-        pane_id: pane_id.to_owned(),
-        stream_id: stream_id.to_owned(),
-        code: code.to_owned(),
-        message: message.to_owned(),
-    }
 }
 
 fn parse_focus_result(

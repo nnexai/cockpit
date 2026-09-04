@@ -121,7 +121,7 @@ fn compatible() -> HerdrCompatibility {
     HerdrCompatibility::Compatible {
         identity: HerdrIdentity {
             version: "0.8.2".into(),
-            protocol: 20,
+            protocol: 22,
             schema_version: 1,
         },
     }
@@ -131,7 +131,7 @@ fn snapshot(session_id: &str) -> SessionSnapshotResponse {
     SessionSnapshotResponse {
         session_id: session_id.into(),
         version: "0.8.2".into(),
-        protocol: 20,
+        protocol: 22,
         focused_space_id: Some("space-1".into()),
         focused_tab_id: Some("tab-1".into()),
         focused_pane_id: Some("pane-1".into()),
@@ -422,12 +422,17 @@ async fn subscription_and_terminal_are_delegated() {
         .unwrap();
     let terminal = service
         .open_terminal(&TerminalOpenRequest {
+            client_surface_id: "surface-1".into(),
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
             mode: TerminalMode::Observe,
             takeover: false,
             cols: 80,
             rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            surface_cols: 80,
+            surface_rows: 24,
         })
         .await
         .unwrap();
@@ -453,12 +458,17 @@ async fn terminal_rejects_pane_reported_in_a_hidden_tab() {
 
     let error = service
         .open_terminal(&TerminalOpenRequest {
+            client_surface_id: "surface-1".into(),
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
             mode: TerminalMode::Observe,
             takeover: false,
             cols: 80,
             rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            surface_cols: 80,
+            surface_rows: 24,
         })
         .await
         .unwrap_err();
@@ -486,12 +496,17 @@ async fn terminal_rejects_missing_pane_before_adapter_launch() {
 
     let error = service
         .open_terminal(&TerminalOpenRequest {
+            client_surface_id: "surface-1".into(),
             session_id: "session-a".into(),
             pane_id: "pane-1".into(),
             mode: TerminalMode::Observe,
             takeover: false,
             cols: 80,
             rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            surface_cols: 80,
+            surface_rows: 24,
         })
         .await
         .unwrap_err();
@@ -533,12 +548,17 @@ async fn invalid_requests_are_rejected_before_adapter_calls() {
     assert_eq!(
         service
             .open_terminal(&TerminalOpenRequest {
+                client_surface_id: "surface-1".into(),
                 session_id: "session-a".into(),
                 pane_id: "pane-1".into(),
                 mode: TerminalMode::Observe,
                 takeover: false,
                 cols: 0,
                 rows: 24,
+                cell_width_px: 8,
+                cell_height_px: 16,
+                surface_cols: 80,
+                surface_rows: 24,
             })
             .await
             .unwrap_err()

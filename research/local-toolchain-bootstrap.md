@@ -4,6 +4,8 @@
 
 This inventory targets the local Fedora Workstation and Herdr 0.8.2 installation described by the project context. The repository currently contains architecture documents and research notes but no `Cargo.toml` or frontend manifest, so this is a prerequisite inventory rather than a project build check.
 
+This inventory predates the local Herdr upgrade. Protocol-20 and unavailable-native-dependency observations below are historical; current runtime and verification authority lives in `DECISIONS.md`.
+
 The Rust compiler, Cargo, rustup, Bun, Node.js, npm, C/C++ compiler toolchain, linker, Make, CMake, OpenSSL development files, and Herdr are present. The Tauri Linux WebKitGTK/GTK development stack is not installed, and the Tauri CLI is not installed as a Cargo subcommand. Those are the immediate native-build blockers. The `pnpm` executable is a Corepack shim, and its harmless version/help invocation currently fails signature verification before pnpm starts.
 
 Bun can own frontend dependency installation and package scripts: Tauri's own project generator lists Bun as a supported JavaScript package manager, and Bun documents itself as a standalone package manager for existing `package.json` projects. Bun does not replace Rust, Cargo, the native linker, or WebKitGTK development libraries.

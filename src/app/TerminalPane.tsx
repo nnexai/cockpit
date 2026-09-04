@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { FitAddon } from "@xterm/addon-fit";
+import { ImageAddon } from "@xterm/addon-image";
 import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
@@ -12,16 +14,17 @@ export function appendPendingControlCommand(queue: TerminalCommand[], command: T
 }
 export type TerminalPaneProps = {
   client: CockpitClient;
-  request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows">;
-  herdrRect: { x: number; y: number; width: number; height: number } | null;
+  request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px" | "surface_cols" | "surface_rows">;
+  surfaceCols: number;
+  surfaceRows: number;
+  paneCols: number;
+  paneRows: number;
   selected: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
   terminalMouseInput: boolean;
   onRequestControl?: () => void;
-  onControlLost?: () => void;
   onSelect?: () => void;
-  onRetry?: () => void;
   onResync?: () => void;
   onClosed?: () => void;
   onClosePane?: () => void;
@@ -39,6 +42,18 @@ function decodeFrame(bytes: string): Uint8Array {
 function applicationFontSize(): number {
   const fontSize = Number.parseFloat(globalThis.getComputedStyle(document.body).fontSize);
   return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16;
+}
+
+function invalidateImageCanvas(canvas: HTMLCanvasElement): void {
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  try {
+    // Re-writing one unchanged pixel makes Chromium repaint xterm's transparent image layer.
+    const firstPixel = context.getImageData(0, 0, 1, 1);
+    context.putImageData(firstPixel, 0, 0);
+  } catch {
+    // A tainted or not-yet-ready canvas is retried by the caller.
+  }
 }
 
 export function createCockpitTerminal(fontSize = applicationFontSize()): Terminal {
@@ -99,15 +114,14 @@ export function terminalMouseCommand(
   bounds: TerminalBounds,
   cols: number,
   rows: number,
-  herdrRect: { x: number; y: number; width: number; height: number },
 ): TerminalCommand {
   const position = terminalCellPosition(event.clientX, event.clientY, bounds, cols, rows);
   return {
     type: "terminal.mouse",
     kind,
     button,
-    column: Math.max(0, Math.min(65535, Math.floor(herdrRect.x + position.column), Math.floor(herdrRect.x + Math.max(1, herdrRect.width) - 1))),
-    row: Math.max(0, Math.min(65535, Math.floor(herdrRect.y + position.row), Math.floor(herdrRect.y + Math.max(1, herdrRect.height) - 1))),
+    column: position.column,
+    row: position.row,
     modifiers: terminalModifierBits(event),
   };
 }
@@ -121,30 +135,35 @@ export function forwardTerminalMouse(
   bounds: TerminalBounds,
   cols: number,
   rows: number,
-  herdrRect: { x: number; y: number; width: number; height: number },
 ): boolean {
   if (!enabled) return false;
-  send(terminalMouseCommand(kind, button, event, bounds, cols, rows, herdrRect));
+  send(terminalMouseCommand(kind, button, event, bounds, cols, rows));
   return true;
 }
 
-export function shouldObserveAfterControlLoss(
-  controlRequested: boolean,
-  ownership: TerminalOwnershipState,
-): boolean {
-  return controlRequested && (ownership === "conflict" || ownership === "lost");
+
+function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell_height_px: number } {
+  const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
+  return {
+    cell_width_px: bounds && terminal.cols > 0 ? Math.max(1, Math.round(bounds.width / terminal.cols)) : 0,
+    cell_height_px: bounds && terminal.rows > 0 ? Math.max(1, Math.round(bounds.height / terminal.rows)) : 0,
+  };
+}
+export function sharedSurfaceDimension(paneFitCells: number, surfaceCells: number, paneSurfaceCells: number): number {
+  return Math.max(1, Math.min(4096, Math.round(paneFitCells * surfaceCells / Math.max(1, paneSurfaceCells))));
 }
 
-export function TerminalPane({ client, request, herdrRect, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onControlLost, onSelect, onRetry, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCols, paneRows, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
-  const [ownership, setOwnership] = useState<"pending" | "observing" | "owned" | "conflict" | "released" | "lost">("observing");
+  const [ownership, setOwnership] = useState<TerminalOwnershipState>("observing");
   const [error, setError] = useState<PaneError | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [closed, setClosed] = useState(false);
   const [terminalReady, setTerminalReady] = useState(false);
   const lastSequence = useRef<bigint | null>(null);
+  const graphicsReadyRef = useRef(false);
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
   const [controlRequested, setControlRequested] = useState(controlAllowed);
@@ -176,47 +195,47 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
   };
 
   useEffect(() => {
-    if (!hostRef.current) return;
+    const host = hostRef.current;
+    if (!host) return;
     const terminal = createCockpitTerminal();
-    terminal.open(hostRef.current);
-    let disposed = false;
-    let fit: { fit(): void } | null = null;
-    void import("@xterm/addon-fit").then(async ({ FitAddon }) => {
-      if (disposed) return;
-      const addon = new FitAddon();
-      fit = addon;
-      terminal.loadAddon(addon);
-      try {
-        const [{ WebglAddon }, { ImageAddon }] = await Promise.all([
-          import("@xterm/addon-webgl"),
-          import("@xterm/addon-image"),
-        ]);
-        if (disposed) return;
-        const webglAddon = new WebglAddon();
-        terminal.loadAddon(webglAddon);
-        const imageAddon = new ImageAddon({
-          kittySupport: true,
-          sixelSupport: false,
-          iipSupport: false,
-        });
-        terminal.loadAddon(imageAddon);
-        webglAddon.onContextLoss(() => {
-          imageAddon.dispose();
-          webglAddon.dispose();
-        });
-      } catch {
-        // The built-in renderer remains usable when WebGL is unavailable.
-      }
-      if (disposed) return;
-      addon.fit();
-      setTerminalReady(true);
-    }).catch(() => undefined);
+    const fit = new FitAddon();
+    terminal.open(host);
+    terminal.loadAddon(fit);
+    try {
+      terminal.loadAddon(new ImageAddon({
+        kittySupport: true,
+        sixelSupport: false,
+        iipSupport: false,
+      }));
+      graphicsReadyRef.current = true;
+    } catch {
+      graphicsReadyRef.current = false;
+    }
+    fit.fit();
+    setTerminalReady(true);
     terminalRef.current = terminal;
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => fit?.fit());
-    observer?.observe(hostRef.current);
+    let layerTimer: number | null = null;
+    const refreshLayer = () => {
+      if (layerTimer !== null) window.clearTimeout(layerTimer);
+      let attempts = 0;
+      const inspect = () => {
+        layerTimer = null;
+        const imageLayer = terminal.element?.querySelector<HTMLCanvasElement>(".xterm-image-layer-top");
+        if (imageLayer) invalidateImageCanvas(imageLayer);
+        attempts += 1;
+        if (attempts < 10) layerTimer = window.setTimeout(inspect, 500);
+      };
+      layerTimer = window.setTimeout(inspect, 100);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      fit.fit();
+      refreshLayer();
+    });
+    observer?.observe(host);
     return () => {
-      disposed = true;
+      graphicsReadyRef.current = false;
       observer?.disconnect();
+      if (layerTimer !== null) window.clearTimeout(layerTimer);
       terminal.dispose();
       terminalRef.current = null;
     };
@@ -235,14 +254,15 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
       return false;
     });
     const resize = terminal.onResize(({ cols, rows }) => {
-      if (!controlAllowedRef.current || ownershipRef.current !== "owned" || !streamRef.current) return;
+      const stream = streamRef.current;
+      if (!stream) return;
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
-      streamRef.current.send({
+      stream.send({
         type: "terminal.resize",
-        cols,
-        rows,
-        cell_width_px: bounds ? Math.max(0, Math.round(bounds.width / Math.max(1, cols))) : 0,
-        cell_height_px: bounds ? Math.max(0, Math.round(bounds.height / Math.max(1, rows))) : 0,
+        cols: sharedSurfaceDimension(cols, surfaceCols, paneCols),
+        rows: sharedSurfaceDimension(rows, surfaceRows, paneRows),
+        cell_width_px: bounds ? Math.max(1, Math.round(bounds.width / Math.max(1, cols))) : 0,
+        cell_height_px: bounds ? Math.max(1, Math.round(bounds.height / Math.max(1, rows))) : 0,
       });
     });
     terminal.attachCustomWheelEventHandler((event) => {
@@ -271,7 +291,7 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
       terminal.attachCustomWheelEventHandler(() => true);
       terminal.attachCustomKeyEventHandler(() => true);
     };
-  }, [selected, onSelect]);
+  }, [selected, onSelect, surfaceCols, surfaceRows, paneCols, paneRows]);
   useEffect(() => {
     if (controlAllowed) {
       controlRequestPendingRef.current = false;
@@ -299,22 +319,35 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
   }, [ownership]);
 
   useEffect(() => {
-    if (ownership === "owned") flushPending();
-  }, [ownership]);
-
-  useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !terminalReady) return;
-    const mode = controlRequested ? "control" : "observe";
+    const geometry = terminalCellGeometry(terminal);
     const openRequest: TerminalOpenRequest = {
       ...request,
-      mode,
-      takeover: controlRequested,
+      mode: controlRequested ? "control" : "observe",
+      takeover: false,
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
+      cell_width_px: geometry.cell_width_px,
+      cell_height_px: geometry.cell_height_px,
+      surface_cols: sharedSurfaceDimension(terminal.cols || 80, surfaceCols, paneCols),
+      surface_rows: sharedSurfaceDimension(terminal.rows || 24, surfaceRows, paneRows),
     };
     let cancelled = false;
     let stream: TerminalStream | null = null;
+    let layerTimer: number | null = null;
+    const refreshGraphicsLayer = () => {
+      if (layerTimer !== null) window.clearTimeout(layerTimer);
+      let attempts = 0;
+      const inspect = () => {
+        layerTimer = null;
+        const imageLayer = terminal.element?.querySelector<HTMLCanvasElement>(".xterm-image-layer-top");
+        if (imageLayer) invalidateImageCanvas(imageLayer);
+        attempts += 1;
+        if (attempts < 10) layerTimer = window.setTimeout(inspect, 500);
+      };
+      layerTimer = window.setTimeout(inspect, 100);
+    };
     lastSequence.current = null;
     setError(null);
     setClosed(false);
@@ -330,31 +363,23 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-    const observeAfterControlLoss = () => {
-      pendingCommands.current = [];
-      cancelled = true;
-      setError(null);
-      setClosed(false);
-      ownershipRef.current = "observing";
-      setOwnership("observing");
-      streamRef.current = null;
-      if (stream) registerStream?.(stream, false);
-      stream?.close();
-      controlRequestedRef.current = false;
-      controlRequestPendingRef.current = false;
-      setControlRequested(false);
-      onControlLost?.();
-    };
     const onMessage = (message: TerminalStreamMessage) => {
       if (cancelled) return;
       if (message.type === "ownership") {
-        if (message.state === "conflict" || message.state === "lost") {
-          if (shouldObserveAfterControlLoss(controlRequested, message.state)) observeAfterControlLoss();
-          else fail(message.state, message.message ?? "Terminal control is unavailable");
-        } else {
-          ownershipRef.current = message.state;
-          setOwnership(message.state);
-          if (message.state === "owned") flushPending();
+        ownershipRef.current = message.state;
+        setOwnership(message.state);
+        if (message.state === "owned") flushPending();
+        return;
+      }
+      if (message.type === "graphics") {
+        if (!graphicsReadyRef.current) {
+          fail("terminal_frame", "Terminal graphics are unavailable");
+          return;
+        }
+        try {
+          terminal.write(decodeFrame(message.bytes), refreshGraphicsLayer);
+        } catch {
+          fail("terminal_frame", "Terminal sent an invalid graphics payload");
         }
         return;
       }
@@ -377,19 +402,19 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
         lastSequence.current = sequence;
         try {
           const text = decodeFrame(message.bytes);
-          if (message.full) {
-            terminal.reset();
-          }
+          if (message.full) terminal.reset();
           terminal.write(text);
-          if (controlRequested) { ownershipRef.current = "owned"; setOwnership("owned"); flushPending(); }
+          if (controlRequested) {
+            ownershipRef.current = "owned";
+            setOwnership("owned");
+            flushPending();
+          }
         } catch {
           fail("terminal_frame", "Terminal sent an invalid frame");
         }
         return;
       }
-      if (message.type === "error") {
-        fail(message.code, message.message);
-      } else if (message.type === "disconnected") {
+      if (message.type === "error" || message.type === "disconnected") {
         fail(message.code, message.message);
       } else if (message.type === "closed") {
         cancelled = true;
@@ -405,9 +430,13 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
     void client.openTerminal(openRequest, onMessage, (cause: unknown) => {
       if (cancelled) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
-      fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
+      const code = /graphics/i.test(typed.message) ? "terminal_frame" : (typed as Error & { code?: string }).code ?? "terminal_attach_failed";
+      fail(code, typed.message);
     }).then((opened) => {
-      if (cancelled) { opened.close(); return; }
+      if (cancelled) {
+        opened.close();
+        return;
+      }
       stream = opened;
       streamRef.current = opened;
       flushPending();
@@ -415,23 +444,25 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
     }, (cause: unknown) => {
       if (cancelled) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
-      fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
+      const code = /graphics/i.test(typed.message) ? "terminal_frame" : (typed as Error & { code?: string }).code ?? "terminal_attach_failed";
+      fail(code, typed.message);
     });
     return () => {
       cancelled = true;
+      if (layerTimer !== null) window.clearTimeout(layerTimer);
       if (streamRef.current === stream) streamRef.current = null;
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, request.session_id, request.pane_id, controlRequested, terminalReady, attempt, registerStream]);
+  }, [client, request.session_id, request.pane_id, request.client_surface_id, controlRequested, terminalReady, attempt, registerStream]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;
-    if (!terminal || !herdrRect) return;
+    if (!terminal) return;
     const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect()
       ?? hostRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    forwardTerminalMouse(terminalMouseInput, sendInput, kind, button, event, bounds, terminal.cols, terminal.rows, herdrRect);
+    forwardTerminalMouse(terminalMouseInput, sendInput, kind, button, event, bounds, terminal.cols, terminal.rows);
   };
   return (
     <div
@@ -491,10 +522,7 @@ export function TerminalPane({ client, request, herdrRect, selected, controlAllo
       ) : error ? (
         <div className="terminal-overlay" role="alert">
           <span>{error.message}</span>
-          <button type="button" className="recovery-button" onClick={() => {
-            setAttempt((value) => value + 1);
-            if (error.code === "conflict" || error.code === "lost") onRetry?.();
-          }}>{error.code === "conflict" || error.code === "lost" ? "Retry control" : "Retry"}</button>
+          <button type="button" className="recovery-button" onClick={() => setAttempt((value) => value + 1)}>Retry</button>
           <button type="button" className="recovery-button" onClick={onResync}>Resync</button>
         </div>
       ) : null}

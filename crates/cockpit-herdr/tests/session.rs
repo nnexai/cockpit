@@ -8,10 +8,10 @@ use cockpit_core::{HerdrAdapter, SessionChange};
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
 use cockpit_protocol::v1::{
     PaneSummary, ResourceMutationRequest, SessionSnapshotResponse, TerminalMode,
-    TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+    TerminalOpenRequest,
 };
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 
 #[cfg(unix)]
@@ -445,7 +445,7 @@ async fn propagates_subscription_setup_error_without_id() {
     let snapshot = cockpit_protocol::v1::SessionSnapshotResponse {
         session_id: "default".into(),
         version: "0.8.2".into(),
-        protocol: 20,
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -558,7 +558,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
     let initial_snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
         version: "0.8.2".into(),
-        protocol: 20,
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -605,103 +605,21 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     let error = adapter.session_snapshot("bad/name").await.unwrap_err();
     assert_eq!(error.code, "invalid_session_id");
     let request = cockpit_protocol::v1::TerminalOpenRequest {
+        client_surface_id: "surface-1".into(),
         session_id: "default".into(),
         pane_id: "bad/id".into(),
         mode: cockpit_protocol::v1::TerminalMode::Observe,
         takeover: false,
         cols: 80,
         rows: 24,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        surface_cols: 80,
+        surface_rows: 24,
     };
     let error = adapter.open_terminal(&request).await.unwrap_err();
     assert_eq!(error.code, "invalid_pane_id");
     drop(fs::remove_file(fixture));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn maps_controller_takeover_to_ownership_loss() {
-    let socket = std::env::temp_dir().join(format!("cockpit-herdr-handoff-{}.sock", temp_id()));
-    let client_socket = socket.with_file_name(format!(
-        "{}-client.sock",
-        socket.file_stem().unwrap().to_string_lossy()
-    ));
-    let listener = UnixListener::bind(&client_socket).unwrap();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let hello_size = stream.read_u32_le().await.unwrap() as usize;
-        let mut hello = vec![0; hello_size];
-        stream.read_exact(&mut hello).await.unwrap();
-        assert_eq!(hello, [0, 20, 80, 24, 0, 0, 1, 0, 2]);
-
-        let welcome = [0, 20, 1, 0];
-        stream
-            .write_all(&(welcome.len() as u32).to_le_bytes())
-            .await
-            .unwrap();
-        stream.write_all(&welcome).await.unwrap();
-
-        let control_size = stream.read_u32_le().await.unwrap() as usize;
-        let mut control = vec![0; control_size];
-        stream.read_exact(&mut control).await.unwrap();
-        assert_eq!(control, [9, 5, b'w', b'1', b':', b'p', b'1', 1]);
-
-        let terminal = [2, 1, 80, 24, 1, 0];
-        stream
-            .write_all(&(terminal.len() as u32).to_le_bytes())
-            .await
-            .unwrap();
-        stream.write_all(&terminal).await.unwrap();
-        let reason = b"terminal attach taken over";
-        let mut shutdown = vec![4, 1, reason.len() as u8];
-        shutdown.extend_from_slice(reason);
-        stream
-            .write_all(&(shutdown.len() as u32).to_le_bytes())
-            .await
-            .unwrap();
-        stream.write_all(&shutdown).await.unwrap();
-    });
-    let config =
-        HerdrCliConfig::from_options(None, Some("handoff".into()), Some(socket.clone())).unwrap();
-    let request = TerminalOpenRequest {
-        session_id: "handoff".into(),
-        pane_id: "w1:p1".into(),
-        mode: TerminalMode::Control,
-        takeover: true,
-        cols: 80,
-        rows: 24,
-    };
-    let mut terminal = HerdrCliAdapter::new(config)
-        .open_terminal(&request)
-        .await
-        .unwrap();
-    let mut messages = Vec::new();
-    while let Ok(Some(message)) =
-        tokio::time::timeout(Duration::from_secs(1), terminal.messages.recv()).await
-    {
-        messages.push(message);
-    }
-
-    assert!(matches!(
-        messages.as_slice(),
-        [
-            TerminalStreamMessage::Ownership {
-                state: TerminalOwnershipState::Pending,
-                ..
-            },
-            TerminalStreamMessage::Ownership {
-                state: TerminalOwnershipState::Owned,
-                ..
-            },
-            TerminalStreamMessage::Frame { full: true, .. },
-            TerminalStreamMessage::Ownership {
-                state: TerminalOwnershipState::Lost,
-                message: Some(message),
-                ..
-            }
-        ] if message == "terminal attach taken over"
-    ));
-    server.await.unwrap();
-    drop(fs::remove_file(client_socket));
 }
 
 #[test]

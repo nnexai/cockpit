@@ -172,6 +172,9 @@ summary:focus-visible {
   height: 100%;
 }
 
+.terminal-host .xterm-image-layer-top {
+  z-index: 4 !important;
+}
 
 .terminal-overlay {
   position: absolute;

@@ -479,6 +479,19 @@ fn localize_terminal_message(
             state,
             message,
         },
+        TerminalStreamMessage::Graphics {
+            session_id,
+            pane_id,
+            revision,
+            bytes,
+            ..
+        } => TerminalStreamMessage::Graphics {
+            session_id,
+            pane_id,
+            stream_id: stream_id.to_owned(),
+            revision,
+            bytes,
+        },
         TerminalStreamMessage::Frame {
             session_id,
             pane_id,
@@ -581,6 +594,12 @@ fn validate_terminal_message(
             stream_id,
             ..
         }
+        | TerminalStreamMessage::Graphics {
+            session_id,
+            pane_id,
+            stream_id,
+            ..
+        }
         | TerminalStreamMessage::Closed {
             session_id,
             pane_id,
@@ -640,6 +659,11 @@ fn validate_terminal_message(
         }
         *last_seq = Some(number);
         *has_baseline = true;
+    }
+    if let TerminalStreamMessage::Graphics { bytes, .. } = message
+        && BASE64.decode(bytes.as_bytes()).is_err()
+    {
+        return Err(("terminal_frame_invalid", "Invalid terminal graphics"));
     }
     Ok(())
 }

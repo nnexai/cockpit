@@ -50,10 +50,10 @@ async fn inspect(status: &str, schema: &str) -> HerdrCompatibility {
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_schema_fixture_is_compatible() {
-    let schema = include_str!("fixtures/herdr-0.8.2-protocol-20-schema-1.json");
-    let status = r#"{"version":"0.8.2","protocol":20}"#;
+    let schema = include_str!("fixtures/herdr-0.8.2-protocol-22-schema-1.json");
+    let status = r#"{"version":"0.8.2","protocol":22}"#;
     assert!(
-        matches!(inspect(status, schema).await, HerdrCompatibility::Compatible { identity } if identity.version == "0.8.2" && identity.protocol == 20 && identity.schema_version == 1)
+        matches!(inspect(status, schema).await, HerdrCompatibility::Compatible { identity } if identity.version == "0.8.2" && identity.protocol == 22 && identity.schema_version == 1)
     );
 }
 
@@ -67,9 +67,9 @@ async fn autostart_launches_a_missing_server_before_inspection() {
     let script = root.join(format!("cockpit-herdr-autostart-{id}.sh"));
     let marker = root.join(format!("cockpit-herdr-autostart-{id}.ready"));
     let log = root.join(format!("cockpit-herdr-autostart-{id}.log"));
-    let schema = include_str!("fixtures/herdr-0.8.2-protocol-20-schema-1.json");
+    let schema = include_str!("fixtures/herdr-0.8.2-protocol-22-schema-1.json");
     let script_body = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  *'status server --json') if [ -f '{}' ]; then printf '%s' '{{\"version\":\"0.8.2\",\"protocol\":20}}'; else printf '%s' '{{\"status\":\"not_running\",\"running\":false,\"version\":null,\"protocol\":null}}'; fi;;\n  *'api schema --json') printf '%s' '{}';;\n  *server) touch '{}';;\nesac\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  *'status server --json') if [ -f '{}' ]; then printf '%s' '{{\"version\":\"0.8.2\",\"protocol\":22}}'; else printf '%s' '{{\"status\":\"not_running\",\"running\":false,\"version\":null,\"protocol\":null}}'; fi;;\n  *'api schema --json') printf '%s' '{}';;\n  *server) touch '{}';;\nesac\n",
         log.display(),
         marker.display(),
         schema.replace('\'', "'\\''"),
@@ -112,16 +112,16 @@ async fn autostart_launches_a_missing_server_before_inspection() {
 async fn version_protocol_schema_and_method_mismatches_are_incompatible() {
     let schema = r#"{"schema_version":1,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}},{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"events.subscribe"}}}]}}}"#;
     assert!(
-        matches!(inspect(r#"{"version":"0.7.0","protocol":20}"#, schema).await, HerdrCompatibility::Incompatible { identity: None, code, .. } if code == "version_mismatch")
+        matches!(inspect(r#"{"version":"0.7.0","protocol":22}"#, schema).await, HerdrCompatibility::Incompatible { identity: None, code, .. } if code == "version_mismatch")
     );
     assert!(
-        matches!(inspect(r#"{"version":"0.8.2","protocol":19}"#, schema).await, HerdrCompatibility::Incompatible { identity: None, code, .. } if code == "protocol_mismatch")
+        matches!(inspect(r#"{"version":"0.8.2","protocol":20}"#, schema).await, HerdrCompatibility::Incompatible { identity: None, code, .. } if code == "protocol_mismatch")
     );
     assert!(
-        matches!(inspect(r#"{"version":"0.8.2","protocol":20}"#, r#"{"schema_version":2,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}},{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"events.subscribe"}}}]}}}"#).await, HerdrCompatibility::Incompatible { identity: Some(identity), code, .. } if identity.schema_version == 2 && code == "schema_version_mismatch")
+        matches!(inspect(r#"{"version":"0.8.2","protocol":22}"#, r#"{"schema_version":2,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}},{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"events.subscribe"}}}]}}}"#).await, HerdrCompatibility::Incompatible { identity: Some(identity), code, .. } if identity.schema_version == 2 && code == "schema_version_mismatch")
     );
     assert!(
-        matches!(inspect(r#"{"version":"0.8.2","protocol":20}"#, r#"{"schema_version":1,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}}]}}}"#).await, HerdrCompatibility::Incompatible { code, .. } if code == "missing_methods")
+        matches!(inspect(r#"{"version":"0.8.2","protocol":22}"#, r#"{"schema_version":1,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}}]}}}"#).await, HerdrCompatibility::Incompatible { code, .. } if code == "missing_methods")
     );
 }
 
@@ -165,7 +165,7 @@ async fn records_fixed_argv_and_socket_environment() {
     let log = root.join(format!("cockpit-herdr-record-{id}.log"));
     let schema = r#"{"schema_version":1,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}},{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"events.subscribe"}}},{"properties":{"method":{"const":"pane.read"}}}]}}}"#;
     let script_body = format!(
-        "#!/bin/sh\nprintf '%s|%s\\n' \"$*\" \"${{HERDR_SOCKET_PATH-<inherited>}}\" >> '{}'\ncase \"$*\" in *'status server --json') printf '%s' '{{\"version\":\"0.8.2\",\"protocol\":20}}';; *'api schema --json') printf '%s' '{}';; esac\n",
+        "#!/bin/sh\nprintf '%s|%s\\n' \"$*\" \"${{HERDR_SOCKET_PATH-<inherited>}}\" >> '{}'\ncase \"$*\" in *'status server --json') printf '%s' '{{\"version\":\"0.8.2\",\"protocol\":22}}';; *'api schema --json') printf '%s' '{}';; esac\n",
         log.display(),
         schema.replace('\'', "'\\''")
     );
@@ -277,7 +277,7 @@ fn incompatible_without_full_identity_serializes_null_identity() {
     let response = HerdrCompatibility::Incompatible {
         identity: None,
         code: "protocol_mismatch".into(),
-        message: "expected Herdr protocol 20".into(),
+        message: "expected Herdr protocol 22".into(),
     };
     let value = serde_json::to_value(response).unwrap();
     assert!(

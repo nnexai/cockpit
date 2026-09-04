@@ -58,7 +58,7 @@ export type SessionStreamMessage = { "type": "snapshot", session_id: string, gen
 
 export type TerminalMode = "observe" | "control";
 
-export type TerminalOpenRequest = { session_id: string, pane_id: string, mode: TerminalMode, takeover: boolean, cols: number, rows: number, };
+export type TerminalOpenRequest = { client_surface_id: string, session_id: string, pane_id: string, mode: TerminalMode, takeover: boolean, cols: number, rows: number, cell_width_px: number, cell_height_px: number, surface_cols: number, surface_rows: number, };
 
 export type TerminalScrollDirection = "up" | "down";
 
@@ -72,4 +72,4 @@ export type TerminalCommand = { "type": "terminal.input", text: string | null, b
 
 export type TerminalOwnershipState = "pending" | "observing" | "owned" | "conflict" | "released" | "lost";
 
-export type TerminalStreamMessage = { "type": "ownership", session_id: string, pane_id: string, stream_id: string, state: TerminalOwnershipState, message: string | null, } | { "type": "frame", session_id: string, pane_id: string, stream_id: string, seq: string, encoding: string, width: number, height: number, full: boolean, bytes: string, } | { "type": "closed", session_id: string, pane_id: string, stream_id: string, reason: string, } | { "type": "disconnected", session_id: string, pane_id: string, stream_id: string, code: string, message: string, } | { "type": "error", session_id: string, pane_id: string, stream_id: string, code: string, message: string, };
+export type TerminalStreamMessage = { "type": "ownership", session_id: string, pane_id: string, stream_id: string, state: TerminalOwnershipState, message: string | null, } | { "type": "frame", session_id: string, pane_id: string, stream_id: string, seq: string, encoding: string, width: number, height: number, full: boolean, bytes: string, } | { "type": "graphics", session_id: string, pane_id: string, stream_id: string, revision: string, bytes: string, } | { "type": "closed", session_id: string, pane_id: string, stream_id: string, reason: string, } | { "type": "disconnected", session_id: string, pane_id: string, stream_id: string, code: string, message: string, } | { "type": "error", session_id: string, pane_id: string, stream_id: string, code: string, message: string, };
