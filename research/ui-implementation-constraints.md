@@ -1,5 +1,7 @@
 # Cockpit UI implementation constraints
 
+Current-authority note, 2026-09-04: protocol-22 client-shell behavior in `../DECISIONS.md` overrides historical ownership/renderer details below. The next Context/Review design is `../planning/next-level/08-ui-design.md`: detect real extension panes and replace their renderer, with no extension IPC or separate dock/tab authority. The current implemented workbench remains the baseline; these plans add future behavior.
+
 ## Scope and authority
 
 This is an implementation constraint note, not a visual direction. Cockpit is a dense desktop developer tool: the first screen is a graphical mirror of a live Herdr session (Spaces, Agents, tabs, panes, and terminals), not a landing page or a locally invented workspace model.

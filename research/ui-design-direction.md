@@ -1,5 +1,7 @@
 # Cockpit UI design direction
 
+Current-authority note, 2026-09-04: protocol-22 client-shell behavior in `../DECISIONS.md` overrides historical ownership/renderer details below. The next Context/Review design is `../planning/next-level/08-ui-design.md`: detect real extension panes and replace their renderer, with no extension IPC or separate dock/tab authority. The current implemented workbench remains the baseline; these plans add future behavior.
+
 ## Decision
 
 Build Cockpit as a **graphite operations workbench**: one compact control rail on the left and one terminal-first work area on the right. The interface should look native to a Linux developer's daily work, with flat dark surfaces, crisp one-pixel separators, restrained state color, and no decorative dashboard cards.

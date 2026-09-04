@@ -1,6 +1,6 @@
 # Cockpit Architecture Decision Snapshot
 
-Status: confirmed working snapshot. `CONTEXT.md` has been rewritten as the current implementation reference.
+Status: confirmed design decisions. Current runtime and planned features are distinguished in `CONTEXT.md` and `planning/next-level/README.md`.
 
 This records the decisions made during the architecture refinement interview. It intentionally avoids example filesystem locations; all roots and endpoints are configurable.
 
@@ -99,15 +99,17 @@ This records the decisions made during the architecture refinement interview. It
 - Attach/reconnect failure leaves the resource visible with stale/disconnected status, retry, and resync; the Herdr process is not silently closed.
 - Errors are inline on the affected resource. Toasts may supplement but are not the only error surface.
 
-### Context surface
+### Context and review replacements
 
-- Context is a first-class read-only surface associated with the selected Space.
-- It can be represented as a dedicated Context tab and may also occupy a pane in a Herdr-supported split layout.
-- The browser renders Markdown/frontmatter, navigates the companion tree, searches, and refreshes on file changes.
-- Search is delegated to `ripgrep` through a narrow core-mediated allowlisted operation; Cockpit does not implement a custom search engine.
-- Safe type-based viewers support Markdown, bounded plain text/log files, and images. Unsafe, binary, executable, or oversized files are refused or opened externally.
-- User-created files found in the companion tree are rendered under the same discovery and safety rules.
-- Preview bounds are configurable and intentionally generous, not unlimited.
+- Detect supported Herdr extension panes and replace the renderer with a complete Cockpit GUI. Context/files replace `herdr-file-viewer`; local review replaces `persiyanov.reviewr`.
+- Herdr owns the actual pane, process, tab/Space membership, focus, and layout. The user moves/resizes it through normal Herdr operations. No separate dock layout or synthetic Context tab is introduced.
+- Cockpit owns the GUI file/review model and drafts. It does not communicate with, scrape, or synchronize the extension's private state. No extension or Herdr-server change is required.
+- Use plugin-open provenance and bounded current process evidence for automatic detection. Ambiguous panes retain terminal rendering with an explicit per-pane renderer choice. Titles alone do not decide replacement.
+- The original extension keeps running independently. Terminal fallback reveals its own state; GUI drafts remain in Cockpit. A future TUI backport is a separate reusable-core story.
+- Context renders Markdown with Mermaid, frontmatter, bounded source/text/logs, and safe images. It discovers user files, watches changes, and uses bounded core-mediated ripgrep.
+- Whole-file and selected-line comments can be collected across files, edited, removed, and previewed as one batch. Full-file comments carry path/comment; line comments also carry exact original lines and line numbers.
+- Paste targets an explicitly selected agent in the same actual tab. It never submits Enter. A dedicated acknowledged task uses the existing public Herdr byte-write capability with proven paste framing; ordinary terminal input stays on the client-shell path. Pending, rejected, and unknown outcomes retain drafts/receipts and never cause automatic duplicate retries.
+- Full local graphical review is a separately selectable feature using Cockpit's own read-only Git model and shared comment behavior. Review/MR URLs are setup inputs, not Build/Review workbench modes.
 
 ### Accessibility and settings
 
@@ -118,21 +120,21 @@ This records the decisions made during the architecture refinement interview. It
 ## Workspace and filesystem lifecycle
 
 - Workspace creation starts by enumerating repositories under a configured default root.
-- Creation resolves a typed task/artifact, asks Herdr’s worktree API to create/open the worktree workspace, creates the Cockpit-owned companion context, attaches that context through Herdr metadata/environment, and returns the selected session/resource.
+- Creation resolves a typed task/artifact, asks Herdr’s worktree API to create/open the worktree workspace, creates the Cockpit-owned companion context, records verified provenance in its owned manifest, passes context env to explicit new Cockpit tabs/panes, and returns the selected session/resource.
 - Workspace lifecycle uses Herdr’s worktree API for creation/open/removal and Herdr worktree provenance for mapping.
-- The companion context resource is Cockpit-owned and linked through Herdr metadata; it is not tracked by a separate Cockpit registry.
+- The companion resource is Cockpit-owned. Its manifest records context ownership and verified Herdr/repository provenance; it is not a second registry of live Herdr workspaces. Display metadata is not used as arbitrary durable context storage.
 - Partial provisioning artifacts are allowed. Destroying a newly created space/workspace must also remove its owned companion context.
 - Branch and workspace-location templates are configurable and use task artifact metadata where available. A review artifact may already identify its source branch.
 - Configuration uses a durable config file with environment-variable overrides and one-off command options.
-- CoW cloning is preferred. Normal copying is a correctness-preserving fallback and emits a performance warning.
+- Reflink copies are preferred for independent local repository snapshots. Normal copying is a correctness-preserving fallback and reports its copy mode. Hardlinks and Git alternates are prohibited for writable context snapshots.
 - Central normalized cache assets are replicated into companion contexts. Sync replaces changed copies atomically.
 
 ## Terminal environment
 
-- New Herdr-created terminals receive context/workspace environment through the Herdr session environment.
+- Worktree create/open has no env argument in the inspected version. Context env is passed explicitly to subsequent Cockpit-created tabs/panes; the initial root pane, existing processes, and direct TUI-created terminals are not guaranteed to inherit it.
 - Automatic OMP setup/launch is out of scope for now.
 - Initial workspace setup creates/registers a Herdr session only; it does not require a predefined three-surface layout.
-- Cockpit does not mutate Herdr metadata for its own bookkeeping. Existing Herdr-provided metadata is inherited; Cockpit adds only the context/workspace environment needed for its operations.
+- Cockpit does not mutate Herdr metadata for bookkeeping. Existing Herdr-provided metadata is inherited; Cockpit adds only approved context/workspace environment to its explicit process launches. Renderer detection uses supported Herdr inspection and launch receipts, not an extension handshake.
 - Credentials are not abstracted or managed by the client initially. External wrappers/tools retain responsibility for credential handling. Cockpit must not persist or export secrets through snapshots or generated environment values.
 
 ## Context ingestion and snapshots
@@ -183,3 +185,12 @@ This records the decisions made during the architecture refinement interview. It
 - Herdr socket API: https://herdr.dev/docs/socket-api/
 - Herdr source repository: https://github.com/SuperCodeAgents/herdr-terminal
 - Herdr Agent Inbox source: https://github.com/douglascorrea/herdr-agent-inbox
+
+## Personal workflow and maintainability, 2026-09-04
+
+- This is the user's primary local project workbench, not a product targeted at other users. Code changes should be the easy way to tweak behavior.
+- Add a separate maintainability pass before the new features: preserve current behavior, identify owning modules, simplify focus/input/lifecycle seams, consolidate styling, and document where to change common behavior.
+- Keep broader follow-up cleanup selectable after features. Avoid a wholesale rewrite, arbitrary file-size goals, a generic workflow engine, or a dynamically loaded frontend plugin framework.
+- Plan every missing/deferred capability as a separate story, but do not make distribution, multi-user access, credentials infrastructure, or provider breadth prerequisites for the local main loop.
+- A local primary repository is required for setup; an issue/review URL is optional. Additional already-discovered local repositories can be explicitly snapshotted into context. Arbitrary URL downloading and remote cloning remain outside the current main scope.
+- The selected UI supersedes the first HTML dock study. Final plans, dependencies, code cleanup, and graphical pane mocks are in `planning/next-level/README.md`.

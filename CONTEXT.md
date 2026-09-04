@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: refined proof-of-concept architecture. This document is the implementation reference for the current design.
+Status: architecture reference. The current Herdr client is implemented; the next-level setup/context/review features are planned in `planning/next-level/README.md`, not yet implemented.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 
@@ -20,7 +20,7 @@ Cockpit follows conventional engineering workflows:
 - inspect, test, and review changes locally;
 - destroy owned workspace resources when the task is complete.
 
-The current deliverable is a sophisticated proof of concept for the Herdr client and reusable Cockpit core. Distribution to other users, formal accessibility compliance, remote access, and credential management are later concerns.
+Cockpit is intended to become the developer's primary way of engaging with local projects. Maintainable code and easy behavior changes matter more than distribution or product generality. Distribution to other users, formal accessibility compliance, remote access, and credential management are elective later concerns.
 
 ## 2. Product domains
 
@@ -130,13 +130,13 @@ Workspace creation eventually performs this sequence:
 2. resolve a typed task/artifact;
 3. ask Herdr to create or open the worktree workspace;
 4. create the Cockpit-owned companion context resource;
-5. attach the companion context through the Herdr session environment and supported workspace association;
+5. record the companion association in a Cockpit-owned provenance manifest and pass context environment to explicitly created new Cockpit tabs/panes;
 6. optionally hydrate explicitly requested context;
 7. return the selected Herdr session/resource.
 
 Partial artifacts are allowed. Destruction requires confirmation and removes the owned Herdr worktree/workspace and its associated Cockpit companion context. Central caches and unrelated resources are never removed by workspace destruction.
 
-CoW cloning is preferred where available. A normal copy is a correctness-preserving fallback and emits a performance warning.
+Independent reflink snapshots are preferred where available. Normal copies preserve correctness and report the fallback. Hardlinks and Git alternates must not couple writable context files to their originals.
 
 ## 5. Herdr client UI
 
@@ -211,25 +211,29 @@ Herdr owns every PTY, process, terminal model, and client-shell surface. xterm.j
 
 The client loads hierarchy metadata for all resources. It does not require an xterm.js DOM instance or live output subscription for every pane.
 
-### 5.5 Context surface
+### 5.5 Context and graphical review panes
 
-Context is a first-class read-only surface associated with the selected Space. It can occupy a dedicated Context tab or a pane in a Herdr-supported split layout.
+Cockpit detects supported Herdr extension panes and replaces their renderer with a complete graphical implementation. The initial targets are `herdr-file-viewer` for Context/files and `persiyanov.reviewr` for local review. These remain real Herdr panes with normal layout, move, resize, focus, and close behavior. There are no Build/Review workbench modes or synthetic Context tabs.
 
-The initial context browser:
+Detection uses supported Herdr plugin launch provenance and bounded `pane.process_info` evidence, with explicit per-pane renderer selection for ambiguous cases. It does not communicate with the extension's internal state, scrape terminal output, or require extension/Herdr-server changes. The original TUI continues independently; switching to terminal view does not synchronize its comments with Cockpit's own GUI drafts.
 
-- enumerates the companion context tree;
-- recognizes frontmatter and resource identity;
-- renders Markdown and frontmatter;
-- renders bounded plain text and log files;
-- renders images when safely supported;
-- discovers user-created files automatically;
-- refreshes when files change;
-- searches through a core-mediated `ripgrep` operation;
-- offers external opening for unsafe, binary, executable, or oversized files.
+The Context browser:
 
-Preview limits are configurable and generous, but finite. Cockpit does not implement a custom search engine or expose arbitrary shell commands to the UI.
+- enumerates the companion context tree and optionally an authorized repository root;
+- recognizes frontmatter/resource identity and discovers user-created files;
+- renders Markdown with Mermaid, bounded source/plain text/logs, and safe images;
+- preserves exact original source line numbers, including frontmatter;
+- refreshes on file changes and searches through bounded core-mediated ripgrep;
+- offers safe external opening/refusal for unsupported content;
+- collects whole-file and selected-line comments across files;
+- previews a batch containing real file paths, comments, and selected original lines with line numbers;
+- pastes that batch into an explicitly selected same-tab agent without submitting it.
 
-There is no generated index or scratchpad in the current scope. Human-created files are discoverable but not managed by Cockpit.
+Cockpit owns durable GUI drafts and a local Git review model for the complete Reviewr replacement. Local review includes staged, unstaged, branch, and untracked scopes with explicit revisions and side-aware anchors. It does not mutate Git or post provider comments. A future TUI backport can reuse Cockpit core logic as a separate story.
+
+Preview/search/paste limits are finite and configurable. No generated index or scratchpad is required. Human-created files are discovered but are never treated as managed merely because their frontmatter claims ownership.
+
+See `planning/next-level/04-viewer-and-reference-comments.md`, `07-extension-panes.md`, and `08-ui-design.md` for the proposed implementation and UI contracts.
 
 ### 5.6 Errors, settings, and accessibility
 
@@ -241,7 +245,7 @@ Accessibility is best effort for this personal proof of concept, not an acceptan
 
 ## 6. Terminal environment
 
-New Herdr-created terminals receive Cockpit context/workspace variables through the Herdr session environment. Existing Herdr-provided environment metadata is inherited.
+Existing Herdr-provided metadata is inherited. Worktree create/open cannot accept environment variables for the initial root pane in the inspected Herdr version. Cockpit passes context/workspace variables explicitly when it creates subsequent tabs/panes through supported env parameters. Existing terminals and panes launched directly from the Herdr TUI cannot be retrofitted or assumed to inherit them. The setup result states this limitation and never silently closes the initial pane.
 
 Cockpit does not automatically launch or configure OMP. The developer starts agents manually. Herdr’s own integrations report agent state to the presentation layer.
 
@@ -357,3 +361,9 @@ Verification uses the actual changed surface:
 - raw socket forwarding to browsers;
 - unbounded file previews;
 - formal WCAG 2.2 AA release compliance.
+
+## 11. Next-level delivery and code maintenance
+
+The full plan is `planning/next-level/README.md`. Begin with a separately scoped maintainability increment, then implement configuration/contracts, real extension-pane detection/rendering, local worktree/companion setup, context reading/comments/paste, and source downloads. Full graphical review and previously deferred capabilities remain separately selectable stories with dependencies and tests.
+
+Keep this a personal tool that is easy to change in code. Prefer clear owning modules and small interfaces over a generic plugin/workflow framework. The cleanup plan names concrete seams and a code-tweaking guide; it must preserve current Herdr runtime behavior before feature additions.
