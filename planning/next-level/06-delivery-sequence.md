@@ -6,7 +6,7 @@ This is an implementation sequence for later work. The current task delivers pla
 
 ## Terminal stability and existing-code repairs first
 
-The user reports severe whole-view flicker during terminal redraw, including active agent output and `/pets`; images may amplify it but are not the only suspected trigger. [TERM-01/02](13-terminal-stability.md) now precedes the milestones below. The custom protocol-22 build and renderer are not an accepted stable baseline. Reproduce and compare compatible build pairs, then migrate to verified stable Herdr with retained mouse handling without changing the user’s running setup during planning. Re-probe downstream capabilities if the Herdr target changes.
+The user reports severe whole-view flicker during terminal redraw, including active agent output and `/pets`; images may amplify it but are not the only suspected trigger. [BOOT-01 then TERM-01/02](13-terminal-stability.md) now precedes the milestones below. The custom protocol-22 build and renderer are not an accepted stable baseline. Reproduce and compare compatible build pairs, then migrate to verified stable Herdr with retained mouse handling without changing the user’s running setup during planning. Re-probe downstream capabilities if the Herdr target changes.
 
 The [existing-code review](../../research/next-level-existing-code-review.md) also identifies ordering, sequence validation, input routing, attachment identity, and request-lifetime repairs. Capture them in CLEAN-01, fix them as separately reviewed correctness increments, and only then preserve the corrected behavior through extraction. Frontend ordering/input and Rust request/attachment work can proceed in separate lanes once shared protocol/renderer ownership is fixed.
 

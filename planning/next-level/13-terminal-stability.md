@@ -71,7 +71,7 @@ The Context GUI's Markdown/Mermaid/images remain required and are independent of
 
 Update current implementation records, schema fixtures, generated DTOs where necessary, startup capability messaging, and the real-runtime scripts. A `version` string alone is insufficient to distinguish the previously custom build from the selected stable binary.
 
-Exit: G04 probes use the selected stable target and all affected future stories reference the corrected capability contract. Later work does not silently reintroduce the protocol-22 requirement.
+Exit at S02: record stable capability/schema probe results and update affected future stories. Full G04 contracts and feature probes are implemented and accepted at S05; they are not prerequisites for completing S02. Later work does not silently reintroduce the protocol-22 requirement.
 
 ## Stability and scrolling acceptance
 

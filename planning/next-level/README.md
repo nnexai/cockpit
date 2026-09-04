@@ -6,6 +6,8 @@ Status: selected direction is detect-and-replace for real Herdr extension panes.
 
 The final implementation order and selected scope are authoritative in [15](15-execution-timeline.md), with measurable acceptance in [16](16-verification-goals.md). Stable Herdr is selected. The user downgrades before execution; BOOT-01 fixes frontend compatibility before runtime smoke, and the orchestrator protects its `default` session.
 
+Implementation entry point: [Astra orchestration handoff](../../IMPLEMENTATION_HANDOFF.md). It includes protected-session rules, Terra/Luna assignments, persistent execution state, and completion requirements.
+
 ## Start here
 
 1. [Architecture and shared contracts](01-architecture-and-contracts.md): authority, identities, configuration, transport, and storage boundaries.
