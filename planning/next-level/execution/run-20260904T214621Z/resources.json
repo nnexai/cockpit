@@ -341,6 +341,14 @@
       "id": "wP",
       "purpose": "native current startup event and application mouse red proof",
       "status": "running"
+    },
+    {
+      "kind": "Herdr workspace",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "id": "wQ",
+      "purpose": "application mouse enable, drag, Shift selection, disable and plain selection",
+      "status": "running"
     }
   ],
   "cleanup_outcomes": [],

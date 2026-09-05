@@ -151,7 +151,7 @@
     {
       "name": "ordered recovery, GUI input and fresh compatibility",
       "base_commit": "f16cb21",
-      "status": "verified_pending_commit",
+      "status": "verified",
       "checks": {
         "frontend_tests": 69,
         "workspace_tests": 108,
@@ -197,7 +197,8 @@
         "crates/cockpit-core/tests/status.rs": "e868dacaddbf79c1474192a77dc6aa8bc57066426b848c756620922902fa825a",
         "crates/cockpit-herdr/src/cli.rs": "86f0e56a722eea8019b7cea676049d5ff8e0c447c4fadc0fa789df3659125a6b",
         "crates/cockpit-herdr/tests/session.rs": "f58e7de2cede30c11f71ce8b11d03420399c4dee174647260206ae3f6e86e228"
-      }
+      },
+      "delivery_commit": "fe53b86"
     }
   ]
 }

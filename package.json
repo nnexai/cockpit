@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite",
+    "browser": "bun run build && cargo run -p cockpit-host --bin cockpit -- serve --bind 127.0.0.1:4173 --static-dir dist",
     "build": "tsc --noEmit && bunx --bun vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

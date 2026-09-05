@@ -25,6 +25,8 @@ The core depends on narrow adapter traits. Hosts compose concrete adapters; prov
 
 ## Development loop
 
+Run `bun run browser` to build the frontend and serve the browser app at `http://127.0.0.1:4173`. Extra server flags can be appended, for example `bun run browser --herdr-session my-session`. Run `bun run tauri:dev` for the native app.
+
 For a focused frontend change, run `bun run typecheck` and `bun run test -- <affected-test-file>`. For a Rust change, run the affected package/test filter. At an integration boundary:
 
 ```sh
