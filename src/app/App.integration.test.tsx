@@ -88,6 +88,8 @@ function panePresentation(sessionId: string, paneId: string, canOpenReview = fal
     roots: [{ root_id: "repository", kind: "repository", label: "Repository", path: "/repository", repository_id: "repository", checkout_path: "/repository", companion_id: null }],
     default_root_id: "repository",
     can_open_context: false,
+    can_open_files: false,
+    files_root_id: null,
     can_open_review: canOpenReview,
     diagnostics: [],
   };
@@ -291,7 +293,7 @@ describe("mounted App mutation and session ordering", () => {
 
     const overlay = container.querySelector<HTMLElement>(".command-overlay");
     const shortcuts = overlay?.querySelector<HTMLElement>(".shortcut-list");
-    expect(overlay?.querySelectorAll(".command-actions .session-command")).toHaveLength(7);
+    expect(overlay?.querySelectorAll(".command-actions .session-command")).toHaveLength(9);
     expect(shortcuts?.querySelectorAll(":scope > .shortcut-row")).toHaveLength(2);
     expect(button("Open Review right").disabled).toBe(true);
     expect(button("Open Review right").title).toBe("Review requires a configured repository");
@@ -315,6 +317,24 @@ describe("mounted App mutation and session ordering", () => {
     click(button("Open Review right"));
     await settle();
     expect(fixture.openReview).toHaveBeenCalledWith("session-1", { pane_id: "pane-1", binding_id: "binding-pane-1", repository_id: "repository", direction: "right" });
+  });
+
+  it("opens files from the Pane menu without a task companion", async () => {
+    const fixture = new AppFixture();
+    const presentation = panePresentation("session-1", "pane-1");
+    presentation.can_open_files = true;
+    presentation.files_root_id = "folder";
+    presentation.roots.push({ root_id: "folder", kind: "folder", label: "Files", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null });
+    fixture.setPanePresentation(presentation);
+    vi.mocked(fixture.client.openContext).mockResolvedValue(presentation);
+    await mount(fixture);
+    click(button("Pane"));
+    expect(button("Open files right").disabled).toBe(false);
+    expect(button("Open files below").disabled).toBe(false);
+    expect(button("Open Context right").disabled).toBe(true);
+    click(button("Open files right"));
+    await settle();
+    expect(fixture.client.openContext).toHaveBeenCalledWith("session-1", { pane_id: "pane-1", binding_id: "binding-pane-1", root_id: "folder", direction: "right" });
   });
 
   it("keeps Pane and Commands toolbar controls available for the selected single pane", async () => {

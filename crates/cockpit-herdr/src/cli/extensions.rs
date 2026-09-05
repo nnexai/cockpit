@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,7 @@ use cockpit_core::{
 use cockpit_protocol::context::{ContextSplitDirection, DetectionConfidence, ExtensionKind};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use super::{HerdrCliAdapter, object, optional_string, required_array, required_string};
@@ -31,6 +32,8 @@ const FILE_VIEWER_ID: &str = "herdr-file-viewer";
 const FILE_VIEWER_ENTRYPOINT: &str = "file-viewer";
 const REVIEWR_ID: &str = "persiyanov.reviewr";
 const REVIEWR_ENTRYPOINT: &str = "pane";
+const CONTEXT_GIT_OUTPUT_BYTES: usize = 64 * 1024;
+const CONTEXT_GIT_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 struct ManifestPane {
@@ -740,24 +743,33 @@ impl ExtensionHerdrAdapter {
                 "extension launch target changed before plugin open",
             ));
         }
+        if kind == ExtensionKind::Context {
+            let source_cwd =
+                optional_string(target_metadata, "foreground_cwd", "target pane metadata")?.or(
+                    optional_string(target_metadata, "cwd", "target pane metadata")?,
+                );
+            let source_matches = match source_cwd.as_deref() {
+                Some(cwd) => context_cwd_matches_approved(cwd, &request.cwd).await,
+                None => false,
+            };
+            if !source_matches {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "source pane cwd no longer resolves to the approved file-viewer root",
+                ));
+            }
+        }
         let direction = match request.direction {
             ContextSplitDirection::Right => "right",
             ContextSplitDirection::Down => "down",
         };
+        let parameters = plugin_open_parameters(request, plugin_id, entrypoint, direction, kind);
         let (result, _) = self
             .herdr
             .socket_request_with_identity(
                 session_id,
                 "plugin.pane.open",
-                json!({
-                    "plugin_id": plugin_id,
-                    "entrypoint": entrypoint,
-                    "placement": "split",
-                    "target_pane_id": request.pane_id,
-                    "direction": direction,
-                    "cwd": request.cwd,
-                    "focus": true,
-                }),
+                parameters,
                 Some(&endpoint_identity),
             )
             .await?;
@@ -812,13 +824,18 @@ impl ExtensionHerdrAdapter {
             required_string(opened_pane, "tab_id", "plugin pane").map_err(post_mutation_error)?;
         let opened_cwd =
             optional_string(opened_pane, "cwd", "plugin pane").map_err(post_mutation_error)?;
-        if !opened_cwd
-            .as_deref()
-            .is_some_and(|cwd| actual_cwd_matches(cwd, &request.cwd))
-        {
+        let opened_cwd_matches = match kind {
+            ExtensionKind::Context => opened_cwd.as_deref().is_some_and(|cwd| {
+                actual_cwd_matches(cwd, &manifest.plugin_root.to_string_lossy())
+            }),
+            ExtensionKind::Review => opened_cwd
+                .as_deref()
+                .is_some_and(|cwd| actual_cwd_matches(cwd, &request.cwd)),
+        };
+        if !opened_cwd_matches {
             return Err(post_mutation_error(InspectionError::new(
                 "launch_receipt_unverified",
-                "opened extension cwd does not match the authorized checkout",
+                "opened extension cwd does not match the installed plugin or authorized checkout",
             )));
         }
         let subsequent = self
@@ -851,29 +868,50 @@ impl ExtensionHerdrAdapter {
             .process_info(session_id, &pane_id, &endpoint_identity, &methods)
             .await
             .map_err(post_mutation_error)?;
-        let (process_identity, confidence, reason) = match process_evidence {
+        let (process_identity, confidence, reason, viewer_cwd) = match process_evidence {
             ProcessEvidence::Available(info) => {
-                let (identity, _) = self.classify_process(&info, manifest, pane).ok_or_else(|| {
+                let process = Self::matching_process(&info, manifest, pane).ok_or_else(|| {
                     post_mutation_error(InspectionError::new(
                         "launch_receipt_unverified",
                         "opened pane executable or process generation does not match the installed entrypoint",
                     ))
                 })?;
+                let (identity, _) = self.classify_process(&info, manifest, pane).expect("matched process is classifiable");
+                let viewer_cwd = if kind == ExtensionKind::Context {
+                    let viewer_cwd = viewer_context_from_process(process, &identity).ok_or_else(|| {
+                        post_mutation_error(InspectionError::new(
+                            "launch_receipt_unverified",
+                            "opened file viewer did not expose a verified plugin context",
+                        ))
+                    })?;
+                    if !context_cwd_matches_approved(&viewer_cwd, &request.cwd).await {
+                        return Err(post_mutation_error(InspectionError::new(
+                            "launch_receipt_unverified",
+                            "opened file viewer context does not resolve to the approved browsing root",
+                        )));
+                    }
+                    Some(viewer_cwd)
+                } else {
+                    None
+                };
                 (
                     identity,
                     DetectionConfidence::VerifiedLaunch,
                     "plugin launch receipt verified against the subsequent authoritative snapshot and process generation".to_owned(),
+                    viewer_cwd,
                 )
             }
             ProcessEvidence::SchemaAbsent => (
                 "process:unknown-generation".to_owned(),
                 DetectionConfidence::Candidate,
                 "plugin launch confirmed, but this endpoint does not expose process inspection; retaining a candidate receipt".to_owned(),
+                None,
             ),
             ProcessEvidence::Unavailable => (
                 "process:unknown-generation".to_owned(),
                 DetectionConfidence::Candidate,
                 "plugin launch confirmed, but live process evidence is temporarily unavailable; retaining a candidate receipt".to_owned(),
+                None,
             ),
         };
         let receipt = LaunchReceipt {
@@ -883,7 +921,7 @@ impl ExtensionHerdrAdapter {
             workspace_id: workspace_id.clone(),
             tab_id: tab_id.clone(),
             viewer_cwd: if kind == ExtensionKind::Context {
-                opened_cwd.clone()
+                viewer_cwd.clone()
             } else {
                 None
             },
@@ -904,13 +942,7 @@ impl ExtensionHerdrAdapter {
             cwd: opened_cwd,
             foreground_cwd: optional_string(opened_pane, "foreground_cwd", "plugin pane")
                 .map_err(post_mutation_error)?,
-            viewer_cwd: if kind == ExtensionKind::Context
-                && confidence == DetectionConfidence::VerifiedLaunch
-            {
-                Some(request.cwd.clone())
-            } else {
-                None
-            },
+            viewer_cwd,
             process_identity,
             extension: Some(kind),
             confidence,
@@ -950,12 +982,92 @@ impl ExtensionHerdrAdapterTrait for ExtensionHerdrAdapter {
     }
 }
 
+fn plugin_open_parameters(
+    request: &ExtensionLaunch,
+    plugin_id: &str,
+    entrypoint: &str,
+    direction: &str,
+    kind: ExtensionKind,
+) -> Value {
+    let mut parameters = json!({
+        "plugin_id": plugin_id,
+        "entrypoint": entrypoint,
+        "placement": "split",
+        "target_pane_id": request.pane_id,
+        "direction": direction,
+        "focus": true,
+    });
+    if kind == ExtensionKind::Review {
+        parameters["cwd"] = Value::String(request.cwd.clone());
+    }
+    parameters
+}
+
 fn actual_cwd_matches(observed: &str, approved: &str) -> bool {
     if !Path::new(observed).is_absolute() || !Path::new(approved).is_absolute() {
         return false;
     }
     canonical_or_original(Path::new(observed), None)
         == canonical_or_original(Path::new(approved), None)
+}
+
+async fn context_cwd_matches_approved(observed: &str, approved: &str) -> bool {
+    let Some(root) = context_root_for_cwd(observed).await else {
+        return false;
+    };
+    actual_cwd_matches(&root, approved)
+}
+
+async fn context_root_for_cwd(cwd: &str) -> Option<String> {
+    let cwd_path = Path::new(cwd);
+    if !cwd_path.is_absolute() || cwd.contains('\0') || git_metadata_path(cwd_path) {
+        return None;
+    }
+    let mut command = Command::new("git");
+    command
+        .current_dir(cwd_path)
+        .arg("--attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904")
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .args(["rev-parse", "--show-toplevel"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "");
+    let output = cockpit_core::process::run_bounded_command(
+        command,
+        CONTEXT_GIT_OUTPUT_BYTES,
+        CONTEXT_GIT_OUTPUT_BYTES,
+        CONTEXT_GIT_TIMEOUT,
+        "file_viewer_root_resolution",
+    )
+    .await
+    .ok()?;
+    if !output.status.success() {
+        return Some(cwd.to_owned());
+    }
+    let root = std::str::from_utf8(&output.stdout).ok()?.trim();
+    if root.is_empty() || root.lines().count() != 1 || root.chars().any(char::is_control) {
+        return None;
+    }
+    let root_path = Path::new(root);
+    if !root_path.is_absolute() || git_metadata_path(root_path) {
+        return None;
+    }
+    Some(root.to_owned())
+}
+
+fn git_metadata_path(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        Component::Normal(name) => name == ".git",
+        _ => false,
+    })
 }
 
 #[cfg(test)]
@@ -995,6 +1107,70 @@ mod tests {
             .is_none()
         );
     }
+
+    #[test]
+    fn context_launch_omits_cwd_while_review_keeps_the_authorized_checkout() {
+        let request = ExtensionLaunch {
+            endpoint_identity: "endpoint".to_owned(),
+            pane_id: "pane".to_owned(),
+            terminal_id: "terminal".to_owned(),
+            workspace_id: "workspace".to_owned(),
+            cwd: "/approved/root".to_owned(),
+            direction: ContextSplitDirection::Right,
+        };
+        let context = plugin_open_parameters(
+            &request,
+            FILE_VIEWER_ID,
+            FILE_VIEWER_ENTRYPOINT,
+            "right",
+            ExtensionKind::Context,
+        );
+        assert!(context.get("cwd").is_none());
+        assert!(context.get("workspace_id").is_none());
+        let review = plugin_open_parameters(
+            &request,
+            REVIEWR_ID,
+            REVIEWR_ENTRYPOINT,
+            "right",
+            ExtensionKind::Review,
+        );
+        assert_eq!(
+            review.get("cwd").and_then(Value::as_str),
+            Some("/approved/root")
+        );
+    }
+
+    #[tokio::test]
+    async fn context_root_uses_git_top_level_and_refuses_git_metadata() {
+        let unique = format!(
+            "cockpit-herdr-context-root-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let repository = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(repository.join("nested")).expect("fixture directory");
+        let init = std::process::Command::new("git")
+            .arg("init")
+            .arg(&repository)
+            .output()
+            .expect("git starts");
+        assert!(
+            init.status.success(),
+            "git init: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        assert_eq!(
+            context_root_for_cwd(repository.join("nested").to_str().expect("utf8 path")).await,
+            Some(repository.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            context_root_for_cwd(repository.join(".git").to_str().expect("utf8 path")).await,
+            None
+        );
+        std::fs::remove_dir_all(repository).expect("cleanup");
+    }
 }
 
 fn viewer_cwd_from_process(process: &ProcessRecord, process_identity: &str) -> Option<String> {
@@ -1017,6 +1193,32 @@ fn viewer_cwd_from_process(process: &ProcessRecord, process_identity: &str) -> O
             }
             PluginContextValue::ProcessCwdFallback => process.cwd.clone(),
             PluginContextValue::Unavailable => None,
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (process, process_identity);
+        None
+    }
+}
+
+fn viewer_context_from_process(process: &ProcessRecord, process_identity: &str) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let pid = i32::try_from(process.pid).ok()?;
+        let start_before = HerdrCliAdapter::process_start_identity(Some(pid))?;
+        let (_, expected_start) = process_identity.split_once(":start=")?;
+        if start_before != expected_start.parse::<u64>().ok()? {
+            return None;
+        }
+        let value = read_plugin_context_value(process.pid);
+        let start_after = HerdrCliAdapter::process_start_identity(Some(pid))?;
+        if start_before != start_after {
+            return None;
+        }
+        return match value {
+            PluginContextValue::Found(bytes) => parse_plugin_context(&bytes),
+            PluginContextValue::ProcessCwdFallback | PluginContextValue::Unavailable => None,
         };
     }
     #[cfg(not(target_os = "linux"))]

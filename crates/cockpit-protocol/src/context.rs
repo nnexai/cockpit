@@ -52,6 +52,12 @@ pub struct PanePresentation {
     pub reason: String,
     pub roots: Vec<ContextRoot>,
     pub default_root_id: Option<String>,
+    /// Installed file-viewer support can open a fresh, source-pane-derived
+    /// Folder root. This remains distinct from Cockpit companion Context.
+    pub can_open_files: bool,
+    /// The only Folder root accepted by `ContextLaunchRequest` when opening
+    /// files from the current source pane.
+    pub files_root_id: Option<String>,
     pub can_open_context: bool,
     /// Reviewr is installed/enabled at this endpoint and the current pane can
     /// launch it only from an authorized primary repository checkout.

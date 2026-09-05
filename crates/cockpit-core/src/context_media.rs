@@ -17,8 +17,8 @@ const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
 impl ContextService {
     /// Read one host-authorized, bounded raster image from the current Context
-    /// companion. This accepts no URL-like input and does not expose a path to
-    /// the browser.
+    /// companion or verified Folder root. This accepts no URL-like input and
+    /// does not expose a path to the browser.
     pub async fn media(
         &self,
         session_id: &str,
@@ -26,7 +26,7 @@ impl ContextService {
         request: &ContextMediaRequest,
     ) -> Result<ContextMedia, InspectionError> {
         let authorized = self
-            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
+            .authorize_media_root(session_id, pane_id, &request.binding_id, &request.root_id)
             .await?;
         let max_bytes = self.configuration.limits.context_preview_bytes as usize;
         read_media(authorized, request, max_bytes)

@@ -292,6 +292,32 @@ impl ContextService {
         Ok(authorized)
     }
 
+    /// Freshly authorize a file-viewer root for bounded media reads. Folder
+    /// roots are sourced only from verified viewer or source-pane evidence;
+    /// repository roots never grant this capability.
+    pub(crate) async fn authorize_media_root(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        binding_id: &str,
+        root_id: &str,
+    ) -> Result<AuthorizedRoot, InspectionError> {
+        let presentation = self.inspect_pane(session_id, pane_id).await?;
+        require_binding(&presentation, binding_id)?;
+        let mut authorized = find_root(&presentation.roots, root_id)?;
+        if !matches!(
+            authorized.root.kind,
+            ContextRootKind::Companion | ContextRootKind::Folder
+        ) {
+            return Err(InspectionError::new(
+                "context_root_not_media",
+                "bounded media reads are available only for companion or folder roots",
+            ));
+        }
+        authorized.max_depth = self.configuration.limits.context_tree_depth;
+        Ok(authorized)
+    }
+
     /// Materialize a freshly resolved local repository under this pane's
     /// currently authorized companion. The request never carries a filesystem
     /// path, so it cannot widen the Context root capability.
@@ -649,12 +675,6 @@ impl ContextService {
         }
         let presentation = self.presentation(session_id, &source).await?;
         require_binding(&presentation, &request.binding_id)?;
-        if !presentation.can_open_context {
-            return Err(InspectionError::new(
-                "context_open_unavailable",
-                "this pane is not at an authorized companion context",
-            ));
-        }
         let actual_cwd = evidence_cwd(&source).ok_or_else(|| {
             InspectionError::new(
                 "context_open_unavailable",
@@ -662,11 +682,34 @@ impl ContextService {
             )
         })?;
         let root = find_root(&presentation.roots, &request.root_id)?;
-        if root.root.kind != ContextRootKind::Companion || root.canonical != actual_cwd {
-            return Err(InspectionError::new(
-                "context_open_unavailable",
-                "Context must open from the source pane's exact companion root",
-            ));
+        match root.root.kind {
+            ContextRootKind::Companion
+                if presentation.can_open_context && root.canonical == actual_cwd => {}
+            ContextRootKind::Folder
+                if presentation.can_open_files
+                    && presentation.files_root_id.as_deref() == Some(request.root_id.as_str()) =>
+            {
+                let resolved = resolve_viewer_root(&self.configuration, &actual_cwd)
+                    .await
+                    .ok_or_else(|| {
+                        InspectionError::new(
+                            "context_open_unavailable",
+                            "the source pane cwd is unavailable or unsafe",
+                        )
+                    })?;
+                if root.canonical != resolved {
+                    return Err(InspectionError::new(
+                        "context_open_unavailable",
+                        "the source pane folder changed before files could open",
+                    ));
+                }
+            }
+            _ => {
+                return Err(InspectionError::new(
+                    "context_open_unavailable",
+                    "the requested root is not available from the current source pane",
+                ));
+            }
         }
         revalidate_root(&root.dir, &root.root.root_id)?;
         let launched = self
@@ -817,8 +860,14 @@ impl ContextService {
         session_id: &str,
         evidence: &ExtensionPaneEvidence,
     ) -> Result<PanePresentation, InspectionError> {
-        let (roots, diagnostics, viewer_companion_id, viewer_folder_id, current_repository_id) =
-            self.authorized_roots(session_id, evidence).await?;
+        let (
+            roots,
+            diagnostics,
+            viewer_companion_id,
+            viewer_folder_id,
+            files_root_id,
+            current_repository_id,
+        ) = self.authorized_roots(session_id, evidence).await?;
         let mut roots: Vec<_> = roots.into_values().collect();
         roots.sort_by_key(|root| {
             (
@@ -838,6 +887,7 @@ impl ContextService {
                         && Path::new(&root.root.path) == cwd.as_path()
                 })
             });
+        let can_open_files = evidence.can_open_context && files_root_id.is_some();
         let can_open_review = evidence.can_open_review
             && roots.iter().any(|root| {
                 matches!(
@@ -882,6 +932,9 @@ impl ContextService {
         if evidence.can_open_context && !can_open_context {
             reason.push_str("; Open Context requires a source pane at its companion directory");
         }
+        if evidence.can_open_context && !can_open_files {
+            reason.push_str("; Open files requires a safe source pane directory");
+        }
         if evidence.can_open_review && !can_open_review {
             reason.push_str(
                 "; Open Review requires an authorized repository or companion association",
@@ -898,6 +951,8 @@ impl ContextService {
             reason,
             roots: roots.into_iter().map(|root| root.root).collect(),
             default_root_id,
+            can_open_files,
+            files_root_id,
             can_open_context,
             can_open_review,
             diagnostics,
@@ -912,6 +967,7 @@ impl ContextService {
         (
             BTreeMap<String, AuthorizedRoot>,
             Vec<ProjectDiagnostic>,
+            Option<String>,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -988,6 +1044,13 @@ impl ContextService {
             .as_ref()
             .filter(|_| viewer_companion.is_none())
             .cloned();
+        let source_folder = if !evidence.can_open_context || verified_viewer {
+            None
+        } else if let Some(cwd) = actual_cwd.as_deref() {
+            resolve_viewer_root(&self.configuration, cwd).await
+        } else {
+            None
+        };
         // Ordinary file browsing does not require task/companion discovery.
         // A non-Git folder is normal, not a failed Context setup.
         if let Some(folder) = viewer_folder.as_ref() {
@@ -1012,6 +1075,7 @@ impl ContextService {
             .as_ref()
             .map(|(root_id, _)| root_id.clone());
         let mut viewer_folder_id = None;
+        let mut files_root_id = None;
         let mut roots = BTreeMap::new();
         for candidate in repositories {
             if viewer_folder.is_some() {
@@ -1061,7 +1125,10 @@ impl ContextService {
                 },
             );
         }
-        if let Some(path) = viewer_folder {
+        if let Some((path, is_viewer_folder)) = viewer_folder
+            .map(|path| (path, true))
+            .or_else(|| source_folder.map(|path| (path, false)))
+        {
             if let Ok((path, dir, metadata)) = canonical_directory(&path) {
                 let identity = filesystem_identity(&metadata);
                 let root_id = format!("folder:{identity}");
@@ -1089,7 +1156,11 @@ impl ContextService {
                         max_depth: self.configuration.limits.context_tree_depth,
                     },
                 );
-                viewer_folder_id = Some(root_id);
+                if is_viewer_folder {
+                    viewer_folder_id = Some(root_id);
+                } else {
+                    files_root_id = Some(root_id);
+                }
             }
         }
         if viewer_folder_id.is_none() {
@@ -1103,6 +1174,7 @@ impl ContextService {
             diagnostics,
             viewer_companion_id,
             viewer_folder_id,
+            files_root_id,
             current_repository_id,
         ))
     }
@@ -1610,6 +1682,9 @@ async fn resolve_verified_viewer_root(
 }
 
 async fn resolve_viewer_root(configuration: &ProjectConfiguration, cwd: &Path) -> Option<PathBuf> {
+    if git_metadata_path(cwd) {
+        return None;
+    }
     let dir = open_dir_nofollow_absolute(cwd).ok()?;
     if !dir.dir_metadata().ok()?.is_dir() {
         return None;
@@ -1649,8 +1724,18 @@ async fn resolve_viewer_root(configuration: &ProjectConfiguration, cwd: &Path) -
         return None;
     }
     let root = absolute_context_path(Path::new(text)).ok()?;
+    if git_metadata_path(&root) {
+        return None;
+    }
     let root_dir = open_dir_nofollow_absolute(&root).ok()?;
     root_dir.dir_metadata().ok()?.is_dir().then_some(root)
+}
+
+fn git_metadata_path(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        Component::Normal(name) => name == ".git",
+        _ => false,
+    })
 }
 fn canonical_directory(path: &Path) -> Result<(PathBuf, Dir, Metadata), InspectionError> {
     let absolute = absolute_context_path(path).map_err(|error| {
@@ -1921,7 +2006,7 @@ mod review_checkout_tests {
     use std::sync::Arc;
 
     use cockpit_protocol::{
-        context::ContextSplitDirection,
+        context::{ContextLaunchRequest, ContextSplitDirection},
         projects::{ProjectLimits, ProjectProvider},
         v1::{
             FocusRequest, FocusResponse, HerdrCompatibility, ResourceMutationRequest,
@@ -1942,6 +2027,7 @@ mod review_checkout_tests {
 
     struct TestAdapter {
         evidence: ExtensionPaneEvidence,
+        context_launches: Mutex<Vec<ExtensionLaunch>>,
         review_launches: Mutex<Vec<ExtensionLaunch>>,
     }
 
@@ -2054,9 +2140,10 @@ mod review_checkout_tests {
         async fn launch_context_pane(
             &self,
             _: &str,
-            _: &ExtensionLaunch,
+            request: &ExtensionLaunch,
         ) -> Result<ExtensionPaneEvidence, InspectionError> {
-            unavailable()
+            self.context_launches.lock().await.push(request.clone());
+            Ok(self.evidence.clone())
         }
         async fn launch_review_pane(
             &self,
@@ -2122,6 +2209,140 @@ mod review_checkout_tests {
     }
 
     #[tokio::test]
+    async fn opens_files_from_a_fresh_source_folder_root() {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-context-files-{}", Uuid::new_v4()));
+        let repository = workspace.join("repository");
+        git_fixture(&repository);
+        let source = repository.join("nested");
+        std::fs::create_dir(&source).expect("source directory");
+        let adapter = Arc::new(TestAdapter {
+            evidence: ExtensionPaneEvidence {
+                endpoint_identity: "endpoint".to_owned(),
+                pane_id: "pane".to_owned(),
+                terminal_id: "terminal".to_owned(),
+                workspace_id: String::new(),
+                tab_id: "tab".to_owned(),
+                cwd: Some(source.to_string_lossy().into_owned()),
+                foreground_cwd: Some(source.to_string_lossy().into_owned()),
+                viewer_cwd: None,
+                process_identity: "process".to_owned(),
+                extension: None,
+                confidence: DetectionConfidence::None,
+                reason: "fixture".to_owned(),
+                can_open_context: true,
+                can_open_review: false,
+            },
+            context_launches: Mutex::new(Vec::new()),
+            review_launches: Mutex::new(Vec::new()),
+        });
+        let configuration = configuration(&workspace);
+        let projects = Arc::new(
+            ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
+        );
+        let context = ContextService::new(configuration, adapter.clone(), projects);
+
+        let presentation = context
+            .inspect_pane("session", "pane")
+            .await
+            .expect("source presentation");
+        assert!(!presentation.can_open_context);
+        assert!(presentation.can_open_files);
+        let files_root_id = presentation
+            .files_root_id
+            .clone()
+            .expect("source folder root");
+        let files_root = presentation
+            .roots
+            .iter()
+            .find(|root| root.root_id == files_root_id)
+            .expect("files root");
+        assert_eq!(files_root.kind, ContextRootKind::Folder);
+        assert_eq!(files_root.path, repository.to_string_lossy());
+        assert!(
+            resolve_viewer_root(&context.configuration, &repository.join(".git"))
+                .await
+                .is_none(),
+            "Git metadata cannot become a Folder root"
+        );
+        assert_eq!(
+            presentation
+                .roots
+                .iter()
+                .find(|root| root.root_id == presentation.default_root_id.as_deref().unwrap())
+                .expect("default root")
+                .kind,
+            ContextRootKind::Repository,
+            "the original Context default root remains the repository"
+        );
+
+        let media_root = context
+            .authorize_media_root("session", "pane", &presentation.binding_id, &files_root_id)
+            .await
+            .expect("Folder root is authorized for bounded media reads");
+        assert_eq!(media_root.root.kind, ContextRootKind::Folder);
+        let repository_root_id = presentation
+            .roots
+            .iter()
+            .find(|root| root.kind == ContextRootKind::Repository)
+            .expect("repository root")
+            .root_id
+            .clone();
+        let media_error = match context
+            .authorize_media_root(
+                "session",
+                "pane",
+                &presentation.binding_id,
+                &repository_root_id,
+            )
+            .await
+        {
+            Ok(_) => panic!("Repository root cannot authorize media"),
+            Err(error) => error,
+        };
+        assert_eq!(media_error.code, "context_root_not_media");
+
+        context
+            .open(
+                "session",
+                &ContextLaunchRequest {
+                    pane_id: "pane".to_owned(),
+                    binding_id: presentation.binding_id.clone(),
+                    root_id: files_root_id.clone(),
+                    direction: ContextSplitDirection::Right,
+                },
+            )
+            .await
+            .expect("open files");
+        let launches = adapter.context_launches.lock().await;
+        assert_eq!(launches.len(), 1);
+        assert_eq!(launches[0].endpoint_identity, "endpoint");
+        assert_eq!(launches[0].pane_id, "pane");
+        assert_eq!(launches[0].terminal_id, "terminal");
+        assert_eq!(launches[0].cwd, repository.to_string_lossy());
+        drop(launches);
+
+        assert_eq!(
+            context
+                .open(
+                    "session",
+                    &ContextLaunchRequest {
+                        pane_id: "pane".to_owned(),
+                        binding_id: presentation.binding_id,
+                        root_id: repository_root_id,
+                        direction: ContextSplitDirection::Down,
+                    },
+                )
+                .await
+                .expect_err("repository root is not an Open files target")
+                .code,
+            "context_open_unavailable"
+        );
+        assert_eq!(adapter.context_launches.lock().await.len(), 1);
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
     async fn review_uses_the_foreground_nested_checkout_and_refuses_its_parent() {
         let workspace =
             std::env::temp_dir().join(format!("cockpit-context-review-{}", Uuid::new_v4()));
@@ -2148,6 +2369,7 @@ mod review_checkout_tests {
                 can_open_context: false,
                 can_open_review: true,
             },
+            context_launches: Mutex::new(Vec::new()),
             review_launches: Mutex::new(Vec::new()),
         });
         let configuration = configuration(&workspace);
@@ -2295,6 +2517,7 @@ mod review_checkout_tests {
                 can_open_context: false,
                 can_open_review: false,
             },
+            context_launches: Mutex::new(Vec::new()),
             review_launches: Mutex::new(Vec::new()),
         });
         let configuration = configuration(&catalog);
@@ -2450,6 +2673,7 @@ mod review_checkout_tests {
                 can_open_context: false,
                 can_open_review: false,
             },
+            context_launches: Mutex::new(Vec::new()),
             review_launches: Mutex::new(Vec::new()),
         });
         let configuration = configuration(&workspace);

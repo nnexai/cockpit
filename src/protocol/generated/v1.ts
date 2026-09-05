@@ -120,7 +120,17 @@ export type PanePresentation = { session_id: string, pane_id: string, terminal_i
 /**
  * Eligible automatic replacement, distinct from detected extension identity.
  */
-renderer: ExtensionKind | null, confidence: DetectionConfidence, reason: string, roots: Array<ContextRoot>, default_root_id: string | null, can_open_context: boolean,
+renderer: ExtensionKind | null, confidence: DetectionConfidence, reason: string, roots: Array<ContextRoot>, default_root_id: string | null,
+/**
+ * Installed file-viewer support can open a fresh, source-pane-derived
+ * Folder root. This remains distinct from Cockpit companion Context.
+ */
+can_open_files: boolean,
+/**
+ * The only Folder root accepted by `ContextLaunchRequest` when opening
+ * files from the current source pane.
+ */
+files_root_id: string | null, can_open_context: boolean,
 /**
  * Reviewr is installed/enabled at this endpoint and the current pane can
  * launch it only from an authorized primary repository checkout.

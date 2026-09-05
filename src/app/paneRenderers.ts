@@ -113,7 +113,7 @@ export function usePaneRenderers(
     });
   };
 
-  const open = async (paneId: string, direction: ContextSplitDirection, kind: "context" | "review" = "context") => {
+  const open = async (paneId: string, direction: ContextSplitDirection, kind: "context" | "review" | "files" = "context") => {
     if (!sessionId || !live || launching.current) return;
     const previous = panesRef.current[paneId];
     if (previous?.outcomeUnknown && !window.confirm("The previous launch outcome is unknown. Check the existing panes before opening another pane. Open another?")) return;
@@ -131,8 +131,11 @@ export function usePaneRenderers(
         if (!root || !presentation.can_open_review) throw new Error(presentation.reason || "Review requires an enabled Reviewr plugin and a Git checkout");
         await client.openReview(sessionId, { pane_id: paneId, binding_id: presentation.binding_id, repository_id: root.repository_id, direction });
       } else {
-        const root = presentation.roots.find(candidate => candidate.root_id === presentation.default_root_id);
-        if (!root || !presentation.can_open_context) throw new Error(presentation.reason || "Context requires an enabled file-viewer plugin and an authorized root");
+        const root = kind === "files"
+          ? presentation.roots.find(candidate => candidate.root_id === presentation.files_root_id)
+          : presentation.roots.find(candidate => candidate.root_id === presentation.default_root_id);
+        const available = kind === "files" ? presentation.can_open_files : presentation.can_open_context;
+        if (!root || !available) throw new Error(presentation.reason || "Files require an enabled file-viewer plugin and a verified browsing root");
         await client.openContext(sessionId, { pane_id: paneId, binding_id: presentation.binding_id, root_id: root.root_id, direction });
       }
       if (currentSession.current !== requestedSession) return;
