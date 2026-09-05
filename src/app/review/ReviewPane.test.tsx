@@ -180,3 +180,51 @@ it("starts previous hunk navigation at the last hunk and does not skip a missing
     expect(window.document.activeElement).toBe(host.querySelector('[data-new-line="1"]'));
   } finally { await act(async () => mounted.unmount()); host.remove(); }
 });
+
+it("waits for an explicit branch base submission without requesting blank or partial refs", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const load = vi.fn(async (_request: unknown, _signal?: AbortSignal) => snapshot);
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={load} file={async () => diff} />));
+    load.mockClear();
+    const mode = host.querySelector<HTMLSelectElement>("select")!;
+    await act(async () => { mode.value = "branch"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(load).not.toHaveBeenCalled();
+    expect(host.querySelector(".review-file")).toBeNull();
+    const input = host.querySelector<HTMLInputElement>(".review-base input")!;
+    input.focus();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "main");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(load).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(load).toHaveBeenCalledOnce();
+    expect(load.mock.calls[0][0]).toMatchObject({ comparison: "branch", base_ref: "main" });
+    const typeBase = async (value: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    let finish!: (value: ReviewSnapshot) => void;
+    load.mockImplementationOnce(() => new Promise<ReviewSnapshot>((resolve) => { finish = resolve; }));
+    await typeBase("release");
+    expect(host.querySelector(".review-file")).toBeNull();
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await typeBase("next");
+    await act(async () => finish(snapshot));
+    expect(host.querySelector(".review-file")).toBeNull();
+    await typeBase("");
+    await act(async () => { mode.value = "all_local"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    load.mockClear();
+    await act(async () => { mode.value = "branch"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(load).not.toHaveBeenCalled();
+    expect(host.querySelector(".review-file")).toBeNull();
+
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});

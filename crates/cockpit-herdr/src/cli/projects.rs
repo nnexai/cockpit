@@ -421,18 +421,7 @@ fn parse_worktree_removed(
             "worktree.remove returned an unexpected result",
         ));
     }
-    let worktree = object(
-        result.get("worktree").ok_or_else(|| {
-            InspectionError::new(
-                "malformed_worktree_response",
-                "removed worktree is required",
-            )
-        })?,
-        "worktree.remove result.worktree",
-    )?;
-    if required_string(worktree, "path", "worktree.remove result.worktree")?
-        != request.checkout_path
-    {
+    if required_string(result, "path", "worktree.remove result")? != request.checkout_path {
         return Err(InspectionError::new(
             "provenance_conflict",
             "worktree.remove returned a different checkout path",
@@ -743,6 +732,33 @@ mod tests {
             .unwrap(),
             "w1:t2"
         );
+    }
+
+    #[test]
+    fn parses_installed_worktree_removal_receipt() {
+        let request = ProjectWorktreeRemoveRequest {
+            endpoint_identity: "unix-socket:/tmp/herdr.sock:pid=1:uid=1:gid=1:start=1".into(),
+            workspace_id: "w2".into(),
+            checkout_path: "/task".into(),
+            force: false,
+        };
+        let result = json!({
+            "type": "worktree_removed",
+            "workspace_id": "w2",
+            "forced": false,
+            "path": "/task"
+        });
+
+        parse_worktree_removed(&result, &request).expect("installed Herdr removal receipt");
+        for (field, replacement) in [
+            ("workspace_id", json!("w3")),
+            ("path", json!("/another-task")),
+            ("forced", json!(true)),
+        ] {
+            let mut mismatched = result.clone();
+            mismatched[field] = replacement;
+            assert!(parse_worktree_removed(&mismatched, &request).is_err());
+        }
     }
 
     #[test]

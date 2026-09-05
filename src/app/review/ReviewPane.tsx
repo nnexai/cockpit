@@ -120,6 +120,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const baseId = useId();
   const [comparison, setComparison] = useState<ReviewComparison>("all_local");
   const [baseRef, setBaseRef] = useState("");
+  const [draftBaseRef, setDraftBaseRef] = useState("");
   const [review, setReview] = useState<ReviewSnapshot | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState<ReviewFileDiff | null>(null);
@@ -140,8 +141,15 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     abortRef.current = controller;
     const generation = generationRef.current + 1;
     generationRef.current = generation;
-    setPending(true);
     setError(null);
+    if (comparison === "branch" && !baseRef) {
+      setPending(false);
+      setReview(null);
+      setSelected(null);
+      setDiff(null);
+      return;
+    }
+    setPending(true);
     try {
       const next = await snapshot({ binding_id: bindingId, repository_id: repositoryId, comparison, base_ref: comparison === "branch" ? baseRef.trim() || null : null }, controller.signal);
       if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
@@ -156,6 +164,23 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       if (!controller.signal.aborted && generation === generationRef.current) setPending(false);
     }
   }, [baseRef, bindingId, comparison, identity, paneId, repositoryId, sessionId, snapshot]);
+
+  const editBaseRef = (value: string) => {
+    abortRef.current?.abort();
+    generationRef.current += 1;
+    setDraftBaseRef(value);
+    setBaseRef("");
+    setPending(false);
+    setReview(null);
+    setSelected(null);
+    setDiff(null);
+    setError(null);
+  };
+
+  const submitComparison = () => {
+    if (comparison === "branch" && draftBaseRef.trim() !== baseRef) setBaseRef(draftBaseRef.trim());
+    else void refresh();
+  };
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -292,7 +317,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         </section>)}
         {diff?.diagnostics.map((item, index) => <p key={`${item.code}-${index}`} className="review-notice">{item.message}</p>)}
         {diff && diff.hunks.length === 0 && !selectedFile?.binary ? <p className="review-empty">No textual hunk is available for this change.</p> : null}
-        {!review && !pending ? <p className="review-empty">Choose a verified Review pane to load a local Git snapshot.</p> : null}
+        {!review && !pending ? <p className="review-empty">{comparison === "branch" ? "Enter a base ref, then press Enter or Refresh to compare branches." : "Choose a verified Review pane to load a local Git snapshot."}</p> : null}
   </>;
 
   return <section className="review-pane" aria-label="Local review">
@@ -301,7 +326,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       <select id={`${baseId}-mode`} value={comparison} disabled={pending} onChange={(event) => setComparison(event.target.value as ReviewComparison)}>
         {modes.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
       </select>
-      {comparison === "branch" ? <label className="review-base" htmlFor={`${baseId}-base`}>Base ref <input id={`${baseId}-base`} value={baseRef} onChange={(event) => setBaseRef(event.target.value)} placeholder="main" disabled={pending} /></label> : null}
+      {comparison === "branch" ? <label className="review-base" htmlFor={`${baseId}-base`}>Base ref <input id={`${baseId}-base`} value={draftBaseRef} onChange={(event) => editBaseRef(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && draftBaseRef.trim()) { event.preventDefault(); submitComparison(); } }} placeholder="main" /></label> : null}
       <div className="review-nav" aria-label="Review navigation">
         <button type="button" aria-label="Previous file" title="Previous file (Alt+Left)" onClick={() => moveFile(-1)} disabled={!review?.files.length}>←</button>
         <button type="button" aria-label="Next file" title="Next file (Alt+Right)" onClick={() => moveFile(1)} disabled={!review?.files.length}>→</button>
@@ -309,7 +334,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         <button type="button" aria-label="Next hunk" title="Next hunk (Alt+Down)" onClick={() => moveHunk(1)} disabled={!diff?.hunks.length}>↓</button>
       </div>
       <span className="review-toolbar-spacer" />
-      <button type="button" onClick={() => void refresh()} disabled={pending || (comparison === "branch" && !baseRef.trim())}>{pending ? "Refreshing…" : "Refresh"}</button>
+      <button type="button" onClick={submitComparison} disabled={pending || (comparison === "branch" && !draftBaseRef.trim())}>{pending ? "Refreshing…" : "Refresh"}</button>
     </header>
     {error ? <p className="review-notice review-error" role="alert">{error}</p> : null}
     {diff?.truncated ? <p className="review-notice review-warning">This file reached the preview limit. Comments require an available complete source.</p> : null}
