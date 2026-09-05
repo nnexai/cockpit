@@ -1,3 +1,4 @@
+import type { CommentReviewRef, ExtensionKind } from "../../protocol/generated/v1";
 import { CommentPasteControls } from "./CommentPasteControls";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
@@ -25,7 +26,7 @@ const windowClientId = (() => {
   return `cockpit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 })();
 type CommentSelection = { start: number; end: number } | null;
-type NewDraftTarget = { rootId: string; path: string; revision: string; selection: CommentSelection };
+type NewDraftTarget = { review?: CommentReviewRef; rootId: string; path: string; revision: string; selection: CommentSelection };
 export type CommentDraftActions = {
   edit: (draft: CommentDraft) => void;
   remove: (draft: CommentDraft) => void;
@@ -44,6 +45,9 @@ type CommentDraftsProps = {
   children?: (drafts: CommentDraft[], actions: CommentDraftActions) => ReactNode;
   onCountChange?: (count: number) => void;
   invalidationGeneration?: number;
+  sourceIdentity?: string;
+  sourceKind?: ExtensionKind;
+  reviewCapture?: CommentReviewRef;
 };
 
 function errorText(error: unknown): string {
@@ -51,10 +55,6 @@ function errorText(error: unknown): string {
   if (typeof error === "string" && error) return error;
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
   return "The comments request could not be completed.";
-}
-
-function sourceId(root: ContextRoot): string | null {
-  return root.companion_id;
 }
 
 function draftAnchorLabel(anchor: CommentAnchor): string {
@@ -78,7 +78,8 @@ export function InlineCommentDrafts({ drafts, line, actions, rootId, path }: { d
   </article>)}</div>;
 }
 
-export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, onCountChange, invalidationGeneration = 0 }: CommentDraftsProps) {
+export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, onCountChange, invalidationGeneration = 0, sourceIdentity, sourceKind = "context", reviewCapture }: CommentDraftsProps) {
+  const currentSourceId = sourceIdentity ?? root.companion_id;
   const scope = useMemo<CommentRequestScope>(() => ({ binding_id: presentation.binding_id, client_id: windowClientId }), [presentation.binding_id]);
   const [batch, setBatch] = useState<CommentBatch | null>(null);
   const [batchList, setBatchList] = useState<CommentBatchList | null>(null);
@@ -89,7 +90,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const [editing, setEditing] = useState<CommentDraft | null>(null);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const identity = `${presentation.session_id}\u0000${presentation.pane_id}\u0000${presentation.binding_id}\u0000${root.root_id}\u0000${sourceId(root) ?? ""}`;
+  const identity = `${presentation.session_id}\u0000${presentation.pane_id}\u0000${presentation.binding_id}\u0000${root.root_id}\u0000${currentSourceId ?? ""}`;
   const [pending, setPending] = useState(false);
   const [preview, setPreview] = useState<CommentPreview | null>(null);
   const [retainedStale, setRetainedStale] = useState(false);
@@ -158,6 +159,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setEditor(editorState.editor);
     setText(editorState.text);
     setNewDraftTarget(editorState.draftId === null ? {
+      review: editorState.review,
       rootId: editorState.rootId,
       path: editorState.path,
       revision: editorState.revision,
@@ -189,6 +191,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const actions = useMemo<CommentDraftActions>(() => ({
     edit: (draft) => {
       const nextEditorState: ContextCommentEditorState = {
+        review: draft.file_ref.review,
         rootId: draft.file_ref.root_id,
         path: draft.file_ref.path,
         revision: draft.file_ref.revision,
@@ -213,8 +216,9 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     : null;
 
   const beginNew = (kind: "whole_file" | "lines") => {
-    if (!document || document.text === null || !sourceId(root) || !path || (kind === "lines" && !selectedRange)) return;
+    if (!document || document.text === null || !currentSourceId || !path || (kind === "lines" && !selectedRange)) return;
     const nextEditorState: ContextCommentEditorState = {
+      review: reviewCapture,
       rootId: root.root_id,
       path,
       revision: document.revision,
@@ -224,7 +228,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
       selection: selectedRange,
     };
     setEditing(null);
-    setNewDraftTarget({ rootId: root.root_id, path, revision: document.revision, selection: selectedRange });
+    setNewDraftTarget({ review: reviewCapture, rootId: root.root_id, path, revision: document.revision, selection: selectedRange });
     setText("");
     setEditor(kind);
     onEditorStateChange(nextEditorState);
@@ -232,12 +236,22 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setError(null);
   };
 
+  const staleReviewEditor = Boolean(editorState && editorState.draftId === null && editorState.review && (
+    editorState.review.review_id !== reviewCapture?.review_id || editorState.review.generation !== reviewCapture?.generation ||
+    editorState.review.file_id !== reviewCapture?.file_id || editorState.review.side !== reviewCapture?.side));
+  const recaptureEditor = () => {
+    if (!editorState || !document || document.text === null || document.truncated || !reviewCapture) return;
+    if (editorState.editor === "lines" && !selection) return;
+    onEditorStateChange({ ...editorState, review: reviewCapture, rootId: root.root_id, path,
+      revision: document.revision, selection: editorState.editor === "lines" ? selection : null });
+  };
+
   const saveDraft = async () => {
-    if (!batch || !editor || pending) return;
-    if (!editing && (!newDraftTarget || !sourceId(root))) return;
+    if (!batch || !editor || pending || staleReviewEditor) return;
+    if (!editing && (!newDraftTarget || !currentSourceId)) return;
     if (!text.trim()) { setError("Enter a comment before saving."); return; }
     if (!editing && editor === "lines" && !newDraftTarget?.selection) { setError("Select a contiguous source range first."); return; }
-    const capture: CommentCapture | null = editing ? null : { root_id: newDraftTarget!.rootId, path: newDraftTarget!.path, expected_revision: newDraftTarget!.revision, start_line: editor === "lines" ? newDraftTarget!.selection!.start : null, end_line: editor === "lines" ? newDraftTarget!.selection!.end : null };
+    const capture: CommentCapture | null = editing ? null : { ...(newDraftTarget!.review ? { review: newDraftTarget!.review } : {}), root_id: newDraftTarget!.rootId, path: newDraftTarget!.path, expected_revision: newDraftTarget!.revision, start_line: editor === "lines" ? newDraftTarget!.selection!.start : null, end_line: editor === "lines" ? newDraftTarget!.selection!.end : null };
     const generation = ++generationRef.current;
     setPending(true); setError(null);
     try {
@@ -268,7 +282,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   };
 
   const attach = async () => {
-    if (!batch || pending || !sourceId(root)) return;
+    if (!batch || pending || !currentSourceId) return;
     const generation = ++generationRef.current;
     setPending(true); setError(null);
     try {
@@ -306,10 +320,10 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   };
 
   const currentDrafts = batch?.drafts ?? [];
-  const fileDrafts = currentDrafts.filter((draft) => draft.file_ref.root_id === root.root_id && draft.file_ref.path === path);
+  const fileDrafts = currentDrafts.filter((draft) => draft.file_ref.root_id === root.root_id && draft.file_ref.path === path && (sourceKind !== "review" || (draft.file_ref.review?.file_id === reviewCapture?.file_id && draft.file_ref.review?.side === reviewCapture?.side)));
   const fileBottomDrafts = fileDrafts.filter((draft) => mode === "markdown" || draft.anchor.kind === "whole_file" || stale(draft));
   const detached = batch?.live_attachment === null;
-  const sameSource = Boolean(batch && batch.owner.source_kind === "context" && batch.owner.source_id === sourceId(root));
+  const sameSource = Boolean(batch && batch.owner.source_kind === sourceKind && batch.owner.source_id === currentSourceId);
   const content = children ? children(currentDrafts, actions) : null;
   const editorSelection = editing?.anchor.kind === "lines"
     ? { start: editing.anchor.start_line, end: editing.anchor.end_line }
@@ -320,11 +334,11 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const recreateFromCurrentSource = () => {
     if (!document || document.text === null || !path || !editor || (editor === "lines" && !selectedRange)) return;
     const next: ContextCommentEditorState = {
-      rootId: root.root_id, path, revision: document.revision, draftId: null,
+      review: reviewCapture, rootId: root.root_id, path, revision: document.revision, draftId: null,
       editor, text, selection: editor === "lines" ? selectedRange : null,
     };
     setEditing(null);
-    setNewDraftTarget({ rootId: next.rootId, path, revision: next.revision, selection: next.selection });
+    setNewDraftTarget({ review: next.review, rootId: next.rootId, path, revision: next.revision, selection: next.selection });
     onEditorStateChange(next);
     setError(null);
   };
@@ -332,8 +346,8 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   return <>
     <div className="comment-toolbar" aria-label="Reference comments">
       <button type="button" className="comment-count" onClick={() => void openOverview()} disabled={pending || loading} aria-label={`${currentDrafts.length} comments, open overview`}>{currentDrafts.length} comments</button>
-      <button type="button" onClick={() => beginNew("whole_file")} disabled={!batch || loading || !sourceId(root) || document?.text === null || document?.text === undefined || !path || pending}>Comment whole file</button>
-      <button type="button" onClick={() => beginNew("lines")} disabled={!batch || loading || !selectedRange || !sourceId(root) || pending}>Comment selected lines</button>
+      <button type="button" onClick={() => beginNew("whole_file")} disabled={!batch || loading || !currentSourceId || document?.text === null || document?.text === undefined || !path || pending}>Comment whole file</button>
+      <button type="button" onClick={() => beginNew("lines")} disabled={!batch || loading || !selectedRange || !currentSourceId || pending}>Comment selected lines</button>
       {detached ? <span className="comment-detached" role="status">Detached recovery</span> : null}
     </div>
     {error ? <div className="comment-notice comment-notice-error" role="alert"><strong>Comments not saved</strong><span>{error}</span><button type="button" onClick={() => void loadBatch(batch?.batch_id ?? null)}>Reload</button></div> : null}
@@ -341,7 +355,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     {content}
     {removedEditorDraft ? <div className="comment-notice" role="status"><span>This comment was deleted in another window. Your unsaved text is retained. Select a file{editor === "lines" ? " and source lines" : ""} to create a new comment.</span><button type="button" onClick={recreateFromCurrentSource} disabled={!document || document.text === null || !path || (editor === "lines" && !selectedRange)}>Use current source</button></div> : null}
     {fileBottomDrafts.length > 0 ? <section className={`comment-file-drafts${mode === "markdown" ? " comment-markdown-drafts" : ""}`} aria-label={`Comments for ${path}`}><h3>{mode === "markdown" ? "File comments" : "File comments"}</h3>{fileBottomDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{draftAnchorLabel(draft.anchor)}</strong><span>{draft.source_state}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</section> : null}
-    {editor ? <section className="comment-editor" aria-label={editing ? "Edit comment" : "New comment"}><h3>{editing ? `Edit ${draftAnchorLabel(editing.anchor).toLowerCase()}` : editor === "whole_file" ? "Comment on whole file" : editorSelection ? `Comment on lines ${editorSelection.start}–${editorSelection.end}` : "Comment on selected lines"}{editorPath && editorPath !== path ? ` · ${editorPath}` : ""}</h3><textarea value={text} onChange={(event) => { const nextText = event.target.value; setText(nextText); if (editorState) onEditorStateChange({ ...editorState, text: nextText }); }} rows={4} maxLength={8192} autoFocus aria-label="Comment text" placeholder="Describe what should be changed…" /><div className="comment-editor-actions"><button type="button" onClick={clearEditor}>Cancel</button><button type="button" onClick={() => void saveDraft()} disabled={pending || removedEditorDraft || !text.trim()}>{pending ? "Saving…" : "Save comment"}</button></div></section> : null}
-    {overviewOpen ? <div className="comment-overview-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setOverviewOpen(false); }}><section className="comment-overview" role="dialog" aria-modal="true" aria-labelledby="comment-overview-title"><header><h2 id="comment-overview-title">Comments</h2><button type="button" aria-label="Close comments overview" onClick={() => setOverviewOpen(false)}>Close</button></header>{batchList?.batches.length ? <div className="comment-recovery-list"><h3>Saved batches</h3>{batchList.batches.map((summary) => <button type="button" className="comment-recovery-row" key={summary.batch_id} onClick={() => { setOverviewOpen(false); switchBatch(summary.batch_id); }}><span>{summary.draft_count} comments</span><code>{summary.batch_id}</code><small>generation {summary.generation} · {summary.updated_at}</small></button>)}</div> : null}{batch && detached ? <div className="comment-recovery"><strong>Detached batch</strong><span>Reattach only after confirming this Context source.</span><button type="button" onClick={() => void attach()} disabled={pending || !sameSource}>Reattach to this source</button></div> : null}<div className="comment-overview-list"><h3>Current batch</h3>{currentDrafts.length === 0 ? <p>No comments yet.</p> : currentDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{sourceLabel(draft)}</strong><span>{draftAnchorLabel(draft.anchor)} · {draft.source_state}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</div><div className="comment-preview"><div className="comment-preview-heading"><h3>Preview</h3><div><button type="button" onClick={() => void makePreview(false)} disabled={pending}>Refresh preview</button><button type="button" onClick={() => void makePreview(true)} disabled={pending}>Include stale excerpts</button></div></div>{preview ? <><div className="comment-preview-meta"><span>{preview.payload_bytes} payload bytes</span><span>{preview.framed_bytes} framed bytes</span><span>{preview.sanitized_controls} controls sanitized</span><span>{preview.exportable ? "Exportable" : "Not exportable"}</span></div>{preview.reason ? <span className="comment-preview-reason">{preview.reason}</span> : null}<textarea readOnly value={preview.payload} rows={10} aria-label="Comment preview" />{preview.stale_draft_ids.length > 0 ? <span className="comment-preview-blocked">{preview.stale_draft_ids.length} stale comment{preview.stale_draft_ids.length === 1 ? "" : "s"} marked in the file.</span> : null}{preview.exportable && retainedStale ? <span className="comment-preview-ok">Stale excerpts retained explicitly.</span> : null}</> : <span className="comment-preview-meta">No preview generated.</span>}</div>{batch ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onAccepted={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}</section></div> : null}
+    {editor ? <section className="comment-editor" aria-label={editing ? "Edit comment" : "New comment"}><h3>{editing ? `Edit ${draftAnchorLabel(editing.anchor).toLowerCase()}` : editor === "whole_file" ? "Comment on whole file" : editorSelection ? `Comment on lines ${editorSelection.start}–${editorSelection.end}` : "Comment on selected lines"}{editorPath && editorPath !== path ? ` · ${editorPath}` : ""}</h3>{staleReviewEditor ? <p role="status">The displayed review source changed. Your text is retained. Select the intended source lines again before using the current source.<button type="button" onClick={recaptureEditor} disabled={!document?.text || document.truncated || (editor === "lines" && !selection)}>Use current source</button></p> : null}<textarea value={text} onChange={(event) => { const nextText = event.target.value; setText(nextText); if (editorState) onEditorStateChange({ ...editorState, text: nextText }); }} rows={4} maxLength={8192} autoFocus aria-label="Comment text" placeholder="Describe what should be changed…" /><div className="comment-editor-actions"><button type="button" onClick={clearEditor}>Cancel</button><button type="button" onClick={() => void saveDraft()} disabled={pending || staleReviewEditor || removedEditorDraft || !text.trim()}>{pending ? "Saving…" : "Save comment"}</button></div></section> : null}
+    {overviewOpen ? <div className="comment-overview-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setOverviewOpen(false); }}><section className="comment-overview" role="dialog" aria-modal="true" aria-labelledby="comment-overview-title"><header><h2 id="comment-overview-title">Comments</h2><button type="button" aria-label="Close comments overview" onClick={() => setOverviewOpen(false)}>Close</button></header>{batchList?.batches.length ? <div className="comment-recovery-list"><h3>Saved batches</h3>{batchList.batches.map((summary) => <button type="button" className="comment-recovery-row" key={summary.batch_id} onClick={() => { setOverviewOpen(false); switchBatch(summary.batch_id); }}><span>{summary.draft_count} comments</span><code>{summary.batch_id}</code><small>generation {summary.generation} · {summary.updated_at}</small></button>)}</div> : null}{batch && detached ? <div className="comment-recovery"><strong>Detached batch</strong><span>Reattach only after confirming this {sourceKind === "review" ? "Review" : "Context"} source.</span><button type="button" onClick={() => void attach()} disabled={pending || !sameSource}>Reattach to this source</button></div> : null}<div className="comment-overview-list"><h3>Current batch</h3>{currentDrafts.length === 0 ? <p>No comments yet.</p> : currentDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{sourceLabel(draft)}</strong><span>{draftAnchorLabel(draft.anchor)} · {draft.source_state}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</div><div className="comment-preview"><div className="comment-preview-heading"><h3>Preview</h3><div><button type="button" onClick={() => void makePreview(false)} disabled={pending}>Refresh preview</button><button type="button" onClick={() => void makePreview(true)} disabled={pending}>Include stale excerpts</button></div></div>{preview ? <><div className="comment-preview-meta"><span>{preview.payload_bytes} payload bytes</span><span>{preview.framed_bytes} framed bytes</span><span>{preview.sanitized_controls} controls sanitized</span><span>{preview.exportable ? "Exportable" : "Not exportable"}</span></div>{preview.reason ? <span className="comment-preview-reason">{preview.reason}</span> : null}<textarea readOnly value={preview.payload} rows={10} aria-label="Comment preview" />{preview.stale_draft_ids.length > 0 ? <span className="comment-preview-blocked">{preview.stale_draft_ids.length} stale comment{preview.stale_draft_ids.length === 1 ? "" : "s"} marked in the file.</span> : null}{preview.exportable && retainedStale ? <span className="comment-preview-ok">Stale excerpts retained explicitly.</span> : null}</> : <span className="comment-preview-meta">No preview generated.</span>}</div>{batch ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onAccepted={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}</section></div> : null}
   </>;
 }

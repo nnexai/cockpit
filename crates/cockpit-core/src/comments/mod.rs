@@ -16,17 +16,37 @@ use cockpit_protocol::context::{ContextDocumentRequest, ExtensionKind};
 use cockpit_protocol::projects::ProjectConfiguration;
 use uuid::Uuid;
 
-use crate::context::{ContextCommentEvidence, ContextService};
-use crate::paste_adapter::CommentPasteAdapter;
 use crate::InspectionError;
+use crate::context::ContextService;
+use crate::paste_adapter::CommentPasteAdapter;
 use crate::project_store::timestamp;
 
 use self::format::{capture_lines, format_batch};
-use self::store::CommentStore;
 use self::paste::PasteStore;
+use self::store::CommentStore;
 
 const MAX_DRAFTS: usize = 64;
 const MAX_COMMENT_BYTES: usize = 8 * 1024;
+
+struct CommentEvidence {
+    binding_id: String,
+    terminal_id: String,
+    workspace_id: String,
+    tab_id: String,
+    root_id: String,
+    companion_id: String,
+    companion_path: String,
+    source_kind: ExtensionKind,
+}
+
+struct CapturedDocument {
+    root_id: String,
+    path: String,
+    revision: String,
+    content_hash: Option<String>,
+    text: Option<String>,
+    truncated: bool,
+}
 
 #[derive(Clone)]
 pub struct CommentsService {
@@ -34,6 +54,7 @@ pub struct CommentsService {
     paste_store: PasteStore,
     context: Arc<ContextService>,
     paste_adapter: Option<Arc<dyn CommentPasteAdapter>>,
+    reviews: Option<Arc<crate::review::ReviewService>>,
 }
 
 impl CommentsService {
@@ -47,7 +68,13 @@ impl CommentsService {
             paste_store: PasteStore::new(&root)?,
             context,
             paste_adapter: None,
+            reviews: None,
         })
+    }
+
+    pub fn with_reviews(mut self, reviews: Arc<crate::review::ReviewService>) -> Self {
+        self.reviews = Some(reviews);
+        self
     }
 
     /// Add the separately capability-gated raw-byte paste adapter.
@@ -106,11 +133,9 @@ impl CommentsService {
             }
             return Ok(empty_batch(&attachment));
         };
-        let mut batch = self
-            .store
-            .load(batch_id)
-            .await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        let mut batch = self.store.load(batch_id).await?.ok_or_else(|| {
+            InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+        })?;
         if same_attachment(&batch, &attachment, &evidence) {
             batch.live_attachment = Some(attachment);
             self.refresh_states(&mut batch, &evidence).await;
@@ -128,14 +153,23 @@ impl CommentsService {
         request: &CommentUpsertRequest,
     ) -> Result<CommentBatch, InspectionError> {
         validate_comment_text(&request.comment_text)?;
-        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let (attachment, evidence) = self
+            .attachment(session_id, pane_id, &request.batch.scope)
+            .await?;
         let mut batch = match self.store.load(&request.batch.batch_id).await? {
             Some(batch) => {
                 require_owner(&batch, &attachment, &evidence)?;
                 batch
             }
-            None if request.batch.expected_generation == 0 => empty_batch_with_id(&attachment, &request.batch.batch_id),
-            None => return Err(InspectionError::new("comments_batch_not_found", "comment batch does not exist")),
+            None if request.batch.expected_generation == 0 => {
+                empty_batch_with_id(&attachment, &request.batch.batch_id)
+            }
+            None => {
+                return Err(InspectionError::new(
+                    "comments_batch_not_found",
+                    "comment batch does not exist",
+                ));
+            }
         };
         if batch.generation != request.batch.expected_generation {
             return Err(InspectionError::new(
@@ -155,7 +189,12 @@ impl CommentsService {
                     .drafts
                     .iter_mut()
                     .find(|draft| draft.draft_id == draft_id)
-                    .ok_or_else(|| InspectionError::new("comments_draft_not_found", "comment draft does not exist"))?;
+                    .ok_or_else(|| {
+                        InspectionError::new(
+                            "comments_draft_not_found",
+                            "comment draft does not exist",
+                        )
+                    })?;
                 // An edit changes only prose; its captured source is immutable.
                 draft.comment_text = request.comment_text.clone();
                 draft.updated_at = timestamp();
@@ -168,7 +207,10 @@ impl CommentsService {
                     ));
                 }
                 let capture = request.capture.as_ref().ok_or_else(|| {
-                    InspectionError::new("comments_capture_required", "new drafts require a source capture")
+                    InspectionError::new(
+                        "comments_capture_required",
+                        "new drafts require a source capture",
+                    )
                 })?;
                 let draft = self
                     .capture_draft(
@@ -196,12 +238,16 @@ impl CommentsService {
         pane_id: &str,
         request: &CommentRemoveRequest,
     ) -> Result<CommentBatch, InspectionError> {
-        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let (attachment, evidence) = self
+            .attachment(session_id, pane_id, &request.batch.scope)
+            .await?;
         let mut batch = self
             .store
             .load(&request.batch.batch_id)
             .await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+            .ok_or_else(|| {
+                InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+            })?;
         require_owner(&batch, &attachment, &evidence)?;
         if batch.generation != request.batch.expected_generation {
             return Err(InspectionError::new(
@@ -210,9 +256,14 @@ impl CommentsService {
             ));
         }
         let before = batch.drafts.len();
-        batch.drafts.retain(|draft| draft.draft_id != request.draft_id);
+        batch
+            .drafts
+            .retain(|draft| draft.draft_id != request.draft_id);
         if batch.drafts.len() == before {
-            return Err(InspectionError::new("comments_draft_not_found", "comment draft does not exist"));
+            return Err(InspectionError::new(
+                "comments_draft_not_found",
+                "comment draft does not exist",
+            ));
         }
         self.refresh_states(&mut batch, &evidence).await;
         let committed = self
@@ -229,12 +280,10 @@ impl CommentsService {
         request: &CommentBatchMutation,
     ) -> Result<CommentBatch, InspectionError> {
         let (attachment, evidence) = self.attachment(session_id, pane_id, &request.scope).await?;
-        let mut batch = self
-            .store
-            .load(&request.batch_id)
-            .await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
-        if batch.owner.source_kind != ExtensionKind::Context
+        let mut batch = self.store.load(&request.batch_id).await?.ok_or_else(|| {
+            InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+        })?;
+        if batch.owner.source_kind != attachment.owner.source_kind
             || batch.owner.source_id != attachment.owner.source_id
             || !captured_roots_match(&batch, &evidence)
         {
@@ -252,7 +301,10 @@ impl CommentsService {
         batch.owner = attachment.owner.clone();
         batch.last_known_location = attachment.location.clone();
         self.refresh_states(&mut batch, &evidence).await;
-        let committed = self.store.commit(batch, request.expected_generation).await?;
+        let committed = self
+            .store
+            .commit(batch, request.expected_generation)
+            .await?;
         Ok(with_attachment(committed, attachment))
     }
 
@@ -262,12 +314,16 @@ impl CommentsService {
         pane_id: &str,
         request: &CommentPreviewRequest,
     ) -> Result<CommentPreview, InspectionError> {
-        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let (attachment, evidence) = self
+            .attachment(session_id, pane_id, &request.batch.scope)
+            .await?;
         let mut batch = self
             .store
             .load(&request.batch.batch_id)
             .await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+            .ok_or_else(|| {
+                InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+            })?;
         require_owner(&batch, &attachment, &evidence)?;
         if batch.generation != request.batch.expected_generation {
             return Err(InspectionError::new(
@@ -302,19 +358,52 @@ impl CommentsService {
         session_id: &str,
         pane_id: &str,
         scope: &CommentRequestScope,
-    ) -> Result<(CommentAttachment, ContextCommentEvidence), InspectionError> {
+    ) -> Result<(CommentAttachment, CommentEvidence), InspectionError> {
         if scope.binding_id.is_empty() || scope.client_id.is_empty() {
-            return Err(InspectionError::new("comments_invalid_scope", "comment scope is incomplete"));
+            return Err(InspectionError::new(
+                "comments_invalid_scope",
+                "comment scope is incomplete",
+            ));
         }
-        let evidence = self
-            .context
-            .comment_evidence(session_id, pane_id, &scope.binding_id)
-            .await?;
+        let presentation = self.context.inspect_pane(session_id, pane_id).await?;
+        let evidence = if presentation.renderer == Some(ExtensionKind::Review) {
+            let review = self.reviews.as_ref().ok_or_else(|| {
+                InspectionError::new("review_unavailable", "Review comments are not configured")
+            })?;
+            let value = review
+                .comment_evidence(session_id, pane_id, &scope.binding_id)
+                .await?;
+            CommentEvidence {
+                binding_id: value.binding_id,
+                terminal_id: value.terminal_id,
+                workspace_id: value.workspace_id,
+                tab_id: value.tab_id,
+                root_id: value.source_id.clone(),
+                companion_id: value.source_id,
+                companion_path: value.checkout_path,
+                source_kind: ExtensionKind::Review,
+            }
+        } else {
+            let value = self
+                .context
+                .comment_evidence(session_id, pane_id, &scope.binding_id)
+                .await?;
+            CommentEvidence {
+                binding_id: value.binding_id,
+                terminal_id: value.terminal_id,
+                workspace_id: value.workspace_id,
+                tab_id: value.tab_id,
+                root_id: value.root_id,
+                companion_id: value.companion_id,
+                companion_path: value.companion_path,
+                source_kind: ExtensionKind::Context,
+            }
+        };
         let owner = CommentOwner {
             session_id: session_id.to_owned(),
             pane_id: pane_id.to_owned(),
             terminal_id: evidence.terminal_id.clone(),
-            source_kind: ExtensionKind::Context,
+            source_kind: evidence.source_kind,
             source_id: evidence.companion_id.clone(),
         };
         let attachment = CommentAttachment {
@@ -334,7 +423,7 @@ impl CommentsService {
         pane_id: &str,
         capture: &CommentCapture,
         comment_text: &str,
-        evidence: &ContextCommentEvidence,
+        evidence: &CommentEvidence,
     ) -> Result<CommentDraft, InspectionError> {
         if capture.root_id != evidence.root_id {
             return Err(InspectionError::new(
@@ -342,28 +431,82 @@ impl CommentsService {
                 "capture root is not the currently verified Context companion",
             ));
         }
-        let document = self
-            .context
-            .document(
-                session_id,
-                pane_id,
-                &ContextDocumentRequest {
-                    binding_id: evidence.binding_id.clone(),
-                    root_id: evidence.root_id.clone(),
-                    path: capture.path.clone(),
-                    expected_revision: Some(capture.expected_revision.clone()),
-                },
-            )
-            .await
-            .map_err(|error| {
-                if error.code == "context_stale_revision"
-                    || error.code == "context_changed_during_read"
-                {
-                    InspectionError::new("comments_stale_source", error.message)
-                } else {
-                    InspectionError::new("comments_capture_unavailable", error.message)
-                }
+        let document = if evidence.source_kind == ExtensionKind::Review {
+            let reference = capture.review.as_ref().ok_or_else(|| {
+                InspectionError::new(
+                    "comments_capture_required",
+                    "Review capture needs an immutable snapshot and side",
+                )
             })?;
+            let review = self.reviews.as_ref().ok_or_else(|| {
+                InspectionError::new("review_unavailable", "Review comments are not configured")
+            })?;
+            let value = review
+                .capture(
+                    session_id,
+                    pane_id,
+                    &evidence.binding_id,
+                    &reference.review_id,
+                    reference.generation,
+                    &reference.file_id,
+                    reference.side,
+                )
+                .await?;
+            if value.source_id != evidence.root_id
+                || value.path != capture.path
+                || value.revision != capture.expected_revision
+            {
+                return Err(InspectionError::new(
+                    "comments_stale_source",
+                    "Review source identity does not match the captured side",
+                ));
+            }
+            CapturedDocument {
+                root_id: value.source_id,
+                path: value.path,
+                revision: value.revision,
+                content_hash: Some(value.content_hash),
+                text: Some(value.text),
+                truncated: false,
+            }
+        } else {
+            if capture.review.is_some() {
+                return Err(InspectionError::new(
+                    "comments_source_mismatch",
+                    "Context capture cannot carry a Review anchor",
+                ));
+            }
+            let value = self
+                .context
+                .document(
+                    session_id,
+                    pane_id,
+                    &ContextDocumentRequest {
+                        binding_id: evidence.binding_id.clone(),
+                        root_id: evidence.root_id.clone(),
+                        path: capture.path.clone(),
+                        expected_revision: Some(capture.expected_revision.clone()),
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    if error.code == "context_stale_revision"
+                        || error.code == "context_changed_during_read"
+                    {
+                        InspectionError::new("comments_stale_source", error.message)
+                    } else {
+                        InspectionError::new("comments_capture_unavailable", error.message)
+                    }
+                })?;
+            CapturedDocument {
+                root_id: value.root_id,
+                path: value.path,
+                revision: value.revision,
+                content_hash: value.content_hash,
+                text: value.text,
+                truncated: value.truncated,
+            }
+        };
         let truncated = document.truncated;
         let text = match document.text {
             Some(text) => text,
@@ -387,9 +530,8 @@ impl CommentsService {
         let anchor = match (capture.start_line, capture.end_line) {
             (None, None) => CommentAnchor::WholeFile,
             (Some(start_line), Some(end_line)) => {
-                let selected_lines = capture_lines(&text, start_line, end_line).map_err(|message| {
-                    InspectionError::new("comments_invalid_range", message)
-                })?;
+                let selected_lines = capture_lines(&text, start_line, end_line)
+                    .map_err(|message| InspectionError::new("comments_invalid_range", message))?;
                 CommentAnchor::Lines {
                     start_line,
                     end_line,
@@ -410,6 +552,7 @@ impl CommentsService {
         Ok(CommentDraft {
             draft_id: Uuid::new_v4().to_string(),
             file_ref: CommentFileRef {
+                review: capture.review.clone(),
                 root_id: document.root_id,
                 path: document.path,
                 absolute_path,
@@ -423,7 +566,54 @@ impl CommentsService {
         })
     }
 
-    async fn refresh_states(&self, batch: &mut CommentBatch, evidence: &ContextCommentEvidence) {
+    async fn refresh_states(&self, batch: &mut CommentBatch, evidence: &CommentEvidence) {
+        if evidence.source_kind == ExtensionKind::Review {
+            let mut states = HashMap::new();
+            for draft in &mut batch.drafts {
+                let Some(reference) = draft.file_ref.review.as_ref() else {
+                    draft.source_state = CommentSourceState::Unavailable;
+                    continue;
+                };
+                let key = (
+                    reference.review_id.clone(),
+                    reference.generation,
+                    reference.file_id.clone(),
+                    reference.side == cockpit_protocol::review::ReviewSide::Old,
+                );
+                if !states.contains_key(&key) {
+                    let state = match &self.reviews {
+                        Some(review) => match review
+                            .source_state(
+                                &batch.owner.session_id,
+                                &batch.owner.pane_id,
+                                &evidence.binding_id,
+                                &reference.review_id,
+                                reference.generation,
+                                &reference.file_id,
+                                reference.side,
+                            )
+                            .await
+                        {
+                            Ok(crate::review::ReviewSourceState::Current) => {
+                                CommentSourceState::Current
+                            }
+                            Ok(crate::review::ReviewSourceState::Changed) => {
+                                CommentSourceState::Changed
+                            }
+                            Err(_) => CommentSourceState::Unavailable,
+                        },
+                        None => CommentSourceState::Unavailable,
+                    };
+                    states.insert(key.clone(), state);
+                }
+                draft.source_state = if draft.file_ref.root_id == evidence.root_id {
+                    states[&key]
+                } else {
+                    CommentSourceState::Unavailable
+                };
+            }
+            return;
+        }
         let session_id = batch.owner.session_id.clone();
         let pane_id = batch.owner.pane_id.clone();
         let mut reads: HashMap<(String, String), Result<(String, Option<String>), String>> =
@@ -499,7 +689,7 @@ fn same_owner(left: &CommentOwner, right: &CommentOwner) -> bool {
         && left.source_id == right.source_id
 }
 
-fn captured_roots_match(batch: &CommentBatch, evidence: &ContextCommentEvidence) -> bool {
+fn captured_roots_match(batch: &CommentBatch, evidence: &CommentEvidence) -> bool {
     batch
         .drafts
         .iter()
@@ -509,7 +699,7 @@ fn captured_roots_match(batch: &CommentBatch, evidence: &ContextCommentEvidence)
 fn same_attachment(
     batch: &CommentBatch,
     attachment: &CommentAttachment,
-    evidence: &ContextCommentEvidence,
+    evidence: &CommentEvidence,
 ) -> bool {
     same_owner(&batch.owner, &attachment.owner)
         && batch.last_known_location == attachment.location
@@ -519,7 +709,7 @@ fn same_attachment(
 fn require_owner(
     batch: &CommentBatch,
     attachment: &CommentAttachment,
-    evidence: &ContextCommentEvidence,
+    evidence: &CommentEvidence,
 ) -> Result<(), InspectionError> {
     if !same_owner(&batch.owner, &attachment.owner)
         || batch.last_known_location != attachment.location
@@ -570,8 +760,9 @@ mod tests {
         }
     }
 
-    fn evidence(root_id: &str) -> ContextCommentEvidence {
-        ContextCommentEvidence {
+    fn evidence(root_id: &str) -> CommentEvidence {
+        CommentEvidence {
+            source_kind: ExtensionKind::Context,
             binding_id: "binding".to_owned(),
             terminal_id: "terminal".to_owned(),
             workspace_id: "workspace".to_owned(),
@@ -599,6 +790,7 @@ mod tests {
         batch.drafts.push(CommentDraft {
             draft_id: Uuid::new_v4().to_string(),
             file_ref: CommentFileRef {
+                review: None,
                 root_id: "root-a".to_owned(),
                 path: "notes.md".to_owned(),
                 absolute_path: "/companion/notes.md".to_owned(),

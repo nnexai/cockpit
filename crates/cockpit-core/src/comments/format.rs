@@ -103,7 +103,9 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
             .then_with(|| match (&left.anchor, &right.anchor) {
                 (CommentAnchor::WholeFile, CommentAnchor::WholeFile) => std::cmp::Ordering::Equal,
                 (CommentAnchor::WholeFile, CommentAnchor::Lines { .. }) => std::cmp::Ordering::Less,
-                (CommentAnchor::Lines { .. }, CommentAnchor::WholeFile) => std::cmp::Ordering::Greater,
+                (CommentAnchor::Lines { .. }, CommentAnchor::WholeFile) => {
+                    std::cmp::Ordering::Greater
+                }
                 (
                     CommentAnchor::Lines { start_line: a, .. },
                     CommentAnchor::Lines { start_line: b, .. },
@@ -144,6 +146,27 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
         payload.push_str("relative_path: ");
         payload.push_str(&relative_path);
         payload.push('\n');
+        if let Some(review) = &draft.file_ref.review {
+            let (review_id, count) = quote_value(&review.review_id);
+            sanitized_controls = sanitized_controls.saturating_add(count);
+            let (file_id, count) = quote_value(&review.file_id);
+            sanitized_controls = sanitized_controls.saturating_add(count);
+            payload.push_str("review_id: ");
+            payload.push_str(&review_id);
+            payload.push('\n');
+            payload.push_str("review_generation: ");
+            payload.push_str(&review.generation.to_string());
+            payload.push('\n');
+            payload.push_str("review_file_id: ");
+            payload.push_str(&file_id);
+            payload.push('\n');
+            payload.push_str("review_side: ");
+            payload.push_str(match review.side {
+                cockpit_protocol::review::ReviewSide::Old => "old",
+                cockpit_protocol::review::ReviewSide::New => "new",
+            });
+            payload.push('\n');
+        }
         payload.push_str("revision: ");
         payload.push_str(&revision);
         payload.push('\n');
@@ -208,7 +231,6 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{capture_lines, quote_value, sanitize, split_line_ending};
@@ -247,7 +269,10 @@ mod tests {
 
     #[test]
     fn preview_line_metadata_distinguishes_crlf_lf_and_missing_newline() {
-        assert_eq!(split_line_ending("front: true\r\n"), ("front: true", "crlf"));
+        assert_eq!(
+            split_line_ending("front: true\r\n"),
+            ("front: true", "crlf")
+        );
         assert_eq!(split_line_ending("body\n"), ("body", "lf"));
         assert_eq!(split_line_ending("last"), ("last", "none"));
     }

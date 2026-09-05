@@ -21,6 +21,7 @@ pub struct ExtensionPaneEvidence {
     pub confidence: DetectionConfidence,
     pub reason: String,
     pub can_open_context: bool,
+    pub can_open_review: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,12 @@ pub trait ExtensionHerdrAdapter: Send + Sync {
     ) -> Result<ExtensionPaneEvidence, InspectionError>;
 
     async fn launch_context_pane(
+        &self,
+        session_id: &str,
+        request: &ExtensionLaunch,
+    ) -> Result<ExtensionPaneEvidence, InspectionError>;
+
+    async fn launch_review_pane(
         &self,
         session_id: &str,
         request: &ExtensionLaunch,

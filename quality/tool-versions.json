@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "probe_date": "2026-09-05",
+  "tools": {
+    "node": { "argv": ["node", "--version"], "expected": "v26.8.1", "invocation_mode": "system" },
+    "bun": { "argv": ["bun", "--version"], "expected": "1.3.14", "invocation_mode": "system" },
+    "rustc": { "argv": ["rustc", "--version"], "expected": "rustc 1.98.0 (88d9e12ae 2026-08-18)", "invocation_mode": "rust-toolchain" },
+    "cargo": { "argv": ["cargo", "--version"], "expected": "cargo 1.98.0 (797e8a9bc 2026-08-05)", "invocation_mode": "rust-toolchain" },
+    "vitest": { "argv": ["node", "node_modules/vitest/vitest.mjs", "--version"], "expected": "vitest/4.1.10 linux-x64 node-v26.8.1", "invocation_mode": "project-lockfile" },
+    "vitest_coverage_v8": { "argv": ["node", "-e", "require.resolve('@vitest/coverage-v8/package.json')"], "expected": null, "package": "@vitest/coverage-v8", "invocation_mode": "optional-unconfigured" },
+    "cargo_llvm_cov": { "argv": ["cargo", "llvm-cov", "--version"], "expected": null, "package": "cargo-llvm-cov", "invocation_mode": "optional-unconfigured" },
+    "cargo_crap": { "argv": ["cargo", "crap", "--version"], "expected": null, "package": "cargo-crap", "invocation_mode": "optional-unconfigured" },
+    "cargo_mutants": { "argv": ["cargo", "mutants", "--version"], "expected": null, "package": "cargo-mutants", "invocation_mode": "optional-unconfigured" },
+    "stryker": { "argv": ["node", "-e", "require.resolve('@stryker-mutator/core/package.json')"], "expected": null, "package": "@stryker-mutator/core", "invocation_mode": "optional-unconfigured" }
+  }
+}

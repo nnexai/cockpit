@@ -1,16 +1,19 @@
-pub mod context_assets;
 pub mod comments;
 pub mod config;
 pub mod context;
+pub mod context_assets;
+pub mod context_media;
 pub mod context_search;
 pub mod extension_adapter;
+pub mod paste_adapter;
 pub mod process;
 pub mod project_adapter;
-pub mod paste_adapter;
 mod project_store;
-pub mod projects;
 pub mod project_teardown;
+pub mod projects;
 pub mod repositories;
+pub mod review;
+pub mod sources;
 
 pub use extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 pub use paste_adapter::CommentPasteAdapter;
@@ -120,6 +123,7 @@ pub struct CockpitService {
     projects: Option<Arc<projects::ProjectService>>,
     contexts: Option<Arc<context::ContextService>>,
     comments: Option<Arc<comments::CommentsService>>,
+    reviews: Option<Arc<review::ReviewService>>,
 }
 
 #[derive(Default)]
@@ -181,6 +185,7 @@ impl CockpitService {
             projects: None,
             contexts: None,
             comments: None,
+            reviews: None,
         }
     }
 
@@ -208,6 +213,20 @@ impl CockpitService {
             InspectionError::new(
                 "context_configuration_unavailable",
                 "Context operations are not configured in this host",
+            )
+        })
+    }
+
+    pub fn with_reviews(mut self, reviews: review::ReviewService) -> Self {
+        self.reviews = Some(Arc::new(reviews));
+        self
+    }
+
+    pub fn reviews(&self) -> Result<&Arc<review::ReviewService>, InspectionError> {
+        self.reviews.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "review_unavailable",
+                "Review operations are not configured in this host",
             )
         })
     }

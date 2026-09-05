@@ -22,24 +22,40 @@ fn required_string<'a>(
     key: &str,
     context: &str,
 ) -> Result<&'a str, InspectionError> {
-    object.get(key).and_then(Value::as_str).filter(|value| !value.is_empty()).ok_or_else(|| {
-        InspectionError::new("comments_paste_malformed_target", format!("{context}.{key} is required"))
-    })
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                format!("{context}.{key} is required"),
+            )
+        })
 }
 
 fn optional_string<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
-    object.get(key).and_then(Value::as_str).filter(|value| !value.is_empty())
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
 }
 
-fn session(object: &serde_json::Map<String, Value>) -> Result<Option<AgentSession>, InspectionError> {
-    let Some(value) = object.get("agent_session") else { return Ok(None) };
+fn session(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Option<AgentSession>, InspectionError> {
+    let Some(value) = object.get("agent_session") else {
+        return Ok(None);
+    };
     if value.is_null() {
         return Ok(None);
     }
-    let object = value.as_object().ok_or_else(|| InspectionError::new(
-        "comments_paste_malformed_target",
-        "agent_session must be an object when present",
-    ))?;
+    let object = value.as_object().ok_or_else(|| {
+        InspectionError::new(
+            "comments_paste_malformed_target",
+            "agent_session must be an object when present",
+        )
+    })?;
     Ok(Some(AgentSession {
         source: required_string(object, "source", "agent_session")?.to_owned(),
         agent: required_string(object, "agent", "agent_session")?.to_owned(),
@@ -59,7 +75,12 @@ fn fingerprint(terminal_id: &str, agent: &str, agent_session: Option<&AgentSessi
         None => digest.update([0]),
         Some(session) => {
             digest.update([1]);
-            for part in [&session.source, &session.agent, &session.kind, &session.value] {
+            for part in [
+                &session.source,
+                &session.agent,
+                &session.kind,
+                &session.value,
+            ] {
                 digest.update((part.len() as u64).to_be_bytes());
                 digest.update(part.as_bytes());
             }
@@ -74,22 +95,43 @@ fn targets_from_snapshot(
     session_id: &str,
 ) -> Result<Vec<CommentPasteTarget>, InspectionError> {
     let result = value.as_object().ok_or_else(|| {
-        InspectionError::new("comments_paste_malformed_target", "session snapshot response must be an object")
+        InspectionError::new(
+            "comments_paste_malformed_target",
+            "session snapshot response must be an object",
+        )
     })?;
     if required_string(result, "type", "session snapshot result")? != "session_snapshot" {
-        return Err(InspectionError::new("comments_paste_malformed_target", "session snapshot response has an unexpected type"));
+        return Err(InspectionError::new(
+            "comments_paste_malformed_target",
+            "session snapshot response has an unexpected type",
+        ));
     }
-    let snapshot = result.get("snapshot").and_then(Value::as_object).ok_or_else(|| {
-        InspectionError::new("comments_paste_malformed_target", "session snapshot response omitted its snapshot")
-    })?;
-    let agents = snapshot.get("agents").and_then(Value::as_array).ok_or_else(|| {
-        InspectionError::new("comments_paste_malformed_target", "session snapshot omitted agents")
-    })?;
+    let snapshot = result
+        .get("snapshot")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                "session snapshot response omitted its snapshot",
+            )
+        })?;
+    let agents = snapshot
+        .get("agents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                "session snapshot omitted agents",
+            )
+        })?;
     let mut agent_sessions = std::collections::BTreeMap::new();
     for raw in agents {
-        let agent = raw.as_object().ok_or_else(|| InspectionError::new(
-            "comments_paste_malformed_target", "agent snapshot entry must be an object",
-        ))?;
+        let agent = raw.as_object().ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                "agent snapshot entry must be an object",
+            )
+        })?;
         let pane_id = required_string(agent, "pane_id", "agent snapshot")?;
         let agent_name = required_string(agent, "agent", "agent snapshot")?;
         let session = match session(agent) {
@@ -100,17 +142,30 @@ fn targets_from_snapshot(
         };
         agent_sessions.insert(pane_id.to_owned(), (agent_name.to_owned(), session));
     }
-    let panes = snapshot.get("panes").and_then(Value::as_array).ok_or_else(|| {
-        InspectionError::new("comments_paste_malformed_target", "session snapshot omitted panes")
-    })?;
+    let panes = snapshot
+        .get("panes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                "session snapshot omitted panes",
+            )
+        })?;
     let mut targets = Vec::new();
     for raw in panes {
-        let pane = raw.as_object().ok_or_else(|| InspectionError::new(
-            "comments_paste_malformed_target", "pane snapshot entry must be an object",
-        ))?;
+        let pane = raw.as_object().ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                "pane snapshot entry must be an object",
+            )
+        })?;
         let pane_id = required_string(pane, "pane_id", "pane snapshot")?;
-        let Some((confirmed_agent, agent_session)) = agent_sessions.get(pane_id) else { continue };
-        let Some(pane_agent) = optional_string(pane, "agent") else { continue };
+        let Some((confirmed_agent, agent_session)) = agent_sessions.get(pane_id) else {
+            continue;
+        };
+        let Some(pane_agent) = optional_string(pane, "agent") else {
+            continue;
+        };
         if pane_agent != confirmed_agent {
             continue;
         }
@@ -124,9 +179,15 @@ fn targets_from_snapshot(
             continue;
         }
         // A partially described agent can never become a paste target.
-        let Some(terminal_id) = optional_string(pane, "terminal_id") else { continue };
-        let Some(workspace_id) = optional_string(pane, "workspace_id") else { continue };
-        let Some(tab_id) = optional_string(pane, "tab_id") else { continue };
+        let Some(terminal_id) = optional_string(pane, "terminal_id") else {
+            continue;
+        };
+        let Some(workspace_id) = optional_string(pane, "workspace_id") else {
+            continue;
+        };
+        let Some(tab_id) = optional_string(pane, "tab_id") else {
+            continue;
+        };
         targets.push(CommentPasteTarget {
             endpoint_identity: endpoint_identity.clone(),
             session_id: session_id.to_owned(),
@@ -150,16 +211,18 @@ fn confirm_focused_target(
     endpoint_identity: String,
     target: &CommentPasteTarget,
 ) -> Result<(), InspectionError> {
-    let snapshot = value.as_object()
+    let snapshot = value
+        .as_object()
         .and_then(|result| result.get("snapshot"))
         .and_then(Value::as_object)
-        .ok_or_else(|| InspectionError::new(
-            "comments_paste_malformed_target",
-            "session snapshot response omitted its snapshot",
-        ))?;
-    let focused = |key: &str, expected: &str| {
-        snapshot.get(key).and_then(Value::as_str) == Some(expected)
-    };
+        .ok_or_else(|| {
+            InspectionError::new(
+                "comments_paste_malformed_target",
+                "session snapshot response omitted its snapshot",
+            )
+        })?;
+    let focused =
+        |key: &str, expected: &str| snapshot.get(key).and_then(Value::as_str) == Some(expected);
     if !focused("focused_workspace_id", &target.workspace_id)
         || !focused("focused_tab_id", &target.tab_id)
         || !focused("focused_pane_id", &target.pane_id)
@@ -169,10 +232,14 @@ fn confirm_focused_target(
             "Herdr snapshot no longer confirms the target workspace, tab, and pane focus",
         ));
     }
-    let pane_focused = snapshot.get("panes").and_then(Value::as_array)
-        .and_then(|panes| panes.iter().find(|pane| {
-            pane.get("pane_id").and_then(Value::as_str) == Some(target.pane_id.as_str())
-        }))
+    let pane_focused = snapshot
+        .get("panes")
+        .and_then(Value::as_array)
+        .and_then(|panes| {
+            panes.iter().find(|pane| {
+                pane.get("pane_id").and_then(Value::as_str) == Some(target.pane_id.as_str())
+            })
+        })
         .and_then(Value::as_object)
         .and_then(|pane| pane.get("focused"))
         .and_then(Value::as_bool)
@@ -185,13 +252,15 @@ fn confirm_focused_target(
     }
     if !targets_from_snapshot(value, endpoint_identity, &target.session_id)?
         .iter()
-        .any(|candidate| candidate.endpoint_identity == target.endpoint_identity
-            && candidate.session_id == target.session_id
-            && candidate.workspace_id == target.workspace_id
-            && candidate.tab_id == target.tab_id
-            && candidate.pane_id == target.pane_id
-            && candidate.terminal_id == target.terminal_id
-            && candidate.agent_fingerprint == target.agent_fingerprint)
+        .any(|candidate| {
+            candidate.endpoint_identity == target.endpoint_identity
+                && candidate.session_id == target.session_id
+                && candidate.workspace_id == target.workspace_id
+                && candidate.tab_id == target.tab_id
+                && candidate.pane_id == target.pane_id
+                && candidate.terminal_id == target.terminal_id
+                && candidate.agent_fingerprint == target.agent_fingerprint
+        })
     {
         return Err(InspectionError::new(
             "comments_paste_target_mismatch",
@@ -226,7 +295,10 @@ impl CommentPasteAdapter for HerdrCliAdapter {
             )
             .await?;
         if actual_identity != target.endpoint_identity {
-            return Err(InspectionError::new("stale_identity", "Herdr endpoint changed before target focus"));
+            return Err(InspectionError::new(
+                "stale_identity",
+                "Herdr endpoint changed before target focus",
+            ));
         }
         parse_focus_result(result, FocusKind::Agent, &target.pane_id)?;
         Ok(())
@@ -245,7 +317,10 @@ impl CommentPasteAdapter for HerdrCliAdapter {
             )
             .await?;
         if endpoint_identity != target.endpoint_identity {
-            return Err(InspectionError::new("stale_identity", "Herdr endpoint changed after target focus"));
+            return Err(InspectionError::new(
+                "stale_identity",
+                "Herdr endpoint changed after target focus",
+            ));
         }
         confirm_focused_target(result, endpoint_identity, target)
     }
@@ -256,10 +331,16 @@ impl CommentPasteAdapter for HerdrCliAdapter {
         framed_payload: &str,
     ) -> Result<(), InspectionError> {
         if framed_payload.as_bytes().len() > MAX_PASTE_BYTES {
-            return Err(InspectionError::new("comments_paste_input_bounded", "framed paste exceeds the 64 KiB Herdr limit"));
+            return Err(InspectionError::new(
+                "comments_paste_input_bounded",
+                "framed paste exceeds the 64 KiB Herdr limit",
+            ));
         }
         if !framed_payload.starts_with("\u{1b}[200~") || !framed_payload.ends_with("\u{1b}[201~") {
-            return Err(InspectionError::new("comments_paste_framing", "paste adapter requires one complete bracketed-paste frame"));
+            return Err(InspectionError::new(
+                "comments_paste_framing",
+                "paste adapter requires one complete bracketed-paste frame",
+            ));
         }
         let (result, actual_identity) = self
             .socket_request_with_identity(
@@ -270,13 +351,22 @@ impl CommentPasteAdapter for HerdrCliAdapter {
             )
             .await?;
         if actual_identity != target.endpoint_identity {
-            return Err(InspectionError::new("stale_identity", "Herdr endpoint changed during paste dispatch"));
+            return Err(InspectionError::new(
+                "stale_identity",
+                "Herdr endpoint changed during paste dispatch",
+            ));
         }
         let result = result.as_object().ok_or_else(|| {
-            InspectionError::new("comments_paste_malformed_ack", "Herdr paste acknowledgment must be an object")
+            InspectionError::new(
+                "comments_paste_malformed_ack",
+                "Herdr paste acknowledgment must be an object",
+            )
         })?;
         if result.get("type").and_then(Value::as_str) != Some("ok") {
-            return Err(InspectionError::new("comments_paste_rejected", "Herdr did not acknowledge the raw paste queue write"));
+            return Err(InspectionError::new(
+                "comments_paste_rejected",
+                "Herdr did not acknowledge the raw paste queue write",
+            ));
         }
         Ok(())
     }
@@ -317,12 +407,14 @@ mod tests {
             snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"first"})),
             "endpoint".to_owned(),
             "session",
-        ).expect("first target");
+        )
+        .expect("first target");
         let restarted = targets_from_snapshot(
             snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"second"})),
             "endpoint".to_owned(),
             "session",
-        ).expect("restarted target");
+        )
+        .expect("restarted target");
         assert_eq!(first.len(), 1);
         assert_eq!(restarted.len(), 1);
         assert_ne!(first[0].agent_fingerprint, restarted[0].agent_fingerprint);
@@ -331,7 +423,8 @@ mod tests {
     #[test]
     fn missing_native_agent_session_uses_a_valid_fallback_identity() {
         let mut raw = snapshot(serde_json::Value::Null);
-        raw["snapshot"]["agents"][0].as_object_mut()
+        raw["snapshot"]["agents"][0]
+            .as_object_mut()
             .expect("agent object")
             .remove("agent_session");
         let targets = targets_from_snapshot(raw, "endpoint".to_owned(), "session")
@@ -346,22 +439,27 @@ mod tests {
             snapshot(json!({"source":"herdr:codex","agent":"codex"})),
             "endpoint".to_owned(),
             "session",
-        ).expect("malformed session rejects only this target");
+        )
+        .expect("malformed session rejects only this target");
         assert!(targets.is_empty());
     }
 
     #[test]
     fn post_focus_snapshot_requires_the_same_focused_pane() {
-        let raw = snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"one"}));
+        let raw =
+            snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"one"}));
         let target = targets_from_snapshot(raw.clone(), "endpoint".to_owned(), "session")
-            .expect("target")[0].clone();
+            .expect("target")[0]
+            .clone();
         confirm_focused_target(raw, "endpoint".to_owned(), &target).expect("focused target");
 
-        let mut moved = snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"one"}));
+        let mut moved =
+            snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"one"}));
         moved["snapshot"]["focused_pane_id"] = json!("w1:p2");
         assert_eq!(
             confirm_focused_target(moved, "endpoint".to_owned(), &target)
-                .expect_err("lost focus must reject").code,
+                .expect_err("lost focus must reject")
+                .code,
             "comments_paste_focus_lost",
         );
     }

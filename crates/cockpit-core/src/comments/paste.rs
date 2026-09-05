@@ -1,18 +1,18 @@
 use std::path::Path;
 
 use cockpit_protocol::comment_paste::{
-    CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt,
-    CommentPasteSendRequest, CommentPasteState, CommentPasteTarget,
+    CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPastePrepareResponse,
+    CommentPasteReceipt, CommentPasteSendRequest, CommentPasteState, CommentPasteTarget,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::project_store::{atomic_write_json, read_json_bounded, timestamp, ProjectStore};
 use crate::InspectionError;
+use crate::project_store::{ProjectStore, atomic_write_json, read_json_bounded, timestamp};
 
-use super::format::{format_batch, PREVIEW_LIMIT_BYTES};
-use super::{require_owner, CommentsService};
+use super::format::{PREVIEW_LIMIT_BYTES, format_batch};
+use super::{CommentsService, require_owner};
 
 const MAX_TARGETS: usize = 64;
 const MAX_ID_BYTES: usize = 128;
@@ -41,10 +41,16 @@ struct StoredReceipt {
 
 impl PasteStore {
     pub(super) fn new(root: &Path) -> Result<Self, InspectionError> {
-        Ok(Self { state: ProjectStore::new(root.join("paste"))? })
+        Ok(Self {
+            state: ProjectStore::new(root.join("paste"))?,
+        })
     }
 
-    async fn lease(&self, target: &CommentPasteTarget, batch_id: &str) -> Result<PasteLease, InspectionError> {
+    async fn lease(
+        &self,
+        target: &CommentPasteTarget,
+        batch_id: &str,
+    ) -> Result<PasteLease, InspectionError> {
         let state = self.state.clone();
         let target_name = target_lock_name(target);
         let batch_name = batch_lock_name(batch_id)?;
@@ -53,13 +59,19 @@ impl PasteStore {
             // then target cannot self-deadlock when both hashes choose index N.
             let batch = state.acquire_named_lock(&batch_name, "comments_paste_lock")?;
             let target = state.acquire_named_lock(&target_name, "comments_paste_lock")?;
-            Ok(PasteLease { _batch: batch, _target: target })
+            Ok(PasteLease {
+                _batch: batch,
+                _target: target,
+            })
         })
         .await
         .map_err(|error| InspectionError::new("comments_paste_task", error.to_string()))?
     }
 
-    async fn load(&self, operation_id: &str) -> Result<Option<CommentPasteReceipt>, InspectionError> {
+    async fn load(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<CommentPasteReceipt>, InspectionError> {
         let operation_id = operation_id.to_owned();
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || load_receipt(&state, &operation_id, true))
@@ -67,7 +79,10 @@ impl PasteStore {
             .map_err(|error| InspectionError::new("comments_paste_task", error.to_string()))?
     }
 
-    async fn load_stored(&self, operation_id: &str) -> Result<Option<StoredReceipt>, InspectionError> {
+    async fn load_stored(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<StoredReceipt>, InspectionError> {
         let operation_id = operation_id.to_owned();
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || load_stored_receipt(&state, &operation_id, true))
@@ -75,7 +90,10 @@ impl PasteStore {
             .map_err(|error| InspectionError::new("comments_paste_task", error.to_string()))?
     }
 
-    async fn inspect_stored(&self, operation_id: &str) -> Result<Option<StoredReceipt>, InspectionError> {
+    async fn inspect_stored(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<StoredReceipt>, InspectionError> {
         let operation_id = operation_id.to_owned();
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || load_stored_receipt(&state, &operation_id, false))
@@ -83,7 +101,10 @@ impl PasteStore {
             .map_err(|error| InspectionError::new("comments_paste_task", error.to_string()))?
     }
 
-    async fn save(&self, receipt: CommentPasteReceipt) -> Result<CommentPasteReceipt, InspectionError> {
+    async fn save(
+        &self,
+        receipt: CommentPasteReceipt,
+    ) -> Result<CommentPasteReceipt, InspectionError> {
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || save_receipt(&state, receipt, None))
             .await
@@ -101,7 +122,10 @@ impl PasteStore {
             .map_err(|error| InspectionError::new("comments_paste_task", error.to_string()))?
     }
 
-    async fn list_for_batch(&self, batch_id: &str) -> Result<Vec<CommentPasteReceipt>, InspectionError> {
+    async fn list_for_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Vec<CommentPasteReceipt>, InspectionError> {
         let batch_id = batch_id.to_owned();
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || list_receipts_for_batch(&state, &batch_id))
@@ -111,7 +135,10 @@ impl PasteStore {
 
     /// Internal safety checks must inspect the complete bounded receipt set;
     /// presentation is truncated only after these checks have run.
-    async fn all_for_batch(&self, batch_id: &str) -> Result<Vec<CommentPasteReceipt>, InspectionError> {
+    async fn all_for_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Vec<CommentPasteReceipt>, InspectionError> {
         let batch_id = batch_id.to_owned();
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || all_receipts_for_batch(&state, &batch_id))
@@ -127,7 +154,10 @@ struct PasteLease {
 
 fn valid_id(value: &str, kind: &str) -> Result<(), InspectionError> {
     if value.is_empty() || value.len() > MAX_ID_BYTES || value.contains(['/', '\\', '\0']) {
-        return Err(InspectionError::new("comments_paste_invalid_id", format!("paste {kind} is invalid")));
+        return Err(InspectionError::new(
+            "comments_paste_invalid_id",
+            format!("paste {kind} is invalid"),
+        ));
     }
     Ok(())
 }
@@ -144,11 +174,17 @@ fn validate_target(target: &CommentPasteTarget) -> Result<(), InspectionError> {
         &target.agent_fingerprint,
     ] {
         if value.is_empty() || value.len() > 4096 || value.contains('\0') {
-            return Err(InspectionError::new("comments_paste_invalid_target", "paste target identity is invalid"));
+            return Err(InspectionError::new(
+                "comments_paste_invalid_target",
+                "paste target identity is invalid",
+            ));
         }
     }
     if !target.agent_fingerprint.starts_with("sha256:") || target.agent_fingerprint.len() != 71 {
-        return Err(InspectionError::new("comments_paste_invalid_target", "paste target fingerprint is invalid"));
+        return Err(InspectionError::new(
+            "comments_paste_invalid_target",
+            "paste target fingerprint is invalid",
+        ));
     }
     Ok(())
 }
@@ -156,7 +192,10 @@ fn validate_target(target: &CommentPasteTarget) -> Result<(), InspectionError> {
 fn receipt_name(operation_id: &str) -> Result<String, InspectionError> {
     valid_id(operation_id, "operation identity")?;
     if Uuid::parse_str(operation_id).is_err() {
-        return Err(InspectionError::new("comments_paste_invalid_id", "paste operation identity must be a UUID"));
+        return Err(InspectionError::new(
+            "comments_paste_invalid_id",
+            "paste operation identity must be a UUID",
+        ));
     }
     Ok(format!("receipt-{operation_id}.json"))
 }
@@ -169,8 +208,12 @@ fn batch_lock_name(batch_id: &str) -> Result<String, InspectionError> {
 fn target_lock_name(target: &CommentPasteTarget) -> String {
     let mut digest = Sha256::new();
     for part in [
-        target.endpoint_identity.as_bytes(), target.session_id.as_bytes(), target.workspace_id.as_bytes(),
-        target.tab_id.as_bytes(), target.pane_id.as_bytes(), target.terminal_id.as_bytes(),
+        target.endpoint_identity.as_bytes(),
+        target.session_id.as_bytes(),
+        target.workspace_id.as_bytes(),
+        target.tab_id.as_bytes(),
+        target.pane_id.as_bytes(),
+        target.terminal_id.as_bytes(),
         target.agent_fingerprint.as_bytes(),
     ] {
         digest.update(part);
@@ -192,7 +235,11 @@ fn striped_lock_name(domain: &str, key: &[u8]) -> String {
     format!(".paste-{domain}-{stripe:02}.lock")
 }
 
-fn load_receipt(state: &ProjectStore, operation_id: &str, recover_pending: bool) -> Result<Option<CommentPasteReceipt>, InspectionError> {
+fn load_receipt(
+    state: &ProjectStore,
+    operation_id: &str,
+    recover_pending: bool,
+) -> Result<Option<CommentPasteReceipt>, InspectionError> {
     Ok(load_stored_receipt(state, operation_id, recover_pending)?.map(|record| record.receipt))
 }
 
@@ -205,22 +252,38 @@ fn load_stored_receipt(
     match state.state_dir().symlink_metadata(&name) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(InspectionError::new("comments_paste_read", error.to_string())),
+        Err(error) => {
+            return Err(InspectionError::new(
+                "comments_paste_read",
+                error.to_string(),
+            ));
+        }
     }
-    let mut record = match read_json_bounded::<StoredReceipt>(state.state_dir(), &name, MAX_STORED_RECEIPT_BYTES) {
+    let mut record = match read_json_bounded::<StoredReceipt>(
+        state.state_dir(),
+        &name,
+        MAX_STORED_RECEIPT_BYTES,
+    ) {
         Ok(record) => record,
         Err(error) => return Err(error),
     };
     if recover_pending && record.receipt.state == CommentPasteState::Pending {
         record.receipt.state = CommentPasteState::OutcomeUnknown;
         record.receipt.completed_at = Some(timestamp());
-        record.receipt.message = Some("Cockpit restarted while delivery was pending; inspect the terminal before retrying.".to_owned());
+        record.receipt.message = Some(
+            "Cockpit restarted while delivery was pending; inspect the terminal before retrying."
+                .to_owned(),
+        );
         write_stored_receipt(state, &name, &record)?;
     }
     Ok(Some(record))
 }
 
-fn write_stored_receipt(state: &ProjectStore, name: &str, record: &StoredReceipt) -> Result<(), InspectionError> {
+fn write_stored_receipt(
+    state: &ProjectStore,
+    name: &str,
+    record: &StoredReceipt,
+) -> Result<(), InspectionError> {
     atomic_write_json(state.state_dir(), name, record)
         .map_err(|error| InspectionError::new("comments_paste_write", error.to_string()))
 }
@@ -231,18 +294,28 @@ fn save_receipt(
     frozen_drafts: Option<Vec<cockpit_protocol::comments::CommentDraft>>,
 ) -> Result<CommentPasteReceipt, InspectionError> {
     let name = receipt_name(&receipt.operation_id)?;
-    let _lock = state.acquire_named_lock(&receipt_lock_name(&receipt.operation_id), "comments_paste_lock")?;
+    let _lock = state.acquire_named_lock(
+        &receipt_lock_name(&receipt.operation_id),
+        "comments_paste_lock",
+    )?;
     let _receipts_lock = state.acquire_named_lock(".paste-receipts.lock", "comments_paste_lock")?;
     if let Some(mut existing) = load_stored_receipt(state, &receipt.operation_id, false)? {
         let existing_receipt = &existing.receipt;
-        if existing_receipt.request_id != receipt.request_id || existing_receipt.batch_id != receipt.batch_id
-            || existing_receipt.payload_hash != receipt.payload_hash || !same_target(&existing_receipt.target, &receipt.target) {
-            return Err(InspectionError::new("comments_paste_operation_conflict", "paste operation identity was already used for another request"));
+        if existing_receipt.request_id != receipt.request_id
+            || existing_receipt.batch_id != receipt.batch_id
+            || existing_receipt.payload_hash != receipt.payload_hash
+            || !same_target(&existing_receipt.target, &receipt.target)
+        {
+            return Err(InspectionError::new(
+                "comments_paste_operation_conflict",
+                "paste operation identity was already used for another request",
+            ));
         }
         let explicit_resolution = existing_receipt.state == CommentPasteState::OutcomeUnknown
             && receipt.state == CommentPasteState::Accepted
             && receipt.user_confirmed;
-        if (existing_receipt.state == CommentPasteState::Accepted && receipt.state == CommentPasteState::Accepted)
+        if (existing_receipt.state == CommentPasteState::Accepted
+            && receipt.state == CommentPasteState::Accepted)
             || explicit_resolution
         {
             existing.receipt = receipt.clone();
@@ -264,7 +337,14 @@ fn save_receipt(
         prune_completed_receipts(state)?;
         return Ok(receipt);
     }
-    write_stored_receipt(state, &name, &StoredReceipt { receipt: receipt.clone(), sent_drafts: frozen_drafts })?;
+    write_stored_receipt(
+        state,
+        &name,
+        &StoredReceipt {
+            receipt: receipt.clone(),
+            sent_drafts: frozen_drafts,
+        },
+    )?;
     prune_completed_receipts(state)?;
     Ok(receipt)
 }
@@ -275,9 +355,13 @@ fn list_receipts_for_batch(
 ) -> Result<Vec<CommentPasteReceipt>, InspectionError> {
     let mut receipts = all_receipts_for_batch(state, batch_id)?;
     // Actionable receipts must remain reachable even after newer completed history.
-    receipts.sort_by_key(|receipt| !( !receipt.user_confirmed
-        && (matches!(receipt.state, CommentPasteState::Pending | CommentPasteState::OutcomeUnknown)
-            || receipt_requires_reconciliation(receipt))));
+    receipts.sort_by_key(|receipt| {
+        !(!receipt.user_confirmed
+            && (matches!(
+                receipt.state,
+                CommentPasteState::Pending | CommentPasteState::OutcomeUnknown
+            ) || receipt_requires_reconciliation(receipt)))
+    });
     receipts.truncate(MAX_RECEIPTS);
     Ok(receipts)
 }
@@ -287,7 +371,9 @@ fn all_receipts_for_batch(
     batch_id: &str,
 ) -> Result<Vec<CommentPasteReceipt>, InspectionError> {
     let _lock = state.acquire_named_lock(".paste-receipts.lock", "comments_paste_lock")?;
-    let entries = state.state_dir().entries()
+    let entries = state
+        .state_dir()
+        .entries()
         .map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
     let mut operation_ids = Vec::new();
     let mut seen = 0usize;
@@ -295,40 +381,67 @@ fn all_receipts_for_batch(
     for entry in entries {
         entries_seen = entries_seen.saturating_add(1);
         if entries_seen > MAX_STATE_ENTRIES {
-            return Err(InspectionError::new("comments_paste_bounded", "paste receipt directory exceeded its bounded entry limit"));
+            return Err(InspectionError::new(
+                "comments_paste_bounded",
+                "paste receipt directory exceeded its bounded entry limit",
+            ));
         }
-        let name = entry.as_ref().ok().and_then(|entry| entry.file_name().to_str().map(str::to_owned));
-        let is_receipt = name.as_deref()
+        let name = entry
+            .as_ref()
+            .ok()
+            .and_then(|entry| entry.file_name().to_str().map(str::to_owned));
+        let is_receipt = name
+            .as_deref()
             .is_some_and(|name| name.starts_with("receipt-") && name.ends_with(".json"));
         if is_receipt {
             seen = seen.saturating_add(1);
         }
         if seen > MAX_RECEIPT_SCAN {
-            return Err(InspectionError::new("comments_paste_bounded", "paste receipt lookup exceeded its bounded entry limit"));
+            return Err(InspectionError::new(
+                "comments_paste_bounded",
+                "paste receipt lookup exceeded its bounded entry limit",
+            ));
         }
-        let entry = entry.map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
+        let entry = entry
+            .map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(operation_id) = name.strip_prefix("receipt-").and_then(|value| value.strip_suffix(".json")) else { continue };
+        let Some(operation_id) = name
+            .strip_prefix("receipt-")
+            .and_then(|value| value.strip_suffix(".json"))
+        else {
+            continue;
+        };
         if Uuid::parse_str(operation_id).is_err() {
             continue;
         }
-        let file_type = entry.file_type()
+        let file_type = entry
+            .file_type()
             .map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
         if file_type.is_symlink() || !file_type.is_file() {
-            return Err(InspectionError::new("unsafe_path", "paste receipt is not a regular file"));
+            return Err(InspectionError::new(
+                "unsafe_path",
+                "paste receipt is not a regular file",
+            ));
         }
         operation_ids.push(operation_id.to_owned());
     }
     operation_ids.sort();
     let mut receipts = Vec::new();
     for operation_id in operation_ids {
-        let Some(receipt) = load_receipt(state, &operation_id, false)? else { continue };
+        let Some(receipt) = load_receipt(state, &operation_id, false)? else {
+            continue;
+        };
         if receipt.batch_id == batch_id {
             receipts.push(receipt);
         }
     }
-    receipts.sort_by(|left, right| right.created_at.cmp(&left.created_at).then(right.operation_id.cmp(&left.operation_id)));
+    receipts.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then(right.operation_id.cmp(&left.operation_id))
+    });
     Ok(receipts)
 }
 
@@ -336,7 +449,9 @@ fn all_receipts_for_batch(
 /// indefinitely. Lock inodes are deliberately never removed: deleting a path
 /// while another process holds its flock would create a second lock identity.
 fn prune_completed_receipts(state: &ProjectStore) -> Result<(), InspectionError> {
-    let entries = state.state_dir().entries()
+    let entries = state
+        .state_dir()
+        .entries()
         .map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
     let mut completed = Vec::new();
     let mut total = 0usize;
@@ -344,24 +459,41 @@ fn prune_completed_receipts(state: &ProjectStore) -> Result<(), InspectionError>
     for entry in entries {
         entries_seen = entries_seen.saturating_add(1);
         if entries_seen > MAX_STATE_ENTRIES {
-            return Err(InspectionError::new("comments_paste_bounded", "paste receipt directory exceeded its bounded entry limit"));
+            return Err(InspectionError::new(
+                "comments_paste_bounded",
+                "paste receipt directory exceeded its bounded entry limit",
+            ));
         }
-        let entry = entry.map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
+        let entry = entry
+            .map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(operation_id) = name.strip_prefix("receipt-").and_then(|value| value.strip_suffix(".json")) else { continue };
+        let Some(operation_id) = name
+            .strip_prefix("receipt-")
+            .and_then(|value| value.strip_suffix(".json"))
+        else {
+            continue;
+        };
         if Uuid::parse_str(operation_id).is_err() {
             continue;
         }
         total = total.saturating_add(1);
-        let file_type = entry.file_type()
+        let file_type = entry
+            .file_type()
             .map_err(|error| InspectionError::new("comments_paste_read", error.to_string()))?;
         if file_type.is_symlink() || !file_type.is_file() {
-            return Err(InspectionError::new("unsafe_path", "paste receipt is not a regular file"));
+            return Err(InspectionError::new(
+                "unsafe_path",
+                "paste receipt is not a regular file",
+            ));
         }
-        let Some(receipt) = load_receipt(state, operation_id, false)? else { continue };
-        if !matches!(receipt.state, CommentPasteState::Pending | CommentPasteState::OutcomeUnknown)
-            && !receipt_requires_reconciliation(&receipt)
+        let Some(receipt) = load_receipt(state, operation_id, false)? else {
+            continue;
+        };
+        if !matches!(
+            receipt.state,
+            CommentPasteState::Pending | CommentPasteState::OutcomeUnknown
+        ) && !receipt_requires_reconciliation(&receipt)
         {
             completed.push((name.to_owned(), receipt));
         }
@@ -371,10 +503,14 @@ fn prune_completed_receipts(state: &ProjectStore) -> Result<(), InspectionError>
         return Ok(());
     }
     completed.sort_by(|(_, left), (_, right)| {
-        left.created_at.cmp(&right.created_at).then(left.operation_id.cmp(&right.operation_id))
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.operation_id.cmp(&right.operation_id))
     });
     for (name, _) in completed.into_iter().take(removable) {
-        state.state_dir().remove_file(name)
+        state
+            .state_dir()
+            .remove_file(name)
             .map_err(|error| InspectionError::new("comments_paste_write", error.to_string()))?;
     }
     Ok(())
@@ -400,15 +536,25 @@ fn same_target(left: &CommentPasteTarget, right: &CommentPasteTarget) -> bool {
 fn rejection(request: &CommentPasteSendRequest, message: impl Into<String>) -> CommentPasteReceipt {
     let now = timestamp();
     CommentPasteReceipt {
-        operation_id: request.operation_id.clone(), request_id: request.request_id.clone(),
-        batch_id: request.batch.batch_id.clone(), batch_generation: request.batch.expected_generation,
-        payload_hash: request.expected_payload_hash.clone(), target: request.target.clone(),
-        state: CommentPasteState::Rejected, sent_draft_ids: Vec::new(), created_at: now.clone(),
-        completed_at: Some(now), message: Some(message.into()), user_confirmed: false,
+        operation_id: request.operation_id.clone(),
+        request_id: request.request_id.clone(),
+        batch_id: request.batch.batch_id.clone(),
+        batch_generation: request.batch.expected_generation,
+        payload_hash: request.expected_payload_hash.clone(),
+        target: request.target.clone(),
+        state: CommentPasteState::Rejected,
+        sent_draft_ids: Vec::new(),
+        created_at: now.clone(),
+        completed_at: Some(now),
+        message: Some(message.into()),
+        user_confirmed: false,
     }
 }
 
-fn outcome_unknown(mut receipt: CommentPasteReceipt, message: impl Into<String>) -> CommentPasteReceipt {
+fn outcome_unknown(
+    mut receipt: CommentPasteReceipt,
+    message: impl Into<String>,
+) -> CommentPasteReceipt {
     receipt.state = CommentPasteState::OutcomeUnknown;
     receipt.completed_at = Some(timestamp());
     receipt.message = Some(message.into());
@@ -416,20 +562,28 @@ fn outcome_unknown(mut receipt: CommentPasteReceipt, message: impl Into<String>)
 }
 
 fn reconciliation_message(detail: impl std::fmt::Display) -> String {
-    format!("{RECONCILIATION_PREFIX} Herdr accepted one raw bracketed-paste write; no Enter was sent. {detail}")
+    format!(
+        "{RECONCILIATION_PREFIX} Herdr accepted one raw bracketed-paste write; no Enter was sent. {detail}"
+    )
 }
 
 fn receipt_requires_reconciliation(receipt: &CommentPasteReceipt) -> bool {
     !receipt.user_confirmed
         && receipt.state == CommentPasteState::Accepted
-        && receipt.message.as_deref().is_some_and(|message| message.starts_with(RECONCILIATION_PREFIX))
+        && receipt
+            .message
+            .as_deref()
+            .is_some_and(|message| message.starts_with(RECONCILIATION_PREFIX))
 }
 
 fn has_unarchived_sent_drafts(
     batch: &cockpit_protocol::comments::CommentBatch,
     receipt: &CommentPasteReceipt,
 ) -> bool {
-    receipt.sent_draft_ids.iter().any(|id| batch.drafts.iter().any(|draft| &draft.draft_id == id))
+    receipt
+        .sent_draft_ids
+        .iter()
+        .any(|id| batch.drafts.iter().any(|draft| &draft.draft_id == id))
 }
 
 /// Remove only drafts that have not changed since the accepted payload was
@@ -441,10 +595,18 @@ fn archive_matching_drafts(
     receipt: &CommentPasteReceipt,
 ) -> ArchiveOutcome {
     current.drafts.retain(|draft| {
-        let Some(sent) = sent_batch.drafts.iter().find(|sent| sent.draft_id == draft.draft_id) else {
+        let Some(sent) = sent_batch
+            .drafts
+            .iter()
+            .find(|sent| sent.draft_id == draft.draft_id)
+        else {
             return true;
         };
-        !receipt.sent_draft_ids.iter().any(|id| id == &draft.draft_id) || !same_sent_draft(draft, sent)
+        !receipt
+            .sent_draft_ids
+            .iter()
+            .any(|id| id == &draft.draft_id)
+            || !same_sent_draft(draft, sent)
     });
     if has_unarchived_sent_drafts(current, receipt) {
         ArchiveOutcome::ReconciliationRequired
@@ -471,8 +633,16 @@ fn same_anchor(
     match (left, right) {
         (CommentAnchor::WholeFile, CommentAnchor::WholeFile) => true,
         (
-            CommentAnchor::Lines { start_line: left_start, end_line: left_end, selected_lines: left_lines },
-            CommentAnchor::Lines { start_line: right_start, end_line: right_end, selected_lines: right_lines },
+            CommentAnchor::Lines {
+                start_line: left_start,
+                end_line: left_end,
+                selected_lines: left_lines,
+            },
+            CommentAnchor::Lines {
+                start_line: right_start,
+                end_line: right_end,
+                selected_lines: right_lines,
+            },
         ) => left_start == right_start && left_end == right_end && left_lines == right_lines,
         _ => false,
     }
@@ -483,6 +653,7 @@ fn same_sent_draft(
     right: &cockpit_protocol::comments::CommentDraft,
 ) -> bool {
     left.draft_id == right.draft_id
+        && left.file_ref.review == right.file_ref.review
         && left.file_ref.root_id == right.file_ref.root_id
         && left.file_ref.path == right.file_ref.path
         && left.file_ref.absolute_path == right.file_ref.absolute_path
@@ -502,28 +673,51 @@ impl CommentsService {
         request: &CommentPastePrepareRequest,
     ) -> Result<CommentPastePrepareResponse, InspectionError> {
         let adapter = self.paste_adapter.as_ref().ok_or_else(|| {
-            InspectionError::new("comments_paste_unavailable", "acknowledged Herdr paste is not configured")
+            InspectionError::new(
+                "comments_paste_unavailable",
+                "acknowledged Herdr paste is not configured",
+            )
         })?;
-        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
-        let mut batch = self.store.load(&request.batch.batch_id).await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        let (attachment, evidence) = self
+            .attachment(session_id, pane_id, &request.batch.scope)
+            .await?;
+        let mut batch = self
+            .store
+            .load(&request.batch.batch_id)
+            .await?
+            .ok_or_else(|| {
+                InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+            })?;
         require_owner(&batch, &attachment, &evidence)?;
         if batch.generation != request.batch.expected_generation {
-            return Err(InspectionError::new("stale_generation", "comment batch generation is no longer current"));
+            return Err(InspectionError::new(
+                "stale_generation",
+                "comment batch generation is no longer current",
+            ));
         }
         self.refresh_states(&mut batch, &evidence).await;
         let preview = format_batch(&batch, request.retain_stale_excerpts);
         if preview.payload_bytes > super::format::MAX_PREVIEW_PAYLOAD_BYTES {
-            return Err(InspectionError::new("comments_preview_bounded", "comment preview exceeds the 4 MiB response payload limit"));
+            return Err(InspectionError::new(
+                "comments_preview_bounded",
+                "comment preview exceeds the 4 MiB response payload limit",
+            ));
         }
         let payload_hash = hash_payload(&preview.payload);
         let receipts = self.recover_paste_receipts(&batch.batch_id).await?;
-        let needs_reconciliation = self.paste_store.all_for_batch(&batch.batch_id).await?.iter().any(|receipt| {
-            !receipt.user_confirmed
-                && receipt.state == CommentPasteState::Accepted
-                && has_unarchived_sent_drafts(&batch, receipt)
-        });
-        let targets = adapter.comment_paste_targets(session_id).await?
+        let needs_reconciliation = self
+            .paste_store
+            .all_for_batch(&batch.batch_id)
+            .await?
+            .iter()
+            .any(|receipt| {
+                !receipt.user_confirmed
+                    && receipt.state == CommentPasteState::Accepted
+                    && has_unarchived_sent_drafts(&batch, receipt)
+            });
+        let targets = adapter
+            .comment_paste_targets(session_id)
+            .await?
             .into_iter()
             .filter(|target| {
                 target.session_id == session_id
@@ -564,40 +758,95 @@ impl CommentsService {
     ) -> Result<CommentPasteReceipt, InspectionError> {
         valid_id(&request.request_id, "request identity")?;
         validate_target(&request.target)?;
-        let adapter = self.paste_adapter.as_ref().ok_or_else(|| {
-            InspectionError::new("comments_paste_unavailable", "acknowledged Herdr paste is not configured")
-        })?.clone();
+        let adapter = self
+            .paste_adapter
+            .as_ref()
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "comments_paste_unavailable",
+                    "acknowledged Herdr paste is not configured",
+                )
+            })?
+            .clone();
         if request.target.session_id != session_id {
-            return Err(InspectionError::new("comments_paste_target_mismatch", "paste target is from another session"));
+            return Err(InspectionError::new(
+                "comments_paste_target_mismatch",
+                "paste target is from another session",
+            ));
         }
-        let _lease = self.paste_store.lease(&request.target, &request.batch.batch_id).await?;
+        let _lease = self
+            .paste_store
+            .lease(&request.target, &request.batch.batch_id)
+            .await?;
         if let Some(receipt) = self.paste_store.load(&request.operation_id).await? {
             return Ok(receipt);
         }
-        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let (attachment, evidence) = self
+            .attachment(session_id, pane_id, &request.batch.scope)
+            .await?;
         if request.target.workspace_id != attachment.location.workspace_id
-            || request.target.tab_id != attachment.location.tab_id {
-            return self.paste_store.save(rejection(request, "paste target is no longer in this Context tab")).await;
+            || request.target.tab_id != attachment.location.tab_id
+        {
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    "paste target is no longer in this Context tab",
+                ))
+                .await;
         }
         let targets = adapter.comment_paste_targets(session_id).await?;
-        if !targets.iter().any(|target| same_target(target, &request.target)) {
-            return self.paste_store.save(rejection(request, "paste target no longer has a verified agent identity")).await;
+        if !targets
+            .iter()
+            .any(|target| same_target(target, &request.target))
+        {
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    "paste target no longer has a verified agent identity",
+                ))
+                .await;
         }
         if let Err(error) = adapter.focus_comment_paste_target(&request.target).await {
-            return self.paste_store.save(rejection(request, format!("Herdr did not acknowledge target focus: {}", error.message))).await;
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    format!("Herdr did not acknowledge target focus: {}", error.message),
+                ))
+                .await;
         }
-        if let Err(error) = adapter.confirm_comment_paste_target_focus(&request.target).await {
-            return self.paste_store.save(rejection(request, format!("paste target lost confirmed focus: {}", error.message))).await;
+        if let Err(error) = adapter
+            .confirm_comment_paste_target_focus(&request.target)
+            .await
+        {
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    format!("paste target lost confirmed focus: {}", error.message),
+                ))
+                .await;
         }
         let mut has_unknown = false;
-        for receipt in self.paste_store.all_for_batch(&request.batch.batch_id).await? {
-            if receipt.operation_id == request.operation_id || !same_target(&receipt.target, &request.target) {
+        for receipt in self
+            .paste_store
+            .all_for_batch(&request.batch.batch_id)
+            .await?
+        {
+            if receipt.operation_id == request.operation_id
+                || !same_target(&receipt.target, &request.target)
+            {
                 continue;
             }
             // The current target/batch lease is held, so a pending receipt here
             // cannot belong to a live same-target sender.
             let receipt = if receipt.state == CommentPasteState::Pending {
-                self.paste_store.load(&receipt.operation_id).await?.unwrap_or(receipt)
+                self.paste_store
+                    .load(&receipt.operation_id)
+                    .await?
+                    .unwrap_or(receipt)
             } else {
                 receipt
             };
@@ -612,17 +861,34 @@ impl CommentsService {
                 "a prior paste outcome is unknown; inspect the terminal and explicitly acknowledge duplicate risk before retrying",
             ));
         }
-        let mut batch = self.store.load(&request.batch.batch_id).await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        let mut batch = self
+            .store
+            .load(&request.batch.batch_id)
+            .await?
+            .ok_or_else(|| {
+                InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+            })?;
         require_owner(&batch, &attachment, &evidence)?;
         if batch.generation != request.batch.expected_generation {
-            return self.paste_store.save(rejection(request, "comment batch changed after preview; prepare it again before pasting")).await;
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    "comment batch changed after preview; prepare it again before pasting",
+                ))
+                .await;
         }
-        if self.paste_store.all_for_batch(&batch.batch_id).await?.iter().any(|receipt| {
-            !receipt.user_confirmed
-                && receipt.state == CommentPasteState::Accepted
-                && has_unarchived_sent_drafts(&batch, receipt)
-        }) {
+        if self
+            .paste_store
+            .all_for_batch(&batch.batch_id)
+            .await?
+            .iter()
+            .any(|receipt| {
+                !receipt.user_confirmed
+                    && receipt.state == CommentPasteState::Accepted
+                    && has_unarchived_sent_drafts(&batch, receipt)
+            })
+        {
             return Err(InspectionError::new(
                 "comments_paste_reconciliation_required",
                 "a prior accepted paste still has unarchived drafts; reconcile it before another paste",
@@ -633,17 +899,40 @@ impl CommentsService {
         let preview = format_batch(&batch, request.retain_stale_excerpts);
         let payload_hash = hash_payload(&preview.payload);
         if !preview.exportable || preview.framed_bytes > PREVIEW_LIMIT_BYTES {
-            return self.paste_store.save(rejection(request, preview.reason.unwrap_or_else(|| "paste payload exceeds its bound".to_owned()))).await;
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    preview
+                        .reason
+                        .unwrap_or_else(|| "paste payload exceeds its bound".to_owned()),
+                ))
+                .await;
         }
         if payload_hash != request.expected_payload_hash {
-            return self.paste_store.save(rejection(request, "the exact preview payload changed; prepare and review it again")).await;
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    "the exact preview payload changed; prepare and review it again",
+                ))
+                .await;
         }
         if preview.payload.contains('\u{1b}') || preview.payload.contains("\u{1b}[201~") {
-            return self.paste_store.save(rejection(request, "paste payload contains an unsafe bracketed-paste terminator")).await;
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    "paste payload contains an unsafe bracketed-paste terminator",
+                ))
+                .await;
         }
         let framed = format!("\u{1b}[200~{}\u{1b}[201~", preview.payload);
         if framed.as_bytes().len() != preview.framed_bytes as usize {
-            return Err(InspectionError::new("comments_paste_framing", "paste framing byte accounting disagreed with preview"));
+            return Err(InspectionError::new(
+                "comments_paste_framing",
+                "paste framing byte accounting disagreed with preview",
+            ));
         }
         let pending = CommentPasteReceipt {
             operation_id: request.operation_id.clone(),
@@ -653,19 +942,28 @@ impl CommentsService {
             payload_hash,
             target: request.target.clone(),
             state: CommentPasteState::Pending,
-            sent_draft_ids: batch.drafts.iter().map(|draft| draft.draft_id.clone()).collect(),
+            sent_draft_ids: batch
+                .drafts
+                .iter()
+                .map(|draft| draft.draft_id.clone())
+                .collect(),
             created_at: timestamp(),
             completed_at: None,
             message: None,
             user_confirmed: false,
         };
-        let pending = self.paste_store.save_frozen(pending, batch.drafts.clone()).await?;
+        let pending = self
+            .paste_store
+            .save_frozen(pending, batch.drafts.clone())
+            .await?;
         match adapter.send_comment_paste(&request.target, &framed).await {
             Ok(()) => {
                 let mut accepted = pending;
                 accepted.state = CommentPasteState::Accepted;
                 accepted.completed_at = Some(timestamp());
-                accepted.message = Some("Herdr accepted one raw bracketed-paste write; no Enter was sent.".to_owned());
+                accepted.message = Some(
+                    "Herdr accepted one raw bracketed-paste write; no Enter was sent.".to_owned(),
+                );
                 let mut accepted = self.paste_store.save(accepted).await?;
                 // The receipt is durable before archive CAS. Later edits survive;
                 // only byte-for-byte matching sent drafts may be removed.
@@ -694,9 +992,24 @@ impl CommentsService {
                 Ok(accepted)
             }
             Err(error) if is_definitive_pre_dispatch(&error) => {
-                self.paste_store.save(rejection(request, format!("Herdr rejected the paste before dispatch: {}", error.message))).await
+                self.paste_store
+                    .save(rejection(
+                        request,
+                        format!(
+                            "Herdr rejected the paste before dispatch: {}",
+                            error.message
+                        ),
+                    ))
+                    .await
             }
-            Err(error) => self.paste_store.save(outcome_unknown(pending, format!("paste dispatch outcome is unknown: {}", error.message))).await,
+            Err(error) => {
+                self.paste_store
+                    .save(outcome_unknown(
+                        pending,
+                        format!("paste dispatch outcome is unknown: {}", error.message),
+                    ))
+                    .await
+            }
         }
     }
 
@@ -710,31 +1023,69 @@ impl CommentsService {
         request: &CommentPasteMarkPastedRequest,
     ) -> Result<CommentPasteReceipt, InspectionError> {
         valid_id(&request.operation_id, "operation identity")?;
-        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
-        let initial = self.paste_store.inspect_stored(&request.operation_id).await?
-            .ok_or_else(|| InspectionError::new("comments_paste_receipt_not_found", "paste receipt does not exist"))?;
+        let (attachment, evidence) = self
+            .attachment(session_id, pane_id, &request.batch.scope)
+            .await?;
+        let initial = self
+            .paste_store
+            .inspect_stored(&request.operation_id)
+            .await?
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "comments_paste_receipt_not_found",
+                    "paste receipt does not exist",
+                )
+            })?;
         if initial.receipt.batch_id != request.batch.batch_id {
-            return Err(InspectionError::new("comments_paste_operation_conflict", "paste receipt belongs to another comment batch"));
+            return Err(InspectionError::new(
+                "comments_paste_operation_conflict",
+                "paste receipt belongs to another comment batch",
+            ));
         }
         // A live sender holds this same target/batch lease. Waiting before
         // recovery ensures a visible Pending receipt is never resolved while a
         // raw write may still be in progress.
-        let _lease = self.paste_store.lease(&initial.receipt.target, &request.batch.batch_id).await?;
-        let mut stored = self.paste_store.load_stored(&request.operation_id).await?
-            .ok_or_else(|| InspectionError::new("comments_paste_receipt_not_found", "paste receipt disappeared"))?;
+        let _lease = self
+            .paste_store
+            .lease(&initial.receipt.target, &request.batch.batch_id)
+            .await?;
+        let mut stored = self
+            .paste_store
+            .load_stored(&request.operation_id)
+            .await?
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "comments_paste_receipt_not_found",
+                    "paste receipt disappeared",
+                )
+            })?;
         if stored.receipt.batch_id != request.batch.batch_id {
-            return Err(InspectionError::new("comments_paste_operation_conflict", "paste receipt belongs to another comment batch"));
+            return Err(InspectionError::new(
+                "comments_paste_operation_conflict",
+                "paste receipt belongs to another comment batch",
+            ));
         }
-        let current = self.store.load(&request.batch.batch_id).await?
-            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        let current = self
+            .store
+            .load(&request.batch.batch_id)
+            .await?
+            .ok_or_else(|| {
+                InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+            })?;
         require_owner(&current, &attachment, &evidence)?;
         if current.generation != request.batch.expected_generation {
-            return Err(InspectionError::new("stale_generation", "comment batch generation is no longer current"));
+            return Err(InspectionError::new(
+                "stale_generation",
+                "comment batch generation is no longer current",
+            ));
         }
         if stored.receipt.user_confirmed {
             return Ok(stored.receipt);
         }
-        if !matches!(stored.receipt.state, CommentPasteState::OutcomeUnknown | CommentPasteState::Accepted) {
+        if !matches!(
+            stored.receipt.state,
+            CommentPasteState::OutcomeUnknown | CommentPasteState::Accepted
+        ) {
             return Err(InspectionError::new(
                 "comments_paste_resolution_invalid",
                 "only an unknown or reconciliation-required accepted paste can be marked pasted",
@@ -744,7 +1095,8 @@ impl CommentsService {
         let outcome = if let Some(frozen_drafts) = stored.sent_drafts.as_ref() {
             let mut frozen_batch = current.clone();
             frozen_batch.drafts = frozen_drafts.clone();
-            self.archive_accepted_drafts(&frozen_batch, &stored.receipt).await?
+            self.archive_accepted_drafts(&frozen_batch, &stored.receipt)
+                .await?
         } else {
             ArchiveOutcome::MissingFrozenSnapshot
         };
@@ -794,11 +1146,13 @@ impl CommentsService {
             }
             let generation = current.generation;
             match self.store.commit(current, generation).await {
-                Ok(current) => return Ok(if has_unarchived_sent_drafts(&current, receipt) {
-                    ArchiveOutcome::ReconciliationRequired
-                } else {
-                    ArchiveOutcome::Archived
-                }),
+                Ok(current) => {
+                    return Ok(if has_unarchived_sent_drafts(&current, receipt) {
+                        ArchiveOutcome::ReconciliationRequired
+                    } else {
+                        ArchiveOutcome::Archived
+                    });
+                }
                 Err(error) if error.code == "stale_generation" => continue,
                 Err(error) => return Err(error),
             }
@@ -829,8 +1183,8 @@ mod tests {
     use std::fs;
 
     fn temp_root(label: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir()
-            .join(format!("cockpit-comment-paste-{label}-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("cockpit-comment-paste-{label}-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("temporary root");
         root
     }
@@ -867,6 +1221,7 @@ mod tests {
             drafts: vec![CommentDraft {
                 draft_id: Uuid::new_v4().to_string(),
                 file_ref: CommentFileRef {
+                    review: None,
                     root_id: "root".to_owned(),
                     path: "file.txt".to_owned(),
                     absolute_path: "/repo/file.txt".to_owned(),
@@ -891,7 +1246,11 @@ mod tests {
             payload_hash: format!("sha256:{}", "b".repeat(64)),
             target: target(),
             state: CommentPasteState::Accepted,
-            sent_draft_ids: batch.drafts.iter().map(|draft| draft.draft_id.clone()).collect(),
+            sent_draft_ids: batch
+                .drafts
+                .iter()
+                .map(|draft| draft.draft_id.clone())
+                .collect(),
             created_at: timestamp(),
             completed_at: Some(timestamp()),
             message: Some("accepted".to_owned()),
@@ -912,7 +1271,11 @@ mod tests {
             archive_matching_drafts(&mut concurrently_edited, &sent, &receipt),
             ArchiveOutcome::ReconciliationRequired,
         );
-        assert_eq!(concurrently_edited.drafts.len(), 1, "the newer draft survives");
+        assert_eq!(
+            concurrently_edited.drafts.len(),
+            1,
+            "the newer draft survives"
+        );
         assert!(has_unarchived_sent_drafts(&concurrently_edited, &receipt));
     }
 
@@ -958,17 +1321,36 @@ mod tests {
             .expect("receipt");
         assert!(stored.receipt.user_confirmed);
         assert!(!receipt_requires_reconciliation(&stored.receipt));
-        assert_eq!(stored.sent_drafts.as_ref().expect("frozen drafts")[0].draft_id, batch.drafts[0].draft_id);
+        assert_eq!(
+            stored.sent_drafts.as_ref().expect("frozen drafts")[0].draft_id,
+            batch.drafts[0].draft_id
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
     fn only_proven_pre_dispatch_errors_are_rejected() {
-        for code in ["request_not_dispatched", "comments_paste_input_bounded", "comments_paste_framing"] {
-            assert!(is_definitive_pre_dispatch(&InspectionError::new(code, "before write")), "{code}");
+        for code in [
+            "request_not_dispatched",
+            "comments_paste_input_bounded",
+            "comments_paste_framing",
+        ] {
+            assert!(
+                is_definitive_pre_dispatch(&InspectionError::new(code, "before write")),
+                "{code}"
+            );
         }
-        for code in ["comments_paste_malformed_ack", "comments_paste_rejected", "stale_identity", "bounded_output", "socket_error"] {
-            assert!(!is_definitive_pre_dispatch(&InspectionError::new(code, "write may have queued")), "{code}");
+        for code in [
+            "comments_paste_malformed_ack",
+            "comments_paste_rejected",
+            "stale_identity",
+            "bounded_output",
+            "socket_error",
+        ] {
+            assert!(
+                !is_definitive_pre_dispatch(&InspectionError::new(code, "write may have queued")),
+                "{code}"
+            );
         }
     }
 
@@ -978,15 +1360,34 @@ mod tests {
         let store = PasteStore::new(&root).expect("paste store");
         let batch = batch();
         for _ in 0..(MAX_RECEIPT_RECORDS + 12) {
-            save_receipt(&store.state, accepted_receipt(&batch), None).expect("completed receipt remains writable");
+            save_receipt(&store.state, accepted_receipt(&batch), None)
+                .expect("completed receipt remains writable");
         }
         let names = fs::read_dir(root.join("paste"))
             .expect("paste state")
-            .map(|entry| entry.expect("entry").file_name().into_string().expect("utf-8 name"))
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8 name")
+            })
             .collect::<Vec<_>>();
-        assert!(names.iter().filter(|name| name.starts_with("receipt-") && name.ends_with(".json")).count() <= MAX_RECEIPT_RECORDS);
-        let lock_count = names.iter().filter(|name| name.starts_with(".paste-") && name.ends_with(".lock")).count();
-        assert!(lock_count <= LOCK_STRIPES + 1, "receipt locking uses a fixed namespace");
+        assert!(
+            names
+                .iter()
+                .filter(|name| name.starts_with("receipt-") && name.ends_with(".json"))
+                .count()
+                <= MAX_RECEIPT_RECORDS
+        );
+        let lock_count = names
+            .iter()
+            .filter(|name| name.starts_with(".paste-") && name.ends_with(".lock"))
+            .count();
+        assert!(
+            lock_count <= LOCK_STRIPES + 1,
+            "receipt locking uses a fixed namespace"
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1008,12 +1409,22 @@ mod tests {
             save_receipt(&store.state, rejected, None).expect("recent rejected receipt");
         }
 
-        let visible = list_receipts_for_batch(&store.state, &batch.batch_id).expect("recent history");
+        let visible =
+            list_receipts_for_batch(&store.state, &batch.batch_id).expect("recent history");
         assert_eq!(visible.len(), MAX_RECEIPTS);
-        assert!(visible.iter().any(|receipt| receipt.operation_id == unknown.operation_id));
-        let internal = all_receipts_for_batch(&store.state, &batch.batch_id).expect("complete bounded safety scan");
-        assert!(internal.iter().any(|receipt| receipt.operation_id == unknown.operation_id
-            && receipt.state == CommentPasteState::OutcomeUnknown));
+        assert!(
+            visible
+                .iter()
+                .any(|receipt| receipt.operation_id == unknown.operation_id)
+        );
+        let internal = all_receipts_for_batch(&store.state, &batch.batch_id)
+            .expect("complete bounded safety scan");
+        assert!(
+            internal
+                .iter()
+                .any(|receipt| receipt.operation_id == unknown.operation_id
+                    && receipt.state == CommentPasteState::OutcomeUnknown)
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -1,3 +1,8 @@
+import { remarkBoundDiagrams } from "./markdownPolicy";
+import { SafeImage } from "./SafeImage";
+import { MermaidView } from "./MermaidView";
+import { SourceImport } from "./SourceImport";
+import type { CommentReviewRef } from "../../protocol/generated/v1";
 import { SnapshotImport } from "./SnapshotImport";
 import { Component, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -33,6 +38,7 @@ export interface ContextFileViewState {
 }
 
 export interface ContextCommentEditorState {
+  review?: CommentReviewRef;
   rootId: string;
   path: string;
   revision: string;
@@ -223,7 +229,7 @@ function spanFromClick(event: ReactMouseEvent<HTMLDivElement>): SourceSpan | nul
   return Number.isSafeInteger(start) && Number.isSafeInteger(end) ? { start, end } : null;
 }
 
-function SourceLines({
+export function SourceLines({
   text,
   state,
   onSelect,
@@ -287,12 +293,28 @@ function SourceLines({
   );
 }
 
+export function localImagePath(documentPath: string, value: string | undefined): string | null {
+  if (!value || /^(?:[A-Za-z][A-Za-z0-9+.-]*:|[/\\])/.test(value) || /[?#]/.test(value)) return null;
+  let decoded: string;
+  try { decoded = decodeURIComponent(value); } catch { return null; }
+  if (/[\x00-\x1f\x7f\\]/.test(decoded) || decoded.startsWith("/")) return null;
+  const segments = documentPath.split("/").slice(0, -1);
+  for (const segment of decoded.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") { if (!segments.length) return null; segments.pop(); }
+    else segments.push(segment);
+  }
+  return segments.length ? segments.join("/") : null;
+}
+
 function MarkdownView({
   text,
   state,
   onSelect,
   onScroll,
+  client, presentation,
 }: {
+  client: CockpitClient; presentation: PanePresentation;
   text: string;
   state: ContextFileViewState;
   onSelect: (start: number, end: number) => void;
@@ -314,12 +336,23 @@ function MarkdownView({
     blockquote: ({ node, children, ...props }) => <blockquote {...props} {...blockData(node, derived.sourceLines)}>{children}</blockquote>,
     ul: ({ node, children, ...props }) => <ul {...props} {...blockData(node, derived.sourceLines)}>{children}</ul>,
     ol: ({ node, children, ...props }) => <ol {...props} {...blockData(node, derived.sourceLines)}>{children}</ol>,
-    pre: ({ node, children, ...props }) => <pre {...props} {...blockData(node, derived.sourceLines)}>{children}</pre>,
+    pre: ({ node, children, ...props }) => {
+      const code = node?.children.find(child => child.type === "element" && child.tagName === "code");
+      if (code?.type === "element" && Array.isArray(code.properties.className) && code.properties.className.includes("language-mermaid")) {
+
+        const source = code.children.filter(child => child.type === "text").map(child => child.type === "text" ? child.value : "").join("");
+        return <div {...blockData(node, derived.sourceLines)}>{code.properties.dataMermaidPreview === true ? <MermaidView source={source} /> : <><p>Only the first four diagrams are previewed.</p><pre>{children}</pre></>}</div>;
+      }
+      return <pre {...props} {...blockData(node, derived.sourceLines)}>{children}</pre>;
+    },
     a: ({ node, href, children, ...props }) => isSafeHref(href)
-      ? <a {...props} href={href}>{children}</a>
+      ? <span {...props} title={href} className="context-link-reference" {...blockData(node, derived.sourceLines)}>{children}</span>
       : <span {...props} {...blockData(node, derived.sourceLines)}>{children}</span>,
-    img: ({ node, alt }) => <span className="context-media-refusal" {...blockData(node, derived.sourceLines)}>[Image unavailable{alt ? `: ${alt}` : ""}]</span>,
-  }), [derived.sourceLines]);
+    img: ({ node, alt, src }) => {
+      const path = localImagePath(state.path, src);
+      return <span {...blockData(node, derived.sourceLines)}>{path ? <SafeImage client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} request={{ binding_id: presentation.binding_id, root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : <span className="context-media-refusal">[Image unavailable: only companion-relative PNG/JPEG images are supported]</span>}</span>;
+    },
+  }), [derived.sourceLines, derived.text, client, presentation.session_id, presentation.pane_id, presentation.binding_id, state.rootId, state.path]);
   return (
     <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
       const span = spanFromClick(event);
@@ -332,7 +365,7 @@ function MarkdownView({
         </details>
       ) : null}
       <article className="context-markdown-body">
-        <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={components}>{derived.text}</ReactMarkdown>
+        <ReactMarkdown skipHtml remarkPlugins={[remarkGfm, remarkBoundDiagrams]} components={components}>{derived.text}</ReactMarkdown>
       </article>
     </div>
   );
@@ -663,10 +696,10 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
               {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
               {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
-              {document.text === null ? <div className="context-notice context-notice-error"><strong>File refused</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
+              {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && root.kind === "companion" && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage client={client} sessionId={sessionId} paneId={paneId} request={{ binding_id: bindingId, root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
                 <div className="context-mode-switch" role="tablist" aria-label="Document view"><button type="button" role="tab" aria-selected={fileState!.mode === "source"} className={fileState!.mode === "source" ? "is-selected" : ""} onClick={() => updateFile({ mode: "source" })}>Source</button>{isMarkdown(document, selectedPath) ? <button type="button" role="tab" aria-selected={fileState!.mode === "markdown"} className={fileState!.mode === "markdown" ? "is-selected" : ""} onClick={() => updateFile({ mode: "markdown" })}>Markdown</button> : null}</div>
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
-                  {fileState!.mode === "markdown" ? <MarkdownView text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} />}
+                  {fileState!.mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} />}
                 </RenderErrorBoundary>
               </>}
             </>
@@ -709,6 +742,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           onInvalidate={invalidateVisibleFiles}
           disabled={!controlAllowed}
         /> : null}
+          {root.kind === "companion" ? <SourceImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onChanged={files => {
+            const paths = files.flatMap(file => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
+            setExpanded(current => new Set([...current, ...paths]));
+            void loadDirectory(root, "", true);
+            for (const path of new Set(paths)) void loadDirectory(root, path, true);
+          }} /> : null}
           {root.kind === "companion" ? <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={(result) => {
             const parts = result.snapshot_path.split("/");
             const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));

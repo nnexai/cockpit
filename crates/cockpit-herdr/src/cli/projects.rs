@@ -412,7 +412,8 @@ fn parse_worktree_removed(
 ) -> Result<(), InspectionError> {
     let result = object(value, "worktree.remove result")?;
     if required_string(result, "type", "worktree.remove result")? != "worktree_removed"
-        || required_string(result, "workspace_id", "worktree.remove result")? != request.workspace_id
+        || required_string(result, "workspace_id", "worktree.remove result")?
+            != request.workspace_id
         || required_bool(result, "forced", "worktree.remove result")? != request.force
     {
         return Err(InspectionError::new(
@@ -422,7 +423,10 @@ fn parse_worktree_removed(
     }
     let worktree = object(
         result.get("worktree").ok_or_else(|| {
-            InspectionError::new("malformed_worktree_response", "removed worktree is required")
+            InspectionError::new(
+                "malformed_worktree_response",
+                "removed worktree is required",
+            )
         })?,
         "worktree.remove result.worktree",
     )?;

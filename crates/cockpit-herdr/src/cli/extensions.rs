@@ -71,6 +71,7 @@ struct LaunchReceipt {
     /// cwd, rather than its foreground process cwd.
     viewer_cwd: Option<String>,
     process_identity: Option<String>,
+    kind: ExtensionKind,
 }
 
 #[derive(Debug, Deserialize)]
@@ -529,9 +530,13 @@ impl ExtensionHerdrAdapter {
         let mut cwd = optional_string(pane_metadata, "cwd", "pane metadata")?;
         let mut foreground_cwd = optional_string(pane_metadata, "foreground_cwd", "pane metadata")?;
         let mut viewer_cwd = None;
-        let mut can_open_context = methods.contains("plugin.pane.open")
+        let can_open_context = methods.contains("plugin.pane.open")
             && manifests.as_deref().is_some_and(|manifests| {
                 Self::target_manifest(manifests, ExtensionKind::Context).is_some()
+            });
+        let can_open_review = methods.contains("plugin.pane.open")
+            && manifests.as_deref().is_some_and(|manifests| {
+                Self::target_manifest(manifests, ExtensionKind::Review).is_some()
             });
         if let Some((manifest, manifest_pane)) = manifest_target {
             if let Some(info) = process_info
@@ -562,7 +567,7 @@ impl ExtensionHerdrAdapter {
                 ExtensionKind::Context => "pane title matches the file-viewer candidate; executable and process-generation evidence are required".to_owned(),
                 ExtensionKind::Review => "pane title matches the Reviewr candidate; executable and process-generation evidence are required".to_owned(),
             };
-        } else if !can_open_context && manifests.is_some() {
+        } else if !can_open_context && !can_open_review && manifests.is_some() {
             confidence = DetectionConfidence::Unsupported;
             reason = "supported extension is not installed and enabled at this endpoint".to_owned();
         }
@@ -577,7 +582,7 @@ impl ExtensionHerdrAdapter {
                 process_info,
                 manifests
                     .as_deref()
-                    .and_then(|items| Self::target_manifest(items, ExtensionKind::Context)),
+                    .and_then(|items| Self::target_manifest(items, receipt.kind)),
             ) {
                 (Some(expected), Some(info), Some((manifest, manifest_pane))) => self
                     .classify_process(info, manifest, manifest_pane)
@@ -591,9 +596,12 @@ impl ExtensionHerdrAdapter {
                     .process_identity
                     .clone()
                     .expect("verified receipt has process identity");
-                kind = Some(ExtensionKind::Context);
-                can_open_context = methods.contains("plugin.pane.open");
-                viewer_cwd = receipt.viewer_cwd.clone();
+                kind = Some(receipt.kind);
+                viewer_cwd = if receipt.kind == ExtensionKind::Context {
+                    receipt.viewer_cwd.clone()
+                } else {
+                    None
+                };
             } else if process_info.is_none() {
                 // Retain the launch as a candidate; missing live process
                 // evidence cannot authorize graphical replacement.
@@ -604,9 +612,12 @@ impl ExtensionHerdrAdapter {
                     ProcessEvidence::Available(_) => unreachable!("process_info is Some above"),
                 };
                 process_identity = receipt.process_identity.clone().unwrap_or(process_identity);
-                kind = Some(ExtensionKind::Context);
-                can_open_context = methods.contains("plugin.pane.open");
-                viewer_cwd = receipt.viewer_cwd.clone();
+                kind = Some(receipt.kind);
+                viewer_cwd = if receipt.kind == ExtensionKind::Context {
+                    receipt.viewer_cwd.clone()
+                } else {
+                    None
+                };
             }
         }
 
@@ -624,6 +635,7 @@ impl ExtensionHerdrAdapter {
             confidence,
             reason,
             can_open_context,
+            can_open_review,
         })
     }
 
@@ -631,6 +643,7 @@ impl ExtensionHerdrAdapter {
         &self,
         session_id: &str,
         request: &ExtensionLaunch,
+        kind: ExtensionKind,
     ) -> Result<ExtensionPaneEvidence, InspectionError> {
         self.herdr.selected_session(session_id)?;
         if !super::valid_pane_id(&request.pane_id)
@@ -647,7 +660,7 @@ impl ExtensionHerdrAdapter {
         if endpoint_identity != request.endpoint_identity {
             return Err(InspectionError::new(
                 "stale_identity",
-                "Herdr endpoint changed before Context launch",
+                "Herdr endpoint changed before extension launch",
             ));
         }
         let methods = self.schema_methods(session_id, &endpoint_identity).await?;
@@ -673,7 +686,7 @@ impl ExtensionHerdrAdapter {
         if target.space_id != request.workspace_id || target.terminal_id != request.terminal_id {
             return Err(InspectionError::new(
                 "stale_identity",
-                "Context launch target identity changed",
+                "extension launch target identity changed",
             ));
         }
         let manifests = self
@@ -682,18 +695,20 @@ impl ExtensionHerdrAdapter {
             .ok_or_else(|| {
                 InspectionError::new("unsupported_capability", "plugin.list is unavailable")
             })?;
-        let (manifest, pane) = Self::target_manifest(&manifests, ExtensionKind::Context)
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "unsupported_capability",
-                    "installed file-viewer entrypoint is unavailable",
-                )
-            })?;
+        let (manifest, pane) = Self::target_manifest(&manifests, kind).ok_or_else(|| {
+            InspectionError::new(
+                "unsupported_capability",
+                "installed extension entrypoint is unavailable",
+            )
+        })?;
+        let (plugin_id, entrypoint) = match kind {
+            ExtensionKind::Context => (FILE_VIEWER_ID, FILE_VIEWER_ENTRYPOINT),
+            ExtensionKind::Review => (REVIEWR_ID, REVIEWR_ENTRYPOINT),
+        };
 
-        // Herdr creates the plugin process from its install root and injects
-        // context from this target pane. Re-read the target immediately before
-        // opening so the receipt records observed Herdr context, never the
-        // approved read-root constraint from request.cwd.
+        // Re-read the placement target immediately before opening. The plugin
+        // cwd is the separately authorized request cwd, so a Context companion
+        // can launch Reviewr for its associated checkout.
         let (target_result, _) = self
             .herdr
             .socket_request_with_identity(
@@ -722,17 +737,7 @@ impl ExtensionHerdrAdapter {
         {
             return Err(InspectionError::new(
                 "stale_identity",
-                "Context launch target changed before plugin open",
-            ));
-        }
-        let target_cwd = optional_string(target_metadata, "cwd", "target pane metadata")?;
-        if !target_cwd
-            .as_deref()
-            .is_some_and(|cwd| actual_cwd_matches(cwd, &request.cwd))
-        {
-            return Err(InspectionError::new(
-                "stale_identity",
-                "Context launch target cwd changed before plugin open",
+                "extension launch target changed before plugin open",
             ));
         }
         let direction = match request.direction {
@@ -745,11 +750,12 @@ impl ExtensionHerdrAdapter {
                 session_id,
                 "plugin.pane.open",
                 json!({
-                    "plugin_id": FILE_VIEWER_ID,
-                    "entrypoint": FILE_VIEWER_ENTRYPOINT,
+                    "plugin_id": plugin_id,
+                    "entrypoint": entrypoint,
                     "placement": "split",
                     "target_pane_id": request.pane_id,
                     "direction": direction,
+                    "cwd": request.cwd,
                     "focus": true,
                 }),
                 Some(&endpoint_identity),
@@ -776,10 +782,10 @@ impl ExtensionHerdrAdapter {
         )
         .map_err(post_mutation_error)?;
         if required_string(plugin_pane, "plugin_id", "plugin_pane").map_err(post_mutation_error)?
-            != FILE_VIEWER_ID
+            != plugin_id
             || required_string(plugin_pane, "entrypoint", "plugin_pane")
                 .map_err(post_mutation_error)?
-                != FILE_VIEWER_ENTRYPOINT
+                != entrypoint
         {
             return Err(post_mutation_error(InspectionError::new(
                 "stale_identity",
@@ -804,6 +810,17 @@ impl ExtensionHerdrAdapter {
             .map_err(post_mutation_error)?;
         let tab_id =
             required_string(opened_pane, "tab_id", "plugin pane").map_err(post_mutation_error)?;
+        let opened_cwd =
+            optional_string(opened_pane, "cwd", "plugin pane").map_err(post_mutation_error)?;
+        if !opened_cwd
+            .as_deref()
+            .is_some_and(|cwd| actual_cwd_matches(cwd, &request.cwd))
+        {
+            return Err(post_mutation_error(InspectionError::new(
+                "launch_receipt_unverified",
+                "opened extension cwd does not match the authorized checkout",
+            )));
+        }
         let subsequent = self
             .herdr
             .read_snapshot_with_identity(session_id, Some(&endpoint_identity))
@@ -865,12 +882,17 @@ impl ExtensionHerdrAdapter {
             terminal_id: terminal_id.clone(),
             workspace_id: workspace_id.clone(),
             tab_id: tab_id.clone(),
-            viewer_cwd: target_cwd.clone(),
+            viewer_cwd: if kind == ExtensionKind::Context {
+                opened_cwd.clone()
+            } else {
+                None
+            },
             process_identity: if confidence == DetectionConfidence::VerifiedLaunch {
                 Some(process_identity.clone())
             } else {
                 None
             },
+            kind,
         };
         self.remember_receipt(receipt).await;
         Ok(ExtensionPaneEvidence {
@@ -879,19 +901,22 @@ impl ExtensionHerdrAdapter {
             terminal_id,
             workspace_id,
             tab_id,
-            cwd: optional_string(opened_pane, "cwd", "plugin pane").map_err(post_mutation_error)?,
+            cwd: opened_cwd,
             foreground_cwd: optional_string(opened_pane, "foreground_cwd", "plugin pane")
                 .map_err(post_mutation_error)?,
-            viewer_cwd: if confidence == DetectionConfidence::VerifiedLaunch {
-                target_cwd
+            viewer_cwd: if kind == ExtensionKind::Context
+                && confidence == DetectionConfidence::VerifiedLaunch
+            {
+                Some(request.cwd.clone())
             } else {
                 None
             },
             process_identity,
-            extension: Some(ExtensionKind::Context),
+            extension: Some(kind),
             confidence,
             reason,
-            can_open_context: true,
+            can_open_context: Self::target_manifest(&manifests, ExtensionKind::Context).is_some(),
+            can_open_review: Self::target_manifest(&manifests, ExtensionKind::Review).is_some(),
         })
     }
 }
@@ -911,7 +936,17 @@ impl ExtensionHerdrAdapterTrait for ExtensionHerdrAdapter {
         session_id: &str,
         request: &ExtensionLaunch,
     ) -> Result<ExtensionPaneEvidence, InspectionError> {
-        self.launch_inner(session_id, request).await
+        self.launch_inner(session_id, request, ExtensionKind::Context)
+            .await
+    }
+
+    async fn launch_review_pane(
+        &self,
+        session_id: &str,
+        request: &ExtensionLaunch,
+    ) -> Result<ExtensionPaneEvidence, InspectionError> {
+        self.launch_inner(session_id, request, ExtensionKind::Review)
+            .await
     }
 }
 
@@ -921,6 +956,45 @@ fn actual_cwd_matches(observed: &str, approved: &str) -> bool {
     }
     canonical_or_original(Path::new(observed), None)
         == canonical_or_original(Path::new(approved), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(plugin_id: &str, pane: &str) -> Manifest {
+        Manifest {
+            plugin_id: plugin_id.to_owned(),
+            plugin_root: PathBuf::from("/plugins/test"),
+            enabled: true,
+            valid: true,
+            panes: vec![ManifestPane {
+                id: pane.to_owned(),
+                command: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn review_launch_uses_only_the_declared_reviewr_pane() {
+        let manifests = vec![
+            manifest(FILE_VIEWER_ID, FILE_VIEWER_ENTRYPOINT),
+            manifest(REVIEWR_ID, REVIEWR_ENTRYPOINT),
+            manifest(REVIEWR_ID, "other"),
+        ];
+        let (plugin, pane) =
+            ExtensionHerdrAdapter::target_manifest(&manifests, ExtensionKind::Review)
+                .expect("Reviewr pane is present");
+        assert_eq!(plugin.plugin_id, REVIEWR_ID);
+        assert_eq!(pane.id, REVIEWR_ENTRYPOINT);
+        assert!(
+            ExtensionHerdrAdapter::target_manifest(
+                &[manifest(REVIEWR_ID, "other")],
+                ExtensionKind::Review
+            )
+            .is_none()
+        );
+    }
 }
 
 fn viewer_cwd_from_process(process: &ProcessRecord, process_identity: &str) -> Option<String> {

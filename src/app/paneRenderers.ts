@@ -5,7 +5,7 @@ import { createContextViewState, type ContextViewState } from "./context/Context
 
 export type PaneRendererState = {
   presentation: PanePresentation;
-  choice: "context" | "terminal" | null;
+  choice: "context" | "review" | "terminal" | null;
   view: ContextViewState;
   inspectionError: string | null;
   actionError: string | null;
@@ -14,6 +14,10 @@ export type PaneRendererState = {
 
 export function isGraphicalContext(state: PaneRendererState | undefined): boolean {
   return state?.presentation.renderer === "context" && state.choice !== "terminal";
+}
+
+export function isGraphicalReview(state: PaneRendererState | undefined): boolean {
+  return state?.presentation.renderer === "review" && state.choice !== "terminal";
 }
 
 
@@ -93,7 +97,7 @@ export function usePaneRenderers(
     return () => { abort.abort(); clearTimeout(timer); };
   }, [client, sessionId, visibleKey, allKey, live, refreshEpoch, refresh, accept]);
 
-  const choose = (paneId: string, choice: "context" | "terminal") => {
+  const choose = (paneId: string, choice: "context" | "review" | "terminal") => {
     setPanes((current) => {
       const previous = current[paneId];
       if (!previous || (choice === "context" && previous.presentation.renderer !== "context")) return current;
@@ -109,10 +113,10 @@ export function usePaneRenderers(
     });
   };
 
-  const open = async (paneId: string, direction: ContextSplitDirection) => {
+  const open = async (paneId: string, direction: ContextSplitDirection, kind: "context" | "review" = "context") => {
     if (!sessionId || !live || launching.current) return;
     const previous = panesRef.current[paneId];
-    if (previous?.outcomeUnknown && !window.confirm("The previous launch outcome is unknown. Check the existing panes before opening another Context. Open another?")) return;
+    if (previous?.outcomeUnknown && !window.confirm("The previous launch outcome is unknown. Check the existing panes before opening another pane. Open another?")) return;
     const requestedSession = sessionId;
     let requestedBinding = previous?.presentation.binding_id;
     launching.current = true;
@@ -121,11 +125,15 @@ export function usePaneRenderers(
       const presentation = await client.inspectPane(sessionId, paneId);
       if (currentSession.current !== requestedSession) return;
       requestedBinding = presentation.binding_id;
-      const root = presentation.roots.find((candidate) => candidate.root_id === presentation.default_root_id);
-      if (!root || !presentation.can_open_context) throw new Error(presentation.reason || "Context requires an enabled file-viewer plugin and an authorized root");
-      await client.openContext(sessionId, {
-        pane_id: paneId, binding_id: presentation.binding_id, root_id: root.root_id, direction,
-      });
+      if (kind === "review") {
+        const root = (presentation.roots.find(candidate => candidate.kind === "repository") ?? presentation.roots[0]);
+        if (!root || !presentation.can_open_review) throw new Error("Review requires an enabled Reviewr plugin and a configured repository");
+        await client.openReview(sessionId, { pane_id: paneId, binding_id: presentation.binding_id, repository_id: root.repository_id, direction });
+      } else {
+        const root = presentation.roots.find(candidate => candidate.root_id === presentation.default_root_id);
+        if (!root || !presentation.can_open_context) throw new Error(presentation.reason || "Context requires an enabled file-viewer plugin and an authorized root");
+        await client.openContext(sessionId, { pane_id: paneId, binding_id: presentation.binding_id, root_id: root.root_id, direction });
+      }
       if (currentSession.current !== requestedSession) return;
       setPanes((current) => {
         const source = current[paneId];

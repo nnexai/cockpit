@@ -1,4 +1,3 @@
-use cockpit_protocol::context_assets::ContextSnapshotRequest;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
@@ -10,6 +9,7 @@ use cockpit_core::{CockpitService, context_search::ContextSearchService};
 use cockpit_protocol::context::{
     ContextDirectoryRequest, ContextDocumentRequest, ContextLaunchRequest,
 };
+use cockpit_protocol::context_assets::ContextSnapshotRequest;
 use cockpit_protocol::context_search::{ContextInvalidationRequest, ContextSearchRequest};
 use serde::de::DeserializeOwned;
 
@@ -41,7 +41,10 @@ pub(super) fn routes() -> Router<CockpitService> {
             post(invalidate),
         )
         .route("/api/v1/sessions/{session_id}/context/open", post(open))
-        .route("/api/v1/sessions/{session_id}/panes/{pane_id}/context/snapshot", post(snapshot))
+        .route(
+            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/snapshot",
+            post(snapshot),
+        )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
 }
@@ -136,7 +139,10 @@ async fn search(
         Ok(contexts) => contexts.clone(),
         Err(error) => return inspection_error(error),
     };
-    match ContextSearchService::new(contexts).search(&session, &pane, &request).await {
+    match ContextSearchService::new(contexts)
+        .search(&session, &pane, &request)
+        .await
+    {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -158,7 +164,10 @@ async fn invalidate(
         Ok(contexts) => contexts.clone(),
         Err(error) => return inspection_error(error),
     };
-    match ContextSearchService::new(contexts).invalidate(&session, &pane, &request).await {
+    match ContextSearchService::new(contexts)
+        .invalidate(&session, &pane, &request)
+        .await
+    {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -201,7 +210,10 @@ async fn snapshot(
         Ok(contexts) => contexts.clone(),
         Err(error) => return inspection_error(error),
     };
-    match contexts.snapshot_local_repository(&session, &pane, &request).await {
+    match contexts
+        .snapshot_local_repository(&session, &pane, &request)
+        .await
+    {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

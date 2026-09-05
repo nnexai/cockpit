@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Minimal capability for the Cockpit main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "allow-cockpit-status",
     "allow-cockpit-sessions",
@@ -24,6 +26,9 @@
     "allow-cockpit-context-search",
     "allow-cockpit-context-snapshot",
     "allow-cockpit-context-invalidate",
+    "allow-cockpit-review-snapshot",
+    "allow-cockpit-review-file",
+    "allow-cockpit-review-open",
     "allow-cockpit-comments-list",
     "allow-cockpit-comments-batch",
     "allow-cockpit-comments-upsert",
@@ -39,6 +44,10 @@
     "allow-cockpit-session-subscribe",
     "allow-cockpit-terminal-open",
     "allow-cockpit-terminal-command",
-    "allow-cockpit-stream-cancel"
+    "allow-cockpit-stream-cancel",
+    "allow-cockpit-source-import",
+    "allow-cockpit-source-refresh",
+    "allow-cockpit-source-list",
+    "allow-cockpit-context-media"
   ]
 }

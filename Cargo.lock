@@ -556,6 +556,7 @@ name = "cockpit-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "cap-fs-ext",
  "cap-std",
  "cockpit-protocol",
@@ -599,6 +600,7 @@ dependencies = [
  "cockpit-core",
  "cockpit-herdr",
  "cockpit-protocol",
+ "cockpit-providers",
  "futures-util",
  "percent-encoding",
  "serde",
@@ -619,6 +621,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cockpit-providers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cockpit-core",
+ "cockpit-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "cockpit-tauri"
 version = "0.1.0"
 dependencies = [
@@ -626,6 +641,7 @@ dependencies = [
  "cockpit-core",
  "cockpit-herdr",
  "cockpit-protocol",
+ "cockpit-providers",
  "serde",
  "serde_json",
  "tauri",

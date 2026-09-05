@@ -40,7 +40,7 @@ export function parseProjectConfiguration(value: unknown): ProjectConfiguration 
     || !u32(value.limits.context_directory_entries) || !u32(value.limits.context_tree_depth)
     || !record(value.origins) || !Object.values(value.origins).every(text)
     || !Array.isArray(value.providers) || !value.providers.every((provider) => record(provider)
-      && text(provider.id) && text(provider.base_url) && text(provider.executable))) {
+      && text(provider.id) && text(provider.base_url) && text(provider.executable) && (provider.login === undefined || (text(provider.login) && provider.login.length > 0 && provider.login.length <= 256)))) {
     malformed("project configuration");
   }
   return value as unknown as ProjectConfiguration;

@@ -606,6 +606,7 @@ mod tests {
                 id: "gitea".into(),
                 base_url: "https://git.example.test/".into(),
                 executable: "tea".into(),
+                login: None,
             }],
             limits: ProjectLimits {
                 catalog_depth: 3,

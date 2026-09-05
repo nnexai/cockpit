@@ -11,8 +11,8 @@ use cockpit_protocol::context_search::{
     ContextInvalidationState, ContextSearchRequest, ContextSearchResponse, ContextSearchResult,
 };
 
-use crate::context::{metadata_revision, AuthorizedRoot, ContextService};
 use crate::InspectionError;
+use crate::context::{AuthorizedRoot, ContextService, metadata_revision};
 
 const MAX_QUERY_BYTES: usize = 256;
 const MAX_RESULTS: usize = 100;
@@ -44,14 +44,24 @@ impl ContextSearchService {
             .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
             .await?;
         let request = request.clone();
-        let permit = self.context.search_permits.clone().acquire_owned().await
-            .map_err(|_| InspectionError::new("context_search_unavailable", "Context search capacity is unavailable"))?;
+        let permit = self
+            .context
+            .search_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "context_search_unavailable",
+                    "Context search capacity is unavailable",
+                )
+            })?;
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             search_blocking(root, request)
         })
-            .await
-            .map_err(|error| InspectionError::new("context_search_task", error.to_string()))?
+        .await
+        .map_err(|error| InspectionError::new("context_search_task", error.to_string()))?
     }
 
     pub async fn invalidate(
@@ -66,14 +76,24 @@ impl ContextSearchService {
             .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
             .await?;
         let request = request.clone();
-        let permit = self.context.search_permits.clone().acquire_owned().await
-            .map_err(|_| InspectionError::new("context_invalidation_unavailable", "Context invalidation capacity is unavailable"))?;
+        let permit = self
+            .context
+            .search_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "context_invalidation_unavailable",
+                    "Context invalidation capacity is unavailable",
+                )
+            })?;
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             invalidate_blocking(root, request)
         })
-            .await
-            .map_err(|error| InspectionError::new("context_invalidation_task", error.to_string()))?
+        .await
+        .map_err(|error| InspectionError::new("context_invalidation_task", error.to_string()))?
     }
 }
 
@@ -200,15 +220,16 @@ fn search_blocking(
                 truncated = true;
                 continue;
             }
-            let (text, revision) = match read_utf8_file(&root, &candidate, MAX_SEARCHED_FILE_BYTES, deadline) {
-                Ok(Some(value)) => value,
-                Ok(None) => continue,
-                Err(error) if error.code == "context_search_deadline" => {
-                    truncated = true;
-                    break;
-                }
-                Err(error) => return Err(error),
-            };
+            let (text, revision) =
+                match read_utf8_file(&root, &candidate, MAX_SEARCHED_FILE_BYTES, deadline) {
+                    Ok(Some(value)) => value,
+                    Ok(None) => continue,
+                    Err(error) if error.code == "context_search_deadline" => {
+                        truncated = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                };
             scanned_files = scanned_files.saturating_add(1);
             append_matches(
                 &mut results,
@@ -358,7 +379,10 @@ fn read_utf8_file(
     let file = match parent.open_with(&leaf, &options) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Err(InspectionError::new("context_file_missing", error.to_string()));
+            return Err(InspectionError::new(
+                "context_file_missing",
+                error.to_string(),
+            ));
         }
         Err(_) => return Ok(None),
     };
@@ -367,7 +391,10 @@ fn read_utf8_file(
         Ok(metadata) => metadata,
         Err(_) => return Ok(None),
     };
-    if opened.file_type().is_symlink() || !opened.is_file() || metadata_revision(&opened) != revision {
+    if opened.file_type().is_symlink()
+        || !opened.is_file()
+        || metadata_revision(&opened) != revision
+    {
         return Ok(None);
     }
     let mut content = Vec::with_capacity(before.len() as usize);
@@ -376,9 +403,9 @@ fn read_utf8_file(
         .read_to_end(&mut content)
         .map_err(|error| InspectionError::new("context_file_unavailable", error.to_string()))?;
     check_deadline(deadline)?;
-    let after = parent.symlink_metadata(&leaf).map_err(|error| {
-        InspectionError::new("context_changed_during_read", error.to_string())
-    })?;
+    let after = parent
+        .symlink_metadata(&leaf)
+        .map_err(|error| InspectionError::new("context_changed_during_read", error.to_string()))?;
     if metadata_revision(&after) != revision || content.len() > max_bytes {
         return Ok(None);
     }
@@ -439,7 +466,9 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_matches, truncate_utf8, validate_invalidation_request, validate_search_request};
+    use super::{
+        append_matches, truncate_utf8, validate_invalidation_request, validate_search_request,
+    };
     use cockpit_protocol::context_search::{
         ContextInvalidationRequest, ContextKnownRevision, ContextSearchRequest,
     };

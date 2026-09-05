@@ -1,13 +1,11 @@
 use std::io;
 use std::path::Path;
 
-use cockpit_protocol::comments::{
-    CommentAnchor, CommentBatch, CommentDraft, CommentOwner,
-};
+use cockpit_protocol::comments::{CommentAnchor, CommentBatch, CommentDraft, CommentOwner};
 use uuid::Uuid;
 
 use crate::InspectionError;
-use crate::project_store::{atomic_write_json, read_json_bounded, timestamp, ProjectStore};
+use crate::project_store::{ProjectStore, atomic_write_json, read_json_bounded, timestamp};
 
 const MAX_DRAFTS_PER_BATCH: usize = 64;
 const MAX_COMMENT_TEXT_BYTES: usize = 8 * 1024;
@@ -140,7 +138,10 @@ fn commit_blocking(
     }
     atomic_write_json(state.state_dir(), &name, &batch).map_err(|error| {
         if error.kind() == io::ErrorKind::InvalidInput {
-            InspectionError::new("unsafe_path", "comment batch destination is not a regular file")
+            InspectionError::new(
+                "unsafe_path",
+                "comment batch destination is not a regular file",
+            )
         } else {
             InspectionError::new("comments_write", error.to_string())
         }
@@ -173,9 +174,7 @@ fn read_batch(
     }
 }
 
-fn scan_batches(
-    state: &ProjectStore,
-) -> Result<(Vec<CommentBatch>, bool), InspectionError> {
+fn scan_batches(state: &ProjectStore) -> Result<(Vec<CommentBatch>, bool), InspectionError> {
     let entries = state
         .state_dir()
         .entries()
@@ -190,10 +189,13 @@ fn scan_batches(
                 "comment lookup exceeded its bounded directory-entry limit",
             ));
         }
-        let entry = entry.map_err(|error| InspectionError::new("comments_read", error.to_string()))?;
+        let entry =
+            entry.map_err(|error| InspectionError::new("comments_read", error.to_string()))?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(stem) = name.strip_suffix(".json") else { continue };
+        let Some(stem) = name.strip_suffix(".json") else {
+            continue;
+        };
         if Uuid::parse_str(stem).is_err() {
             continue;
         }
@@ -215,7 +217,9 @@ fn scan_batches(
     }
     let mut batches = Vec::with_capacity(names.len());
     for id in names {
-        let Some(batch) = read_batch(state, &id)? else { continue };
+        let Some(batch) = read_batch(state, &id)? else {
+            continue;
+        };
         if batch.batch_id != id {
             return Err(InspectionError::new(
                 "comments_corrupt",
@@ -231,7 +235,6 @@ fn scan_batches(
     });
     Ok((batches, truncated))
 }
-
 
 fn validate_batch(batch: &CommentBatch) -> Result<(), InspectionError> {
     validate_uuid(&batch.batch_id, "batch")?;
@@ -271,8 +274,21 @@ fn validate_draft(draft: &CommentDraft) -> Result<(), InspectionError> {
         ));
     }
     validate_text_id(&draft.file_ref.root_id, "root")?;
+    if let Some(review) = &draft.file_ref.review {
+        validate_text_id(&review.review_id, "review")?;
+        validate_text_id(&review.file_id, "review file")?;
+        if review.generation == 0 {
+            return Err(InspectionError::new(
+                "comments_invalid_record",
+                "review generation must be positive",
+            ));
+        }
+    }
     if draft.file_ref.path.is_empty() || draft.file_ref.path.len() > 4096 {
-        return Err(InspectionError::new("comments_invalid_path", "comment path is invalid"));
+        return Err(InspectionError::new(
+            "comments_invalid_path",
+            "comment path is invalid",
+        ));
     }
     if draft.file_ref.absolute_path.is_empty() || draft.file_ref.absolute_path.len() > 16 * 1024 {
         return Err(InspectionError::new(
@@ -281,7 +297,11 @@ fn validate_draft(draft: &CommentDraft) -> Result<(), InspectionError> {
         ));
     }
     if draft.file_ref.revision.len() > 4096
-        || draft.file_ref.content_hash.as_ref().is_some_and(|hash| hash.len() > 4096)
+        || draft
+            .file_ref
+            .content_hash
+            .as_ref()
+            .is_some_and(|hash| hash.len() > 4096)
     {
         return Err(InspectionError::new(
             "comments_metadata_bounded",
@@ -320,7 +340,12 @@ fn validate_uuid(value: &str, kind: &str) -> Result<(), InspectionError> {
 }
 
 fn validate_text_id(value: &str, kind: &str) -> Result<(), InspectionError> {
-    if value.is_empty() || value.len() > 256 || value.contains('/') || value.contains('\\') || value.contains('\0') {
+    if value.is_empty()
+        || value.len() > 256
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains('\0')
+    {
         return Err(InspectionError::new(
             "comments_invalid_identity",
             format!("comment {kind} identity is invalid"),
@@ -336,15 +361,13 @@ fn record_name(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cockpit_protocol::comments::{
-        CommentFileRef, CommentLocation, CommentSourceState,
-    };
+    use cockpit_protocol::comments::{CommentFileRef, CommentLocation, CommentSourceState};
     use cockpit_protocol::context::ExtensionKind;
     use std::fs;
 
     fn temp_root(label: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir()
-            .join(format!("cockpit-comment-store-{label}-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("cockpit-comment-store-{label}-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("temporary root");
         root
     }
@@ -368,6 +391,7 @@ mod tests {
             drafts: vec![CommentDraft {
                 draft_id: Uuid::new_v4().to_string(),
                 file_ref: CommentFileRef {
+                    review: None,
                     root_id: "root".to_owned(),
                     path: "file.txt".to_owned(),
                     absolute_path: "/repo/file.txt".to_owned(),
@@ -388,7 +412,10 @@ mod tests {
         let root = temp_root("cas");
         let store = CommentStore::new(&root).expect("store");
         let original = batch("cas", "original");
-        let committed = store.commit(original.clone(), 0).await.expect("initial commit");
+        let committed = store
+            .commit(original.clone(), 0)
+            .await
+            .expect("initial commit");
         let error = store
             .commit(original, 0)
             .await
@@ -412,7 +439,10 @@ mod tests {
 
         let root = temp_root("symlink");
         let store = CommentStore::new(&root).expect("store");
-        let committed = store.commit(batch("symlink", "text"), 0).await.expect("commit");
+        let committed = store
+            .commit(batch("symlink", "text"), 0)
+            .await
+            .expect("commit");
         let record = root.join(record_name(&committed.batch_id));
         let target = root.join("target.json");
         fs::rename(&record, &target).expect("move record");

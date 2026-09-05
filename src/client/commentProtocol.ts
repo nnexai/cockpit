@@ -1,3 +1,4 @@
+import type { CommentReviewRef } from "../protocol/generated/v1";
 import type {
   CommentAnchor, CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation,
   CommentBatchRequest, CommentBatchSummary, CommentCapture, CommentDraft, CommentFileRef,
@@ -65,8 +66,13 @@ function parseAttachment(value: unknown): CommentAttachment {
   };
 }
 
+function parseReviewRef(value: unknown): CommentReviewRef {
+  if (!record(value) || !keys(value, ["review_id", "generation", "file_id", "side"]) || !identity(value.review_id) || !identity(value.file_id) || !integer(value.generation) || value.generation < 1 || (value.side !== "old" && value.side !== "new")) return invalid("review anchor");
+  return { review_id: value.review_id, generation: value.generation, file_id: value.file_id, side: value.side };
+}
+
 function parseCapture(value: unknown): CommentCapture {
-  if (!record(value) || !keys(value, ["root_id", "path", "expected_revision", "start_line", "end_line"])
+  if (!record(value) || !keys(value, ["root_id", "path", "expected_revision", "start_line", "end_line", "review"])
     || !identity(value.root_id) || !relativePath(value.path) || !identity(value.expected_revision)) {
     return invalid("capture");
   }
@@ -76,6 +82,7 @@ function parseCapture(value: unknown): CommentCapture {
   const lines = integer(startLine) && startLine > 0 && integer(endLine) && endLine >= startLine;
   if (!wholeFile && !lines) return invalid("capture");
   return {
+    ...(value.review === undefined ? {} : { review: parseReviewRef(value.review) }),
     root_id: value.root_id,
     path: value.path,
     expected_revision: value.expected_revision,
@@ -105,12 +112,13 @@ function parseAnchor(value: unknown): CommentAnchor {
 }
 
 function parseFileRef(value: unknown): CommentFileRef {
-  if (!record(value) || !keys(value, ["root_id", "path", "absolute_path", "revision", "content_hash"])
+  if (!record(value) || !keys(value, ["root_id", "path", "absolute_path", "revision", "content_hash", "review"])
     || !identity(value.root_id) || !relativePath(value.path) || !identity(value.absolute_path)
     || !identity(value.revision) || !(value.content_hash === null || identity(value.content_hash))) {
     return invalid("file reference");
   }
   return {
+    ...(value.review === undefined ? {} : { review: parseReviewRef(value.review) }),
     root_id: value.root_id,
     path: value.path,
     absolute_path: value.absolute_path,

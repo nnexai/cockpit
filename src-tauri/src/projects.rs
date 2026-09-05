@@ -1,14 +1,13 @@
 use cockpit_core::CockpitService;
 use cockpit_protocol::{
+    project_teardown::{
+        WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreview, WorkspaceTeardownPreviewRequest,
+        WorkspaceTeardownRecoveryList, WorkspaceTeardownResult,
+    },
     projects::{
         ProjectConfiguration, RepositoryListResponse, WorkspaceOperation,
         WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupPlan,
         WorkspaceSetupRequest,
-    },
-    project_teardown::{
-        WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreview,
-        WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecoveryList,
-        WorkspaceTeardownResult,
     },
     v1::ErrorResponse,
 };

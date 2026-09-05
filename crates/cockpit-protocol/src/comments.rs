@@ -34,8 +34,20 @@ pub struct CommentAttachment {
     pub client_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CommentReviewRef {
+    pub review_id: String,
+    pub generation: u32,
+    pub file_id: String,
+    pub side: crate::review::ReviewSide,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommentFileRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<CommentReviewRef>,
     pub root_id: String,
     pub path: String,
     pub absolute_path: String,
@@ -122,6 +134,9 @@ pub struct CommentBatchMutation {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct CommentCapture {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<CommentReviewRef>,
     pub root_id: String,
     pub path: String,
     pub expected_revision: String,

@@ -9,20 +9,20 @@ use cockpit_protocol::context_assets::{
     ContextSnapshotCopyMode, ContextSnapshotMode, ContextSnapshotResponse,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, RepositoryCandidate};
+use cockpit_protocol::sources::{SourceFreshness, SourceMaterializationStatus};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use uuid::Uuid;
-use fs2::FileExt;
 
 use crate::InspectionError;
-use crate::project_store::{
-    CompanionManifest, atomic_write_json, read_json_bounded, timestamp,
-};
 use crate::process::run_bounded_command;
+use crate::project_store::{CompanionManifest, atomic_write_json, read_json_bounded, timestamp};
 
 const MANIFEST_NAME: &str = "context-manifest.json";
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
+const PENDING_SOURCE_INTENT_SCHEMA_VERSION: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES: usize = 512;
 const MAX_SNAPSHOT_FILE_BYTES: usize = 4 * 1024 * 1024;
@@ -37,10 +37,12 @@ struct ContextManifest {
     owner_worktree_path: String,
     primary_repository_identity: String,
     entries: Vec<ContextManifestEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_source_intent: Option<PendingSourceIntent>,
     updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ContextManifestEntry {
     logical_id: String,
@@ -59,6 +61,192 @@ struct ContextManifestEntry {
     source_identity: String,
     source_hash_before: String,
     source_hash_after: String,
+}
+
+/// A durable, in-manifest write-ahead record for one generated source
+/// replacement. The companion lock allows only one pending source publish.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingSourceIntent {
+    schema_version: u32,
+    relative_path: String,
+    previous_written_hash: Option<String>,
+    previous_entry: Option<ContextManifestEntry>,
+    new_written_hash: String,
+    intended_entry: ContextManifestEntry,
+}
+
+/// Materialize one immutable provider payload through the same companion lock,
+/// manifest, and no-follow descriptor policy used by repository snapshots.
+pub(crate) fn materialize_source_markdown(
+    root: &Dir,
+    companion_id: &str,
+    provider_id: &str,
+    provider_instance: &str,
+    resource_type: &str,
+    canonical_id: &str,
+    revision: Option<&str>,
+    content_hash: &str,
+    markdown: &[u8],
+) -> Result<(String, bool), InspectionError> {
+    let _lock = acquire_companion_lock(root)?;
+    let association = read_companion_association(root)?;
+    let mut manifest = read_manifest(root, companion_id, &association)?;
+    recover_pending_source_intent(root, &mut manifest)?;
+    let provider = format!(
+        "provider-{:x}",
+        Sha256::digest(provider_instance.as_bytes())
+    );
+    let asset = format!("asset-{:x}.md", Sha256::digest(canonical_id.as_bytes()));
+    let relative = format!("sources/{provider}/{resource_type}/{asset}");
+    let logical_id =
+        format!("source:{provider_id}:{provider_instance}:{resource_type}:{canonical_id}");
+    // `content_hash` identifies the immutable provider record. The manifest's
+    // file hash must instead describe exactly what was written so a later user
+    // edit can be distinguished from a legitimate provider refresh.
+    let materialized_hash = hash(markdown);
+    let previous_entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.logical_id == logical_id)
+        .cloned();
+    let mut replace_owned = false;
+    if let Some(entry) = &previous_entry {
+        let current = read_stable_source(root, &safe_companion_relative(&entry.relative_path)?)?;
+        if current.hash != entry.content_hash {
+            return Err(InspectionError::new(
+                "source_sync_conflict",
+                "a user-modified generated source will not be overwritten",
+            ));
+        }
+        if entry.source_hash_before == content_hash {
+            return Ok((entry.relative_path.clone(), false));
+        }
+        replace_owned = true;
+    }
+    let path = safe_companion_relative(&relative)?;
+    let (parent, leaf) = create_parent(root, &path)?;
+    if parent.symlink_metadata(&leaf).is_ok() && !replace_owned {
+        return Err(InspectionError::new(
+            "source_sync_conflict",
+            "an existing companion file is not a matching generated source",
+        ));
+    }
+    let temporary = format!(".source-{}.tmp", Uuid::new_v4());
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(cap_fs_ext::FollowSymlinks::No);
+    let mut file = parent
+        .open_with(&temporary, &options)
+        .map_err(io_error("source_materialize_failed"))?;
+    file.write_all(markdown)
+        .map_err(io_error("source_materialize_failed"))?;
+    file.sync_all()
+        .map_err(io_error("source_materialize_failed"))?;
+    let intended_entry = ContextManifestEntry {
+        logical_id,
+        relative_path: relative.clone(),
+        kind: resource_type.to_owned(),
+        source: provider_id.to_owned(),
+        generated: true,
+        revision: revision.unwrap_or("unknown").to_owned(),
+        content_hash: materialized_hash.clone(),
+        bytes: markdown.len() as u64,
+        copy_mode: "write".to_owned(),
+        status: "complete".to_owned(),
+        updated_at: timestamp(),
+        source_repository_id: provider_instance.to_owned(),
+        source_checkout_path: String::new(),
+        source_identity: canonical_id.to_owned(),
+        source_hash_before: content_hash.to_owned(),
+        source_hash_after: materialized_hash,
+    };
+    manifest.pending_source_intent = Some(PendingSourceIntent {
+        schema_version: PENDING_SOURCE_INTENT_SCHEMA_VERSION,
+        relative_path: relative.clone(),
+        previous_written_hash: previous_entry
+            .as_ref()
+            .map(|entry| entry.content_hash.clone()),
+        previous_entry: previous_entry.clone(),
+        new_written_hash: intended_entry.content_hash.clone(),
+        intended_entry: intended_entry.clone(),
+    });
+    write_manifest_durable(root, &manifest)?;
+    // Recheck after the intent is durable and immediately before replacement.
+    // A late user edit abandons this publish; it must never be overwritten.
+    if let Err(error) = recheck_source_destination(root, &path, &parent, &leaf, &previous_entry) {
+        discard_pending_source_intent(root, &mut manifest, &parent, &temporary)?;
+        return Err(error);
+    }
+    parent
+        .rename(&temporary, &parent, &leaf)
+        .map_err(io_error("source_materialize_failed"))?;
+    sync_directory(&parent).map_err(io_error("source_materialize_failed"))?;
+    replace_source_manifest_entry(&mut manifest, intended_entry);
+    manifest.pending_source_intent = None;
+    manifest.updated_at = timestamp();
+    write_manifest_durable(root, &manifest)?;
+    Ok((relative, true))
+}
+
+/// Resolve a cached source against this exact companion manifest. This does
+/// not inspect arbitrary source files: only a manifest-owned generated path is
+/// eligible for a materialized result.
+pub(crate) fn source_materialization_state(
+    root: &Dir,
+    companion_id: &str,
+    provider_id: &str,
+    provider_instance: &str,
+    resource_type: &str,
+    canonical_id: &str,
+    current_hash: &str,
+) -> Result<(SourceFreshness, SourceMaterializationStatus, Option<String>), InspectionError> {
+    let _lock = acquire_companion_lock(root)?;
+    let association = read_companion_association(root)?;
+    let manifest = read_manifest(root, companion_id, &association)?;
+    let logical_id =
+        format!("source:{provider_id}:{provider_instance}:{resource_type}:{canonical_id}");
+    let Some(entry) = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.logical_id == logical_id)
+    else {
+        return Ok((
+            SourceFreshness::Unknown,
+            SourceMaterializationStatus::Unchanged,
+            None,
+        ));
+    };
+    let path = safe_companion_relative(&entry.relative_path)?;
+    let current = match read_stable_source(root, &path) {
+        Ok(current) => current,
+        Err(_) => {
+            return Ok((
+                SourceFreshness::Unavailable,
+                SourceMaterializationStatus::Failed,
+                Some(entry.relative_path.clone()),
+            ));
+        }
+    };
+    if current.hash != entry.content_hash {
+        return Ok((
+            SourceFreshness::Conflict,
+            SourceMaterializationStatus::Conflict,
+            Some(entry.relative_path.clone()),
+        ));
+    }
+    let freshness = if entry.source_hash_before == current_hash {
+        SourceFreshness::Fresh
+    } else {
+        SourceFreshness::Changed
+    };
+    Ok((
+        freshness,
+        SourceMaterializationStatus::Unchanged,
+        Some(entry.relative_path.clone()),
+    ))
 }
 
 #[derive(Debug)]
@@ -103,7 +291,9 @@ pub(crate) async fn snapshot_working_tree(
     })?;
     if !source_root
         .dir_metadata()
-        .map_err(|error| InspectionError::new("context_snapshot_source_unavailable", error.to_string()))?
+        .map_err(|error| {
+            InspectionError::new("context_snapshot_source_unavailable", error.to_string())
+        })?
         .is_dir()
     {
         return Err(InspectionError::new(
@@ -115,7 +305,8 @@ pub(crate) async fn snapshot_working_tree(
     revalidate_repository(configuration, &source_path, repository, &source_root).await?;
 
     let mut diagnostics = limits_diagnostics();
-    let (paths, gitlinks, excluded, source_head, dirty) = git_inventory(configuration, &source_path).await?;
+    let (paths, gitlinks, excluded, source_head, dirty) =
+        git_inventory(configuration, &source_path).await?;
     if paths.len() > MAX_SNAPSHOT_FILES {
         return Err(InspectionError::new(
             "context_snapshot_file_limit",
@@ -127,7 +318,6 @@ pub(crate) async fn snapshot_working_tree(
     source_root_revalidate(&source_root, &source_path)?;
     let association = read_companion_association(companion_root)?;
     let mut manifest = read_manifest(companion_root, companion_id, &association)?;
-    validate_existing_entries(companion_root, &manifest)?;
     reject_unmanaged_repositories_root(companion_root, &manifest)?;
     for path in excluded {
         diagnostics.push(diagnostic(
@@ -242,7 +432,10 @@ fn publish_manifest(
             || error.to_string(),
             |rollback| format!("{error}; published generation rollback failed: {rollback}"),
         );
-        return Err(InspectionError::new("context_snapshot_manifest_failed", detail));
+        return Err(InspectionError::new(
+            "context_snapshot_manifest_failed",
+            detail,
+        ));
     }
     Ok(())
 }
@@ -283,7 +476,11 @@ fn snapshot_into_staging(
         let source = match read_stable_source(source_root, relative) {
             Ok(source) => source,
             Err(error) if is_skippable(&error.code) => {
-                diagnostics.push(diagnostic(&error.code, &error.message, Some(&relative.to_string_lossy())));
+                diagnostics.push(diagnostic(
+                    &error.code,
+                    &error.message,
+                    Some(&relative.to_string_lossy()),
+                ));
                 continue;
             }
             Err(error) => return Err(error),
@@ -319,7 +516,11 @@ fn snapshot_into_staging(
             relative.to_string_lossy()
         );
         entries.push(ContextManifestEntry {
-            logical_id: format!("repository:{}:{}", repository.repository_id, relative.to_string_lossy()),
+            logical_id: format!(
+                "repository:{}:{}",
+                repository.repository_id,
+                relative.to_string_lossy()
+            ),
             relative_path,
             kind: "repository_snapshot".to_owned(),
             source: "local_repository".to_owned(),
@@ -349,7 +550,11 @@ fn snapshot_into_staging(
             gitlink.path.to_string_lossy()
         );
         entries.push(ContextManifestEntry {
-            logical_id: format!("repository:{}:{}", repository.repository_id, gitlink.path.to_string_lossy()),
+            logical_id: format!(
+                "repository:{}:{}",
+                repository.repository_id,
+                gitlink.path.to_string_lossy()
+            ),
             relative_path,
             kind: "gitlink".to_owned(),
             source: "local_repository".to_owned(),
@@ -384,8 +589,22 @@ fn snapshot_into_staging(
 async fn git_inventory(
     configuration: &ProjectConfiguration,
     source: &Path,
-) -> Result<(Vec<PathBuf>, Vec<Gitlink>, Vec<PathBuf>, Option<String>, bool), InspectionError> {
-    let tracked = git_output(configuration, source, &["ls-files", "--stage", "-z", "--cached"]).await?;
+) -> Result<
+    (
+        Vec<PathBuf>,
+        Vec<Gitlink>,
+        Vec<PathBuf>,
+        Option<String>,
+        bool,
+    ),
+    InspectionError,
+> {
+    let tracked = git_output(
+        configuration,
+        source,
+        &["ls-files", "--stage", "-z", "--cached"],
+    )
+    .await?;
     let untracked = git_output(
         configuration,
         source,
@@ -408,25 +627,42 @@ async fn git_inventory(
     }
     let head = git_output(configuration, source, &["rev-parse", "--verify", "HEAD"]).await?;
     let source_head = if head.status.success() {
-        Some(single_line_utf8(&head.stdout, "context_snapshot_git_output")?)
+        Some(single_line_utf8(
+            &head.stdout,
+            "context_snapshot_git_output",
+        )?)
     } else {
         None
     };
     let mut paths = BTreeSet::new();
     let mut gitlinks = Vec::new();
     let mut excluded = BTreeSet::new();
-    for raw in tracked.stdout.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
+    for raw in tracked
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
         let separator = raw.iter().position(|byte| *byte == b'\t').ok_or_else(|| {
-            InspectionError::new("context_snapshot_git_output", "Git returned an invalid index record")
+            InspectionError::new(
+                "context_snapshot_git_output",
+                "Git returned an invalid index record",
+            )
         })?;
         let (stage, raw_path) = raw.split_at(separator);
         let raw_path = &raw_path[1..];
         let stage = std::str::from_utf8(stage).map_err(|_| {
-            InspectionError::new("context_snapshot_git_output", "Git returned non-UTF-8 index metadata")
+            InspectionError::new(
+                "context_snapshot_git_output",
+                "Git returned non-UTF-8 index metadata",
+            )
         })?;
         let mut fields = stage.split_whitespace();
-        let mode = fields.next().ok_or_else(|| InspectionError::new("context_snapshot_git_output", "Git index mode is missing"))?;
-        let object = fields.next().ok_or_else(|| InspectionError::new("context_snapshot_git_output", "Git index object is missing"))?;
+        let mode = fields.next().ok_or_else(|| {
+            InspectionError::new("context_snapshot_git_output", "Git index mode is missing")
+        })?;
+        let object = fields.next().ok_or_else(|| {
+            InspectionError::new("context_snapshot_git_output", "Git index object is missing")
+        })?;
         let text = std::str::from_utf8(raw_path).map_err(|_| {
             InspectionError::new(
                 "context_snapshot_non_utf8_path",
@@ -439,24 +675,31 @@ async fn git_inventory(
             continue;
         }
         if mode == "160000" {
-            gitlinks.push(Gitlink { path, commit: object.to_owned() });
+            gitlinks.push(Gitlink {
+                path,
+                commit: object.to_owned(),
+            });
         } else {
             paths.insert(path);
         }
     }
-    for raw in untracked.stdout.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
-            let text = std::str::from_utf8(raw).map_err(|_| {
-                InspectionError::new(
-                    "context_snapshot_non_utf8_path",
-                    "working-tree snapshot paths must be valid UTF-8",
-                )
-            })?;
-            let path = safe_source_relative(text)?;
-            if excluded_source_path(&path) {
-                excluded.insert(path);
-                continue;
-            }
-            paths.insert(path);
+    for raw in untracked
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let text = std::str::from_utf8(raw).map_err(|_| {
+            InspectionError::new(
+                "context_snapshot_non_utf8_path",
+                "working-tree snapshot paths must be valid UTF-8",
+            )
+        })?;
+        let path = safe_source_relative(text)?;
+        if excluded_source_path(&path) {
+            excluded.insert(path);
+            continue;
+        }
+        paths.insert(path);
     }
     Ok((
         paths.into_iter().collect(),
@@ -502,8 +745,8 @@ async fn git_output(
 }
 
 fn read_companion_association(root: &Dir) -> Result<CompanionManifest, InspectionError> {
-    let association: CompanionManifest = read_json_bounded(root, "manifest.json", MAX_MANIFEST_BYTES)
-        .map_err(|_| {
+    let association: CompanionManifest =
+        read_json_bounded(root, "manifest.json", MAX_MANIFEST_BYTES).map_err(|_| {
             InspectionError::new(
                 "context_snapshot_companion_unavailable",
                 "the authorized companion has no readable durable association",
@@ -547,6 +790,7 @@ fn read_manifest(
             owner_worktree_path: association.checkout_path.clone(),
             primary_repository_identity: association.repository_key.clone(),
             entries: Vec::new(),
+            pending_source_intent: None,
             updated_at: timestamp(),
         }),
         Err(error) => Err(InspectionError::new(
@@ -556,34 +800,221 @@ fn read_manifest(
     }
 }
 
-fn validate_existing_entries(root: &Dir, manifest: &ContextManifest) -> Result<(), InspectionError> {
-    for entry in &manifest.entries {
-        if !entry.generated || entry.source != "local_repository" || entry.status != "complete" {
-            continue;
+fn recover_pending_source_intent(
+    root: &Dir,
+    manifest: &mut ContextManifest,
+) -> Result<(), InspectionError> {
+    let Some(intent) = manifest.pending_source_intent.clone() else {
+        return Ok(());
+    };
+    validate_pending_source_intent(&intent)?;
+    let path = safe_companion_relative(&intent.relative_path)?;
+    let current = match read_stable_source(root, &path) {
+        Ok(current) => current,
+        Err(error)
+            if error.code == "context_snapshot_file_missing" && intent.previous_entry.is_none() =>
+        {
+            manifest.pending_source_intent = None;
+            return write_manifest_durable(root, manifest);
         }
-        let path = safe_companion_relative(&entry.relative_path)?;
-        let current = read_stable_source(root, &path).map_err(|_| {
-            InspectionError::new(
-                "context_snapshot_sync_conflict",
-                "a previously generated snapshot file is missing, changed, or unsafe; Cockpit will preserve it",
-            )
-        })?;
-        if current.hash != entry.content_hash {
-            return Err(InspectionError::new(
-                "context_snapshot_sync_conflict",
-                "a user-modified generated snapshot file will not be overwritten",
-            ));
+        Err(_) => return clear_pending_source_conflict(root, manifest),
+    };
+    let current_entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.logical_id == intent.intended_entry.logical_id);
+    if current_entry == Some(&intent.intended_entry) {
+        if current.hash != intent.new_written_hash {
+            return clear_pending_source_conflict(root, manifest);
         }
+        manifest.pending_source_intent = None;
+        return write_manifest_durable(root, manifest);
+    }
+    let previous_matches = match (&intent.previous_entry, current_entry) {
+        (None, None) => true,
+        (Some(previous), Some(current_entry)) => previous == current_entry,
+        _ => false,
+    };
+    if !previous_matches {
+        return clear_pending_source_conflict(root, manifest);
+    }
+    if current.hash == intent.new_written_hash {
+        replace_source_manifest_entry(manifest, intent.intended_entry);
+        manifest.pending_source_intent = None;
+        manifest.updated_at = timestamp();
+        return write_manifest_durable(root, manifest);
+    }
+    if intent
+        .previous_written_hash
+        .as_deref()
+        .is_some_and(|expected| current.hash == expected)
+    {
+        // The intent persisted but the rename did not. It is safe to discard
+        // it because the prior manifest and bytes still agree exactly.
+        manifest.pending_source_intent = None;
+        return write_manifest_durable(root, manifest);
+    }
+    clear_pending_source_conflict(root, manifest)
+}
+
+fn recheck_source_destination(
+    root: &Dir,
+    path: &Path,
+    parent: &Dir,
+    leaf: &Path,
+    previous_entry: &Option<ContextManifestEntry>,
+) -> Result<(), InspectionError> {
+    let Some(previous) = previous_entry else {
+        return match parent.symlink_metadata(leaf) {
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err(InspectionError::new(
+                "source_sync_conflict",
+                "an existing companion file is not a matching generated source",
+            )),
+            Err(error) => Err(InspectionError::new(
+                "source_materialize_failed",
+                error.to_string(),
+            )),
+        };
+    };
+    let current = read_stable_source(root, path).map_err(|_| {
+        InspectionError::new(
+            "source_sync_conflict",
+            "a generated source changed while Cockpit was refreshing it",
+        )
+    })?;
+    if current.hash != previous.content_hash {
+        return Err(InspectionError::new(
+            "source_sync_conflict",
+            "a user-modified generated source will not be overwritten",
+        ));
     }
     Ok(())
 }
 
-fn reject_unmanaged_repositories_root(root: &Dir, manifest: &ContextManifest) -> Result<(), InspectionError> {
-    match root.symlink_metadata("repos") {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Err(InspectionError::new(
-            "context_snapshot_destination_unavailable",
-            "the companion repositories path is not a real directory",
+fn discard_pending_source_intent(
+    root: &Dir,
+    manifest: &mut ContextManifest,
+    parent: &Dir,
+    temporary: &str,
+) -> Result<(), InspectionError> {
+    manifest.pending_source_intent = None;
+    write_manifest_durable(root, manifest)?;
+    match parent.remove_file(temporary) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(InspectionError::new(
+            "source_materialize_failed",
+            error.to_string(),
         )),
+    }
+}
+
+fn clear_pending_source_conflict(
+    root: &Dir,
+    manifest: &mut ContextManifest,
+) -> Result<(), InspectionError> {
+    manifest.pending_source_intent = None;
+    write_manifest_durable(root, manifest)?;
+    Err(source_publish_conflict())
+}
+
+fn validate_pending_source_intent(intent: &PendingSourceIntent) -> Result<(), InspectionError> {
+    if intent.schema_version != PENDING_SOURCE_INTENT_SCHEMA_VERSION
+        || intent.relative_path != intent.intended_entry.relative_path
+        || intent.new_written_hash != intent.intended_entry.content_hash
+        || intent
+            .previous_entry
+            .as_ref()
+            .map(|entry| entry.content_hash.as_str())
+            != intent.previous_written_hash.as_deref()
+    {
+        return Err(InspectionError::new(
+            "source_publish_intent_invalid",
+            "the pending source publish intent is not internally consistent",
+        ));
+    }
+    if let Some(previous) = &intent.previous_entry {
+        if previous.logical_id != intent.intended_entry.logical_id
+            || previous.relative_path != intent.relative_path
+        {
+            return Err(InspectionError::new(
+                "source_publish_intent_invalid",
+                "the pending source publish intent does not describe one owned path",
+            ));
+        }
+    }
+    safe_companion_relative(&intent.relative_path)?;
+    Ok(())
+}
+
+fn replace_source_manifest_entry(manifest: &mut ContextManifest, intended: ContextManifestEntry) {
+    manifest
+        .entries
+        .retain(|entry| entry.logical_id != intended.logical_id);
+    manifest.entries.push(intended);
+}
+
+fn source_publish_conflict() -> InspectionError {
+    InspectionError::new(
+        "source_sync_conflict",
+        "a pending generated source publish does not match its recorded bytes",
+    )
+}
+
+fn write_manifest_durable(root: &Dir, manifest: &ContextManifest) -> Result<(), InspectionError> {
+    let temporary = format!(".context-manifest-{}.tmp", Uuid::new_v4());
+    let bytes = serde_json::to_vec_pretty(manifest)
+        .map_err(|error| InspectionError::new("source_manifest_failed", error.to_string()))?;
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(cap_fs_ext::FollowSymlinks::No);
+    let mut file = root
+        .open_with(&temporary, &options)
+        .map_err(io_error("source_manifest_failed"))?;
+    file.write_all(&bytes)
+        .map_err(io_error("source_manifest_failed"))?;
+    file.sync_all()
+        .map_err(io_error("source_manifest_failed"))?;
+    match root.symlink_metadata(MANIFEST_NAME) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(InspectionError::new(
+                "source_manifest_failed",
+                "the context manifest destination is not a regular file",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(InspectionError::new(
+                "source_manifest_failed",
+                error.to_string(),
+            ));
+        }
+    }
+    root.rename(&temporary, root, MANIFEST_NAME)
+        .map_err(io_error("source_manifest_failed"))?;
+    sync_directory(root).map_err(io_error("source_manifest_failed"))?;
+    Ok(())
+}
+
+fn sync_directory(dir: &Dir) -> std::io::Result<()> {
+    dir.open(Path::new("."))?.sync_all()
+}
+
+fn reject_unmanaged_repositories_root(
+    root: &Dir,
+    manifest: &ContextManifest,
+) -> Result<(), InspectionError> {
+    match root.symlink_metadata("repos") {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(InspectionError::new(
+                "context_snapshot_destination_unavailable",
+                "the companion repositories path is not a real directory",
+            ))
+        }
         Ok(_) if manifest.entries.is_empty() => Err(InspectionError::new(
             "context_snapshot_destination_conflict",
             "the companion repositories path exists without Cockpit manifest ownership",
@@ -608,44 +1039,81 @@ fn read_stable_source(root: &Dir, relative: &Path) -> Result<SourceBytes, Inspec
 fn read_regular(parent: &Dir, leaf: &Path) -> Result<SourceBytes, InspectionError> {
     let metadata = parent.symlink_metadata(leaf).map_err(|error| {
         InspectionError::new(
-            if error.kind() == ErrorKind::NotFound { "context_snapshot_file_missing" } else { "context_snapshot_file_unavailable" },
+            if error.kind() == ErrorKind::NotFound {
+                "context_snapshot_file_missing"
+            } else {
+                "context_snapshot_file_unavailable"
+            },
             error.to_string(),
         )
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(InspectionError::new("context_snapshot_symlink", "symbolic links are recorded as skipped"));
+        return Err(InspectionError::new(
+            "context_snapshot_symlink",
+            "symbolic links are recorded as skipped",
+        ));
     }
     if !metadata.is_file() {
-        return Err(InspectionError::new("context_snapshot_special_file", "only regular files are eligible for snapshots"));
+        return Err(InspectionError::new(
+            "context_snapshot_special_file",
+            "only regular files are eligible for snapshots",
+        ));
     }
     if metadata.len() > MAX_SNAPSHOT_FILE_BYTES as u64 {
-        return Err(InspectionError::new("context_snapshot_file_bytes", "a source file exceeds Cockpit's snapshot file limit"));
+        return Err(InspectionError::new(
+            "context_snapshot_file_bytes",
+            "a source file exceeds Cockpit's snapshot file limit",
+        ));
     }
     if hardlinked(&metadata) {
-        return Err(InspectionError::new("context_snapshot_hardlink", "hardlinked source files are not copied into snapshots"));
+        return Err(InspectionError::new(
+            "context_snapshot_hardlink",
+            "hardlinked source files are not copied into snapshots",
+        ));
     }
     let mut options = OpenOptions::new();
-    options.read(true).follow(cap_fs_ext::FollowSymlinks::No).nonblock(true);
+    options
+        .read(true)
+        .follow(cap_fs_ext::FollowSymlinks::No)
+        .nonblock(true);
     let file = parent.open_with(leaf, &options).map_err(|error| {
         InspectionError::new("context_snapshot_file_unavailable", error.to_string())
     })?;
     let opened = file.metadata().map_err(|error| {
         InspectionError::new("context_snapshot_file_unavailable", error.to_string())
     })?;
-    if opened.file_type().is_symlink() || !opened.is_file() || identity(&opened) != identity(&metadata) {
-        return Err(InspectionError::new("context_snapshot_source_changed", "a source file changed while opening"));
+    if opened.file_type().is_symlink()
+        || !opened.is_file()
+        || identity(&opened) != identity(&metadata)
+    {
+        return Err(InspectionError::new(
+            "context_snapshot_source_changed",
+            "a source file changed while opening",
+        ));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_SNAPSHOT_FILE_BYTES.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|error| InspectionError::new("context_snapshot_file_unavailable", error.to_string()))?;
+        .map_err(|error| {
+            InspectionError::new("context_snapshot_file_unavailable", error.to_string())
+        })?;
     if bytes.len() > MAX_SNAPSHOT_FILE_BYTES {
-        return Err(InspectionError::new("context_snapshot_file_bytes", "a source file grew beyond Cockpit's snapshot file limit"));
+        return Err(InspectionError::new(
+            "context_snapshot_file_bytes",
+            "a source file grew beyond Cockpit's snapshot file limit",
+        ));
     }
     if native_executable(&opened, &bytes) {
-        return Err(InspectionError::new("context_snapshot_native_binary", "native executable binaries are not copied into snapshots"));
+        return Err(InspectionError::new(
+            "context_snapshot_native_binary",
+            "native executable binaries are not copied into snapshots",
+        ));
     }
-    Ok(SourceBytes { hash: hash(&bytes), bytes, identity: identity(&opened) })
+    Ok(SourceBytes {
+        hash: hash(&bytes),
+        bytes,
+        identity: identity(&opened),
+    })
 }
 
 fn write_new_file(
@@ -662,16 +1130,25 @@ fn write_new_file(
         ));
     }
     let mut options = OpenOptions::new();
-    options.write(true).create_new(true).follow(cap_fs_ext::FollowSymlinks::No);
+    options
+        .write(true)
+        .create_new(true)
+        .follow(cap_fs_ext::FollowSymlinks::No);
     let mut file = parent.open_with(&leaf, &options).map_err(|error| {
-        InspectionError::new("context_snapshot_destination_unavailable", error.to_string())
+        InspectionError::new(
+            "context_snapshot_destination_unavailable",
+            error.to_string(),
+        )
     })?;
     let source_file = open_source_for_clone(source_root, relative, &source.identity)?;
     let mode = match reflink(&file, &source_file) {
         Ok(()) => FileCopyMode::Reflink,
         Err(error) if reflink_fallback(&error) => {
             file.write_all(&source.bytes).map_err(|error| {
-                InspectionError::new("context_snapshot_destination_unavailable", error.to_string())
+                InspectionError::new(
+                    "context_snapshot_destination_unavailable",
+                    error.to_string(),
+                )
             })?;
             FileCopyMode::Copy
         }
@@ -683,7 +1160,10 @@ fn write_new_file(
         }
     };
     file.sync_all().map_err(|error| {
-        InspectionError::new("context_snapshot_destination_unavailable", error.to_string())
+        InspectionError::new(
+            "context_snapshot_destination_unavailable",
+            error.to_string(),
+        )
     })?;
     Ok(mode)
 }
@@ -694,16 +1174,37 @@ fn open_source_for_clone(
     expected_identity: &str,
 ) -> Result<cap_std::fs::File, InspectionError> {
     let (parent, leaf) = resolve_parent(root, relative)?;
-    let metadata = parent.symlink_metadata(&leaf).map_err(io_error("context_snapshot_source_changed"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || identity(&metadata) != expected_identity {
-        return Err(InspectionError::new("context_snapshot_source_changed", "a source file changed before reflink"));
+    let metadata = parent
+        .symlink_metadata(&leaf)
+        .map_err(io_error("context_snapshot_source_changed"))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || identity(&metadata) != expected_identity
+    {
+        return Err(InspectionError::new(
+            "context_snapshot_source_changed",
+            "a source file changed before reflink",
+        ));
     }
     let mut options = OpenOptions::new();
-    options.read(true).follow(cap_fs_ext::FollowSymlinks::No).nonblock(true);
-    let file = parent.open_with(&leaf, &options).map_err(io_error("context_snapshot_source_changed"))?;
-    let opened = file.metadata().map_err(io_error("context_snapshot_source_changed"))?;
-    if opened.file_type().is_symlink() || !opened.is_file() || identity(&opened) != expected_identity {
-        return Err(InspectionError::new("context_snapshot_source_changed", "a source file changed while opening for reflink"));
+    options
+        .read(true)
+        .follow(cap_fs_ext::FollowSymlinks::No)
+        .nonblock(true);
+    let file = parent
+        .open_with(&leaf, &options)
+        .map_err(io_error("context_snapshot_source_changed"))?;
+    let opened = file
+        .metadata()
+        .map_err(io_error("context_snapshot_source_changed"))?;
+    if opened.file_type().is_symlink()
+        || !opened.is_file()
+        || identity(&opened) != expected_identity
+    {
+        return Err(InspectionError::new(
+            "context_snapshot_source_changed",
+            "a source file changed while opening for reflink",
+        ));
     }
     Ok(file)
 }
@@ -719,20 +1220,38 @@ fn reflink(_destination: &cap_std::fs::File, _source: &cap_std::fs::File) -> std
 }
 
 fn reflink_fallback(error: &std::io::Error) -> bool {
-    matches!(error.kind(), ErrorKind::Unsupported | ErrorKind::InvalidInput)
-        || error.raw_os_error() == Some(nix::libc::EXDEV)
+    matches!(
+        error.kind(),
+        ErrorKind::Unsupported | ErrorKind::InvalidInput
+    ) || error.raw_os_error() == Some(nix::libc::EXDEV)
         || error.raw_os_error() == Some(nix::libc::ENOTTY)
         || error.raw_os_error() == Some(nix::libc::EOPNOTSUPP)
 }
 
 fn create_parent(root: &Dir, relative: &Path) -> Result<(Dir, PathBuf), InspectionError> {
-    let leaf = relative.file_name().ok_or_else(|| InspectionError::new("context_snapshot_path", "snapshot path has no file name"))?;
-    let mut current = root.try_clone().map_err(io_error("context_snapshot_destination_unavailable"))?;
-    for component in relative.parent().unwrap_or_else(|| Path::new("")).components() {
+    let leaf = relative.file_name().ok_or_else(|| {
+        InspectionError::new("context_snapshot_path", "snapshot path has no file name")
+    })?;
+    let mut current = root
+        .try_clone()
+        .map_err(io_error("context_snapshot_destination_unavailable"))?;
+    for component in relative
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .components()
+    {
         let Component::Normal(name) = component else {
-            return Err(InspectionError::new("context_snapshot_path", "snapshot path escapes its root"));
+            return Err(InspectionError::new(
+                "context_snapshot_path",
+                "snapshot path escapes its root",
+            ));
         };
-        current = ensure_directory(&current, name.to_str().ok_or_else(|| InspectionError::new("context_snapshot_path", "snapshot paths must be UTF-8"))?)?;
+        current = ensure_directory(
+            &current,
+            name.to_str().ok_or_else(|| {
+                InspectionError::new("context_snapshot_path", "snapshot paths must be UTF-8")
+            })?,
+        )?;
     }
     Ok((current, leaf.into()))
 }
@@ -741,29 +1260,52 @@ fn ensure_directory(root: &Dir, name: &str) -> Result<Dir, InspectionError> {
     match root.create_dir(name) {
         Ok(()) => {}
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(InspectionError::new("context_snapshot_destination_unavailable", error.to_string())),
+        Err(error) => {
+            return Err(InspectionError::new(
+                "context_snapshot_destination_unavailable",
+                error.to_string(),
+            ));
+        }
     }
-    let metadata = root.symlink_metadata(name).map_err(io_error("context_snapshot_destination_unavailable"))?;
+    let metadata = root
+        .symlink_metadata(name)
+        .map_err(io_error("context_snapshot_destination_unavailable"))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(InspectionError::new("context_snapshot_destination_unavailable", "snapshot directory is not a real directory"));
+        return Err(InspectionError::new(
+            "context_snapshot_destination_unavailable",
+            "snapshot directory is not a real directory",
+        ));
     }
-    root.open_dir_nofollow(Path::new(name)).map_err(io_error("context_snapshot_destination_unavailable"))
+    root.open_dir_nofollow(Path::new(name))
+        .map_err(io_error("context_snapshot_destination_unavailable"))
 }
 
 fn open_directory(root: &Dir, path: &Path) -> Result<Dir, InspectionError> {
-    let mut current = root.try_clone().map_err(io_error("context_snapshot_destination_unavailable"))?;
+    let mut current = root
+        .try_clone()
+        .map_err(io_error("context_snapshot_destination_unavailable"))?;
     for component in path.components() {
         let Component::Normal(name) = component else {
-            return Err(InspectionError::new("context_snapshot_path", "snapshot path escapes its root"));
+            return Err(InspectionError::new(
+                "context_snapshot_path",
+                "snapshot path escapes its root",
+            ));
         };
-        current = current.open_dir_nofollow(Path::new(name)).map_err(io_error("context_snapshot_destination_unavailable"))?;
+        current = current
+            .open_dir_nofollow(Path::new(name))
+            .map_err(io_error("context_snapshot_destination_unavailable"))?;
     }
     Ok(current)
 }
 
 fn resolve_parent(root: &Dir, relative: &Path) -> Result<(Dir, PathBuf), InspectionError> {
-    let leaf = relative.file_name().ok_or_else(|| InspectionError::new("context_snapshot_path", "snapshot path has no file name"))?;
-    Ok((open_directory(root, relative.parent().unwrap_or_else(|| Path::new("")))?, leaf.into()))
+    let leaf = relative.file_name().ok_or_else(|| {
+        InspectionError::new("context_snapshot_path", "snapshot path has no file name")
+    })?;
+    Ok((
+        open_directory(root, relative.parent().unwrap_or_else(|| Path::new("")))?,
+        leaf.into(),
+    ))
 }
 
 fn safe_source_relative(value: &str) -> Result<PathBuf, InspectionError> {
@@ -777,13 +1319,21 @@ fn safe_companion_relative(value: &str) -> Result<PathBuf, InspectionError> {
 fn safe_relative(value: &str) -> Result<PathBuf, InspectionError> {
     let candidate = Path::new(value);
     if value.is_empty() || candidate.is_absolute() || value.contains('\0') {
-        return Err(InspectionError::new("context_snapshot_path", "snapshot paths must be bounded relative paths"));
+        return Err(InspectionError::new(
+            "context_snapshot_path",
+            "snapshot paths must be bounded relative paths",
+        ));
     }
     let mut result = PathBuf::new();
     for component in candidate.components() {
         match component {
             Component::Normal(part) => result.push(part),
-            _ => return Err(InspectionError::new("context_snapshot_path", "snapshot path escapes its root")),
+            _ => {
+                return Err(InspectionError::new(
+                    "context_snapshot_path",
+                    "snapshot path escapes its root",
+                ));
+            }
         }
     }
     Ok(result)
@@ -791,18 +1341,33 @@ fn safe_relative(value: &str) -> Result<PathBuf, InspectionError> {
 
 fn excluded_source_path(path: &Path) -> bool {
     path.components().any(|component| {
-        let Component::Normal(name) = component else { return true; };
-        matches!(name.to_str(), Some(".git" | "node_modules" | "target" | "build" | "dist" | ".next"))
+        let Component::Normal(name) = component else {
+            return true;
+        };
+        matches!(
+            name.to_str(),
+            Some(".git" | "node_modules" | "target" | "build" | "dist" | ".next")
+        )
     })
 }
 
 fn is_skippable(code: &str) -> bool {
-    matches!(code, "context_snapshot_symlink" | "context_snapshot_special_file" | "context_snapshot_hardlink" | "context_snapshot_native_binary" | "context_snapshot_file_missing")
+    matches!(
+        code,
+        "context_snapshot_symlink"
+            | "context_snapshot_special_file"
+            | "context_snapshot_hardlink"
+            | "context_snapshot_native_binary"
+            | "context_snapshot_file_missing"
+    )
 }
 
 fn checked_candidate_path(path: &Path) -> Result<PathBuf, InspectionError> {
     if !path.is_absolute() {
-        return Err(InspectionError::new("context_snapshot_source_unavailable", "repository checkout path is not absolute"));
+        return Err(InspectionError::new(
+            "context_snapshot_source_unavailable",
+            "repository checkout path is not absolute",
+        ));
     }
     for component in path.components() {
         if matches!(component, Component::ParentDir | Component::Prefix(_)) {
@@ -812,8 +1377,9 @@ fn checked_candidate_path(path: &Path) -> Result<PathBuf, InspectionError> {
             ));
         }
     }
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| InspectionError::new("context_snapshot_source_unavailable", error.to_string()))?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        InspectionError::new("context_snapshot_source_unavailable", error.to_string())
+    })?;
     if metadata.file_type().is_symlink() {
         return Err(InspectionError::new(
             "context_snapshot_source_unavailable",
@@ -821,7 +1387,10 @@ fn checked_candidate_path(path: &Path) -> Result<PathBuf, InspectionError> {
         ));
     }
     if !metadata.is_dir() {
-        return Err(InspectionError::new("context_snapshot_source_unavailable", "repository checkout is not a directory"));
+        return Err(InspectionError::new(
+            "context_snapshot_source_unavailable",
+            "repository checkout is not a directory",
+        ));
     }
     Ok(path.to_path_buf())
 }
@@ -850,16 +1419,19 @@ async fn revalidate_repository(
 }
 
 fn source_root_revalidate(source_root: &Dir, source: &Path) -> Result<(), InspectionError> {
-    let opened = source_root
-        .dir_metadata()
-        .map_err(|error| InspectionError::new("context_snapshot_repository_changed", error.to_string()))?;
+    let opened = source_root.dir_metadata().map_err(|error| {
+        InspectionError::new("context_snapshot_repository_changed", error.to_string())
+    })?;
     let reopened = open_absolute_dir_nofollow(source).map_err(|error| {
         InspectionError::new("context_snapshot_repository_changed", error.to_string())
     })?;
-    let current = reopened
-        .dir_metadata()
-        .map_err(|error| InspectionError::new("context_snapshot_repository_changed", error.to_string()))?;
-    if !opened.is_dir() || !current.is_dir() || object_identity(&opened) != object_identity(&current) {
+    let current = reopened.dir_metadata().map_err(|error| {
+        InspectionError::new("context_snapshot_repository_changed", error.to_string())
+    })?;
+    if !opened.is_dir()
+        || !current.is_dir()
+        || object_identity(&opened) != object_identity(&current)
+    {
         return Err(InspectionError::new(
             "context_snapshot_repository_changed",
             "the selected checkout changed after catalog resolution",
@@ -899,7 +1471,12 @@ fn open_absolute_dir_nofollow(path: &Path) -> std::io::Result<Dir> {
         match component {
             Component::RootDir | Component::CurDir => {}
             Component::Normal(name) => dir = dir.open_dir_nofollow(Path::new(name))?,
-            Component::ParentDir | Component::Prefix(_) => return Err(std::io::Error::new(ErrorKind::InvalidInput, "unsafe absolute path")),
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "unsafe absolute path",
+                ));
+            }
         }
     }
     Ok(dir)
@@ -925,7 +1502,13 @@ fn identity(metadata: &Metadata) -> String {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        return format!("{}:{}:{}:{}", metadata.dev(), metadata.ino(), metadata.len(), metadata.mtime_nsec());
+        return format!(
+            "{}:{}:{}:{}",
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.mtime_nsec()
+        );
     }
     #[cfg(not(unix))]
     {
@@ -966,7 +1549,15 @@ fn native_executable(metadata: &Metadata, bytes: &[u8]) -> bool {
             return false;
         }
         return bytes.starts_with(b"\x7fELF")
-            || matches!(bytes.get(..4), Some([0xfe, 0xed, 0xfa, 0xce] | [0xfe, 0xed, 0xfa, 0xcf] | [0xcf, 0xfa, 0xed, 0xfe] | [0xce, 0xfa, 0xed, 0xfe]));
+            || matches!(
+                bytes.get(..4),
+                Some(
+                    [0xfe, 0xed, 0xfa, 0xce]
+                        | [0xfe, 0xed, 0xfa, 0xcf]
+                        | [0xcf, 0xfa, 0xed, 0xfe]
+                        | [0xce, 0xfa, 0xed, 0xfe]
+                )
+            );
     }
     #[cfg(not(unix))]
     {
@@ -976,9 +1567,14 @@ fn native_executable(metadata: &Metadata, bytes: &[u8]) -> bool {
 }
 
 fn single_line_utf8(bytes: &[u8], code: &str) -> Result<String, InspectionError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| InspectionError::new(code, "Git returned non-UTF-8 output"))?.trim();
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| InspectionError::new(code, "Git returned non-UTF-8 output"))?
+        .trim();
     if text.is_empty() || text.lines().count() != 1 || text.chars().any(char::is_control) {
-        return Err(InspectionError::new(code, "Git returned an invalid revision"));
+        return Err(InspectionError::new(
+            code,
+            "Git returned an invalid revision",
+        ));
     }
     Ok(text.to_owned())
 }
@@ -992,7 +1588,11 @@ fn limits_diagnostics() -> Vec<ProjectDiagnostic> {
 }
 
 fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnostic {
-    ProjectDiagnostic { code: code.to_owned(), message: message.to_owned(), path: path.map(str::to_owned) }
+    ProjectDiagnostic {
+        code: code.to_owned(),
+        message: message.to_owned(),
+        path: path.map(str::to_owned),
+    }
 }
 
 fn io_error(code: &'static str) -> impl FnOnce(std::io::Error) -> InspectionError {
@@ -1009,7 +1609,8 @@ mod tests {
     use std::process::Command as ProcessCommand;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("cockpit-context-assets-{name}-{}", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("cockpit-context-assets-{name}-{}", Uuid::new_v4()));
         fs::create_dir_all(&path).expect("create temporary directory");
         path
     }
@@ -1027,6 +1628,7 @@ mod tests {
                 id: "test".to_owned(),
                 base_url: "https://example.test".to_owned(),
                 executable: "tea".to_owned(),
+                login: None,
             }],
             limits: ProjectLimits {
                 catalog_depth: 1,
@@ -1059,6 +1661,50 @@ mod tests {
         }
     }
 
+    fn stage_interrupted_source_refresh(
+        dir: &Dir,
+        manifest: &mut ContextManifest,
+        previous: ContextManifestEntry,
+        markdown: &[u8],
+    ) -> ContextManifestEntry {
+        let mut intended = previous.clone();
+        intended.revision = "2".to_owned();
+        intended.content_hash = hash(markdown);
+        intended.bytes = markdown.len() as u64;
+        intended.updated_at = timestamp();
+        intended.source_hash_before = "two".to_owned();
+        intended.source_hash_after = intended.content_hash.clone();
+        manifest.pending_source_intent = Some(PendingSourceIntent {
+            schema_version: PENDING_SOURCE_INTENT_SCHEMA_VERSION,
+            relative_path: intended.relative_path.clone(),
+            previous_written_hash: Some(previous.content_hash.clone()),
+            previous_entry: Some(previous),
+            new_written_hash: intended.content_hash.clone(),
+            intended_entry: intended.clone(),
+        });
+        write_manifest_durable(dir, manifest).expect("persist source publish intent");
+        intended
+    }
+
+    fn rename_source_for_interrupted_publish(dir: &Dir, relative: &str, markdown: &[u8]) {
+        let path = safe_companion_relative(relative).expect("safe source path");
+        let (parent, leaf) = create_parent(dir, &path).expect("source parent");
+        let temporary = format!(".interrupted-source-{}.tmp", Uuid::new_v4());
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .follow(cap_fs_ext::FollowSymlinks::No);
+        let mut file = parent
+            .open_with(&temporary, &options)
+            .expect("temporary source");
+        file.write_all(markdown).expect("write temporary source");
+        file.sync_all().expect("sync temporary source");
+        parent
+            .rename(&temporary, &parent, &leaf)
+            .expect("replace source atomically");
+    }
+
     fn candidate(checkout: &Path) -> RepositoryCandidate {
         RepositoryCandidate {
             repository_id: "repository-test".to_owned(),
@@ -1085,9 +1731,18 @@ mod tests {
     #[test]
     fn source_policy_rejects_escape_and_excluded_paths() {
         assert!(safe_source_relative("../escape").is_err());
-        assert!(excluded_source_path(&safe_source_relative(".git/config").expect("relative")));
-        assert!(excluded_source_path(&safe_source_relative("node_modules/pkg/index.js").expect("relative")));
-        assert_eq!(safe_source_relative("src/lib.rs").expect("safe").to_string_lossy(), "src/lib.rs");
+        assert!(excluded_source_path(
+            &safe_source_relative(".git/config").expect("relative")
+        ));
+        assert!(excluded_source_path(
+            &safe_source_relative("node_modules/pkg/index.js").expect("relative")
+        ));
+        assert_eq!(
+            safe_source_relative("src/lib.rs")
+                .expect("safe")
+                .to_string_lossy(),
+            "src/lib.rs"
+        );
     }
 
     #[test]
@@ -1095,14 +1750,17 @@ mod tests {
         let root = temp_dir("copy");
         fs::create_dir(root.join("src")).expect("source directory");
         fs::write(root.join("src/main.rs"), b"fn main() {}\n").expect("source");
-        let root_dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        let root_dir =
+            Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
         root_dir.create_dir("stage").expect("stage");
         let stage = open_directory(&root_dir, Path::new("stage")).expect("open stage");
         let source = read_stable_source(&root_dir, Path::new("src/main.rs")).expect("read source");
         write_new_file(&stage, Path::new("src/main.rs"), &root_dir, &source).expect("copy");
         let copied = read_stable_source(&stage, Path::new("src/main.rs")).expect("read copy");
         assert_eq!(copied.bytes, b"fn main() {}\n");
-        assert!(!hardlinked(&stage.symlink_metadata("src/main.rs").expect("metadata")));
+        assert!(!hardlinked(
+            &stage.symlink_metadata("src/main.rs").expect("metadata")
+        ));
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1110,7 +1768,8 @@ mod tests {
     fn changed_source_rejects_the_pending_copy() {
         let root = temp_dir("changed");
         fs::write(root.join("source.rs"), b"before").expect("source");
-        let root_dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        let root_dir =
+            Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
         root_dir.create_dir("stage").expect("stage");
         let stage = open_directory(&root_dir, Path::new("stage")).expect("open stage");
         let source = read_stable_source(&root_dir, Path::new("source.rs")).expect("read source");
@@ -1127,7 +1786,8 @@ mod tests {
     #[test]
     fn manifest_owner_mismatch_is_refused_and_publish_failure_rolls_back() {
         let root = temp_dir("manifest");
-        let root_dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        let root_dir =
+            Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
         let first = association("workspace-a", Path::new("/worktree-a"));
         atomic_write_json(&root_dir, "manifest.json", &first).expect("association");
         let manifest = ContextManifest {
@@ -1137,6 +1797,7 @@ mod tests {
             owner_worktree_path: "/worktree-a".to_owned(),
             primary_repository_identity: "primary-repository".to_owned(),
             entries: Vec::new(),
+            pending_source_intent: None,
             updated_at: timestamp(),
         };
         atomic_write_json(&root_dir, MANIFEST_NAME, &manifest).expect("content manifest");
@@ -1147,14 +1808,28 @@ mod tests {
             "context_manifest_owner_mismatch"
         );
 
-        root_dir.remove_file(MANIFEST_NAME).expect("remove manifest");
-        root_dir.create_dir(MANIFEST_NAME).expect("make manifest path fail");
-        let snapshots = ensure_directory(&ensure_directory(&ensure_directory(&root_dir, "repos").expect("repos"), "repo").expect("repo"), "snapshots").expect("snapshots");
+        root_dir
+            .remove_file(MANIFEST_NAME)
+            .expect("remove manifest");
+        root_dir
+            .create_dir(MANIFEST_NAME)
+            .expect("make manifest path fail");
+        let snapshots = ensure_directory(
+            &ensure_directory(
+                &ensure_directory(&root_dir, "repos").expect("repos"),
+                "repo",
+            )
+            .expect("repo"),
+            "snapshots",
+        )
+        .expect("snapshots");
         snapshots.create_dir("generation").expect("generation");
         let error = publish_manifest(&root_dir, &snapshots, "generation", &manifest)
             .expect_err("manifest publish fails");
         assert_eq!(error.code, "context_snapshot_manifest_failed");
-        assert!(matches!(snapshots.symlink_metadata("generation"), Err(error) if error.kind() == ErrorKind::NotFound));
+        assert!(
+            matches!(snapshots.symlink_metadata("generation"), Err(error) if error.kind() == ErrorKind::NotFound)
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1167,7 +1842,9 @@ mod tests {
         let link = root.join("checkout");
         symlink(&replacement, &link).expect("symlink");
         assert_eq!(
-            checked_candidate_path(&link).expect_err("catalog checkout replacement").code,
+            checked_candidate_path(&link)
+                .expect_err("catalog checkout replacement")
+                .code,
             "context_snapshot_source_unavailable"
         );
         fs::remove_dir_all(root).expect("cleanup root");
@@ -1185,14 +1862,23 @@ mod tests {
         fs::write(source.join(".gitignore"), b"ignored.txt\n").expect("ignore");
         fs::create_dir(source.join("target")).expect("excluded directory");
         fs::write(source.join("target/tracked.cache"), b"cached\n").expect("excluded tracked");
-        git(&source, &["add", "tracked.txt", ".gitignore", "target/tracked.cache"]);
+        git(
+            &source,
+            &["add", "tracked.txt", ".gitignore", "target/tracked.cache"],
+        );
         git(&source, &["commit", "--quiet", "-m", "initial"]);
         fs::write(source.join("tracked.txt"), b"dirty\n").expect("dirty");
         fs::write(source.join("untracked.txt"), b"untracked\n").expect("untracked");
         fs::write(source.join("ignored.txt"), b"ignored\n").expect("ignored");
 
-        let companion_dir = Dir::open_ambient_dir(&companion, cap_std::ambient_authority()).expect("open companion");
-        atomic_write_json(&companion_dir, "manifest.json", &association("workspace-a", &source)).expect("association");
+        let companion_dir = Dir::open_ambient_dir(&companion, cap_std::ambient_authority())
+            .expect("open companion");
+        atomic_write_json(
+            &companion_dir,
+            "manifest.json",
+            &association("workspace-a", &source),
+        )
+        .expect("association");
         let response = snapshot_working_tree(
             &configuration(),
             "companion-a",
@@ -1203,24 +1889,76 @@ mod tests {
         .await
         .expect("snapshot");
         assert!(response.dirty);
-        assert!(matches!(response.copy_mode, ContextSnapshotCopyMode::Reflink | ContextSnapshotCopyMode::Copy));
+        assert!(matches!(
+            response.copy_mode,
+            ContextSnapshotCopyMode::Reflink | ContextSnapshotCopyMode::Copy
+        ));
         let snapshot = companion.join(&response.snapshot_path);
-        assert_eq!(fs::read(snapshot.join("tracked.txt")).expect("dirty copy"), b"dirty\n");
-        assert_eq!(fs::read(snapshot.join("untracked.txt")).expect("untracked copy"), b"untracked\n");
+        assert_eq!(
+            fs::read(snapshot.join("tracked.txt")).expect("dirty copy"),
+            b"dirty\n"
+        );
+        assert_eq!(
+            fs::read(snapshot.join("untracked.txt")).expect("untracked copy"),
+            b"untracked\n"
+        );
         assert!(!snapshot.join("ignored.txt").exists());
         assert!(!snapshot.join("target/tracked.cache").exists());
-        assert!(response
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "context_snapshot_excluded_path"));
+        assert!(
+            response
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "context_snapshot_excluded_path")
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
             assert_ne!(
-                fs::metadata(source.join("tracked.txt")).expect("source metadata").ino(),
-                fs::metadata(snapshot.join("tracked.txt")).expect("snapshot metadata").ino(),
+                fs::metadata(source.join("tracked.txt"))
+                    .expect("source metadata")
+                    .ino(),
+                fs::metadata(snapshot.join("tracked.txt"))
+                    .expect("snapshot metadata")
+                    .ino(),
             );
         }
+        // An edit to an older immutable generation must not block unrelated
+        // source imports or a new snapshot generation; neither overwrites it.
+        fs::write(snapshot.join("tracked.txt"), b"user annotation\n").unwrap();
+        let imported = materialize_source_markdown(
+            &companion_dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            Some("1"),
+            "issue-hash",
+            b"issue body\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(companion.join(imported.0)).unwrap(),
+            b"issue body\n"
+        );
+        let next = snapshot_working_tree(
+            &configuration(),
+            "companion-a",
+            &companion_dir,
+            &companion,
+            &candidate(&source),
+        )
+        .await
+        .unwrap();
+        assert_ne!(response.snapshot_path, next.snapshot_path);
+        assert_eq!(
+            fs::read(snapshot.join("tracked.txt")).unwrap(),
+            b"user annotation\n"
+        );
+        assert_eq!(
+            fs::read(companion.join(next.snapshot_path).join("tracked.txt")).unwrap(),
+            b"dirty\n"
+        );
         fs::remove_dir_all(source).expect("cleanup source");
         fs::remove_dir_all(companion).expect("cleanup companion");
     }
@@ -1235,7 +1973,8 @@ mod tests {
         fs::write(source.join("tracked.txt"), b"snapshot\n").expect("tracked");
         git(&source, &["add", "tracked.txt"]);
         git(&source, &["commit", "--quiet", "-m", "initial"]);
-        let companion_dir = Dir::open_ambient_dir(&companion, cap_std::ambient_authority()).expect("open companion");
+        let companion_dir = Dir::open_ambient_dir(&companion, cap_std::ambient_authority())
+            .expect("open companion");
         let association = association("workspace-a", &source);
         atomic_write_json(&companion_dir, "manifest.json", &association).expect("association");
         let configuration = configuration();
@@ -1258,8 +1997,16 @@ mod tests {
         let first = first.expect("first snapshot");
         let second = second.expect("second snapshot");
         assert_ne!(first.generation, second.generation);
-        let manifest = read_manifest(&companion_dir, "companion-a", &association).expect("manifest");
-        assert_eq!(manifest.entries.iter().filter(|entry| entry.status == "complete").count(), 2);
+        let manifest =
+            read_manifest(&companion_dir, "companion-a", &association).expect("manifest");
+        assert_eq!(
+            manifest
+                .entries
+                .iter()
+                .filter(|entry| entry.status == "complete")
+                .count(),
+            2
+        );
         fs::remove_dir_all(source).expect("cleanup source");
         fs::remove_dir_all(companion).expect("cleanup companion");
     }
@@ -1272,9 +2019,243 @@ mod tests {
         fs::write(root.join("source"), b"bytes").expect("source");
         symlink("source", root.join("link")).expect("symlink");
         fs::hard_link(root.join("source"), root.join("alias")).expect("hardlink");
-        let root_dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
-        assert_eq!(read_stable_source(&root_dir, Path::new("link")).expect_err("symlink").code, "context_snapshot_symlink");
-        assert_eq!(read_stable_source(&root_dir, Path::new("alias")).expect_err("hardlink").code, "context_snapshot_hardlink");
+        let root_dir =
+            Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        assert_eq!(
+            read_stable_source(&root_dir, Path::new("link"))
+                .expect_err("symlink")
+                .code,
+            "context_snapshot_symlink"
+        );
+        assert_eq!(
+            read_stable_source(&root_dir, Path::new("alias"))
+                .expect_err("hardlink")
+                .code,
+            "context_snapshot_hardlink"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn generated_source_refresh_preserves_user_edits_and_replaces_owned_bytes() {
+        let root = temp_dir("source-refresh");
+        let dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        atomic_write_json(
+            &dir,
+            "manifest.json",
+            &association("workspace-a", Path::new("/worktree-a")),
+        )
+        .expect("association");
+        let first = materialize_source_markdown(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            Some("1"),
+            "one",
+            b"first\n",
+        )
+        .expect("first");
+        assert!(first.1);
+        let second = materialize_source_markdown(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            Some("2"),
+            "two",
+            b"second\n",
+        )
+        .expect("replace owned");
+        assert!(second.1);
+        assert_eq!(
+            fs::read(root.join(&second.0)).expect("replaced"),
+            b"second\n"
+        );
+        fs::write(root.join(&second.0), b"user edit\n").expect("edit");
+        assert_eq!(
+            materialize_source_markdown(
+                &dir,
+                "companion-a",
+                "tea",
+                "https://forge.test",
+                "issue",
+                "acme/repo#1",
+                Some("3"),
+                "three",
+                b"third\n"
+            )
+            .expect_err("conflict")
+            .code,
+            "source_sync_conflict"
+        );
+        assert_eq!(
+            fs::read(root.join(&second.0)).expect("preserved"),
+            b"user edit\n"
+        );
+        let conflict = source_materialization_state(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            "three",
+        )
+        .expect("conflict state");
+        assert_eq!(conflict.0, SourceFreshness::Conflict);
+        assert_eq!(conflict.2.as_deref(), Some(second.0.as_str()));
+        let absent = source_materialization_state(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#2",
+            "other",
+        )
+        .expect("other source");
+        assert!(absent.2.is_none());
+        fs::remove_file(root.join(&second.0)).expect("remove generated file");
+        let missing = source_materialization_state(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            "three",
+        )
+        .expect("missing state");
+        assert_eq!(missing.0, SourceFreshness::Unavailable);
+        assert_eq!(missing.2.as_deref(), Some(second.0.as_str()));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn interrupted_source_refresh_commits_the_matching_pending_publish() {
+        let root = temp_dir("source-publish-recovery");
+        let dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        let association = association("workspace-a", Path::new("/worktree-a"));
+        atomic_write_json(&dir, "manifest.json", &association).expect("association");
+        let first = materialize_source_markdown(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            Some("1"),
+            "one",
+            b"first\n",
+        )
+        .expect("first source");
+        let mut manifest = read_manifest(&dir, "companion-a", &association).expect("manifest");
+        let previous = manifest.entries[0].clone();
+        let intended = stage_interrupted_source_refresh(&dir, &mut manifest, previous, b"second\n");
+        // This models a process crash after the source rename but before the
+        // final manifest replacement. The pending intent was written first.
+        rename_source_for_interrupted_publish(&dir, &first.0, b"second\n");
+
+        let recovered = materialize_source_markdown(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            Some("2"),
+            "two",
+            b"second\n",
+        )
+        .expect("recover publish");
+        assert_eq!(recovered, (first.0.clone(), false));
+        let recovered_manifest =
+            read_manifest(&dir, "companion-a", &association).expect("recovered manifest");
+        assert_eq!(recovered_manifest.entries, vec![intended]);
+        assert!(recovered_manifest.pending_source_intent.is_none());
+        assert_eq!(
+            source_materialization_state(
+                &dir,
+                "companion-a",
+                "tea",
+                "https://forge.test",
+                "issue",
+                "acme/repo#1",
+                "two",
+            )
+            .expect("fresh state")
+            .0,
+            SourceFreshness::Fresh
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn interrupted_source_refresh_does_not_adopt_user_bytes() {
+        let root = temp_dir("source-publish-conflict");
+        let dir = Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
+        let association = association("workspace-a", Path::new("/worktree-a"));
+        atomic_write_json(&dir, "manifest.json", &association).expect("association");
+        let first = materialize_source_markdown(
+            &dir,
+            "companion-a",
+            "tea",
+            "https://forge.test",
+            "issue",
+            "acme/repo#1",
+            Some("1"),
+            "one",
+            b"first\n",
+        )
+        .expect("first source");
+        let mut manifest = read_manifest(&dir, "companion-a", &association).expect("manifest");
+        let previous = manifest.entries[0].clone();
+        stage_interrupted_source_refresh(&dir, &mut manifest, previous.clone(), b"second\n");
+        fs::write(root.join(&first.0), b"user edit\n").expect("user edit");
+
+        assert_eq!(
+            materialize_source_markdown(
+                &dir,
+                "companion-a",
+                "tea",
+                "https://forge.test",
+                "issue",
+                "acme/repo#1",
+                Some("2"),
+                "two",
+                b"second\n",
+            )
+            .expect_err("conflict")
+            .code,
+            "source_sync_conflict"
+        );
+        assert_eq!(
+            fs::read(root.join(&first.0)).expect("preserved"),
+            b"user edit\n"
+        );
+        let preserved = read_manifest(&dir, "companion-a", &association).expect("manifest");
+        assert_eq!(preserved.entries, vec![previous]);
+        assert!(preserved.pending_source_intent.is_none());
+        assert!(
+            materialize_source_markdown(
+                &dir,
+                "companion-a",
+                "tea",
+                "https://forge.test",
+                "issue",
+                "acme/repo#2",
+                Some("1"),
+                "other",
+                b"unrelated\n",
+            )
+            .expect("unrelated source remains importable")
+            .1
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

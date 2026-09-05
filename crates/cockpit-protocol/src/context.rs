@@ -52,6 +52,9 @@ pub struct PanePresentation {
     pub roots: Vec<ContextRoot>,
     pub default_root_id: Option<String>,
     pub can_open_context: bool,
+    /// Reviewr is installed/enabled at this endpoint and the current pane can
+    /// launch it only from an authorized primary repository checkout.
+    pub can_open_review: bool,
     pub diagnostics: Vec<ProjectDiagnostic>,
 }
 
@@ -131,5 +134,16 @@ pub struct ContextLaunchRequest {
     pub pane_id: String,
     pub binding_id: String,
     pub root_id: String,
+    pub direction: ContextSplitDirection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewLaunchRequest {
+    pub pane_id: String,
+    pub binding_id: String,
+    /// Configured primary repository whose checkout must equal the current
+    /// source pane cwd at the launch boundary.
+    pub repository_id: String,
     pub direction: ContextSplitDirection,
 }

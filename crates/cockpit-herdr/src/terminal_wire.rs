@@ -1,5 +1,6 @@
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use base64::Engine;
 use cockpit_core::{InspectionError, TerminalSession};
@@ -11,11 +12,15 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 const HERDR_PROTOCOL_VERSION: u32 = 20;
 const MAX_NORMAL_FRAME_SIZE: usize = 2 * 1024 * 1024;
 const MAX_GRAPHICS_FRAME_SIZE: usize = 32 * 1024 * 1024;
 const READER_BUFFERED_MESSAGES: usize = 8;
+/// Terminal frames are streaming, but the finite connection/negotiation phase
+/// must not leave a replaced pane waiting forever.
+const TERMINAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 enum ClientMessage {
@@ -104,26 +109,47 @@ pub(crate) async fn open_terminal(
         .validate()
         .map_err(|message| InspectionError::new("invalid_terminal_dimensions", message))?;
 
-    let mut socket = UnixStream::connect(socket_path).await.map_err(|error| {
-        InspectionError::new(
-            "terminal_attach_failed",
-            format!("Herdr terminal protocol connection failed: {error}"),
-        )
-    })?;
-    send_message(
-        &mut socket,
-        &ClientMessage::Hello {
-            version: HERDR_PROTOCOL_VERSION,
-            cols: request.cols,
-            rows: request.rows,
-            cell_width_px: request.cell_width_px,
-            cell_height_px: request.cell_height_px,
-        },
+    let mut socket = timeout(TERMINAL_HANDSHAKE_TIMEOUT, UnixStream::connect(socket_path))
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "terminal_attach_timeout",
+                "Herdr terminal connection timed out",
+            )
+        })?
+        .map_err(|error| {
+            InspectionError::new(
+                "terminal_attach_failed",
+                format!("Herdr terminal protocol connection failed: {error}"),
+            )
+        })?;
+    timeout(
+        TERMINAL_HANDSHAKE_TIMEOUT,
+        send_message(
+            &mut socket,
+            &ClientMessage::Hello {
+                version: HERDR_PROTOCOL_VERSION,
+                cols: request.cols,
+                rows: request.rows,
+                cell_width_px: request.cell_width_px,
+                cell_height_px: request.cell_height_px,
+            },
+        ),
     )
     .await
+    .map_err(|_| InspectionError::new("terminal_attach_timeout", "Herdr terminal hello timed out"))?
     .map_err(handshake_error)?;
 
-    match read_message(&mut socket).await.map_err(handshake_error)? {
+    match timeout(TERMINAL_HANDSHAKE_TIMEOUT, read_message(&mut socket))
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "terminal_attach_timeout",
+                "Herdr terminal negotiation timed out",
+            )
+        })?
+        .map_err(handshake_error)?
+    {
         ServerMessage::Welcome(WelcomePayload {
             version,
             encoding: ServerRenderEncoding::TerminalAnsi,
@@ -154,9 +180,18 @@ pub(crate) async fn open_terminal(
             takeover: request.takeover,
         },
     };
-    send_message(&mut socket, &attach)
-        .await
-        .map_err(handshake_error)?;
+    timeout(
+        TERMINAL_HANDSHAKE_TIMEOUT,
+        send_message(&mut socket, &attach),
+    )
+    .await
+    .map_err(|_| {
+        InspectionError::new(
+            "terminal_attach_timeout",
+            "Herdr terminal attach request timed out",
+        )
+    })?
+    .map_err(handshake_error)?;
 
     let (reader, writer) = socket.into_split();
     let (sender, receiver) = mpsc::channel(64);
@@ -673,6 +708,7 @@ mod tests {
 
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
     use tokio::time::timeout;
 
     fn client_payload(message: ClientMessage) -> Vec<u8> {
@@ -907,6 +943,42 @@ mod tests {
             .await
             .expect("terminal reader was not released")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn terminal_open_times_out_when_the_handshake_never_replies() {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-terminal-handshake-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos(),
+        ));
+        let listener = UnixListener::bind(&path).expect("listener");
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.expect("accept");
+            tokio::time::sleep(TERMINAL_HANDSHAKE_TIMEOUT + Duration::from_millis(100)).await;
+        });
+        let request = TerminalOpenRequest {
+            session_id: "session".to_owned(),
+            pane_id: "pane".to_owned(),
+            mode: TerminalMode::Observe,
+            takeover: false,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+        };
+        assert_eq!(
+            open_terminal(&path, &request, "stream".to_owned())
+                .await
+                .expect_err("timeout")
+                .code,
+            "terminal_attach_timeout"
+        );
+        server.abort();
+        let _ = tokio::fs::remove_file(path).await;
     }
 
     #[tokio::test]

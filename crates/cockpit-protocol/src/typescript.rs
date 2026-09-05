@@ -1,7 +1,32 @@
-use crate::context_assets::{ContextSnapshotRequest, ContextSnapshotResponse, ContextSnapshotMode, ContextSnapshotCopyMode};
-use crate::comment_paste::{CommentPasteTarget, CommentPasteState, CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteSendRequest, CommentPasteMarkPastedRequest, CommentPasteReceipt};
-use crate::project_teardown::{WorkspaceTeardownAction, WorkspaceTeardownOwnership, WorkspaceTeardownDirtyState, WorkspaceTeardownWorkspaceState, WorkspaceTeardownCompanionState, WorkspaceTeardownPreviewRequest, WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreview, WorkspaceTeardownOutcome, WorkspaceTeardownResult, WorkspaceTeardownRecoveryState, WorkspaceTeardownRecovery, WorkspaceTeardownRecoveryList};
-use crate::context_search::{ContextSearchRequest, ContextSearchResult, ContextSearchResponse, ContextKnownRevision, ContextInvalidationState, ContextInvalidation, ContextInvalidationRequest, ContextInvalidationResponse};
+use crate::comment_paste::{
+    CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPastePrepareResponse,
+    CommentPasteReceipt, CommentPasteSendRequest, CommentPasteState, CommentPasteTarget,
+};
+use crate::context_assets::{
+    ContextSnapshotCopyMode, ContextSnapshotMode, ContextSnapshotRequest, ContextSnapshotResponse,
+};
+use crate::context_media::{ContextMedia, ContextMediaRequest};
+use crate::context_search::{
+    ContextInvalidation, ContextInvalidationRequest, ContextInvalidationResponse,
+    ContextInvalidationState, ContextKnownRevision, ContextSearchRequest, ContextSearchResponse,
+    ContextSearchResult,
+};
+use crate::project_teardown::{
+    WorkspaceTeardownAction, WorkspaceTeardownCompanionState, WorkspaceTeardownDirtyState,
+    WorkspaceTeardownExecuteRequest, WorkspaceTeardownOutcome, WorkspaceTeardownOwnership,
+    WorkspaceTeardownPreview, WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery,
+    WorkspaceTeardownRecoveryList, WorkspaceTeardownRecoveryState, WorkspaceTeardownResult,
+    WorkspaceTeardownWorkspaceState,
+};
+use crate::review::{
+    ReviewChangedFile, ReviewComparison, ReviewDiffLine, ReviewDiffLineKind, ReviewFileDiff,
+    ReviewFileRequest, ReviewFileStatus, ReviewHunk, ReviewSide, ReviewSnapshot,
+    ReviewSnapshotRequest,
+};
+use crate::sources::{
+    SourceCapability, SourceEntry, SourceFreshness, SourceImportRequest, SourceImportResponse,
+    SourceListRequest, SourceMaterializationStatus, SourceRefreshRequest,
+};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -11,12 +36,13 @@ use crate::comments::{
     CommentAnchor, CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation,
     CommentBatchRequest, CommentBatchSummary, CommentCapture, CommentDraft, CommentFileRef,
     CommentLocation, CommentOwner, CommentPreview, CommentPreviewRequest, CommentRemoveRequest,
-    CommentRequestScope, CommentSourceState, CommentUpsertRequest,
+    CommentRequestScope, CommentReviewRef, CommentSourceState, CommentUpsertRequest,
 };
 use crate::context::{
     ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
     ContextEntry, ContextEntryKind, ContextLaunchRequest, ContextRoot, ContextRootKind,
     ContextSplitDirection, DetectionConfidence, ExtensionKind, PanePresentation,
+    ReviewLaunchRequest,
 };
 use crate::projects::{
     ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectLimits, ProjectProvider,
@@ -109,14 +135,18 @@ pub fn render_v1() -> String {
         ContextDirectory::decl(&config),
         ContextDocumentRequest::decl(&config),
         ContextDocument::decl(&config),
+        ContextMediaRequest::decl(&config),
+        ContextMedia::decl(&config),
         ContextSplitDirection::decl(&config),
         ContextLaunchRequest::decl(&config),
+        ReviewLaunchRequest::decl(&config),
         CommentRequestScope::decl(&config),
         CommentOwner::decl(&config),
         CommentLocation::decl(&config),
         CommentAttachment::decl(&config),
         CommentFileRef::decl(&config),
         CommentSourceState::decl(&config),
+        CommentReviewRef::decl(&config),
         CommentAnchor::decl(&config),
         CommentDraft::decl(&config),
         CommentBatch::decl(&config),
@@ -136,7 +166,6 @@ pub fn render_v1() -> String {
         CommentPasteSendRequest::decl(&config),
         CommentPasteMarkPastedRequest::decl(&config),
         CommentPasteReceipt::decl(&config),
-
         WorkspaceTeardownAction::decl(&config),
         WorkspaceTeardownOwnership::decl(&config),
         WorkspaceTeardownDirtyState::decl(&config),
@@ -150,7 +179,25 @@ pub fn render_v1() -> String {
         WorkspaceTeardownRecoveryState::decl(&config),
         WorkspaceTeardownRecovery::decl(&config),
         WorkspaceTeardownRecoveryList::decl(&config),
-
+        SourceCapability::decl(&config),
+        SourceFreshness::decl(&config),
+        SourceMaterializationStatus::decl(&config),
+        SourceImportRequest::decl(&config),
+        SourceListRequest::decl(&config),
+        SourceRefreshRequest::decl(&config),
+        SourceEntry::decl(&config),
+        SourceImportResponse::decl(&config),
+        ReviewSide::decl(&config),
+        ReviewComparison::decl(&config),
+        ReviewFileStatus::decl(&config),
+        ReviewDiffLineKind::decl(&config),
+        ReviewSnapshotRequest::decl(&config),
+        ReviewChangedFile::decl(&config),
+        ReviewSnapshot::decl(&config),
+        ReviewFileRequest::decl(&config),
+        ReviewDiffLine::decl(&config),
+        ReviewHunk::decl(&config),
+        ReviewFileDiff::decl(&config),
         ContextSnapshotRequest::decl(&config),
         ContextSnapshotResponse::decl(&config),
         ContextSnapshotMode::decl(&config),
@@ -163,14 +210,20 @@ pub fn render_v1() -> String {
         ContextInvalidation::decl(&config),
         ContextInvalidationRequest::decl(&config),
         ContextInvalidationResponse::decl(&config),
-
     ]
     .into_iter()
     .map(|declaration| format!("export {declaration}"))
     .collect::<Vec<_>>()
     .join("\n\n");
 
-    format!("{HEADER}\n\n{}\n", declarations.lines().map(str::trim_end).collect::<Vec<_>>().join("\n"))
+    format!(
+        "{HEADER}\n\n{}\n",
+        declarations
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
 /// Replace `path` with `contents` using a same-directory temporary file and rename.

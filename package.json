@@ -7,6 +7,9 @@
     "build": "tsc --noEmit && bunx --bun vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "quality:probe": "python3 scripts/quality/gate.py probe",
+    "quality:report": "python3 scripts/quality/gate.py report",
+    "quality:gate": "python3 scripts/quality/gate.py gate",
     "tauri:dev": "bunx tauri dev",
     "tauri:build": "NO_STRIP=1 bunx tauri build"
   },
@@ -21,6 +24,7 @@
     "@xterm/addon-fit": "0.12.0-beta.301",
     "@xterm/xterm": "6.1.0-beta.304",
     "highlight.js": "11.11.1",
+    "mermaid": "11.17.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "10.1.0",

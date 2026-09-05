@@ -297,6 +297,15 @@ pub fn load_project_configuration(
             format!("providers.{}.executable", provider.id),
             provider_origin.into(),
         );
+        origins.insert(
+            format!("providers.{}.login", provider.id),
+            if provider.login.is_some() {
+                "toml"
+            } else {
+                "default"
+            }
+            .into(),
+        );
     }
 
     Ok(ProjectConfiguration {
@@ -510,6 +519,14 @@ fn validate_provider(provider: &ProjectProvider) -> Result<(), InspectionError> 
             "provider base_url must be credential-free HTTP(S)",
         ));
     }
+    if let Some(login) = &provider.login {
+        if login.is_empty() || login.len() > 256 || login.chars().any(char::is_control) {
+            return Err(InspectionError::new(
+                "invalid_provider_login",
+                "provider login must be a non-empty control-free value of at most 256 bytes",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -548,6 +565,43 @@ mod tests {
             load_project_configuration(Some(&path), None).expect_err("unknown key must fail");
         let _ = fs::remove_file(path);
         assert_eq!(error.code, "invalid_config");
+    }
+
+    #[test]
+    fn provider_login_is_optional_and_validated_when_present() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-provider-{nonce}.toml"));
+        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\n").expect("legacy provider");
+        let legacy = load_project_configuration(Some(&path), None).expect("optional login");
+        assert_eq!(legacy.providers[0].login, None);
+        assert_eq!(
+            legacy
+                .origins
+                .get("providers.tea.login")
+                .map(String::as_str),
+            Some("default")
+        );
+        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\nlogin = 'fixture'\n").expect("configured provider");
+        let configured = load_project_configuration(Some(&path), None).expect("login");
+        assert_eq!(configured.providers[0].login.as_deref(), Some("fixture"));
+        assert_eq!(
+            configured
+                .origins
+                .get("providers.tea.login")
+                .map(String::as_str),
+            Some("toml")
+        );
+        fs::write(&path, "version = 1\n[[providers]]\nid = 'tea'\nbase_url = 'https://forge.example'\nexecutable = 'tea'\nlogin = ''\n").expect("bad provider");
+        assert_eq!(
+            load_project_configuration(Some(&path), None)
+                .expect_err("empty login")
+                .code,
+            "invalid_provider_login"
+        );
+        let _ = fs::remove_file(path);
     }
 }
 

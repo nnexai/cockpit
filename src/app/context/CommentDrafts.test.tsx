@@ -36,3 +36,29 @@ it("retains prose after a remote deletion and requires explicit source capture t
     host.remove();
   }
 });
+
+it("retains an open Review editor across refresh but requires explicit current-source capture", async () => {
+  const root = { root_id: "review-source", kind: "repository", companion_id: null } as ContextRoot;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const batch: CommentBatch = { batch_id: "batch", generation: 1, drafts: [], owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "review", source_id: "review-source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, updated_at: "now" };
+  const upsert = vi.fn(async () => ({ ...batch, generation: 2 }));
+  const client = { commentBatch: vi.fn(async () => batch), commentUpsert: upsert } as unknown as CockpitClient;
+  const old = { review_id: "review", generation: 1, file_id: "file", side: "old" as const };
+  const current = { ...old, generation: 2, side: "new" as const };
+  function Harness() {
+    const [editor, setEditor] = useState<ContextCommentEditorState | null>({ rootId: root.root_id, path: "file.ts", revision: "old", review: old, draftId: null, editor: "whole_file", text: "Retained prose", selection: null });
+    return <CommentDrafts client={client} presentation={presentation} root={root} sourceKind="review" sourceIdentity="review-source" reviewCapture={current} path="file.ts" document={{ text: "current source", revision: "current" } as ContextDocument} selection={null} mode="source" editorState={editor} onEditorStateChange={setEditor} />;
+  }
+  const host = window.document.createElement("div"); window.document.body.append(host); const mounted = createRoot(host);
+  const button = (label: string) => [...host.querySelectorAll("button")].find(item => item.textContent === label)!;
+  try {
+    await act(async () => mounted.render(<Harness />));
+    expect(host.textContent).toContain("displayed review source changed");
+    expect(host.querySelector("textarea")?.value).toBe("Retained prose");
+    expect(button("Save comment").disabled).toBe(true);
+    await act(async () => button("Use current source").click());
+    expect(button("Save comment").disabled).toBe(false);
+    await act(async () => button("Save comment").click());
+    expect(upsert).toHaveBeenCalledWith("session", "pane", expect.objectContaining({ capture: expect.objectContaining({ review: current, expected_revision: "current" }), comment_text: "Retained prose" }));
+  } finally { await act(async () => mounted.unmount()); host.remove(); }
+});

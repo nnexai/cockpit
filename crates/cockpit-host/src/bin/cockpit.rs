@@ -108,7 +108,24 @@ fn make_service(
                     .map_err(|error| error.to_string())?
                     .clone(),
             );
+            let sources = cockpit_core::sources::SourceService::new(
+                &config,
+                cockpit_providers::configured_providers(&config)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let contexts = contexts.with_sources(Arc::new(sources));
             let service = service.with_contexts(contexts);
+            let reviews = cockpit_core::review::ReviewService::new(
+                config.clone(),
+                adapter.extension_adapter(),
+                service
+                    .contexts()
+                    .map_err(|error| error.to_string())?
+                    .clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            let service = service.with_reviews(reviews);
             let comments = cockpit_core::comments::CommentsService::new(
                 config,
                 service
@@ -117,7 +134,15 @@ fn make_service(
                     .clone(),
             )
             .map_err(|error| error.to_string())?;
-            Ok(service.with_comments(comments.with_paste_adapter(adapter.paste_adapter())))
+            let comments = comments
+                .with_paste_adapter(adapter.paste_adapter())
+                .with_reviews(
+                    service
+                        .reviews()
+                        .map_err(|error| error.to_string())?
+                        .clone(),
+                );
+            Ok(service.with_comments(comments))
         }
         None => Ok(service),
     }

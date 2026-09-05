@@ -25,6 +25,9 @@ pub struct ProjectProvider {
     pub id: String,
     pub base_url: String,
     pub executable: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub login: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

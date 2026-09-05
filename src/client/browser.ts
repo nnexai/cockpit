@@ -1,3 +1,6 @@
+import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
+import { parseSourceScope, parseSourceImport, parseSourceRefresh, parseSourceResponse, matchSourceResponse } from "./sourceProtocol";
+import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
@@ -197,12 +200,13 @@ function openTerminalStream(
   request: TerminalOpenRequest,
   onMessage: (message: TerminalStreamMessage) => void,
   onError: (error: CockpitClientError) => void,
+  signal?: AbortSignal,
 ): Promise<TerminalStream> {
   let validated: TerminalOpenRequest;
   try { validated = parseTerminalOpenRequest(request); } catch (error) { return Promise.reject(error); }
   const path = `/api/v1/sessions/${encodeURIComponent(validated.session_id)}/panes/${encodeURIComponent(validated.pane_id)}/terminal?mode=${validated.mode}&takeover=${validated.takeover ? "true" : "false"}&cols=${validated.cols}&rows=${validated.rows}&cell_width_px=${validated.cell_width_px}&cell_height_px=${validated.cell_height_px}`;
   return new Promise((resolve, reject) => {
-    let socket: BrowserWebSocket;
+    let socket: BrowserWebSocket | undefined;
     let settled = false;
     let closed = false;
     let streamId: string | undefined;
@@ -211,9 +215,18 @@ function openTerminalStream(
     const fail = (error: CockpitClientError, beforeOpen = false) => {
       if (beforeOpen && !settled) { settled = true; reject(error); }
       else onError(error);
-      if (!closed) { closed = true; socket.close(); }
+      if (!closed) { closed = true; socket?.close(); }
     };
+    const abort = () => {
+      if (closed) return;
+      closed = true;
+      socket?.close();
+      if (!settled) { settled = true; reject(new CockpitClientError("stream_error", "Terminal attach was cancelled")); }
+    };
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener("abort", abort, { once: true });
     try { socket = webSocketFactory(websocketUrl(path)); } catch (cause) {
+      signal?.removeEventListener("abort", abort);
       reject(new CockpitClientError("transport_error", "Could not open terminal stream", { cause })); return;
     }
     const handle: TerminalStream = {
@@ -222,7 +235,7 @@ function openTerminalStream(
         const parsed = parseTerminalCommand(command);
         socket.send(JSON.stringify(parsed));
       },
-      close() { if (!closed) { closed = true; socket.close(); } },
+      close() { if (!closed) { closed = true; signal?.removeEventListener("abort", abort); socket?.close(); } },
     };
     socket.onopen = () => { if (!closed) { settled = true; resolve(handle); } };
     socket.onmessage = (event) => {
@@ -347,6 +360,18 @@ export function createBrowserClient(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       }), body);
     },
+    async reviewSnapshot(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+      const parsed = parseReviewSnapshotRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/review/snapshot`, "Review snapshot", parseReviewSnapshot, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, paneId, parsed);
+    },
+    async reviewFile(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+      const parsed = parseReviewFileRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/review/file`, "Review file", parseReviewFile, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, paneId, parsed);
+    },
     async contextSnapshot(sessionId, paneId, value) {
       validateSessionId(sessionId);
       validateResourceId(paneId);
@@ -373,6 +398,37 @@ export function createBrowserClient(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       });
       return matchContextInvalidationResponse(response, body);
+    },
+    async contextMedia(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseContextMediaRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/media`, "Context image", parseContextMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      return matchContextMedia(response, body);
+    },
+    async sourceImport(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseSourceImport(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/sources/import`, "source import", parseSourceResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      return matchSourceResponse(response, body);
+    },
+    async sourceRefresh(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseSourceRefresh(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/sources/refresh`, "source refresh", parseSourceResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      return matchSourceResponse(response, body);
+    },
+    async sourceList(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseSourceScope(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/sources/list`, "source list", parseSourceResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      return matchSourceResponse(response, body);
+    },
+    async openReview(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseReviewLaunchRequest(value);
+      return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/review/open`, "Review launch", parsePanePresentation, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId);
     },
     async openContext(sessionId, value) {
       validateSessionId(sessionId);
@@ -518,6 +574,6 @@ export function createBrowserClient(
       });
     },
     subscribeSession(sessionId, onMessage, onError) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError); },
-    openTerminal(requestValue, onMessage, onError) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError); },
+    openTerminal(requestValue, onMessage, onError, signal) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError, signal); },
   };
 }

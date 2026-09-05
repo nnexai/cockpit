@@ -1,3 +1,6 @@
+import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
+import type { SourceImportRequest, SourceRefreshRequest, SourceImportResponse } from "../protocol/generated/v1";
+import type { ReviewLaunchRequest, ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
 import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
@@ -109,9 +112,16 @@ export interface CockpitClient {
   inspectPane(sessionId: string, paneId: string, signal?: AbortSignal): Promise<PanePresentation>;
   contextDirectory(sessionId: string, paneId: string, request: ContextDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
   contextDocument(sessionId: string, paneId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
+  reviewSnapshot(sessionId: string, paneId: string, request: ReviewSnapshotRequest, signal?: AbortSignal): Promise<ReviewSnapshot>;
+  reviewFile(sessionId: string, paneId: string, request: ReviewFileRequest, signal?: AbortSignal): Promise<ReviewFileDiff>;
   contextSnapshot(sessionId: string, paneId: string, request: ContextSnapshotRequest): Promise<ContextSnapshotResponse>;
   contextSearch(sessionId: string, paneId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
   contextInvalidate(sessionId: string, paneId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
+  contextMedia(sessionId: string, paneId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
+  sourceImport(sessionId: string, paneId: string, request: SourceImportRequest, signal?: AbortSignal): Promise<SourceImportResponse>;
+  sourceRefresh(sessionId: string, paneId: string, request: SourceRefreshRequest, signal?: AbortSignal): Promise<SourceImportResponse>;
+  sourceList(sessionId: string, paneId: string, request: { binding_id: string; root_id: string }, signal?: AbortSignal): Promise<SourceImportResponse>;
+  openReview(sessionId: string, request: ReviewLaunchRequest): Promise<PanePresentation>;
   openContext(sessionId: string, request: ContextLaunchRequest): Promise<PanePresentation>;
   commentBatches(sessionId: string, paneId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;
   commentBatch(sessionId: string, paneId: string, request: CommentBatchRequest, signal?: AbortSignal): Promise<CommentBatch>;
@@ -138,6 +148,7 @@ export interface CockpitClient {
     request: TerminalOpenRequest,
     onMessage: (message: TerminalStreamMessage) => void,
     onError: (error: CockpitClientError) => void,
+    signal?: AbortSignal,
   ): Promise<TerminalStream>;
 }
 

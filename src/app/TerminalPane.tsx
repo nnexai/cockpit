@@ -138,6 +138,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
+  const attachmentGeneration = useRef(0);
   const [ownership, setOwnership] = useState<TerminalOwnershipState>("observing");
   const [error, setError] = useState<PaneError | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -285,6 +286,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     };
     let cancelled = false;
     let stream: TerminalStream | null = null;
+    const controller = new AbortController();
+    const generation = ++attachmentGeneration.current;
     lastSequence.current = null;
     setError(null);
     setClosed(false);
@@ -293,6 +296,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     const fail = (code: string, message: string) => {
       pendingCommands.current = [];
       cancelled = true;
+      controller.abort();
       setError({ code, message });
       ownershipRef.current = "released";
       setOwnership("released");
@@ -301,7 +305,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       stream?.close();
     };
     const onMessage = (message: TerminalStreamMessage) => {
-      if (cancelled) return;
+      if (cancelled || generation !== attachmentGeneration.current) return;
       if (message.type === "ownership") {
         ownershipRef.current = message.state;
         setOwnership(message.state);
@@ -350,8 +354,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (cancelled) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
       fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
-    }).then((opened) => {
-      if (cancelled) {
+    }, controller.signal).then((opened) => {
+      if (cancelled || generation !== attachmentGeneration.current) {
         opened.close();
         return;
       }
@@ -366,6 +370,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     });
     return () => {
       cancelled = true;
+      controller.abort();
       if (streamRef.current === stream) streamRef.current = null;
       if (stream) registerStream?.(stream, false);
       stream?.close();

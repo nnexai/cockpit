@@ -38,7 +38,10 @@ const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 
 mod comments;
 mod context;
+mod context_media;
 mod projects;
+mod review;
+mod sources;
 
 // The enclosing guard verifies the exact bound Host and Origin.
 async fn require_origin(request: Request<Body>, next: Next) -> Response {
@@ -173,6 +176,9 @@ fn build_router_with_validated_root(
             get(terminal_ws),
         )
         .merge(comments::routes())
+        .merge(review::routes())
+        .merge(sources::routes())
+        .merge(context_media::routes())
         .merge(projects::routes())
         .merge(context::routes())
         // Keep API resolution ahead of the static service. This prevents a static file

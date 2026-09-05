@@ -93,9 +93,11 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     contextDirectory: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextDocument: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextSearch: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
+    reviewSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
+    reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    contextMedia: vi.fn(), sourceImport: vi.fn(), sourceRefresh: vi.fn(), sourceList: vi.fn(async () => ({ binding_id: "binding", root_id: "root", entries: [], diagnostics: [] })), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -279,6 +281,20 @@ describe("browser CockpitClient", () => {
     expect(socket.readyState).toBe(3);
   });
 
+  it("aborts a browser terminal before the handshake and ignores later events", async () => {
+    const socket = new FakeSocket();
+    const controller = new AbortController();
+    const messages = vi.fn();
+    const errors = vi.fn();
+    const open = createBrowserClient(vi.fn(async () => jsonResponse(snapshot)), () => socket).openTerminal(terminalOpen(), messages, errors, controller.signal);
+    controller.abort();
+    await expect(open).rejects.toMatchObject({ code: "stream_error", message: "Terminal attach was cancelled" });
+    socket.open();
+    socket.message(JSON.stringify({ type: "ownership", session_id: "session-1", pane_id: "pane-1", stream_id: "late", state: "owned", message: null }));
+    expect(messages).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+  });
+
   it("rejects duplicate and skipped terminal full frames", async () => {
     for (const invalidSequence of ["1", "3"]) {
       const socket = new FakeSocket();
@@ -394,6 +410,19 @@ describe("native CockpitClient", () => {
     expect(errors).toHaveLength(1);
     stream.close();
     expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "term-1" });
+  });
+  it("cancels a native terminal that resolves after its opening caller aborts", async () => {
+    let resolveOpen: ((value: unknown) => void) | undefined;
+    const controller = new AbortController();
+    const invoke = vi.fn((command: string) => command === "cockpit_terminal_open"
+      ? new Promise<unknown>((resolve) => { resolveOpen = resolve; })
+      : Promise.resolve(undefined));
+    const client = createNativeClient(invoke, <T,>(onmessage: (message: T) => void) => ({ onmessage }));
+    const open = client.openTerminal(terminalOpen(), vi.fn(), vi.fn(), controller.signal);
+    controller.abort();
+    await expect(open).rejects.toMatchObject({ code: "stream_error", message: "Terminal attach was cancelled" });
+    resolveOpen!("late-stream");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "late-stream" }));
   });
   it("closes native session streams on invalid generation transitions", async () => {
     let channel: NativeChannel<unknown> | undefined;

@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::Duration;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
@@ -19,179 +19,46 @@ use cockpit_core::{
 };
 use cockpit_protocol::v1::{
     AgentSummary, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
-    LayoutPane, LayoutRect, PaneMoveDestination, PaneResizeDirection, PaneSplitDirection,
-    PaneSummary, PaneZoomMode, ResourceMutationRequest, ResourceMutationResponse,
+    LayoutPane, LayoutRect, PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
     SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary,
     TabLayout, TabSummary, TerminalOpenRequest,
 };
 use futures_util::future::join_all;
 use serde_json::{Value, json};
+mod capabilities;
+mod config;
 mod extensions;
+mod operations;
 mod projects;
+mod transport;
+
+#[cfg(test)]
+use capabilities::REQUIRED_METHODS;
+use capabilities::missing_required_methods;
+#[cfg(test)]
+use cockpit_protocol::v1::{
+    PaneMoveDestination, PaneResizeDirection, PaneSplitDirection, PaneZoomMode,
+};
+use config::valid_session_name;
+pub use config::{ConfigError, HerdrCliConfig};
+#[cfg(test)]
+use operations::pane_move_destination;
+use operations::{focus_call, mutation_call, request_is_mutating};
+use transport::{
+    FINITE_CONNECT_TIMEOUT, FINITE_RESPONSE_TIMEOUT, FINITE_WRITE_TIMEOUT, read_bounded_line,
+    read_response, write_with_progress,
+};
 
 use crate::schema::{schema_fields, status_fields};
 pub const REQUIRED_VERSION: &str = "0.8.2";
 pub const REQUIRED_PROTOCOL: u32 = 20;
 pub const REQUIRED_SCHEMA_VERSION: u32 = 1;
-const REQUIRED_METHODS: [&str; 20] = [
-    "ping",
-    "session.snapshot",
-    "events.subscribe",
-    "worktree.list",
-    "pane.read",
-    "workspace.create",
-    "workspace.rename",
-    "workspace.move_block",
-    "workspace.close",
-    "tab.create",
-    "tab.rename",
-    "tab.move",
-    "tab.close",
-    "pane.split",
-    "pane.resize",
-    "pane.rename",
-    "pane.swap",
-    "pane.move",
-    "pane.zoom",
-    "pane.close",
-];
 const MAX_SAFE_REVISION: u64 = 9_007_199_254_740_991;
-const MAX_SESSION_NAME: usize = 96;
 const MAX_TERMINAL_LINE: usize = 1024 * 1024;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVER_START_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const FINITE_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
-const FINITE_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
-const FINITE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigError {
-    pub code: String,
-    pub message: String,
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-impl std::error::Error for ConfigError {}
-
-/// Resolved command configuration. `None` means Herdr's own default behavior.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HerdrCliConfig {
-    pub executable: PathBuf,
-    pub session: Option<String>,
-    pub socket: Option<PathBuf>,
-}
-
-impl HerdrCliConfig {
-    pub fn from_options(
-        executable: Option<PathBuf>,
-        session: Option<String>,
-        socket: Option<PathBuf>,
-    ) -> Result<Self, ConfigError> {
-        let env: BTreeMap<String, String> = std::env::vars().collect();
-        Self::from_options_with_environment(executable, session, socket, &env)
-    }
-
-    /// Resolve command options without touching process-global environment state.
-    pub fn from_options_with_environment(
-        executable: Option<PathBuf>,
-        session: Option<String>,
-        socket: Option<PathBuf>,
-        environment: &BTreeMap<String, String>,
-    ) -> Result<Self, ConfigError> {
-        let executable = executable
-            .or_else(|| nonempty(environment.get("COCKPIT_HERDR_EXECUTABLE")).map(PathBuf::from))
-            .unwrap_or_else(|| default_herdr_executable(environment));
-        let session = session.or_else(|| nonempty(environment.get("COCKPIT_HERDR_SESSION")));
-        if let Some(session_name) = session.as_deref()
-            && !valid_session_name(session_name)
-        {
-            return Err(ConfigError {
-                code: "invalid_session_name".into(),
-                message: "session name contains unsupported characters".into(),
-            });
-        }
-        let socket =
-            socket.or_else(|| nonempty(environment.get("COCKPIT_HERDR_SOCKET")).map(PathBuf::from));
-        if socket.is_some() && session.is_none() {
-            return Err(ConfigError {
-                code: "missing_socket_session".into(),
-                message: "--herdr-socket/COCKPIT_HERDR_SOCKET requires an explicit --herdr-session/COCKPIT_HERDR_SESSION".into(),
-            });
-        }
-        Ok(Self {
-            executable,
-            session,
-            socket,
-        })
-    }
-
-    pub fn executable(&self) -> &Path {
-        &self.executable
-    }
-    pub fn session(&self) -> Option<&str> {
-        self.session.as_deref()
-    }
-    pub fn socket(&self) -> Option<&Path> {
-        self.socket.as_deref()
-    }
-}
-
-fn nonempty(value: Option<&String>) -> Option<String> {
-    value.filter(|value| !value.trim().is_empty()).cloned()
-}
-
-fn default_herdr_executable(environment: &BTreeMap<String, String>) -> PathBuf {
-    let executable_name = format!("herdr{}", std::env::consts::EXE_SUFFIX);
-    if let Some(path) = environment.get("PATH") {
-        for directory in std::env::split_paths(path) {
-            let candidate = directory.join(&executable_name);
-            if is_executable_file(&candidate) {
-                return candidate;
-            }
-        }
-    }
-
-    if let Some(home) = nonempty(environment.get("HOME")).map(PathBuf::from) {
-        for relative in [".local/bin", ".linuxbrew/bin", ".cargo/bin"] {
-            let candidate = home.join(relative).join(&executable_name);
-            if is_executable_file(&candidate) {
-                return candidate;
-            }
-        }
-    }
-
-    for directory in [
-        "/home/linuxbrew/.linuxbrew/bin",
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-    ] {
-        let candidate = Path::new(directory).join(&executable_name);
-        if is_executable_file(&candidate) {
-            return candidate;
-        }
-    }
-
-    PathBuf::from(executable_name)
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
-}
 fn malformed(message: impl Into<String>) -> InspectionError {
     InspectionError::new("malformed_json", message)
 }
@@ -210,99 +77,6 @@ fn structured_error(value: &Value) -> Result<Option<InspectionError>, Inspection
         required_string(error, "message", "response.error")?,
     )))
 }
-async fn read_bounded_line<R: AsyncBufRead + Unpin>(
-    reader: &mut R,
-    line: &mut String,
-    limit: usize,
-) -> std::io::Result<usize> {
-    line.clear();
-    let mut bytes = Vec::with_capacity(limit.min(4096));
-    loop {
-        let chunk = reader.fill_buf().await?;
-        if chunk.is_empty() {
-            if bytes.is_empty() {
-                return Ok(0);
-            }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "line is not newline terminated",
-            ));
-        }
-        let newline = chunk.iter().position(|byte| *byte == b'\n');
-        let take = newline.map_or(chunk.len(), |index| index + 1);
-        if bytes.len().saturating_add(take) > limit {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "line exceeds configured limit",
-            ));
-        }
-        bytes.extend_from_slice(&chunk[..take]);
-        reader.consume(take);
-        if newline.is_some() {
-            let text = std::str::from_utf8(&bytes).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "line is not valid UTF-8")
-            })?;
-            line.push_str(text);
-            return Ok(line.len());
-        }
-    }
-}
-
-async fn write_with_progress<W: AsyncWrite + Unpin>(
-    writer: &mut W,
-    bytes: &[u8],
-    progress: &AtomicUsize,
-) -> (usize, std::io::Result<()>) {
-    let mut written = 0;
-    while written < bytes.len() {
-        match writer.write(&bytes[written..]).await {
-            Ok(0) => {
-                return (
-                    written,
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "socket write made no progress",
-                    )),
-                );
-            }
-            Ok(count) => {
-                written += count;
-                progress.store(written, Ordering::Release);
-            }
-            Err(error) => return (written, Err(error)),
-        }
-    }
-    (written, Ok(()))
-}
-
-fn request_is_mutating(method: &str) -> bool {
-    matches!(
-        method,
-        "workspace.create"
-            | "workspace.rename"
-            | "workspace.move_block"
-            | "workspace.close"
-            | "worktree.remove"
-            | "workspace.focus"
-            | "tab.create"
-            | "tab.rename"
-            | "tab.move"
-            | "tab.close"
-            | "tab.focus"
-            | "pane.split"
-            | "pane.resize"
-            | "pane.rename"
-            | "pane.swap"
-            | "pane.move"
-            | "pane.zoom"
-            | "pane.close"
-            | "pane.focus"
-            | "agent.focus"
-            | "pane.send_text"
-            | "plugin.pane.open"
-    )
-}
-
 fn object<'a>(
     value: &'a Value,
     context: &str,
@@ -897,14 +671,6 @@ fn valid_pane_id(pane_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
 }
 
-fn valid_session_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_SESSION_NAME
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EventIdentity {
     version: String,
@@ -1239,31 +1005,7 @@ impl HerdrCliAdapter {
             let mut reader = BufReader::new(stream);
             let mut response = String::new();
             loop {
-                response.clear();
-                let read = read_bounded_line(&mut reader, &mut response, MAX_TERMINAL_LINE)
-                    .await
-                    .map_err(|error| {
-                        if error.kind() == std::io::ErrorKind::InvalidData {
-                            InspectionError::new(
-                                "bounded_output",
-                                "Herdr response line exceeds configured limit or is unterminated",
-                            )
-                        } else {
-                            InspectionError::new("disconnected", "Herdr response failed")
-                        }
-                    })?;
-                if read == 0 {
-                    return Err(InspectionError::new(
-                        "disconnected",
-                        "Herdr closed the connection",
-                    ));
-                }
-                let value: Value = serde_json::from_str(response.trim_end()).map_err(|error| {
-                    InspectionError::new(
-                        "malformed_response",
-                        format!("Herdr returned invalid response JSON: {error}"),
-                    )
-                })?;
+                let value = read_response(&mut reader, &mut response, MAX_TERMINAL_LINE).await?;
                 if value.get("id").and_then(Value::as_str) != Some(id.as_str()) {
                     continue;
                 }
@@ -1503,11 +1245,7 @@ impl HerdrCliAdapter {
                 format!("expected schema version {REQUIRED_SCHEMA_VERSION}"),
             ));
         }
-        let missing: Vec<&str> = REQUIRED_METHODS
-            .iter()
-            .copied()
-            .filter(|method| !methods.contains(*method))
-            .collect();
+        let missing = missing_required_methods(&methods);
         if !missing.is_empty() {
             return Ok(Self::incompatible(
                 Some(identity),
@@ -1580,7 +1318,8 @@ impl HerdrCliAdapter {
     ) -> Result<ResourceMutationResponse, InspectionError> {
         self.selected_session(session_id)?;
         let (method, params) = mutation_call(request);
-        drop(self.socket_request(session_id, method, params).await?);
+        let result = self.socket_request(session_id, method, params).await?;
+        validate_mutation_result(request, result)?;
         let snapshot = self.read_snapshot(session_id).await.map_err(|error| {
             InspectionError::new(
                 "mutation_applied_snapshot_failed",
@@ -2257,183 +1996,44 @@ pub(crate) fn parse_focus_result(
     Ok(true)
 }
 
-fn split_direction(direction: PaneSplitDirection) -> &'static str {
-    match direction {
-        PaneSplitDirection::Right => "right",
-        PaneSplitDirection::Down => "down",
+fn validate_mutation_result(
+    request: &ResourceMutationRequest,
+    result: Value,
+) -> Result<(), InspectionError> {
+    let ResourceMutationRequest::PaneMove { .. } = request else {
+        return Ok(());
+    };
+    let result = object(&result, "pane.move result")?;
+    if required_string(result, "type", "pane.move result")? != "pane_move" {
+        return Err(InspectionError::new(
+            "malformed_mutation_response",
+            "Herdr pane.move response has an unexpected result type",
+        ));
     }
-}
-
-fn resize_direction(direction: PaneResizeDirection) -> &'static str {
-    match direction {
-        PaneResizeDirection::Left => "left",
-        PaneResizeDirection::Right => "right",
-        PaneResizeDirection::Up => "up",
-        PaneResizeDirection::Down => "down",
+    let move_result = result
+        .get("move_result")
+        .ok_or_else(|| {
+            InspectionError::new(
+                "malformed_mutation_response",
+                "Herdr pane.move response omitted its result",
+            )
+        })
+        .and_then(|value| object(value, "pane.move result.move_result"))?;
+    if required_bool(move_result, "changed", "pane.move result.move_result")? {
+        return Ok(());
     }
-}
-
-fn zoom_mode(mode: PaneZoomMode) -> &'static str {
-    match mode {
-        PaneZoomMode::Toggle => "toggle",
-        PaneZoomMode::On => "on",
-        PaneZoomMode::Off => "off",
+    let reason = optional_string(move_result, "reason", "pane.move result.move_result")?
+        .unwrap_or_else(|| "an unspecified constraint".into());
+    if reason == "zoomed_tab" {
+        return Err(InspectionError::new(
+            "zoomed_tab",
+            "Unzoom the source tab before moving this pane.",
+        ));
     }
-}
-
-fn insert_optional(params: &mut serde_json::Map<String, Value>, key: &str, value: &Option<String>) {
-    if let Some(value) = value {
-        params.insert(key.to_owned(), Value::String(value.clone()));
-    }
-}
-
-fn insert_optional_number(
-    params: &mut serde_json::Map<String, Value>,
-    key: &str,
-    value: Option<f64>,
-) {
-    if let Some(value) = value {
-        params.insert(key.to_owned(), json!(value));
-    }
-}
-
-fn pane_move_destination(destination: &PaneMoveDestination) -> Value {
-    match destination {
-        PaneMoveDestination::ExistingTab {
-            tab_id,
-            direction,
-            target_pane_id,
-            ratio,
-        } => {
-            let mut params = serde_json::Map::from_iter([
-                ("type".to_owned(), json!("tab")),
-                ("tab_id".to_owned(), json!(tab_id)),
-                ("split".to_owned(), json!(split_direction(*direction))),
-            ]);
-            insert_optional(&mut params, "target_pane_id", target_pane_id);
-            insert_optional_number(&mut params, "ratio", *ratio);
-            Value::Object(params)
-        }
-        PaneMoveDestination::NewTab { space_id, label } => {
-            let mut params = serde_json::Map::from_iter([("type".to_owned(), json!("new_tab"))]);
-            if let Some(space_id) = space_id {
-                params.insert("workspace_id".to_owned(), json!(space_id));
-            }
-            insert_optional(&mut params, "label", label);
-            Value::Object(params)
-        }
-        PaneMoveDestination::NewSpace { label, tab_label } => {
-            let mut params =
-                serde_json::Map::from_iter([("type".to_owned(), json!("new_workspace"))]);
-            insert_optional(&mut params, "label", label);
-            insert_optional(&mut params, "tab_label", tab_label);
-            Value::Object(params)
-        }
-    }
-}
-
-fn mutation_call(request: &ResourceMutationRequest) -> (&'static str, Value) {
-    match request {
-        ResourceMutationRequest::SpaceCreate { cwd, label } => {
-            let mut params = serde_json::Map::from_iter([("focus".to_owned(), json!(true))]);
-            insert_optional(&mut params, "cwd", cwd);
-            insert_optional(&mut params, "label", label);
-            ("workspace.create", Value::Object(params))
-        }
-        ResourceMutationRequest::SpaceRename { space_id, label } => (
-            "workspace.rename",
-            json!({"workspace_id": space_id, "label": label}),
-        ),
-        ResourceMutationRequest::SpaceMoveBlock {
-            space_ids,
-            before_space_id,
-        } => {
-            let mut params =
-                serde_json::Map::from_iter([("workspace_ids".to_owned(), json!(space_ids))]);
-            if let Some(before_space_id) = before_space_id {
-                params.insert("before_workspace_id".to_owned(), json!(before_space_id));
-            }
-            ("workspace.move_block", Value::Object(params))
-        }
-        ResourceMutationRequest::SpaceClose { space_id } => {
-            ("workspace.close", json!({"workspace_id": space_id}))
-        }
-        ResourceMutationRequest::TabCreate { space_id, label } => {
-            let mut params = serde_json::Map::from_iter([
-                ("workspace_id".to_owned(), json!(space_id)),
-                ("focus".to_owned(), json!(true)),
-            ]);
-            insert_optional(&mut params, "label", label);
-            ("tab.create", Value::Object(params))
-        }
-        ResourceMutationRequest::TabRename { tab_id, label } => {
-            ("tab.rename", json!({"tab_id": tab_id, "label": label}))
-        }
-        ResourceMutationRequest::TabMove {
-            tab_id,
-            insert_index,
-        } => (
-            "tab.move",
-            json!({"tab_id": tab_id, "insert_index": insert_index}),
-        ),
-        ResourceMutationRequest::TabClose { tab_id } => ("tab.close", json!({"tab_id": tab_id})),
-        ResourceMutationRequest::PaneSplit {
-            pane_id,
-            direction,
-            ratio,
-        } => {
-            let mut params = serde_json::Map::from_iter([
-                ("target_pane_id".to_owned(), json!(pane_id)),
-                ("direction".to_owned(), json!(split_direction(*direction))),
-                ("focus".to_owned(), json!(true)),
-            ]);
-            insert_optional_number(&mut params, "ratio", *ratio);
-            ("pane.split", Value::Object(params))
-        }
-        ResourceMutationRequest::PaneResize {
-            pane_id,
-            direction,
-            amount,
-        } => (
-            "pane.resize",
-            json!({
-                "pane_id": pane_id,
-                "direction": resize_direction(*direction),
-                "amount": amount
-            }),
-        ),
-        ResourceMutationRequest::PaneRename { pane_id, label } => {
-            ("pane.rename", json!({"pane_id": pane_id, "label": label}))
-        }
-        ResourceMutationRequest::PaneSwap {
-            source_pane_id,
-            target_pane_id,
-        } => (
-            "pane.swap",
-            json!({
-                "source_pane_id": source_pane_id,
-                "target_pane_id": target_pane_id
-            }),
-        ),
-        ResourceMutationRequest::PaneMove {
-            pane_id,
-            destination,
-        } => (
-            "pane.move",
-            json!({
-                "pane_id": pane_id,
-                "destination": pane_move_destination(destination),
-                "focus": true
-            }),
-        ),
-        ResourceMutationRequest::PaneZoom { pane_id, mode } => (
-            "pane.zoom",
-            json!({"pane_id": pane_id, "mode": zoom_mode(*mode)}),
-        ),
-        ResourceMutationRequest::PaneClose { pane_id } => {
-            ("pane.close", json!({"pane_id": pane_id}))
-        }
-    }
+    Err(InspectionError::new(
+        "pane_move_not_applied",
+        format!("Herdr did not move the pane: {reason}"),
+    ))
 }
 
 #[async_trait]
@@ -2492,15 +2092,7 @@ impl HerdrAdapter for HerdrCliAdapter {
                 "focus target contains unsupported characters",
             ));
         }
-        let (method, params) = match request.kind {
-            FocusKind::Space => (
-                "workspace.focus",
-                json!({"workspace_id": request.target_id}),
-            ),
-            FocusKind::Tab => ("tab.focus", json!({"tab_id": request.target_id})),
-            FocusKind::Pane => ("pane.focus", json!({"pane_id": request.target_id})),
-            FocusKind::Agent => ("agent.focus", json!({"target": request.target_id})),
-        };
+        let (method, params) = focus_call(request);
         let accepted = parse_focus_result(
             self.socket_request(session_id, method, params).await?,
             request.kind,
@@ -2819,6 +2411,31 @@ mod tests {
     }
 
     #[test]
+    fn pane_move_refuses_an_unchanged_success_envelope() {
+        let request = ResourceMutationRequest::PaneMove {
+            pane_id: "w2:p4".into(),
+            destination: PaneMoveDestination::NewTab {
+                space_id: Some("w2".into()),
+                label: None,
+            },
+        };
+        let error = validate_mutation_result(
+            &request,
+            json!({
+                "type": "pane_move",
+                "move_result": {"changed": false, "reason": "zoomed_tab"}
+            }),
+        )
+        .expect_err("a no-op pane.move response must not be reported as applied");
+
+        assert_eq!(error.code, "zoomed_tab");
+        assert_eq!(
+            error.message,
+            "Unzoom the source tab before moving this pane."
+        );
+    }
+
+    #[test]
     fn worktree_list_projects_matching_repository_context() {
         let result = json!({
             "type": "worktree_list",
@@ -2909,6 +2526,10 @@ mod tests {
                 "events.subscribe",
                 "worktree.list",
                 "pane.read",
+                "workspace.focus",
+                "tab.focus",
+                "pane.focus",
+                "agent.focus",
                 "workspace.create",
                 "workspace.rename",
                 "workspace.move_block",
@@ -2926,5 +2547,14 @@ mod tests {
                 "pane.close",
             ]
         );
+    }
+
+    #[test]
+    fn worktree_dispatches_have_unknown_outcomes_after_a_response_deadline() {
+        assert!(request_is_mutating("worktree.create"));
+        assert!(request_is_mutating("worktree.open"));
+        assert!(request_is_mutating("worktree.remove"));
+        assert!(!request_is_mutating("worktree.list"));
+        assert!(!request_is_mutating("session.snapshot"));
     }
 }

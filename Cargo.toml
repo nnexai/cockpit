@@ -4,6 +4,7 @@ members = [
     "crates/cockpit-core",
     "crates/cockpit-herdr",
     "crates/cockpit-host",
+    "crates/cockpit-providers",
     "src-tauri",
 ]
 default-members = [

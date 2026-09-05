@@ -1,3 +1,4 @@
+import { ReviewViewer } from "./review/ReviewViewer";
 import { useCallback, useEffect, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import {
   parseResourceMutationResponse,
@@ -7,7 +8,6 @@ import {
 } from "../client/CockpitClient";
 import type {
   FocusRequest,
-  LayoutRect,
   ResourceMutationRequest,
   ResourceMutationResponse,
   SessionSnapshotResponse,
@@ -16,13 +16,17 @@ import type {
   TabLayout,
   TerminalOpenRequest,
 } from "../protocol/generated/v1";
-import { initialSessionState, sessionReducer, type SessionState } from "./sessionReducer";
+import { initialSessionState, sessionReducer, type SessionState } from "./session/sessionStore";
+import { focusRequestForSnapshot, useFocusCoordinator } from "./session/focusCoordinator";
+import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
+import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
+import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
 import { TerminalPane } from "./TerminalPane";
 import { SetupDialog } from "./projects/SetupDialog";
 import { TeardownDialog } from "./projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
-import { isGraphicalContext, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
+import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
@@ -31,129 +35,6 @@ type Tab = SessionSnapshot["tabs"][number];
 type Pane = SessionSnapshot["panes"][number];
 type Agent = SessionSnapshot["agents"][number];
 type Selection = { spaceId: string | null; tabId: string | null; paneId: string | null };
-
-type MutationOperation = {
-  epoch: number;
-  token: number;
-  key: string;
-  request: ResourceMutationRequest;
-  focusFromSnapshot: boolean;
-};
-type MutationFailure = StatusError & { operation: MutationOperation };
-export type MutationCoordinatorState = {
-  token: number;
-  pending: MutationOperation | null;
-  errors: Record<string, MutationFailure>;
-};
-export type MutationCoordinatorAction =
-  | { type: "begin"; operation: MutationOperation }
-  | { type: "succeed"; epoch: number; token: number }
-  | { type: "fail"; epoch: number; token: number; error: StatusError }
-  | { type: "clear"; key: string }
-  | { type: "reset" };
-
-export const initialMutationCoordinatorState: MutationCoordinatorState = { token: 0, pending: null, errors: {} };
-export function mutationCoordinatorReducer(state: MutationCoordinatorState, action: MutationCoordinatorAction): MutationCoordinatorState {
-  if (action.type === "reset") return initialMutationCoordinatorState;
-  if (action.type === "begin") {
-    if (state.pending) return state;
-    const errors = { ...state.errors };
-    delete errors[action.operation.key];
-    return { token: action.operation.token, pending: action.operation, errors };
-  }
-  if (action.type === "clear") {
-    const errors = { ...state.errors };
-    delete errors[action.key];
-    return { ...state, errors };
-  }
-  const pending = state.pending;
-  if (!pending || pending.epoch !== action.epoch || pending.token !== action.token) return state;
-  if (action.type === "succeed") return { ...state, pending: null };
-  return { ...state, pending: null, errors: { ...state.errors, [pending.key]: { ...action.error, operation: pending } } };
-}
-
-export const FOCUS_FALLBACK_MS = 500;
-export function scheduleFocusFallback(isCurrent: () => boolean, onDelayed: () => void, onResync: () => void): () => void {
-  const timer = globalThis.setTimeout(() => {
-    if (!isCurrent()) return;
-    onDelayed();
-    onResync();
-  }, FOCUS_FALLBACK_MS);
-  return () => globalThis.clearTimeout(timer);
-}
-
-export type ResizeHandle = {
-  id: string;
-  paneId: string;
-  axis: "x" | "y";
-  negativeDirection: "left" | "up";
-  positiveDirection: "right" | "down";
-  coordinate: number;
-  start: number;
-  length: number;
-};
-const EPSILON = 0.000001;
-const edge = (rect: LayoutRect, axis: "x" | "y") => axis === "x" ? rect.x + rect.width : rect.y + rect.height;
-const overlap = (aStart: number, aLength: number, bStart: number, bLength: number) => {
-  const start = Math.max(aStart, bStart);
-  return { start, length: Math.min(aStart + aLength, bStart + bLength) - start };
-};
-export function deriveResizeHandles(layout: TabLayout | undefined): ResizeHandle[] {
-  if (!layout || layout.zoomed) return [];
-  const handles: ResizeHandle[] = [];
-  for (let leftIndex = 0; leftIndex < layout.panes.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < layout.panes.length; rightIndex += 1) {
-      const first = layout.panes[leftIndex];
-      const second = layout.panes[rightIndex];
-      const verticalOverlap = overlap(first.rect.y, first.rect.height, second.rect.y, second.rect.height);
-      if (verticalOverlap.length > EPSILON) {
-        const firstBefore = Math.abs(edge(first.rect, "x") - second.rect.x) <= EPSILON;
-        const secondBefore = Math.abs(edge(second.rect, "x") - first.rect.x) <= EPSILON;
-        if (firstBefore || secondBefore) {
-          const pane = firstBefore ? first : second;
-          handles.push({ id: `x:${pane.pane_id}:${firstBefore ? second.pane_id : first.pane_id}`, paneId: pane.pane_id, axis: "x", negativeDirection: "left", positiveDirection: "right", coordinate: edge(pane.rect, "x"), start: verticalOverlap.start, length: verticalOverlap.length });
-        }
-      }
-      const horizontalOverlap = overlap(first.rect.x, first.rect.width, second.rect.x, second.rect.width);
-      if (horizontalOverlap.length > EPSILON) {
-        const firstBefore = Math.abs(edge(first.rect, "y") - second.rect.y) <= EPSILON;
-        const secondBefore = Math.abs(edge(second.rect, "y") - first.rect.y) <= EPSILON;
-        if (firstBefore || secondBefore) {
-          const pane = firstBefore ? first : second;
-          handles.push({ id: `y:${pane.pane_id}:${firstBefore ? second.pane_id : first.pane_id}`, paneId: pane.pane_id, axis: "y", negativeDirection: "up", positiveDirection: "down", coordinate: edge(pane.rect, "y"), start: horizontalOverlap.start, length: horizontalOverlap.length });
-        }
-      }
-    }
-  }
-  return handles;
-}
-export function resizeRequest(handle: ResizeHandle, pixelDelta: number, canvasPixels: number): ResourceMutationRequest | null {
-  if (!Number.isFinite(pixelDelta) || !Number.isFinite(canvasPixels) || canvasPixels <= 0 || Math.abs(pixelDelta) < 1) return null;
-  const amount = Math.abs(pixelDelta) / canvasPixels;
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  return { type: "pane_resize", pane_id: handle.paneId, direction: pixelDelta < 0 ? handle.negativeDirection : handle.positiveDirection, amount };
-}
-
-export function projectedPaneIds(paneIds: string[], layout: TabLayout | undefined, fallbackPaneId: string | null): string[] {
-  if (!layout?.zoomed) return paneIds;
-  const focusedPaneId = paneIds.includes(layout.focused_pane_id ?? "")
-    ? layout.focused_pane_id
-    : paneIds.includes(fallbackPaneId ?? "") ? fallbackPaneId : paneIds[0] ?? null;
-  return focusedPaneId ? [focusedPaneId] : [];
-}
-
-export function projectedPaneRect(layout: TabLayout | undefined, paneId: string): LayoutRect | undefined {
-  if (!layout) return undefined;
-  if (layout.zoomed) return layout.area;
-  return layout.panes.find((candidate) => candidate.pane_id === paneId)?.rect;
-}
-
-export function tabDropInsertionIndex(sourceIndex: number, targetIndex: number, afterTarget: boolean): number | null {
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return null;
-  const insertionIndex = targetIndex + (afterTarget ? 1 : 0);
-  const finalIndex = insertionIndex > sourceIndex ? insertionIndex - 1 : insertionIndex;
-  return finalIndex === sourceIndex ? null : insertionIndex;
-}
 
 export function spaceDropBeforeId(spaces: Space[], sourceId: string, targetId: string, afterTarget: boolean): string | null | undefined {
   const sourceIndex = spaces.findIndex((space) => space.id === sourceId);
@@ -297,13 +178,6 @@ export function authoritativeMutationSnapshot(expectedSessionId: string, respons
   }
   return parsed.snapshot;
 }
-function focusRequestForSnapshot(snapshot: SessionSnapshot): FocusRequest | null {
-  if (snapshot.focused_pane_id) return { kind: "pane", target_id: snapshot.focused_pane_id };
-  if (snapshot.focused_tab_id) return { kind: "tab", target_id: snapshot.focused_tab_id };
-  if (snapshot.focused_space_id) return { kind: "space", target_id: snapshot.focused_space_id };
-  return null;
-}
-
 function CompatibilityNotice({ status, error, retry }: { status: CockpitStatus | null; error: StatusError | null; retry: () => void }) {
   const herdr = status?.herdr;
   const title = error ? "Cockpit unavailable" : herdr?.status === "incompatible" ? "Herdr is incompatible" : "Herdr is unavailable";
@@ -322,29 +196,6 @@ type PaneDialog =
   | { kind: "rename"; paneId: string }
   | { kind: "swap"; paneId: string }
   | { kind: "move"; paneId: string };
-export type PrefixCommand =
-  | "help" | "new-space" | "rename-space" | "close-space"
-  | "new-tab" | "rename-tab" | "previous-tab" | "next-tab" | "close-tab"
-  | "rename-pane" | "split-right" | "split-down" | "close-pane" | "zoom-pane" | "resize";
-
-export function prefixCommandForKey(key: string, shiftKey: boolean): PrefixCommand | null {
-  if (key === "?") return "help";
-  if (shiftKey && key.toLowerCase() === "n") return "new-space";
-  if (shiftKey && key.toLowerCase() === "w") return "rename-space";
-  if (shiftKey && key.toLowerCase() === "d") return "close-space";
-  if (!shiftKey && key === "c") return "new-tab";
-  if (shiftKey && key.toLowerCase() === "t") return "rename-tab";
-  if (!shiftKey && key === "p") return "previous-tab";
-  if (!shiftKey && key === "n") return "next-tab";
-  if (shiftKey && key.toLowerCase() === "x") return "close-tab";
-  if (shiftKey && key.toLowerCase() === "p") return "rename-pane";
-  if (!shiftKey && key === "v") return "split-right";
-  if (!shiftKey && key === "-") return "split-down";
-  if (!shiftKey && key === "x") return "close-pane";
-  if (!shiftKey && key === "z") return "zoom-pane";
-  if (!shiftKey && key === "r") return "resize";
-  return null;
-}
 
 export function canSwitchSessions(sessionCount: number): boolean {
   return sessionCount > 1;
@@ -408,64 +259,6 @@ function trapModalTab(event: ReactKeyboardEvent<HTMLElement>, root: HTMLElement 
   const next = nextModalFocusIndex(controls.indexOf(document.activeElement as HTMLElement), controls.length, event.shiftKey);
   controls[next]?.focus();
 }
-
-function editableTarget(target: EventTarget | null): boolean {
-  return target !== null && target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-}
-
-type WorkbenchKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey" | "target" | "isComposing" | "preventDefault" | "stopPropagation">;
-type WorkbenchKeyRouting = {
-  modalOpen: boolean;
-  prefixActive: boolean;
-  runCommand: (command: PrefixCommand) => void;
-  setPrefixActive: (active: boolean) => void;
-  setCommandsOpen: (open: boolean) => void;
-};
-
-export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
-  if (event.isComposing) return;
-  const target = typeof HTMLElement !== "undefined" && event.target instanceof HTMLElement ? event.target : null;
-  const prefixSafe = !editableTarget(target) || Boolean(target?.closest(".terminal-host"));
-  if (event.key === "Escape" && routing.prefixActive) {
-    routing.setPrefixActive(false);
-    if (!routing.modalOpen && prefixSafe) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-    return;
-  }
-  if (routing.modalOpen) return;
-  if (!routing.prefixActive) {
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b" && prefixSafe) {
-      event.preventDefault();
-      event.stopPropagation();
-      routing.setPrefixActive(true);
-      return;
-    }
-    if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey && !editableTarget(target)) {
-      event.preventDefault();
-      routing.setCommandsOpen(true);
-    }
-    return;
-  }
-  if (!prefixSafe) return;
-  if (event.ctrlKey || event.altKey || event.metaKey) {
-    routing.setPrefixActive(false);
-    return;
-  }
-  const command = prefixCommandForKey(event.key, event.shiftKey);
-  if (command) {
-    event.preventDefault();
-    event.stopPropagation();
-    routing.setPrefixActive(false);
-    routing.runCommand(command);
-    return;
-  }
-  event.preventDefault();
-  routing.setPrefixActive(false);
-}
-
-
 function InlineRename({ label, ariaLabel, onCommit, onCancel }: { label: string; ariaLabel: string; onCommit: (label: string) => boolean; onCancel: () => void }) {
   const [value, setValue] = useState(label);
   return <input className="inline-rename" aria-label={ariaLabel} autoFocus value={value} onChange={(event) => setValue(event.target.value)} onBlur={onCancel} onKeyDown={(event) => {
@@ -619,7 +412,7 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
 }) {
   const title = pane.title || label;
   const closePane = () => { if (window.confirm(`Close ${title}?`)) mutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }); };
-  const graphical = isGraphicalContext(renderer);
+  const graphical = isGraphicalContext(renderer) || isGraphicalReview(renderer);
   const graphicalRef = useRef<HTMLDivElement>(null);
   const intendedControl = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -650,9 +443,9 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
           onRequestControl();
         }
       }}>
-      <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
+      {isGraphicalReview(renderer) ? <ReviewViewer client={client} presentation={renderer.presentation} value={renderer.view} onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)} onRequestControl={onRequestControl} onTerminalView={onTerminalView} /> : <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
         onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)}
-        controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} />
+        controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} />}
     </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} terminalMouseInput={terminalMouseInput} onRequestControl={onRequestControl} onSelect={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
     {renderer?.actionError || (graphical && renderer?.inspectionError) ? <div className="pane-presentation-error" role="status"><span>{renderer.actionError ?? renderer.inspectionError}</span><button type="button" onClick={onRefreshRenderer}>Refresh</button>{graphical ? <button type="button" onClick={onTerminalView}>Terminal</button> : null}</div> : null}
   </section>;
@@ -850,9 +643,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button>
+      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} onClick={() => menuAction(() => { void renderers.open(pane.id, "right", "review"); })}>Open Review right</button>
+      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} onClick={() => menuAction(() => { void renderers.open(pane.id, "down", "review"); })}>Open Review below</button>
       <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right"); })}>Open Context right</button>
       <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down"); })}>Open Context below</button>
-      <button role="menuitem" type="button" disabled={renderer?.presentation.renderer !== "context"} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, isGraphicalContext(renderer) ? "terminal" : "context"))}>{isGraphicalContext(renderer) ? "Show terminal view" : "Render as Context"}</button>
+      <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}>{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : renderer?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
       <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}>Refresh renderer detection</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button>
       <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}>Swap...</button>
@@ -878,7 +673,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       <button type="button" className="session-command" onClick={() => { setCommandsOpen(false); setRecoveryOpen(true); }}>Recover task cleanup…</button>
       <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "right"); }}>Open Context right</button>
       <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "down"); }}>Open Context below</button>
-      <button type="button" className="session-command" disabled={renderers.panes[selection.paneId ?? ""]?.presentation.renderer !== "context"} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) renderers.choose(selection.paneId, isGraphicalContext(renderers.panes[selection.paneId]) ? "terminal" : "context"); }}>{isGraphicalContext(renderers.panes[selection.paneId ?? ""]) ? "Show terminal view" : "Render as Context"}</button>
+      <button type="button" className="session-command" disabled={!renderers.panes[selection.paneId ?? ""]?.presentation.renderer} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) renderers.choose(selection.paneId, (isGraphicalContext(renderers.panes[selection.paneId]) || isGraphicalReview(renderers.panes[selection.paneId])) ? "terminal" : renderers.panes[selection.paneId]?.presentation.renderer ?? "context"); }}>{isGraphicalContext(renderers.panes[selection.paneId ?? ""]) || isGraphicalReview(renderers.panes[selection.paneId ?? ""]) ? "Show terminal view" : renderers.panes[selection.paneId ?? ""]?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
     </>} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
@@ -898,46 +693,54 @@ export function App({ client }: { client: CockpitClient }) {
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sessionsError, setSessionsError] = useState<StatusError | null>(null);
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
-  const [mutations, dispatchMutation] = useReducer(mutationCoordinatorReducer, initialMutationCoordinatorState);
   const [selection, setSelection] = useState<Selection>({ spaceId: null, tabId: null, paneId: null });
   const [controlPaneId, setControlPaneId] = useState<string | null>(null);
   const sessionStream = useRef<{ close(): void } | null>(null);
-  const focusTokenRef = useRef(0);
-  const focusIntent = useRef<{ epoch: number; token: number; request: FocusRequest; location: Selection } | null>(null);
-  const focusFallbackCancel = useRef<(() => void) | null>(null);
   const controlInitializedEpoch = useRef<number | null>(null);
-  const [focusDelayed, setFocusDelayed] = useState(false);
-  const mutationTokenRef = useRef(0);
-  const mutationPendingRef = useRef(false);
   const [resyncAttempt, setResyncAttempt] = useState(0);
   const recoveryResyncRef = useRef(false);
   const sessionObservation = useRef(0);
   const sessionListRequest = useRef(0);
-  const mutationFocusIntent = useRef<{ epoch: number; token: number; paneId: string } | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const autoResyncTimer = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const requestResync = useCallback(() => {
+    recoveryResyncRef.current = true;
+    setResyncAttempt((value) => value + 1);
+  }, []);
+  const { focus, focusDelayed, reconcile: reconcileFocus, reset: resetFocus, retryFocus, tokenRef: focusTokenRef } = useFocusCoordinator({
+    client,
+    stateRef,
+    mountedRef,
+    dispatch,
+    describeError,
+    onTimeout: requestResync,
+  });
+  const { consumeFocusedPane, mutate, reset: resetMutations, retry: retryMutation, state: mutations, tokenRef: mutationTokenRef } = useMutationCoordinator({
+    client,
+    stateRef,
+    mountedRef,
+    sessionObservationRef: sessionObservation,
+    focusTokenRef,
+    dispatchSession: dispatch,
+    describeError,
+    mutationSnapshot: authoritativeMutationSnapshot,
+    onResync: requestResync,
+  });
   const resetSessionRuntime = useCallback(() => {
     sessionObservation.current += 1;
     sessionStream.current?.close();
     sessionStream.current = null;
-    focusFallbackCancel.current?.();
-    focusFallbackCancel.current = null;
+    resetFocus();
     if (autoResyncTimer.current !== null) window.clearTimeout(autoResyncTimer.current);
     autoResyncTimer.current = null;
-    focusTokenRef.current += 1;
-    focusIntent.current = null;
-    mutationFocusIntent.current = null;
-    mutationTokenRef.current += 1;
-    mutationPendingRef.current = false;
     recoveryResyncRef.current = false;
-    dispatchMutation({ type: "reset" });
-    setFocusDelayed(false);
+    resetMutations();
     setSelection({ spaceId: null, tabId: null, paneId: null });
     setControlPaneId(null);
     controlInitializedEpoch.current = null;
-  }, []);
+  }, [resetFocus, resetMutations]);
   const switchSession = useCallback((id: string) => {
     resetSessionRuntime();
     dispatch({ type: "switch", sessionId: id });
@@ -956,7 +759,7 @@ export function App({ client }: { client: CockpitClient }) {
       setSessionsLoaded(true);
     }
   }, [client]);
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; focusFallbackCancel.current?.(); }; }, []);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; resetFocus(); }; }, [resetFocus]);
   useEffect(() => { let active = true; setStatus(null); setStatusError(null); void client.status().then((next) => { if (active) setStatus(next); }, (error: unknown) => { if (active) setStatusError(describeError(error, "Could not read Cockpit status")); }); return () => { active = false; }; }, [client, statusAttempt]);
   const compatible = status?.herdr.status === "compatible";
   const sessionAvailable = sessionsLoaded && sessions.some((session) => session.id === state.sessionId);
@@ -999,7 +802,6 @@ export function App({ client }: { client: CockpitClient }) {
             const confirmedFocus = focusRequestForSnapshot(message.snapshot);
             if (confirmedFocus) {
               const token = ++focusTokenRef.current;
-              focusIntent.current = null;
               dispatch({ type: "focus/request", epoch, sessionId, request: confirmedFocus, token });
             }
           }
@@ -1009,11 +811,8 @@ export function App({ client }: { client: CockpitClient }) {
             controlInitializedEpoch.current = epoch;
             setControlPaneId(message.snapshot.focused_pane_id);
           }
-          const intent = mutationFocusIntent.current;
-          if (intent?.epoch === epoch && intent.token === mutationTokenRef.current) {
-            if (message.snapshot.focused_pane_id === intent.paneId) setControlPaneId(intent.paneId);
-            mutationFocusIntent.current = null;
-          }
+          const mutationFocusPane = consumeFocusedPane(epoch, message.snapshot.focused_pane_id);
+          if (mutationFocusPane) setControlPaneId(mutationFocusPane);
           if (recovering && recoveryMutationToken === mutationTokenRef.current) {
             recoveryResyncRef.current = false;
           }
@@ -1041,101 +840,13 @@ export function App({ client }: { client: CockpitClient }) {
     if (!state.snapshot) return;
     const next = authoritativeSelection(state.snapshot);
     setSelection(next);
-    const intent = focusIntent.current;
-    if (state.sync === "live" && intent && intent.epoch === state.epoch && intent.token === state.focusToken && !state.focusPending && !state.focusError) {
-      focusFallbackCancel.current?.();
-      focusFallbackCancel.current = null;
-      setFocusDelayed(false);
-      setControlPaneId(next.paneId);
-      focusIntent.current = null;
-    } else if (!intent && controlPaneId !== null && next.paneId !== controlPaneId) {
-      setControlPaneId(null);
-    }
-  }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId]);
+    const nextControlPaneId = reconcileFocus(state, next, controlPaneId);
+    if (nextControlPaneId !== undefined) setControlPaneId(nextControlPaneId);
+  }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId, reconcileFocus]);
 
-  const focus = (request: FocusRequest, location: Selection) => {
-    const sessionId = state.sessionId;
-    if (!sessionId) return;
-    const epoch = state.epoch;
-    mutationFocusIntent.current = null;
-    const token = focusTokenRef.current + 1;
-    focusTokenRef.current = token;
-    focusFallbackCancel.current?.();
-    focusFallbackCancel.current = null;
-    setFocusDelayed(false);
-    focusIntent.current = { epoch, token, request, location };
-    dispatch({ type: "focus/request", epoch, sessionId, request, token });
-    void client.focus(sessionId, request).then((response) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || focusTokenRef.current !== token) return;
-      if (!response.accepted) { dispatch({ type: "focus/error", epoch, sessionId, token, code: "focus_rejected", message: "Herdr did not accept this focus request" }); return; }
-      if (!stateRef.current.focusPending) return;
-      focusFallbackCancel.current = scheduleFocusFallback(
-        () => mountedRef.current && stateRef.current.epoch === epoch && stateRef.current.sessionId === sessionId && focusTokenRef.current === token && stateRef.current.focusPending !== null,
-        () => setFocusDelayed(true),
-        () => {
-          focusFallbackCancel.current = null;
-          setFocusDelayed(false);
-          dispatch({ type: "focus/error", epoch, sessionId, token, code: "focus_timeout", message: "Herdr did not confirm this focus request" });
-          recoveryResyncRef.current = true;
-          setResyncAttempt((value) => value + 1);
-        },
-      );
-    }, (error: unknown) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || focusTokenRef.current !== token) return;
-      const described = describeError(error, "Could not focus resource");
-      focusIntent.current = { epoch, token, request, location };
-      focusFallbackCancel.current?.();
-      focusFallbackCancel.current = null;
-      setFocusDelayed(false);
-      dispatch({ type: "focus/error", epoch, sessionId, token, code: described.code ?? "focus_error", message: described.message });
-    });
-  };
-  const mutate = useCallback<Mutate>((key, request, focusFromSnapshot = false) => {
-    const current = stateRef.current;
-    const sessionId = current.sessionId;
-    if (!sessionId || mutationPendingRef.current) return false;
-    const epoch = current.epoch;
-    const observation = sessionObservation.current;
-    const focusToken = focusTokenRef.current;
-    const token = mutationTokenRef.current + 1;
-    mutationTokenRef.current = token;
-    mutationPendingRef.current = true;
-    const operation: MutationOperation = { epoch, token, key, request, focusFromSnapshot };
-    dispatchMutation({ type: "begin", operation });
-    const accepted = true;
-    void client.mutate(sessionId, request).then((response) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || mutationTokenRef.current !== token) return;
-      const snapshot = authoritativeMutationSnapshot(sessionId, response);
-      mutationPendingRef.current = false;
-      dispatchMutation({ type: "succeed", epoch, token });
-      mutationFocusIntent.current = focusFromSnapshot && snapshot.focused_pane_id && observation === sessionObservation.current && focusToken === focusTokenRef.current
-        ? { epoch, token, paneId: snapshot.focused_pane_id }
-        : null;
-      recoveryResyncRef.current = true;
-      dispatch({ type: "snapshot/request", epoch, sessionId });
-      setResyncAttempt((value) => value + 1);
-    }).catch((error: unknown) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || mutationTokenRef.current !== token) return;
-      mutationPendingRef.current = false;
-      const errorState = describeError(error, "Could not update Herdr resource");
-      dispatchMutation({ type: "fail", epoch, token, error: errorState });
-      if (errorState.code === "mutation_applied_snapshot_failed" || errorState.code === "request_outcome_unknown") {
-        mutationFocusIntent.current = null;
-        recoveryResyncRef.current = true;
-        setResyncAttempt((value) => value + 1);
-      }
-    });
-    return accepted;
-  }, [client]);
-  const retryMutation = (operation: MutationOperation) => { mutate(operation.key, operation.request, operation.focusFromSnapshot); };
-  const retryFocus = () => {
-    const intent = focusIntent.current;
-    if (intent) focus(intent.request, intent.location);
-  };
   const explicitResync = () => {
-    recoveryResyncRef.current = true;
     void refreshSessions();
-    setResyncAttempt((value) => value + 1);
+    requestResync();
   };
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;

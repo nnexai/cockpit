@@ -1,4 +1,3 @@
-use cockpit_protocol::comment_paste::{CommentPastePrepareRequest, CommentPasteSendRequest, CommentPasteMarkPastedRequest};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
@@ -7,6 +6,9 @@ use axum::{
     routing::post,
 };
 use cockpit_core::CockpitService;
+use cockpit_protocol::comment_paste::{
+    CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPasteSendRequest,
+};
 use cockpit_protocol::comments::{
     CommentBatchList, CommentBatchMutation, CommentBatchRequest, CommentPreview,
     CommentPreviewRequest, CommentRemoveRequest, CommentUpsertRequest,
@@ -44,9 +46,18 @@ pub(super) fn routes() -> Router<CockpitService> {
             "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/preview",
             post(preview),
         )
-        .route("/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-prepare", post(paste_prepare))
-        .route("/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-send", post(paste_send))
-        .route("/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-mark-pasted", post(paste_mark_pasted))
+        .route(
+            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-prepare",
+            post(paste_prepare),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-send",
+            post(paste_send),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/paste-mark-pasted",
+            post(paste_mark_pasted),
+        )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
 }
@@ -196,23 +207,68 @@ async fn preview(
     }
 }
 
-async fn paste_prepare(State(service): State<CockpitService>, Path((session, pane)): Path<(String, String)>, body: Result<Json<CommentPastePrepareRequest>, JsonRejection>) -> Response {
-    if !valid_pane(&session, &pane) { return bad_request("invalid_comments_request", "Session or pane ID is invalid"); }
-    let request = match request(body) { Ok(request) => request, Err(response) => return response };
-    let comments = match service.comments() { Ok(comments) => comments, Err(error) => return inspection_error(error) };
-    match comments.paste_prepare(&session, &pane, &request).await { Ok(value) => Json(value).into_response(), Err(error) => inspection_error(error) }
+async fn paste_prepare(
+    State(service): State<CockpitService>,
+    Path((session, pane)): Path<(String, String)>,
+    body: Result<Json<CommentPastePrepareRequest>, JsonRejection>,
+) -> Response {
+    if !valid_pane(&session, &pane) {
+        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let comments = match service.comments() {
+        Ok(comments) => comments,
+        Err(error) => return inspection_error(error),
+    };
+    match comments.paste_prepare(&session, &pane, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
 }
 
-async fn paste_send(State(service): State<CockpitService>, Path((session, pane)): Path<(String, String)>, body: Result<Json<CommentPasteSendRequest>, JsonRejection>) -> Response {
-    if !valid_pane(&session, &pane) { return bad_request("invalid_comments_request", "Session or pane ID is invalid"); }
-    let request = match request(body) { Ok(request) => request, Err(response) => return response };
-    let comments = match service.comments() { Ok(comments) => comments, Err(error) => return inspection_error(error) };
-    match comments.paste_send(&session, &pane, &request).await { Ok(value) => Json(value).into_response(), Err(error) => inspection_error(error) }
+async fn paste_send(
+    State(service): State<CockpitService>,
+    Path((session, pane)): Path<(String, String)>,
+    body: Result<Json<CommentPasteSendRequest>, JsonRejection>,
+) -> Response {
+    if !valid_pane(&session, &pane) {
+        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let comments = match service.comments() {
+        Ok(comments) => comments,
+        Err(error) => return inspection_error(error),
+    };
+    match comments.paste_send(&session, &pane, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
 }
 
-async fn paste_mark_pasted(State(service): State<CockpitService>, Path((session, pane)): Path<(String, String)>, body: Result<Json<CommentPasteMarkPastedRequest>, JsonRejection>) -> Response {
-    if !valid_pane(&session, &pane) { return bad_request("invalid_comments_request", "Session or pane ID is invalid"); }
-    let request = match request(body) { Ok(request) => request, Err(response) => return response };
-    let comments = match service.comments() { Ok(comments) => comments, Err(error) => return inspection_error(error) };
-    match comments.paste_mark_pasted(&session, &pane, &request).await { Ok(value) => Json(value).into_response(), Err(error) => inspection_error(error) }
+async fn paste_mark_pasted(
+    State(service): State<CockpitService>,
+    Path((session, pane)): Path<(String, String)>,
+    body: Result<Json<CommentPasteMarkPastedRequest>, JsonRejection>,
+) -> Response {
+    if !valid_pane(&session, &pane) {
+        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let comments = match service.comments() {
+        Ok(comments) => comments,
+        Err(error) => return inspection_error(error),
+    };
+    match comments.paste_mark_pasted(&session, &pane, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
 }

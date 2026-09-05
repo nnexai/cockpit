@@ -9,10 +9,13 @@ use cap_std::fs::{Dir, Metadata, OpenOptions};
 use cockpit_protocol::context::{
     ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
     ContextEntry, ContextEntryKind, ContextLaunchRequest, ContextRoot, ContextRootKind,
-    DetectionConfidence, ExtensionKind, PanePresentation,
+    DetectionConfidence, ExtensionKind, PanePresentation, ReviewLaunchRequest,
 };
 use cockpit_protocol::context_assets::{ContextSnapshotRequest, ContextSnapshotResponse};
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
+use cockpit_protocol::sources::{
+    SourceImportRequest, SourceImportResponse, SourceListRequest, SourceRefreshRequest,
+};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tokio::sync::Semaphore;
@@ -21,12 +24,14 @@ use crate::InspectionError;
 use crate::extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 use crate::projects::ProjectService;
 use crate::repositories::RepositoryCatalog;
+use crate::sources::{SourceAuthority, SourceFetchRequest, SourceService};
 
 #[derive(Clone)]
 pub struct ContextService {
-    configuration: ProjectConfiguration,
+    pub(crate) configuration: ProjectConfiguration,
     adapter: Arc<dyn ExtensionHerdrAdapter>,
     projects: Arc<ProjectService>,
+    sources: Option<Arc<SourceService>>,
     /// Shared across transient host handlers so bounded searches cannot exhaust blocking workers.
     pub(crate) search_permits: Arc<Semaphore>,
 }
@@ -63,8 +68,124 @@ impl ContextService {
             configuration,
             adapter,
             projects,
+            sources: None,
             search_permits: Arc::new(Semaphore::new(2)),
         }
+    }
+    pub fn with_sources(mut self, sources: Arc<SourceService>) -> Self {
+        self.sources = Some(sources);
+        self
+    }
+
+    pub async fn import_source(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &SourceImportRequest,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        let authorized = self
+            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
+            .await?;
+        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
+            InspectionError::new(
+                "source_companion_unavailable",
+                "the authorized companion has no durable identity",
+            )
+        })?;
+        let service = self.sources.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_unsupported",
+                "source import is not configured",
+            )
+        })?;
+        let authority = verified_origin(
+            &self.configuration,
+            Path::new(&authorized.root.checkout_path),
+            &request.provider_id,
+        )
+        .await?;
+        let mut response = service
+            .fetch_to_companion_hydrated(
+                SourceFetchRequest {
+                    provider_id: request.provider_id.clone(),
+                    artifact_url: request.artifact_url.clone(),
+                    authority,
+                },
+                Some((&authorized.dir, companion_id)),
+                request.hydrate_references,
+            )
+            .await?;
+        response.binding_id = request.binding_id.clone();
+        response.root_id = authorized.root.root_id;
+        Ok(response)
+    }
+    pub async fn refresh_source(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &SourceRefreshRequest,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        let authorized = self
+            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
+            .await?;
+        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
+            InspectionError::new(
+                "source_companion_unavailable",
+                "the authorized companion has no durable identity",
+            )
+        })?;
+        let service = self.sources.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_unsupported",
+                "source import is not configured",
+            )
+        })?;
+        let cached = service.find_provider_id(&request.source_id)?;
+        let authority = verified_origin(
+            &self.configuration,
+            Path::new(&authorized.root.checkout_path),
+            &cached,
+        )
+        .await?;
+        let mut response = service
+            .refresh_cached_hydrated(
+                &request.source_id,
+                authority,
+                Some((&authorized.dir, companion_id)),
+                request.hydrate_references,
+            )
+            .await?;
+        response.binding_id = request.binding_id.clone();
+        response.root_id = authorized.root.root_id;
+        Ok(response)
+    }
+    pub async fn list_sources(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &SourceListRequest,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        let authorized = self
+            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
+            .await?;
+        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
+            InspectionError::new(
+                "source_companion_unavailable",
+                "the authorized companion has no durable identity",
+            )
+        })?;
+        let service = self.sources.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_unsupported",
+                "source import is not configured",
+            )
+        })?;
+        Ok(SourceImportResponse {
+            binding_id: request.binding_id.clone(),
+            root_id: authorized.root.root_id,
+            entries: service.list_for_companion(&authorized.dir, companion_id)?,
+            diagnostics: Vec::new(),
+        })
     }
     /// Resolve the current Context pane and its companion-only source
     /// association. This is deliberately crate-visible: comments must use
@@ -169,12 +290,7 @@ impl ContextService {
         request: &ContextSnapshotRequest,
     ) -> Result<ContextSnapshotResponse, InspectionError> {
         let authorized = self
-            .authorize_companion_root(
-                session_id,
-                pane_id,
-                &request.binding_id,
-                &request.root_id,
-            )
+            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
             .await?;
         let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
             InspectionError::new(
@@ -197,7 +313,6 @@ impl ContextService {
         response.root_id = authorized.root.root_id;
         Ok(response)
     }
-
 
     pub async fn inspect_pane(
         &self,
@@ -348,7 +463,11 @@ impl ContextService {
         let (parent, leaf) = resolve_parent(&authorized.dir, &relative)?;
         let before = parent.symlink_metadata(&leaf).map_err(|error| {
             InspectionError::new(
-                if error.kind() == ErrorKind::NotFound { "context_file_missing" } else { "context_file_unavailable" },
+                if error.kind() == ErrorKind::NotFound {
+                    "context_file_missing"
+                } else {
+                    "context_file_unavailable"
+                },
                 format!("cannot inspect context file: {error}"),
             )
         })?;
@@ -542,6 +661,92 @@ impl ContextService {
         self.presentation(session_id, &launched).await
     }
 
+    /// Open the installed Reviewr pane from an authorized repository checkout.
+    /// The requested repository is an opaque root identity, never a
+    /// caller-controlled filesystem path.
+    pub async fn open_review(
+        &self,
+        session_id: &str,
+        request: &ReviewLaunchRequest,
+    ) -> Result<PanePresentation, InspectionError> {
+        if request.pane_id.is_empty()
+            || request.binding_id.is_empty()
+            || request.repository_id.is_empty()
+            || request.repository_id.len() > 256
+            || request.repository_id.chars().any(char::is_control)
+        {
+            return Err(InspectionError::new(
+                "review_open_invalid_request",
+                "review launch request is incomplete",
+            ));
+        }
+        let source = self
+            .adapter
+            .inspect_extension_pane(session_id, &request.pane_id)
+            .await?;
+        if source.pane_id != request.pane_id {
+            return Err(InspectionError::new(
+                "pane_identity_mismatch",
+                "Herdr returned evidence for a different pane",
+            ));
+        }
+        let presentation = self.presentation(session_id, &source).await?;
+        require_binding(&presentation, &request.binding_id)?;
+        if !presentation.can_open_review {
+            return Err(InspectionError::new(
+                "review_open_unavailable",
+                "Reviewr is unavailable for the current configured repository checkout",
+            ));
+        }
+        let checkout =
+            self.review_checkout_for_presentation(&presentation, &request.repository_id)?;
+        let launched = self
+            .adapter
+            .launch_review_pane(
+                session_id,
+                &ExtensionLaunch {
+                    endpoint_identity: source.endpoint_identity,
+                    pane_id: source.pane_id,
+                    terminal_id: source.terminal_id,
+                    workspace_id: source.workspace_id,
+                    cwd: checkout.to_string_lossy().into_owned(),
+                    direction: request.direction,
+                },
+            )
+            .await?;
+        self.presentation(session_id, &launched).await
+    }
+
+    fn review_checkout_for_presentation(
+        &self,
+        presentation: &PanePresentation,
+        repository_id: &str,
+    ) -> Result<PathBuf, InspectionError> {
+        let root = presentation
+            .roots
+            .iter()
+            .find(|root| {
+                matches!(
+                    root.kind,
+                    ContextRootKind::Repository | ContextRootKind::Companion
+                ) && root.repository_id == repository_id
+            })
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "context_root_not_authorized",
+                    "selected repository is not authorized for this source pane",
+                )
+            })?;
+        let (checkout, _, _) =
+            canonical_directory(Path::new(&root.checkout_path)).map_err(|_| {
+                InspectionError::new(
+                    "review_open_unavailable",
+                    "selected repository checkout is unavailable",
+                )
+            })?;
+        Ok(checkout)
+    }
+
     async fn presentation(
         &self,
         session_id: &str,
@@ -567,6 +772,13 @@ impl ContextService {
                     root.root.kind == ContextRootKind::Companion
                         && Path::new(&root.root.path) == cwd.as_path()
                 })
+            });
+        let can_open_review = evidence.can_open_review
+            && roots.iter().any(|root| {
+                matches!(
+                    root.root.kind,
+                    ContextRootKind::Repository | ContextRootKind::Companion
+                )
             });
         let renderer = match (evidence.extension, evidence.confidence) {
             (Some(ExtensionKind::Review), confidence) if verified_confidence(confidence) => {
@@ -602,6 +814,11 @@ impl ContextService {
         if evidence.can_open_context && !can_open_context {
             reason.push_str("; Open Context requires a source pane at its companion directory");
         }
+        if evidence.can_open_review && !can_open_review {
+            reason.push_str(
+                "; Open Review requires an authorized repository or companion association",
+            );
+        }
         Ok(PanePresentation {
             session_id: session_id.to_owned(),
             pane_id: evidence.pane_id.clone(),
@@ -614,6 +831,7 @@ impl ContextService {
             roots: roots.into_iter().map(|root| root.root).collect(),
             default_root_id,
             can_open_context,
+            can_open_review,
             diagnostics,
         })
     }
@@ -745,6 +963,209 @@ impl ContextService {
     }
 }
 
+async fn verified_origin(
+    configuration: &ProjectConfiguration,
+    checkout: &Path,
+    provider_id: &str,
+) -> Result<SourceAuthority, InspectionError> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(checkout)
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "remote",
+            "get-url",
+            "origin",
+        ])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE");
+    let output = crate::process::run_bounded_command(
+        command,
+        configuration.limits.git_output_bytes as usize,
+        configuration.limits.git_output_bytes as usize,
+        Duration::from_millis(configuration.limits.git_timeout_ms as u64),
+        "source origin",
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(InspectionError::new(
+            "source_primary_origin_unavailable",
+            "the companion primary checkout has no readable origin remote",
+        ));
+    }
+    let provider = configuration
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_unsupported",
+                "selected source provider is not configured",
+            )
+        })?;
+    let instance = normalized_provider_instance(&provider.base_url)?;
+    let value = std::str::from_utf8(&output.stdout)
+        .map_err(|_| {
+            InspectionError::new(
+                "source_primary_origin_invalid",
+                "origin remote is not UTF-8",
+            )
+        })?
+        .trim();
+    let (owner, repository) = origin_repository(value, &instance)?;
+    Ok(SourceAuthority {
+        provider_instance: instance.render(),
+        origin_host: instance.host,
+        origin_port: instance.port,
+        origin_base_path: instance.base_path,
+        owner,
+        repository,
+    })
+}
+
+#[derive(Debug)]
+struct ProviderInstance {
+    scheme: String,
+    host: String,
+    port: Option<u16>,
+    base_path: String,
+}
+impl ProviderInstance {
+    fn render(&self) -> String {
+        format!(
+            "{}://{}{}{}",
+            self.scheme,
+            self.host,
+            self.port.map(|port| format!(":{port}")).unwrap_or_default(),
+            self.base_path
+        )
+    }
+}
+fn normalized_provider_instance(value: &str) -> Result<ProviderInstance, InspectionError> {
+    let url = url::Url::parse(value).map_err(|_| {
+        InspectionError::new(
+            "source_provider_invalid",
+            "configured provider URL is invalid",
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(InspectionError::new(
+            "source_provider_invalid",
+            "configured provider URL must be credential-free HTTP(S)",
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_invalid",
+                "configured provider URL lacks a host",
+            )
+        })?
+        .to_ascii_lowercase();
+    let default_port = match url.scheme() {
+        "http" => 80,
+        "https" => 443,
+        _ => unreachable!(),
+    };
+    let port = url.port().filter(|port| *port != default_port);
+    let path = url.path().trim_end_matches('/');
+    let base_path = if path.is_empty() {
+        String::new()
+    } else {
+        path.to_owned()
+    };
+    Ok(ProviderInstance {
+        scheme: url.scheme().to_ascii_lowercase(),
+        host,
+        port,
+        base_path,
+    })
+}
+fn origin_repository(
+    value: &str,
+    instance: &ProviderInstance,
+) -> Result<(String, String), InspectionError> {
+    let (host, port, path, scheme) = if value.contains("://") {
+        let url = url::Url::parse(value).map_err(|_| {
+            InspectionError::new("source_primary_origin_invalid", "origin remote is invalid")
+        })?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "source_primary_origin_invalid",
+                    "origin remote lacks a host",
+                )
+            })?
+            .to_ascii_lowercase();
+        (
+            host,
+            url.port(),
+            url.path().to_owned(),
+            Some(url.scheme().to_ascii_lowercase()),
+        )
+    } else {
+        let (_, tail) = value.rsplit_once('@').unwrap_or(("", value));
+        let (host, path) = tail.split_once(':').ok_or_else(|| {
+            InspectionError::new(
+                "source_primary_origin_invalid",
+                "origin remote does not identify owner/repository",
+            )
+        })?;
+        (host.to_ascii_lowercase(), None, format!("/{path}"), None)
+    };
+    if host != instance.host
+        || scheme
+            .as_deref()
+            .is_some_and(|scheme| scheme != instance.scheme)
+        || (scheme.is_some()
+            && port.filter(|port| *port != if instance.scheme == "https" { 443 } else { 80 })
+                != instance.port)
+    {
+        return Err(InspectionError::new(
+            "source_primary_origin_mismatch",
+            "primary origin does not match the selected configured provider instance",
+        ));
+    }
+    let prefix = if instance.base_path.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("{}/", instance.base_path)
+    };
+    let remainder = path
+        .strip_prefix(&prefix)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_primary_origin_mismatch",
+                "primary origin does not match the configured provider base path",
+            )
+        })?
+        .trim_end_matches(".git");
+    let mut parts = remainder.split('/');
+    let owner = parts.next().unwrap_or("");
+    let repository = parts.next().unwrap_or("");
+    if owner.is_empty()
+        || repository.is_empty()
+        || parts.next().is_some()
+        || owner.chars().any(char::is_control)
+        || repository.chars().any(char::is_control)
+    {
+        return Err(InspectionError::new(
+            "source_primary_origin_invalid",
+            "origin remote does not identify owner/repository",
+        ));
+    }
+    Ok((owner.to_owned(), repository.to_owned()))
+}
+
 fn require_binding(presentation: &PanePresentation, binding: &str) -> Result<(), InspectionError> {
     if binding != presentation.binding_id {
         return Err(InspectionError::new(
@@ -808,7 +1229,10 @@ impl AuthorizedRoot {
         Ok(relative)
     }
 
-    pub(crate) fn resolve_parent(&self, relative: &Path) -> Result<(Dir, PathBuf), InspectionError> {
+    pub(crate) fn resolve_parent(
+        &self,
+        relative: &Path,
+    ) -> Result<(Dir, PathBuf), InspectionError> {
         resolve_parent(&self.dir, relative)
     }
 
@@ -841,13 +1265,10 @@ fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'sta
             {
                 return Some("Cockpit companion metadata is not exposed");
             }
-            if name
-                .to_str()
-                .is_some_and(|name| {
-                    (name.starts_with(".companion-") || name.starts_with(".context-snapshot-"))
-                        && name.ends_with(".tmp")
-                })
-            {
+            if name.to_str().is_some_and(|name| {
+                (name.starts_with(".companion-") || name.starts_with(".context-snapshot-"))
+                    && name.ends_with(".tmp")
+            }) {
                 return Some("Cockpit staging internals are not exposed");
             }
         }
@@ -899,7 +1320,11 @@ fn resolve_directory(root: &Dir, relative: &Path) -> Result<Dir, InspectionError
         };
         let metadata = current.symlink_metadata(name).map_err(|error| {
             InspectionError::new(
-                if error.kind() == ErrorKind::NotFound { "context_file_missing" } else { "context_path_unavailable" },
+                if error.kind() == ErrorKind::NotFound {
+                    "context_file_missing"
+                } else {
+                    "context_path_unavailable"
+                },
                 format!("cannot access context path: {error}"),
             )
         })?;
@@ -919,7 +1344,11 @@ fn resolve_directory(root: &Dir, relative: &Path) -> Result<Dir, InspectionError
             .open_dir_nofollow(Path::new(name))
             .map_err(|error| {
                 InspectionError::new(
-                    if error.kind() == ErrorKind::NotFound { "context_file_missing" } else { "context_path_unavailable" },
+                    if error.kind() == ErrorKind::NotFound {
+                        "context_file_missing"
+                    } else {
+                        "context_path_unavailable"
+                    },
                     format!("cannot open context directory: {error}"),
                 )
             })?;
@@ -1299,4 +1728,32 @@ fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnosti
 
 fn is_within(path: &Path, root: &Path) -> bool {
     path == root || path.strip_prefix(root).is_ok()
+}
+
+#[cfg(test)]
+mod source_authority_tests {
+    use super::*;
+
+    #[test]
+    fn provider_origin_requires_exact_host_port_and_base_path_but_maps_ssh() {
+        let instance =
+            normalized_provider_instance("https://forge.test:8443/gitea/").expect("instance");
+        assert_eq!(instance.render(), "https://forge.test:8443/gitea");
+        assert_eq!(
+            origin_repository("git@forge.test:gitea/acme/repo.git", &instance).expect("ssh"),
+            ("acme".to_owned(), "repo".to_owned())
+        );
+        assert_eq!(
+            origin_repository("https://forge.test:8443/other/acme/repo.git", &instance)
+                .expect_err("base mismatch")
+                .code,
+            "source_primary_origin_mismatch"
+        );
+        assert_eq!(
+            origin_repository("https://other.test:8443/gitea/acme/repo.git", &instance)
+                .expect_err("host mismatch")
+                .code,
+            "source_primary_origin_mismatch"
+        );
+    }
 }

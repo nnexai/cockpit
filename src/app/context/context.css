@@ -1,5 +1,7 @@
 .context-viewer {
   display: flex;
+  flex: 1;
+  width: 100%;
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -206,3 +208,14 @@
 .context-snapshot label { display: grid; gap: 4px; }
 .context-snapshot select { width: 100%; min-width: 0; }
 .context-snapshot button { margin-top: 6px; }
+
+.context-sources input { width: 100%; min-width: 0; box-sizing: border-box; }
+.context-source-entry { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--border); }
+.context-source-entry code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.context-safe-image { max-width: 100%; height: auto; object-fit: contain; }
+.context-raster-preview { overflow: auto; padding: 12px; }
+.context-mermaid { margin: 8px 0; border: 1px solid var(--border); padding: 8px; }
+.context-mermaid-caption { display: block; font-size: 11px; color: var(--text-muted); }
+
+.context-sources input[type="checkbox"] { width: auto; }

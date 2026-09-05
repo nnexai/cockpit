@@ -1,9 +1,12 @@
-use cockpit_protocol::comment_paste::{CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteSendRequest, CommentPasteReceipt, CommentPasteMarkPastedRequest};
 use cockpit_core::CockpitService;
+use cockpit_protocol::comment_paste::{
+    CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPastePrepareResponse,
+    CommentPasteReceipt, CommentPasteSendRequest,
+};
 use cockpit_protocol::{
     comments::{
-        CommentBatch, CommentBatchList, CommentBatchMutation, CommentBatchRequest,
-        CommentPreview, CommentPreviewRequest, CommentRemoveRequest, CommentUpsertRequest,
+        CommentBatch, CommentBatchList, CommentBatchMutation, CommentBatchRequest, CommentPreview,
+        CommentPreviewRequest, CommentRemoveRequest, CommentUpsertRequest,
     },
     v1::ErrorResponse,
 };
@@ -110,19 +113,49 @@ pub async fn cockpit_comments_preview(
 }
 
 #[tauri::command]
-pub async fn cockpit_comments_paste_prepare(session_id: String, pane_id: String, request: Value, service: State<'_, CockpitService>) -> Result<CommentPastePrepareResponse, ErrorResponse> {
+pub async fn cockpit_comments_paste_prepare(
+    session_id: String,
+    pane_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<CommentPastePrepareResponse, ErrorResponse> {
     let request: CommentPastePrepareRequest = decode_request(request, "comments")?;
-    service.comments().map_err(inspection_error_response)?.paste_prepare(&session_id, &pane_id, &request).await.map_err(inspection_error_response)
+    service
+        .comments()
+        .map_err(inspection_error_response)?
+        .paste_prepare(&session_id, &pane_id, &request)
+        .await
+        .map_err(inspection_error_response)
 }
 
 #[tauri::command]
-pub async fn cockpit_comments_paste_send(session_id: String, pane_id: String, request: Value, service: State<'_, CockpitService>) -> Result<CommentPasteReceipt, ErrorResponse> {
+pub async fn cockpit_comments_paste_send(
+    session_id: String,
+    pane_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<CommentPasteReceipt, ErrorResponse> {
     let request: CommentPasteSendRequest = decode_request(request, "comments")?;
-    service.comments().map_err(inspection_error_response)?.paste_send(&session_id, &pane_id, &request).await.map_err(inspection_error_response)
+    service
+        .comments()
+        .map_err(inspection_error_response)?
+        .paste_send(&session_id, &pane_id, &request)
+        .await
+        .map_err(inspection_error_response)
 }
 
 #[tauri::command]
-pub async fn cockpit_comments_paste_mark_pasted(session_id: String, pane_id: String, request: Value, service: State<'_, CockpitService>) -> Result<CommentPasteReceipt, ErrorResponse> {
+pub async fn cockpit_comments_paste_mark_pasted(
+    session_id: String,
+    pane_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<CommentPasteReceipt, ErrorResponse> {
     let request: CommentPasteMarkPastedRequest = decode_request(request, "comments")?;
-    service.comments().map_err(inspection_error_response)?.paste_mark_pasted(&session_id, &pane_id, &request).await.map_err(inspection_error_response)
+    service
+        .comments()
+        .map_err(inspection_error_response)?
+        .paste_mark_pasted(&session_id, &pane_id, &request)
+        .await
+        .map_err(inspection_error_response)
 }

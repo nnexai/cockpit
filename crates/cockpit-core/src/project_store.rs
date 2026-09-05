@@ -79,6 +79,14 @@ pub(crate) struct LockGuard {
     _file: File,
 }
 
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        // Explicitly release even if another thread briefly forked a child
+        // before its close-on-exec descriptors have been closed.
+        let _ = fs2::FileExt::unlock(&self._file);
+    }
+}
+
 /// A per-operation execution lease held across the complete side-effect
 /// sequence. It is intentionally separate from journal CAS locks.
 #[derive(Debug)]
@@ -116,7 +124,20 @@ impl ProjectStore {
         if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('\0') {
             return Err(InspectionError::new("unsafe_path", "invalid lock name"));
         }
-        self.acquire_file_lock(name, code).map(|file| LockGuard { _file: file })
+        self.acquire_file_lock(name, code)
+            .map(|file| LockGuard { _file: file })
+    }
+
+    pub(crate) fn try_acquire_named_lock(
+        &self,
+        name: &str,
+        code: &'static str,
+    ) -> Result<Option<LockGuard>, InspectionError> {
+        if name.is_empty() || name.contains(['/', '\\', '\0']) {
+            return Err(InspectionError::new("unsafe_path", "invalid lock name"));
+        }
+        self.try_acquire_file_lock(name, code)
+            .map(|file| file.map(|file| LockGuard { _file: file }))
     }
 
     pub(crate) fn acquire_record_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
@@ -537,10 +558,8 @@ impl ProjectStore {
                 "teardown receipt does not match its reviewed companion",
             ));
         }
-        let _lock = self.acquire_named_lock(
-            &teardown_lock_name(&receipt.operation_id),
-            "teardown_lock",
-        )?;
+        let _lock =
+            self.acquire_named_lock(&teardown_lock_name(&receipt.operation_id), "teardown_lock")?;
         atomic_write_json(
             &self.root_dir,
             &teardown_record_name(&receipt.operation_id),
@@ -926,7 +945,6 @@ pub(crate) fn read_json_bounded<T: for<'de> Deserialize<'de>>(
         ));
     }
     serde_json::from_slice(&bytes).map_err(|e| InspectionError::new("state_corrupt", e.to_string()))
-
 }
 fn validate_operation_id(value: &str) -> Result<(), InspectionError> {
     if Uuid::parse_str(value).is_err() {

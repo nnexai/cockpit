@@ -1,0 +1,31 @@
+import type { ReviewLaunchRequest, ReviewChangedFile, ReviewComparison, ReviewFileDiff, ReviewFileRequest, ReviewSnapshot, ReviewSnapshotRequest, ProjectDiagnostic, ReviewHunk } from "../protocol/generated/v1";
+import { CockpitClientError } from "./CockpitClient";
+const fail = (): never => { throw new CockpitClientError("malformed_response", "Malformed local review response"); };
+const record = (v: unknown): Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : fail();
+const text = (v: unknown, max = 4096): string => typeof v === "string" && v.length <= max ? v : fail();
+const id = (v: unknown): string => { const s = text(v); return s.length > 0 && !/[\x00-\x1f\x7f]/.test(s) ? s : fail(); };
+const nullable = (v: unknown, max = 4096): string | null => v === null ? null : text(v, max);
+const integer = (v: unknown): number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 0xffffffff ? v : fail();
+const maybeNumber = (v: unknown): number | null => v === null ? null : integer(v);
+const bool = (v: unknown): boolean => typeof v === "boolean" ? v : fail();
+const array = (v: unknown, max: number): unknown[] => Array.isArray(v) && v.length <= max ? v : fail();
+const comparison = (v: unknown): ReviewComparison => ["all_local", "staged", "unstaged", "branch", "untracked"].includes(String(v)) ? v as ReviewComparison : fail();
+const diagnostics = (v: unknown): ProjectDiagnostic[] => array(v, 1024).map(item => { const d = record(item); return { code: id(d.code), message: text(d.message), path: nullable(d.path) }; });
+export function parseReviewSnapshotRequest(v: unknown): ReviewSnapshotRequest { const r = record(v); return { binding_id: id(r.binding_id), repository_id: id(r.repository_id), comparison: comparison(r.comparison), base_ref: nullable(r.base_ref) }; }
+export function parseReviewFileRequest(v: unknown): ReviewFileRequest { const r = record(v); return { binding_id: id(r.binding_id), review_id: id(r.review_id), generation: integer(r.generation), file_id: id(r.file_id) }; }
+function changedFile(v: unknown): ReviewChangedFile {
+  const r = record(v); if (!["added", "modified", "deleted", "renamed", "copied", "untracked", "binary", "mode_only", "submodule", "unreadable"].includes(String(r.status))) return fail();
+  return { file_id: id(r.file_id), comparison: comparison(r.comparison), status: r.status as ReviewChangedFile["status"], old_path: nullable(r.old_path), new_path: nullable(r.new_path), binary: bool(r.binary), summary: text(r.summary), old_revision: nullable(r.old_revision), new_revision: nullable(r.new_revision) };
+}
+export function parseReviewSnapshot(v: unknown): ReviewSnapshot {
+  const r = record(v); return { binding_id: id(r.binding_id), session_id: id(r.session_id), pane_id: id(r.pane_id), review_id: id(r.review_id), generation: integer(r.generation), repository_id: id(r.repository_id), checkout_path: text(r.checkout_path), source_id: id(r.source_id), comparison: comparison(r.comparison), base_revision: nullable(r.base_revision), head_revision: nullable(r.head_revision), index_revision: id(r.index_revision), worktree_revision: id(r.worktree_revision), files: array(r.files, 256).map(changedFile), truncated: bool(r.truncated), diagnostics: diagnostics(r.diagnostics) };
+}
+export function parseReviewFile(v: unknown): ReviewFileDiff {
+  const r = record(v); let totalLines = 0;
+  const hunks: ReviewHunk[] = array(r.hunks, 2048).map(item => { const h = record(item); const lines = array(h.lines, 100000).map(item => { const line = record(item); if (++totalLines > 100000 || !["context", "added", "deleted"].includes(String(line.kind))) return fail(); return { kind: line.kind as "context" | "added" | "deleted", old_line: maybeNumber(line.old_line), new_line: maybeNumber(line.new_line), text: text(line.text, 2 * 1024 * 1024) }; }); return { old_path: nullable(h.old_path), new_path: nullable(h.new_path), old_start: integer(h.old_start), new_start: integer(h.new_start), lines }; });
+  return { binding_id: id(r.binding_id), session_id: id(r.session_id), pane_id: id(r.pane_id), review_id: id(r.review_id), generation: integer(r.generation), file: changedFile(r.file), hunks, old_source: nullable(r.old_source, 512 * 1024), new_source: nullable(r.new_source, 512 * 1024), old_source_hash: nullable(r.old_source_hash), new_source_hash: nullable(r.new_source_hash), old_total_lines: maybeNumber(r.old_total_lines), new_total_lines: maybeNumber(r.new_total_lines), old_source_truncated: bool(r.old_source_truncated), new_source_truncated: bool(r.new_source_truncated), truncated: bool(r.truncated), diagnostics: diagnostics(r.diagnostics) };
+}
+export function matchReviewSnapshot(value: ReviewSnapshot, session: string, pane: string, request: ReviewSnapshotRequest): ReviewSnapshot { if (value.session_id !== session || value.pane_id !== pane || value.binding_id !== request.binding_id || value.repository_id !== request.repository_id || value.comparison !== request.comparison) return fail(); return value; }
+export function matchReviewFile(value: ReviewFileDiff, session: string, pane: string, request: ReviewFileRequest): ReviewFileDiff { if (value.session_id !== session || value.pane_id !== pane || value.binding_id !== request.binding_id || value.review_id !== request.review_id || value.generation !== request.generation || value.file.file_id !== request.file_id) return fail(); return value; }
+
+export function parseReviewLaunchRequest(v: unknown): ReviewLaunchRequest { const r = record(v); if (r.direction !== "right" && r.direction !== "down") return fail(); return { pane_id: id(r.pane_id), binding_id: id(r.binding_id), repository_id: id(r.repository_id), direction: r.direction }; }

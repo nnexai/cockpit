@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "quality_seed": "cockpit-quality-v1",
+  "scope": {
+    "include": ["src/**/*.ts", "src/**/*.tsx", "crates/**/*.rs", "src-tauri/**/*.rs"],
+    "exclude": ["src/protocol/generated/**", "**/*.test.ts", "**/*.test.tsx", "**/tests/**", "**/fixtures/**", "**/mocks/**", "target/**", "node_modules/**", "dist/**"]
+  },
+  "policy": {
+    "crap_info": 6,
+    "crap_warn": 8,
+    "crap_hard": 30,
+    "new_logic_coverage_floor": 0.9,
+    "coverage_kind": "line",
+    "decoded_provider_output_bytes": 1048576
+  },
+  "limits": { "timeout_seconds": 600, "workers": 1 },
+  "checks": [
+    { "name": "typescript_typecheck", "argv": ["bun", "run", "typecheck"] },
+    { "name": "typescript_test", "argv": ["bun", "run", "test"] },
+    { "name": "rust_format", "argv": ["cargo", "fmt", "--all", "--", "--check"] },
+    { "name": "rust_check", "argv": ["cargo", "check", "--workspace"] },
+    { "name": "rust_test", "argv": ["cargo", "test", "--workspace"] },
+    { "name": "tauri_compile", "argv": ["cargo", "check", "-p", "cockpit-tauri"] }
+  ]
+}

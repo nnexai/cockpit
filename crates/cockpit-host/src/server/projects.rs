@@ -6,11 +6,11 @@ use axum::{
     routing::{get, post},
 };
 use cockpit_core::CockpitService;
-use cockpit_protocol::projects::{
-    WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupRequest,
-};
 use cockpit_protocol::project_teardown::{
     WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreviewRequest,
+};
+use cockpit_protocol::projects::{
+    WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupRequest,
 };
 use serde::de::DeserializeOwned;
 

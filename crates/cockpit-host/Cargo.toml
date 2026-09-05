@@ -13,6 +13,7 @@ name = "cockpit"
 path = "src/bin/cockpit.rs"
 
 [dependencies]
+cockpit-providers = { path = "../cockpit-providers" }
 axum.workspace = true
 futures-util.workspace = true
 clap.workspace = true

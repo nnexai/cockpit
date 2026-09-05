@@ -6,16 +6,16 @@ use std::sync::{
 };
 
 use cockpit_protocol::context::{ContextRoot, ContextRootKind};
+use cockpit_protocol::project_teardown::{
+    WorkspaceTeardownExecuteRequest, WorkspaceTeardownOutcome, WorkspaceTeardownPreview,
+    WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery, WorkspaceTeardownRecoveryList,
+    WorkspaceTeardownRecoveryState, WorkspaceTeardownResult,
+};
 use cockpit_protocol::projects::{
     ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse,
     WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationState, WorkspaceOperationStep,
     WorkspaceOwnedResource, WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode,
     WorkspaceSetupPlan, WorkspaceSetupRequest,
-};
-use cockpit_protocol::project_teardown::{
-    WorkspaceTeardownExecuteRequest, WorkspaceTeardownOutcome, WorkspaceTeardownPreview,
-    WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery,
-    WorkspaceTeardownRecoveryList, WorkspaceTeardownRecoveryState, WorkspaceTeardownResult,
 };
 use cockpit_protocol::v1::ErrorResponse;
 use sha2::{Digest, Sha256};
@@ -30,7 +30,9 @@ use crate::project_store::{
     CompanionManifest, ProjectStore, TeardownReceipt, TeardownReceiptState, prepare_project_root,
     timestamp, validate_project_root,
 };
-use crate::project_teardown::{self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree};
+use crate::project_teardown::{
+    self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree,
+};
 use crate::repositories::{self, RepositoryCatalog};
 use crate::{InspectionError, ProjectHerdrAdapter};
 /// sessions, workspaces, tabs, panes, and worktrees; this service only journals
@@ -405,7 +407,8 @@ impl ProjectService {
         request: &WorkspaceTeardownPreviewRequest,
     ) -> Result<WorkspaceTeardownPreview, InspectionError> {
         validate_session(session)?;
-        let operation = self.load_teardown_operation_for_workspace(session, &request.workspace_id)?;
+        let operation =
+            self.load_teardown_operation_for_workspace(session, &request.workspace_id)?;
         let evidence = self.fresh_teardown_evidence(session, operation).await?;
         project_teardown::preview(request, evidence.evidence())
     }
@@ -500,7 +503,8 @@ impl ProjectService {
                     workspace_id,
                     action: request.action,
                     outcome: WorkspaceTeardownOutcome::Completed,
-                    message: "workspace closed; the checkout and companion were retained".to_owned(),
+                    message: "workspace closed; the checkout and companion were retained"
+                        .to_owned(),
                 })
             }
             WorkspaceTeardownCommand::ForgetAssociation { operation_id } => {
@@ -522,7 +526,8 @@ impl ProjectService {
                     workspace_id: request.workspace_id.clone(),
                     action: request.action,
                     outcome: WorkspaceTeardownOutcome::Retained,
-                    message: "borrowed checkout association forgotten; no files were removed".to_owned(),
+                    message: "borrowed checkout association forgotten; no files were removed"
+                        .to_owned(),
                 })
             }
             WorkspaceTeardownCommand::RemoveOwnedWorktree {
@@ -686,11 +691,19 @@ impl ProjectService {
         require_companion: bool,
     ) -> Result<TeardownReceipt, InspectionError> {
         let receipt = evidence.receipt.clone().ok_or_else(|| {
-            InspectionError::new("teardown_receipt_missing", "teardown recovery receipt is missing")
+            InspectionError::new(
+                "teardown_receipt_missing",
+                "teardown recovery receipt is missing",
+            )
         })?;
         if receipt.state != expected
             || receipt.operation_id != evidence.operation.operation_id
-            || receipt.workspace_id != evidence.operation.workspace_id.as_deref().unwrap_or_default()
+            || receipt.workspace_id
+                != evidence
+                    .operation
+                    .workspace_id
+                    .as_deref()
+                    .unwrap_or_default()
             || receipt.endpoint_identity != evidence.endpoint_identity
             || receipt.checkout_path != evidence.operation.plan.checkout_path
             || (require_companion && evidence.companion.as_ref() != Some(&receipt.companion))
@@ -710,7 +723,8 @@ impl ProjectService {
         request: &WorkspaceTeardownExecuteRequest,
         evidence: &FreshTeardownEvidence,
     ) -> Result<WorkspaceTeardownResult, InspectionError> {
-        let mut receipt = self.recovery_receipt(evidence, TeardownReceiptState::OutcomeUnknown, false)
+        let mut receipt = self
+            .recovery_receipt(evidence, TeardownReceiptState::OutcomeUnknown, false)
             .or_else(|error| {
                 if error.code == "stale_identity" {
                     self.recovery_receipt(evidence, TeardownReceiptState::Pending, false)
@@ -774,11 +788,8 @@ impl ProjectService {
         request: &WorkspaceTeardownExecuteRequest,
         evidence: &FreshTeardownEvidence,
     ) -> Result<WorkspaceTeardownResult, InspectionError> {
-        let mut receipt = self.recovery_receipt(
-            evidence,
-            TeardownReceiptState::OrphanedCompanion,
-            true,
-        )?;
+        let mut receipt =
+            self.recovery_receipt(evidence, TeardownReceiptState::OrphanedCompanion, true)?;
         match self
             .store
             .remove_owned_companion(&self.configuration.companion_root, &receipt.companion)
@@ -859,10 +870,10 @@ impl ProjectService {
                 dirty,
             })
             .collect();
-        let companion = match self
-            .store
-            .read_companion(&self.configuration.companion_root, &operation.plan.companion_id)
-        {
+        let companion = match self.store.read_companion(
+            &self.configuration.companion_root,
+            &operation.plan.companion_id,
+        ) {
             Ok(manifest) => Some(manifest),
             Err(error) if error.code == "companion_missing" => None,
             Err(error) => return Err(error),
@@ -1456,14 +1467,15 @@ impl ProjectService {
             ));
         }
         let companion_id = plan.companion_id.as_str();
-        let _association_lock = if plan.mode == WorkspaceSetupMode::Open {
-            Some(self.store.acquire_named_lock(
-                &companion_association_lock_name(&plan),
-                "association_lock",
-            )?)
-        } else {
-            None
-        };
+        let _association_lock =
+            if plan.mode == WorkspaceSetupMode::Open {
+                Some(self.store.acquire_named_lock(
+                    &companion_association_lock_name(&plan),
+                    "association_lock",
+                )?)
+            } else {
+                None
+            };
         if plan.mode == WorkspaceSetupMode::Open {
             validate_open_companion_association(
                 &self
@@ -2289,17 +2301,17 @@ mod tests {
     #[test]
     fn open_reuses_only_its_exact_checkout_companion() {
         let plan = open_plan("current");
-        assert!(validate_open_companion_association(
-            &[("current".to_owned(), companion("current"))],
-            &plan,
-        )
-        .is_ok());
+        assert!(
+            validate_open_companion_association(
+                &[("current".to_owned(), companion("current"))],
+                &plan,
+            )
+            .is_ok()
+        );
 
-        let error = validate_open_companion_association(
-            &[("other".to_owned(), companion("other"))],
-            &plan,
-        )
-        .expect_err("a second companion must not be published for one checkout");
+        let error =
+            validate_open_companion_association(&[("other".to_owned(), companion("other"))], &plan)
+                .expect_err("a second companion must not be published for one checkout");
         assert_eq!(error.code, "association_conflict");
     }
 

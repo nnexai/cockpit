@@ -1,8 +1,11 @@
-mod context;
-mod context_search;
 mod comments;
+mod context;
+mod context_media;
+mod context_search;
 mod projects;
 mod requests;
+mod review;
+mod sources;
 
 use std::{
     collections::HashMap,
@@ -803,13 +806,39 @@ pub fn run() {
         inspector.extension_adapter(),
         shutdown_projects.clone(),
     );
+    let sources = cockpit_core::sources::SourceService::new(
+        &project_config,
+        cockpit_providers::configured_providers(&project_config)
+            .expect("invalid configured source providers"),
+    )
+    .expect("failed to initialize source cache");
+    let contexts = contexts.with_sources(Arc::new(sources));
     let service = service.with_contexts(contexts);
+    let reviews = cockpit_core::review::ReviewService::new(
+        project_config.clone(),
+        inspector.extension_adapter(),
+        service
+            .contexts()
+            .expect("context operations configured")
+            .clone(),
+    )
+    .expect("failed to initialize review operations");
+    let service = service.with_reviews(reviews);
     let comments = cockpit_core::comments::CommentsService::new(
         project_config,
-        service.contexts().expect("context operations configured").clone(),
+        service
+            .contexts()
+            .expect("context operations configured")
+            .clone(),
     )
     .unwrap_or_else(|error| panic!("failed to initialize comment operations: {error}"))
-    .with_paste_adapter(inspector.paste_adapter());
+    .with_paste_adapter(inspector.paste_adapter())
+    .with_reviews(
+        service
+            .reviews()
+            .expect("review operations configured")
+            .clone(),
+    );
     let service = service.with_comments(comments);
 
     tauri::Builder::default()
@@ -842,6 +871,13 @@ pub fn run() {
             context_search::cockpit_context_search,
             context_search::cockpit_context_snapshot,
             context_search::cockpit_context_invalidate,
+            context_media::cockpit_context_media,
+            sources::cockpit_source_import,
+            sources::cockpit_source_refresh,
+            sources::cockpit_source_list,
+            review::cockpit_review_snapshot,
+            review::cockpit_review_file,
+            review::cockpit_review_open,
             comments::cockpit_comments_list,
             comments::cockpit_comments_batch,
             comments::cockpit_comments_upsert,

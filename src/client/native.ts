@@ -1,3 +1,6 @@
+import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
+import { parseSourceScope, parseSourceImport, parseSourceRefresh, parseSourceResponse, matchSourceResponse } from "./sourceProtocol";
+import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
@@ -142,7 +145,7 @@ function sessionSubscription(channelFactory: NativeChannelFactory, invoke: Nativ
   });
 }
 
-function terminalSubscription(channelFactory: NativeChannelFactory, invoke: NativeInvoke, request: TerminalOpenRequest, onMessage: (message: TerminalStreamMessage) => void, onError: (error: CockpitClientError) => void): Promise<TerminalStream> {
+function terminalSubscription(channelFactory: NativeChannelFactory, invoke: NativeInvoke, request: TerminalOpenRequest, onMessage: (message: TerminalStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<TerminalStream> {
   let validated: TerminalOpenRequest;
   try { validated = parseTerminalOpenRequest(request); } catch (error) { return Promise.reject(error); }
   let closed = false;
@@ -198,11 +201,23 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
     }
     onMessage(message);
   });
-  return invokeAndParse(invoke, "cockpit_terminal_open", { request: validated, channel }, "terminal open", streamId).then((id) => {
-    activeStreamId = id;
-    if (closed) cancel(id);
-    ready = !closed;
-    return {
+  return new Promise<TerminalStream>((resolve, reject) => {
+    let settled = false;
+    const abort = () => {
+      if (closed) return;
+      closed = true;
+      ready = false;
+      if (activeStreamId !== undefined) cancel(activeStreamId);
+      if (!settled) { settled = true; reject(streamFailure("Terminal attach was cancelled")); }
+    };
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener("abort", abort, { once: true });
+    void invokeAndParse(invoke, "cockpit_terminal_open", { request: validated, channel }, "terminal open", streamId).then((id) => {
+      activeStreamId = id;
+      if (closed) { cancel(id); return; }
+      ready = true;
+      settled = true;
+      resolve({
       send(command: TerminalCommand) {
         if (closed || !ready) throw new CockpitClientError("stream_error", "Terminal stream is not ready");
         const parsed = parseTerminalCommand(command);
@@ -217,9 +232,13 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
         if (closed) return;
         closed = true;
         ready = false;
+        signal?.removeEventListener("abort", abort);
         cancel(id);
       },
-    } satisfies TerminalStream;
+      } satisfies TerminalStream);
+    }, (error) => {
+      if (!closed && !settled) { settled = true; signal?.removeEventListener("abort", abort); reject(error); }
+    });
   });
 }
 
@@ -297,6 +316,18 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       signal?.throwIfAborted();
       return matchContextResponse(response, request);
     },
+    async reviewSnapshot(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+      const parsed = parseReviewSnapshotRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_review_snapshot", { sessionId, paneId, request: parsed }, "Review snapshot", parseReviewSnapshot);
+      signal?.throwIfAborted(); return matchReviewSnapshot(response, sessionId, paneId, parsed);
+    },
+    async reviewFile(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(paneId); signal?.throwIfAborted();
+      const parsed = parseReviewFileRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_review_file", { sessionId, paneId, request: parsed }, "Review file", parseReviewFile);
+      signal?.throwIfAborted(); return matchReviewFile(response, sessionId, paneId, parsed);
+    },
     async contextSnapshot(sessionId, paneId, value) {
       validateSessionId(sessionId);
       validateResourceId(paneId);
@@ -321,6 +352,39 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_context_invalidate", { sessionId, paneId, request }, "Context invalidation", parseContextInvalidationResponse);
       signal?.throwIfAborted();
       return matchContextInvalidationResponse(response, request);
+    },
+    async contextMedia(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseContextMediaRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_media", { sessionId, paneId, request: body }, "Context image", parseContextMedia);
+      signal?.throwIfAborted();
+      return matchContextMedia(response, body);
+    },
+    async sourceImport(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseSourceImport(value);
+      const response = await invokeAndParse(invoke, "cockpit_source_import", { sessionId, paneId, request: body }, "source import", parseSourceResponse);
+      signal?.throwIfAborted();
+      return matchSourceResponse(response, body);
+    },
+    async sourceRefresh(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseSourceRefresh(value);
+      const response = await invokeAndParse(invoke, "cockpit_source_refresh", { sessionId, paneId, request: body }, "source refresh", parseSourceResponse);
+      signal?.throwIfAborted();
+      return matchSourceResponse(response, body);
+    },
+    async sourceList(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
+      const body = parseSourceScope(value);
+      const response = await invokeAndParse(invoke, "cockpit_source_list", { sessionId, paneId, request: body }, "source list", parseSourceResponse);
+      signal?.throwIfAborted();
+      return matchSourceResponse(response, body);
+    },
+    async openReview(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseReviewLaunchRequest(value);
+      return matchPanePresentation(await invokeAndParse(invoke, "cockpit_review_open", { sessionId, request }, "Review launch", parsePanePresentation), sessionId);
     },
     async openContext(sessionId, value) {
       validateSessionId(sessionId);
@@ -438,6 +502,6 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       });
     },
     subscribeSession(sessionId, onMessage, onError) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError); },
-    openTerminal(request, onMessage, onError) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError); },
+    openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },
   };
 }

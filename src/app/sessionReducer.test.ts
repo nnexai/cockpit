@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSnapshotResponse, TerminalStreamMessage } from "../protocol/generated/v1";
-import { initialSessionState, sessionReducer } from "./sessionReducer";
+import { initialSessionState, sessionReducer } from "./session/sessionStore";
 
 function snapshot(sessionId: string, pane = "pane-1", focused = pane): SessionSnapshotResponse {
   return {
@@ -184,9 +184,18 @@ describe("sessionReducer", () => {
     state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-1", mode: "observe" });
     state = sessionReducer(state, { type: "attachment/message", epoch: state.epoch, sessionId: "one", paneId: "pane-1", message: { type: "ownership", session_id: "one", pane_id: "pane-1", stream_id: "stream-1", state: "observing", message: null } });
     expect(state.attachments["pane-1"].ownership).toBe("observing");
-    state = sessionReducer(state, { type: "attachment/dispose", epoch: state.epoch, sessionId: "one", paneId: "pane-1" });
+    state = sessionReducer(state, { type: "attachment/dispose", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-1" });
     const late = sessionReducer(state, { type: "attachment/message", epoch: state.epoch, sessionId: "one", paneId: "pane-1", message: { type: "ownership", session_id: "one", pane_id: "pane-1", stream_id: "stream-1", state: "owned", message: null } });
     expect(late.attachments["pane-1"].ownership).toBe("observing");
+  });
+
+  it("keeps a replacement attachment when delayed errors or disposal name the retired stream", () => {
+    let state = ready("one");
+    state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a", mode: "observe" });
+    state = sessionReducer(state, { type: "attachment/opened", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-b", mode: "control" });
+    const delayedError = sessionReducer(state, { type: "attachment/error", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a", code: "terminal_disconnected", message: "old" });
+    const delayedDispose = sessionReducer(delayedError, { type: "attachment/dispose", epoch: state.epoch, sessionId: "one", paneId: "pane-1", streamId: "stream-a" });
+    expect(delayedDispose.attachments["pane-1"]).toMatchObject({ streamId: "stream-b", disposed: false, error: null });
   });
 
   it("records terminal.closed without removing the authoritative pane or disconnecting the session", () => {
@@ -200,4 +209,3 @@ describe("sessionReducer", () => {
     expect(state.attachments["pane-1"].error).toEqual({ code: "terminal_closed", message: "process exited" });
   });
 });
-

@@ -5,26 +5,20 @@ import {
   authoritativeSelection,
   canSwitchSessions,
   contextMenuPosition,
-  deriveResizeHandles,
-  initialMutationCoordinatorState,
   mutationFailureCanRetry,
   moveDestinationLabel,
-  mutationCoordinatorReducer,
-  projectedPaneIds,
   orderAgentsByHerdrPriority,
   nextModalFocusIndex,
-  projectedPaneRect,
-  resizeRequest,
-  scheduleFocusFallback,
   reconcileSessionChoice,
-  prefixCommandForKey,
-  routeWorkbenchKeydown,
   spaceDropBeforeId,
-  tabDropInsertionIndex,
   projectSpaceTree,
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
+import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex } from "./layout/layoutProjection";
+import { initialMutationCoordinatorState, mutationCoordinatorReducer } from "./session/mutationCoordinator";
+import { scheduleFocusFallback } from "./session/focusCoordinator";
+import { prefixCommandForKey, routeWorkbenchKeydown } from "./input/keymap";
 import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {

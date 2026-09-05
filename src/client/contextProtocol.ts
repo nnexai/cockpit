@@ -33,7 +33,7 @@ export function parsePanePresentation(value: unknown): PanePresentation {
     || !(value.renderer === null || (value.renderer === value.extension && (value.renderer === "context" || value.renderer === "review")))
     || !text(value.confidence) || !["verified_launch", "verified_process", "candidate", "none", "unsupported"].includes(value.confidence)
     || !text(value.reason) || !Array.isArray(value.roots) || !value.roots.every(root)
-    || !nullableText(value.default_root_id) || typeof value.can_open_context !== "boolean" || !diagnostics(value.diagnostics)) malformed("pane presentation");
+    || !nullableText(value.default_root_id) || typeof value.can_open_context !== "boolean" || typeof value.can_open_review !== "boolean" || !diagnostics(value.diagnostics)) malformed("pane presentation");
   const ids = value.roots.map((item) => item.root_id);
   if (new Set(ids).size !== ids.length || (value.default_root_id !== null && !ids.includes(value.default_root_id))) malformed("Context root identity");
   return value as unknown as PanePresentation;

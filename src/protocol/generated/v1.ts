@@ -76,7 +76,7 @@ export type TerminalStreamMessage = { "type": "ownership", session_id: string, p
 
 export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, context_preview_bytes: number, context_preview_lines: number, context_directory_entries: number, context_tree_depth: number, };
 
-export type ProjectProvider = { id: string, base_url: string, executable: string, };
+export type ProjectProvider = { id: string, base_url: string, executable: string, login?: string, };
 
 export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
 
@@ -120,7 +120,12 @@ export type PanePresentation = { session_id: string, pane_id: string, terminal_i
 /**
  * Eligible automatic replacement, distinct from detected extension identity.
  */
-renderer: ExtensionKind | null, confidence: DetectionConfidence, reason: string, roots: Array<ContextRoot>, default_root_id: string | null, can_open_context: boolean, diagnostics: Array<ProjectDiagnostic>, };
+renderer: ExtensionKind | null, confidence: DetectionConfidence, reason: string, roots: Array<ContextRoot>, default_root_id: string | null, can_open_context: boolean,
+/**
+ * Reviewr is installed/enabled at this endpoint and the current pane can
+ * launch it only from an authorized primary repository checkout.
+ */
+can_open_review: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, };
 
@@ -134,9 +139,20 @@ export type ContextDocumentRequest = { binding_id: string, root_id: string, path
 
 export type ContextDocument = { binding_id: string, root_id: string, path: string, revision: string, content_hash: string | null, bytes: number, media_type: string, text: string | null, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
+export type ContextMediaRequest = { binding_id: string, root_id: string, path: string, expected_revision: string | null, };
+
+export type ContextMedia = { binding_id: string, root_id: string, path: string, revision: string, content_hash: string, bytes: number, mime_type: string, width: number, height: number, data_base64: string, };
+
 export type ContextSplitDirection = "right" | "down";
 
 export type ContextLaunchRequest = { pane_id: string, binding_id: string, root_id: string, direction: ContextSplitDirection, };
+
+export type ReviewLaunchRequest = { pane_id: string, binding_id: string,
+/**
+ * Configured primary repository whose checkout must equal the current
+ * source pane cwd at the launch boundary.
+ */
+repository_id: string, direction: ContextSplitDirection, };
 
 export type CommentRequestScope = { binding_id: string, client_id: string, };
 
@@ -150,9 +166,11 @@ export type CommentLocation = { workspace_id: string, tab_id: string, };
 
 export type CommentAttachment = { owner: CommentOwner, location: CommentLocation, binding_id: string, client_id: string, };
 
-export type CommentFileRef = { root_id: string, path: string, absolute_path: string, revision: string, content_hash: string | null, };
+export type CommentFileRef = { review?: CommentReviewRef, root_id: string, path: string, absolute_path: string, revision: string, content_hash: string | null, };
 
 export type CommentSourceState = "current" | "changed" | "missing" | "unavailable";
+
+export type CommentReviewRef = { review_id: string, generation: number, file_id: string, side: ReviewSide, };
 
 export type CommentAnchor = { "kind": "whole_file" } | { "kind": "lines", start_line: number, end_line: number,
 /**
@@ -180,7 +198,7 @@ batch_id: string | null, };
 
 export type CommentBatchMutation = { scope: CommentRequestScope, batch_id: string, expected_generation: number, };
 
-export type CommentCapture = { root_id: string, path: string, expected_revision: string,
+export type CommentCapture = { review?: CommentReviewRef, root_id: string, path: string, expected_revision: string,
 /**
  * Both null means whole-file; otherwise both are inclusive physical line numbers.
  */
@@ -265,6 +283,70 @@ export type WorkspaceTeardownRecoveryState = "pending" | "outcome_unknown" | "or
 export type WorkspaceTeardownRecovery = { operation_id: string, workspace_id: string, checkout_path: string, state: WorkspaceTeardownRecoveryState, };
 
 export type WorkspaceTeardownRecoveryList = { recoveries: Array<WorkspaceTeardownRecovery>, };
+
+export type SourceCapability = "issue" | "issue_comments" | "review" | "wiki";
+
+export type SourceFreshness = "fresh" | "changed" | "unknown" | "unavailable" | "conflict";
+
+export type SourceMaterializationStatus = "materialized" | "unchanged" | "conflict" | "unsupported" | "failed";
+
+export type SourceImportRequest = { binding_id: string, root_id: string, provider_id: string, artifact_url: string,
+/**
+ * Reference traversal is opt-in because following even same-repository
+ * links can produce surprising context expansion.
+ */
+hydrate_references: boolean, };
+
+export type SourceListRequest = { binding_id: string, root_id: string, };
+
+export type SourceRefreshRequest = { binding_id: string, root_id: string, source_id: string, hydrate_references: boolean, };
+
+export type SourceEntry = { source_id: string, provider_id: string, provider_instance: string, resource_type: string, canonical_id: string, title: string, source_url: string | null, source_revision: string | null, content_hash: string, freshness: SourceFreshness, status: SourceMaterializationStatus, relative_path: string | null, };
+
+export type SourceImportResponse = { binding_id: string, root_id: string, entries: Array<SourceEntry>, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ReviewSide = "old" | "new";
+
+export type ReviewComparison = "all_local" | "staged" | "unstaged" | "branch" | "untracked";
+
+export type ReviewFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "untracked" | "binary" | "mode_only" | "submodule" | "unreadable";
+
+export type ReviewDiffLineKind = "context" | "added" | "deleted";
+
+export type ReviewSnapshotRequest = { binding_id: string, repository_id: string, comparison: ReviewComparison,
+/**
+ * Required only for branch comparison; resolved to an immutable commit.
+ */
+base_ref: string | null, };
+
+export type ReviewChangedFile = { file_id: string,
+/**
+ * All-local preserves each staged/unstaged/untracked anchor separately.
+ */
+comparison: ReviewComparison, status: ReviewFileStatus, old_path: string | null, new_path: string | null, binary: boolean, summary: string, old_revision: string | null, new_revision: string | null, };
+
+export type ReviewSnapshot = { binding_id: string, session_id: string, pane_id: string, review_id: string, generation: number, repository_id: string, checkout_path: string,
+/**
+ * Stable direct-checkout identity shared with Review comment batches.
+ */
+source_id: string, comparison: ReviewComparison, base_revision: string | null, head_revision: string | null, index_revision: string, worktree_revision: string, files: Array<ReviewChangedFile>, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ReviewFileRequest = { binding_id: string, review_id: string, generation: number, file_id: string, };
+
+export type ReviewDiffLine = { kind: ReviewDiffLineKind, old_line: number | null, new_line: number | null,
+/**
+ * Exact line bytes decoded as UTF-8 only for textual Git diff output.
+ */
+text: string, };
+
+export type ReviewHunk = { old_path: string | null, new_path: string | null, old_start: number, new_start: number, lines: Array<ReviewDiffLine>, };
+
+export type ReviewFileDiff = { binding_id: string, session_id: string, pane_id: string, review_id: string, generation: number, file: ReviewChangedFile, hunks: Array<ReviewHunk>,
+/**
+ * Bounded immutable text retained for old/new review-side capture and
+ * expansion of unchanged lines. None means binary, unreadable, or capped.
+ */
+old_source: string | null, new_source: string | null, old_source_hash: string | null, new_source_hash: string | null, old_total_lines: number | null, new_total_lines: number | null, old_source_truncated: boolean, new_source_truncated: boolean, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextSnapshotRequest = { binding_id: string, root_id: string, repository_id: string, mode: ContextSnapshotMode, };
 
