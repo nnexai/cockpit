@@ -18,7 +18,13 @@
     },
     {
       "id": "paired_text_control_ratio",
-      "status": "INCONCLUSIVE"
+      "status": "PASS",
+      "control_p95_ms": 48,
+      "scroll_p95_ms": 28,
+      "motion_samples": 100,
+      "frames": 3601,
+      "duration_ms": 60000,
+      "distinct_source_and_trace": true
     },
     {
       "id": "remaining_workloads_and_three_replays",
@@ -39,7 +45,8 @@
     "Capture contained exactly3601 lossless presented RGB frames over60000ms, with16/17ms timestamp gaps.",
     "100 distinct trusted wheel inputs correlated to independently captured A/B references; p95=43ms.",
     "All3601 full-frame hashes were one of the two verified viewports; no unintended intermediate blank/dark frame occurred in this run.",
-    "Both away-tail intervals remained full-frame pixel-identical while21 and20 new history lines arrived."
+    "Both away-tail intervals remained full-frame pixel-identical while21 and20 new history lines arrived.",
+    "Actual terminal-temporal capture/replay CLI accepted a distinct text-control/scroll pair: p95 48ms/28ms; scroll frame cadence PASS and both away-tail intervals unchanged."
   ],
   "artifacts": [
     {
@@ -85,11 +92,95 @@
     {
       "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/fixture-blocking-green.json",
       "sha256": "042d944f0629319d79ef3630a8ad9cc98cd014683e9c90a87e0d7ef2f9dc59a8"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-pinned-control.mkv",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-pinned-control.mkv",
+      "sha256": "2fabcced72c1543d05df3746626f477281b05663b4e45fa1d3245c0da18971cf"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-pinned-control.mkv.json",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-pinned-control.mkv.json",
+      "sha256": "6eee72a1adb6460bb71dabbe384ce4f109d09c277918f03abf126972b8eaf824"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-pinned-control-raw.json",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-pinned-control-raw.json",
+      "sha256": "2c14252a891deb32a9d5dd6b819d68ebb979c0101b0f351e67566efbf1a435c7"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-pinned-control-replay.json",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-pinned-control-replay.json",
+      "sha256": "72421a356699c7e4804afe44c5ca7b7495c26456c3923b929904e07654a52c79"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-pinned-control-reference-a.png",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-pinned-control-reference-a.png",
+      "sha256": "97396b7814028a22b1857392588e160a110d949467ddc91e6d8e41543f500a64"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-pinned-control-reference-b.png",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-pinned-control-reference-b.png",
+      "sha256": "bcd4a4f7c8d1b526ee37e3c287bdf64f710e6bc10e131f2ee55d61d0b5605999"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-paired.mkv",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-paired.mkv",
+      "sha256": "6815d8270692607caad9e41a94c5a7e67b3616742df86f184a96cfde1db43031"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-paired.mkv.json",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-paired.mkv.json",
+      "sha256": "70755393f0670ee56298df2d2202fde20222bb7579489a52c3bfaba8be6936ee"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-paired-raw.json",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-paired-raw.json",
+      "sha256": "564cec99bb73c880cbed425560cbeaa76170d968823cf104fd6c03b0a0b901f0"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-paired-replay.json",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-paired-replay.json",
+      "sha256": "12fa5ff4ac012e9c80cf045d7e4685bfcb73eb150742b171e1067ff5f5274184"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-paired-reference-a.png",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-paired-reference-a.png",
+      "sha256": "bdefbac928bd156f7a1926807e85a8afb12884dc039bf3f15bc5668d0ecbf665"
+    },
+    {
+      "original_path": "/tmp/cockpit-214621Z-gqhguyl2/scroll-cli-paired-reference-b.png",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-cli-paired-reference-b.png",
+      "sha256": "bea01306608ce76e2f6f521c21ddb71fbb821b79d10f74e81f70546189822b8f"
     }
   ],
   "limitations": [
-    "This single control run does not satisfy aggregate G01.",
-    "Raw scenario was executed through Main browser.run/Bun driver and ffmpeg, not yet through the repaired terminal-temporal capture/replay CLI.",
-    "One earlier ffprobe full-frame inspection timed out at30s during concurrent decoding; packet PTS and framehash decoding completed independently."
-  ]
+    "G01 remains incomplete for remaining workloads/repetitions and unsupported application mouse forwarding.",
+    "User reports no flicker and good scrolling. No additional recordings are planned now; implement independent product stages.",
+    "Replay JSON retains original run-owned temporary paths; temporal-cli-retention.json maps byte-identical durable copies.",
+    "Native temporal matrix is excluded by explicit user override OBS-004."
+  ],
+  "commands": [
+    {
+      "command": "python -W error::ResourceWarning -m unittest discover -s scripts/verify -p test_*.py",
+      "exit_status": 0,
+      "tests": 51
+    },
+    {
+      "command": "python -W error::ResourceWarning -m unittest scripts.verify.test_temporal_detector",
+      "exit_status": 0,
+      "tests": 12
+    },
+    {
+      "command": "scripts/verify/terminal-temporal capture/replay; text-only control then distinct scroll with --paired-control",
+      "exit_status": 0
+    }
+  ],
+  "tested_tool_hashes": {
+    "scripts/verify/temporal_detector.py": "7ff317190e5e01f5f3407543fdc35b394b3036cee597ca915cfe88ed05df2f7b",
+    "scripts/verify/terminal_temporal.py": "502896dfa8c4ae051659cec06d5816fd9dd47da1099de943c3136987100f6751",
+    "scripts/verify/test_temporal_detector.py": "c5e7598faf4d4742be572ebae1615a7129eec3ac958282db3a03d3dca134c74c",
+    "scripts/verify/test_terminal_temporal.py": "7f130765fec6606153f946feef5133431b5b2be7af9b5f0d3d54e5c5b9dcfeda",
+    "scripts/verify/terminal-temporal": "eb25e2d54898d8dd35e39cafc96130e26a220b0c5fbb45a88e976a24df22fd22"
+  }
 }

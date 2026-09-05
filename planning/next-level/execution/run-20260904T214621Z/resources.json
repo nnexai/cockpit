@@ -233,6 +233,76 @@
       "status": "stopped",
       "cleanup": "close managed CDP handle then hub stop cockpit-run-chromium-presented",
       "cleanup_result": "hub stop completed, exit143; managed CDP connection released"
+    },
+    {
+      "kind": "temporal CLI fixture workspace",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "workspace_id": "wC",
+      "pane_id": "wC:p1",
+      "terminal_id": "term_65ab5104c1999c",
+      "status": "running",
+      "cleanup": "guarded workspace close wC"
+    },
+    {
+      "kind": "temporal CLI fixture workspace",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "workspace_id": "wD",
+      "pane_id": "wD:p1",
+      "terminal_id": "term_65ab53c6ca469d",
+      "status": "running",
+      "cleanup": "guarded workspace close wD"
+    },
+    {
+      "kind": "temporal CLI fixture workspace",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "workspace_id": "wE",
+      "pane_id": "wE:p1",
+      "terminal_id": "term_65ab5515163d4e",
+      "status": "running",
+      "cleanup": "guarded workspace close wE"
+    },
+    {
+      "kind": "temporal CLI fixture workspace",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "workspace_id": "wF",
+      "pane_id": "wF:p1",
+      "terminal_id": "term_65ab564848822f",
+      "status": "running",
+      "cleanup": "guarded workspace close wF"
+    },
+    {
+      "kind": "herdr_workspace",
+      "resource_id": "wG",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser",
+      "owner": "run-20260904T214621Z",
+      "status": "running",
+      "purpose": "finite request mutation recovery browser proof"
+    },
+    {
+      "kind": "herdr_workspace",
+      "resource_id": "wH",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser",
+      "owner": "run-20260904T214621Z",
+      "status": "running",
+      "purpose": "finite request mutation recovery browser proof; 900s fixture"
+    },
+    {
+      "kind": "herdr_workspace",
+      "resource_id": "wJ",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser",
+      "owner": "run-20260904T214621Z",
+      "status": "running",
+      "purpose": "finite request mutation recovery browser proof; supported 300s fixture"
     }
   ],
   "cleanup_outcomes": [],

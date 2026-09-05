@@ -3,7 +3,7 @@
   "status": "PASS",
   "run_id": "run-20260904T214621Z",
   "tested_source_commit": "41101de4ef26e8e92754a173979a526e61026344 with explicitly recorded dirty production manifest",
-  "delivery_commit": null,
+  "delivery_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
   "required_subchecks": [
     {
       "id": "stable_named_server_identity",

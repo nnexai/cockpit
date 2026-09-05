@@ -1,7 +1,7 @@
 {
   "run_id": "run-20260904T214621Z",
   "initial_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
-  "current_integration_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
+  "current_integration_commit": "62f55e0",
   "stage": "S03",
   "selected_stories": [
     "CLEAN-01",
@@ -85,7 +85,7 @@
       "goals": [
         "G01"
       ],
-      "implementation": "Real60s/100-wheel browser control measured43ms p95 with pixel-identical away-tail behavior; strict CLI/replay and remaining controls pending."
+      "implementation": "Reusable capture/replay CLI and distinct paired scroll proof passed; G01 remains incomplete. Existing evidence archived; advance product work without expanding matrix."
     },
     "TERM-02": {
       "status": "not_started",
@@ -128,7 +128,8 @@
       "goals": [
         "G02"
       ],
-      "implementation": "Bounded request/process lifetimes and non-retryable unknown mutation recovery verified; cancellation reporting contract remains open. See G02."
+      "implementation": "Bounded request/process lifetimes and non-retryable unknown mutation recovery verified; cancellation reporting contract remains open. See G02.",
+      "delivery_commit": "62f55e0"
     },
     "REPAIR-05": {
       "status": "not_started",
@@ -496,6 +497,29 @@
         "crates/cockpit-herdr/tests/session.rs"
       ],
       "goal": "G02"
+    },
+    {
+      "id": "SessionOrderRepair",
+      "status": "running",
+      "goal": "G02",
+      "owned_paths": [
+        "src/client/streamOrder.ts",
+        "src/client/browser.ts",
+        "src/client/native.ts",
+        "src/client/client.test.ts",
+        "src/app/sessionReducer.ts",
+        "src/app/sessionReducer.test.ts"
+      ]
+    },
+    {
+      "id": "WorkbenchInputRepair",
+      "status": "running",
+      "goal": "G02",
+      "owned_paths": [
+        "src/app/App.tsx:Workbench input only",
+        "src/app/App.test.ts",
+        "src/app/TerminalPane.tsx"
+      ]
     }
   ],
   "tested_hashes": {

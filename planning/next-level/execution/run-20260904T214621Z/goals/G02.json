@@ -3,7 +3,7 @@
   "status": "INCONCLUSIVE",
   "run_id": "run-20260904T214621Z",
   "tested_base_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
-  "delivery_commit": null,
+  "delivery_commit": "62f55e0",
   "required_subchecks": [
     {
       "id": "finite_socket_requests",
