@@ -73,3 +73,37 @@ export type TerminalCommand = { "type": "terminal.input", text: string | null, b
 export type TerminalOwnershipState = "pending" | "observing" | "owned" | "conflict" | "released" | "lost";
 
 export type TerminalStreamMessage = { "type": "ownership", session_id: string, pane_id: string, stream_id: string, state: TerminalOwnershipState, message: string | null, } | { "type": "frame", session_id: string, pane_id: string, stream_id: string, seq: string, encoding: string, width: number, height: number, full: boolean, bytes: string, } | { "type": "closed", session_id: string, pane_id: string, stream_id: string, reason: string, } | { "type": "disconnected", session_id: string, pane_id: string, stream_id: string, code: string, message: string, } | { "type": "error", session_id: string, pane_id: string, stream_id: string, code: string, message: string, };
+
+export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, };
+
+export type ProjectProvider = { id: string, base_url: string, executable: string, };
+
+export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
+
+export type RepositoryCandidate = { repository_id: string, name: string, root: string, checkout_path: string, common_dir: string, branch: string | null, is_linked_worktree: boolean, is_detached: boolean, provenance: string, };
+
+export type ProjectDiagnostic = { code: string, message: string, path: string | null, };
+
+export type RepositoryListResponse = { repositories: Array<RepositoryCandidate>, diagnostics: Array<ProjectDiagnostic>, };
+
+export type WorkspaceSetupMode = "create" | "open";
+
+export type WorkspaceSetupRequest = { repository_id: string, mode: WorkspaceSetupMode, branch: string | null, base: string | null, checkout_path: string | null, label: string | null, task_name: string | null, artifact_url: string | null, focus: boolean, trust_repository: boolean, };
+
+export type ProjectArtifact = { provider_id: string, kind: string, canonical_id: string, original_url: string, canonical_url: string, };
+
+export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate, mode: WorkspaceSetupMode, branch: string | null, base: string | null, checkout_path: string, companion_path: string, label: string, focus: boolean, trust_repository: boolean, artifact: ProjectArtifact | null, effects: Array<string>, warnings: Array<string>, };
+
+export type WorkspaceOperationRequest = { operation_id: string, expected_generation: number, };
+
+export type WorkspaceRecoveryAction = "accept_existing_worktree" | "retry_environment";
+
+export type WorkspaceReconcileRequest = { operation_id: string, expected_generation: number, action: WorkspaceRecoveryAction, };
+
+export type WorkspaceOperationState = "planned" | "running" | "completed" | "partial" | "outcome_unknown" | "cancelled" | "needs_review";
+
+export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "companion_ready" | "environment_requested" | "environment_ready" | "completed";
+
+export type WorkspaceOwnedResource = { kind: string, path: string, created_by_operation: boolean, };
+
+export type WorkspaceOperation = { operation_id: string, generation: number, sequence: number, session_id: string, plan: WorkspaceSetupPlan, state: WorkspaceOperationState, step: WorkspaceOperationStep, workspace_id: string | null, tab_id: string | null, pane_id: string | null, companion_id: string | null, owned_resources: Array<WorkspaceOwnedResource>, error: ErrorResponse | null, resume_allowed: boolean, cancel_requested: boolean, updated_at: string, };

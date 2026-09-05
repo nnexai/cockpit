@@ -3,6 +3,13 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+use crate::projects::{
+    ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectLimits, ProjectProvider,
+    RepositoryCandidate, RepositoryListResponse, WorkspaceOperation, WorkspaceOperationRequest,
+    WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
+    WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
+    WorkspaceSetupRequest,
+};
 use ts_rs::{Config, TS};
 
 use crate::v1::{
@@ -59,6 +66,23 @@ pub fn render_v1() -> String {
         TerminalCommand::decl(&config),
         TerminalOwnershipState::decl(&config),
         TerminalStreamMessage::decl(&config),
+        ProjectLimits::decl(&config),
+        ProjectProvider::decl(&config),
+        ProjectConfiguration::decl(&config),
+        RepositoryCandidate::decl(&config),
+        ProjectDiagnostic::decl(&config),
+        RepositoryListResponse::decl(&config),
+        WorkspaceSetupMode::decl(&config),
+        WorkspaceSetupRequest::decl(&config),
+        ProjectArtifact::decl(&config),
+        WorkspaceSetupPlan::decl(&config),
+        WorkspaceOperationRequest::decl(&config),
+        WorkspaceRecoveryAction::decl(&config),
+        WorkspaceReconcileRequest::decl(&config),
+        WorkspaceOperationState::decl(&config),
+        WorkspaceOperationStep::decl(&config),
+        WorkspaceOwnedResource::decl(&config),
+        WorkspaceOperation::decl(&config),
     ]
     .into_iter()
     .map(|declaration| format!("export {declaration}"))

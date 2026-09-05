@@ -241,12 +241,15 @@ fn snapshot() -> SessionSnapshotResponse {
 }
 
 fn fixture_root() -> PathBuf {
+    static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
+    let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("cockpit-host-{nonce}"));
-    std::fs::create_dir_all(&root).expect("fixture root");
+    let root =
+        std::env::temp_dir().join(format!("cockpit-host-{}-{nonce}-{id}", std::process::id()));
+    std::fs::create_dir(&root).expect("fixture root");
     std::fs::write(
         root.join("index.html"),
         "<!doctype html><main>cockpit</main>",

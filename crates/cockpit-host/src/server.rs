@@ -36,6 +36,8 @@ use tokio::net::TcpListener;
 use tower_http::services::{ServeDir, ServeFile};
 const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 
+mod projects;
+
 /// Configuration for the foreground HTTP gateway.
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -157,6 +159,7 @@ fn build_router_with_validated_root(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/terminal",
             get(terminal_ws),
         )
+        .merge(projects::routes())
         // Keep API resolution ahead of the static service. This prevents a static file
         // named api/... from changing the API's 404 contract.
         .route("/api", any(api_not_found))
@@ -876,10 +879,17 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
         .await
         .map_err(ServerError::Serve)?;
     let actual = listener.local_addr().map_err(ServerError::Serve)?;
+    let projects = config.service.projects().ok().cloned();
     let router = build_router_with_validated_root(config.service, static_dir, actual);
     println!("listening http://{actual}");
     std::io::stdout().flush().map_err(ServerError::Serve)?;
     axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            if let Some(projects) = projects {
+                projects.shutdown().await;
+            }
+        })
         .await
         .map_err(ServerError::Serve)
 }

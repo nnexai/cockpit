@@ -1,0 +1,211 @@
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
+    http::{Method, Request, header::ORIGIN},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use cockpit_core::CockpitService;
+use cockpit_protocol::projects::{
+    WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupRequest,
+};
+use serde::de::DeserializeOwned;
+
+use super::{MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, valid_session_id};
+
+pub(super) fn routes() -> Router<CockpitService> {
+    Router::new()
+        .route("/api/v1/project/configuration", get(configuration))
+        .route("/api/v1/project/repositories", get(repositories))
+        .route("/api/v1/sessions/{session_id}/workspace-plans", post(plan))
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-operations",
+            post(start),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-operations/{operation_id}",
+            get(operation),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-operations/resume",
+            post(resume),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-operations/cancel",
+            post(cancel),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-operations/reconcile",
+            post(reconcile),
+        )
+        .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
+        .route_layer(middleware::from_fn(require_origin))
+}
+
+// The enclosing router verifies the exact bound Host and Origin. Filesystem
+// mutations additionally refuse the missing-Origin fallback used by read-only CLI calls.
+async fn require_origin(request: Request<Body>, next: Next) -> Response {
+    if request.method() != Method::GET && !request.headers().contains_key(ORIGIN) {
+        return bad_request(
+            "request_origin_required",
+            "Project mutations require the gateway Origin",
+        );
+    }
+    next.run(request).await
+}
+
+fn request<T: DeserializeOwned>(body: Result<Json<T>, JsonRejection>) -> Result<T, Response> {
+    body.map(|Json(value)| value).map_err(|_| {
+        bad_request(
+            "invalid_project_request",
+            "Expected a bounded JSON project request with valid fields",
+        )
+    })
+}
+
+async fn configuration(State(service): State<CockpitService>) -> Response {
+    match service.projects() {
+        Ok(projects) => Json(projects.configuration()).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn repositories(State(service): State<CockpitService>) -> Response {
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.repositories().await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn plan(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceSetupRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.plan(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn start(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceOperationRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.start(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn operation(
+    State(service): State<CockpitService>,
+    Path((session_id, operation_id)): Path<(String, String)>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.get(&session_id, &operation_id).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn resume(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceOperationRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.resume(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn cancel(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceOperationRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.cancel(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn reconcile(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceReconcileRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.reconcile(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}

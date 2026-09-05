@@ -78,6 +78,14 @@ function streamStale(sequence: number, generation = 1) {
 function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
   return {
     status: vi.fn(async () => status),
+    projectConfiguration: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    startWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    workspaceOperation: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    resumeWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    cancelWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    reconcileWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),

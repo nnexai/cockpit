@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
@@ -6,16 +7,15 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::Duration;
-use tokio::io::{
-    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
-};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 
 use async_trait::async_trait;
 use cockpit_core::{
     HerdrAdapter, InspectionError, SessionChange, SessionSubscription, TerminalSession,
+    process::{OwnedChild, run_bounded_command},
 };
 use cockpit_protocol::v1::{
     AgentSummary, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
@@ -25,11 +25,8 @@ use cockpit_protocol::v1::{
     TabLayout, TabSummary, TerminalOpenRequest,
 };
 use futures_util::future::join_all;
-#[cfg(unix)]
-use nix::sys::signal::{Signal, killpg};
-#[cfg(unix)]
-use nix::unistd::Pid;
 use serde_json::{Value, json};
+mod projects;
 
 use crate::schema::{schema_fields, status_fields};
 pub const REQUIRED_VERSION: &str = "0.8.2";
@@ -67,8 +64,6 @@ const SERVER_START_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const FINITE_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const FINITE_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 const FINITE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
-const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     pub code: String,
@@ -251,24 +246,6 @@ async fn read_bounded_line<R: AsyncBufRead + Unpin>(
         }
     }
 }
-async fn read_bounded_output<R: AsyncRead + Unpin>(
-    reader: R,
-    limit: usize,
-    context: &str,
-) -> Result<Vec<u8>, InspectionError> {
-    let mut bytes = Vec::with_capacity(limit.min(16 * 1024));
-    let mut reader = reader.take(limit.saturating_add(1) as u64);
-    reader.read_to_end(&mut bytes).await.map_err(|_| {
-        InspectionError::new("bounded_output", format!("{context} could not be read"))
-    })?;
-    if bytes.len() > limit {
-        return Err(InspectionError::new(
-            "bounded_output",
-            format!("{context} exceeds configured limit"),
-        ));
-    }
-    Ok(bytes)
-}
 
 async fn write_with_progress<W: AsyncWrite + Unpin>(
     writer: &mut W,
@@ -304,6 +281,8 @@ fn request_is_mutating(method: &str) -> bool {
             | "workspace.rename"
             | "workspace.move_block"
             | "workspace.close"
+            | "worktree.create"
+            | "worktree.open"
             | "tab.create"
             | "tab.rename"
             | "tab.move"
@@ -957,104 +936,6 @@ enum EventConnectionEnd {
     TopologyChanged,
 }
 
-struct OwnedChild {
-    child: Option<Child>,
-    pid: Option<u32>,
-    reaped: bool,
-}
-
-impl OwnedChild {
-    fn new(child: Child) -> Self {
-        Self {
-            pid: child.id(),
-            child: Some(child),
-            reaped: false,
-        }
-    }
-
-    async fn kill_and_reap(&mut self) -> Option<String> {
-        if self.reaped {
-            return None;
-        }
-        #[cfg(unix)]
-        if let Some(pid) = self.pid {
-            kill_process_group(pid);
-        }
-        let kill_error = self
-            .child
-            .as_mut()
-            .and_then(|child| child.start_kill().err())
-            .filter(|error| error.kind() != std::io::ErrorKind::NotFound)
-            .map(|error| format!("child kill failed: {error}"));
-        let wait_result = match self.child.as_mut() {
-            Some(child) => Some(tokio::time::timeout(CHILD_CLEANUP_TIMEOUT, child.wait()).await),
-            None => None,
-        };
-        let wait_error = match wait_result {
-            Some(Ok(Ok(_))) => {
-                self.child.take();
-                self.reaped = true;
-                None
-            }
-            Some(Ok(Err(error))) => {
-                if let Some(child) = self.child.take() {
-                    spawn_child_cleanup(child);
-                }
-                Some(format!("child reap failed: {error}"))
-            }
-            Some(Err(_)) => {
-                if let Some(child) = self.child.take() {
-                    spawn_child_cleanup(child);
-                }
-                Some("child reap timed out".to_owned())
-            }
-            None => {
-                self.reaped = true;
-                None
-            }
-        };
-        match (kill_error, wait_error) {
-            (None, None) => None,
-            (Some(error), None) | (None, Some(error)) => Some(error),
-            (Some(kill), Some(wait)) => Some(format!("{kill}; {wait}")),
-        }
-    }
-}
-
-// A dropped future cannot receive a cleanup error. Keep the child in this task
-// long enough for bounded reaping, while synchronous callers report errors from
-// `kill_and_reap` directly.
-fn spawn_child_cleanup(mut child: Child) {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async move {
-            let _ = tokio::time::timeout(CHILD_CLEANUP_TIMEOUT, child.wait()).await;
-        });
-    } else {
-        drop(child);
-    }
-}
-
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if self.reaped {
-            return;
-        }
-        #[cfg(unix)]
-        if let Some(pid) = self.pid {
-            kill_process_group(pid);
-        }
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
-            spawn_child_cleanup(child);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn kill_process_group(pid: u32) {
-    let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
-}
-
 impl HerdrCliAdapter {
     pub fn new(config: HerdrCliConfig) -> Self {
         Self {
@@ -1107,139 +988,21 @@ impl HerdrCliAdapter {
         session: Option<&str>,
         args: &[&str],
     ) -> Result<Value, InspectionError> {
-        let mut command = self.command(session, args);
-        command.kill_on_drop(true);
-        #[cfg(unix)]
-        command.process_group(0);
-        let child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                InspectionError::new(
-                    "execution_failed",
-                    format!("failed to execute Herdr: {error}"),
-                )
-            })?;
-        let mut child = OwnedChild::new(child);
-        let stdout = match child.child.as_mut().and_then(|child| child.stdout.take()) {
-            Some(stdout) => stdout,
-            None => {
-                let cleanup = child.kill_and_reap().await;
-                let message = cleanup.map_or_else(
-                    || "Herdr stdout was not captured".to_owned(),
-                    |cleanup| format!("Herdr stdout was not captured; {cleanup}"),
-                );
-                return Err(InspectionError::new("execution_failed", message));
-            }
-        };
-        let stderr = match child.child.as_mut().and_then(|child| child.stderr.take()) {
-            Some(stderr) => stderr,
-            None => {
-                let cleanup = child.kill_and_reap().await;
-                let message = cleanup.map_or_else(
-                    || "Herdr stderr was not captured".to_owned(),
-                    |cleanup| format!("Herdr stderr was not captured; {cleanup}"),
-                );
-                return Err(InspectionError::new("execution_failed", message));
-            }
-        };
-
-        let command_deadline = tokio::time::Instant::now() + COMMAND_TIMEOUT;
-        let stdout_reader = read_bounded_output(stdout, MAX_TERMINAL_LINE, "Herdr stdout");
-        let stderr_reader = read_bounded_output(stderr, 16 * 1024, "Herdr stderr");
-        tokio::pin!(stdout_reader);
-        tokio::pin!(stderr_reader);
-        let deadline = tokio::time::sleep(COMMAND_TIMEOUT);
-        tokio::pin!(deadline);
-        let mut stdout_result = None;
-        let mut stderr_result = None;
-        loop {
-            tokio::select! {
-                result = &mut stdout_reader, if stdout_result.is_none() => {
-                    stdout_result = Some(result);
-                }
-                result = &mut stderr_reader, if stderr_result.is_none() => {
-                    stderr_result = Some(result);
-                }
-                _ = &mut deadline => {
-                    let cleanup = child.kill_and_reap().await;
-                    let message = cleanup.map_or_else(
-                        || "Herdr command exceeded its deadline".to_owned(),
-                        |cleanup| format!("Herdr command exceeded its deadline; {cleanup}"),
-                    );
-                    return Err(InspectionError::new("execution_timeout", message));
-                }
-            }
-            if let Some(Err(error)) = stdout_result.as_ref() {
-                let cleanup = child.kill_and_reap().await;
-                if let Some(cleanup) = cleanup {
-                    return Err(InspectionError::new(
-                        error.code.clone(),
-                        format!("{}; {cleanup}", error.message),
-                    ));
-                }
-                return Err(error.clone());
-            }
-            if let Some(Err(error)) = stderr_result.as_ref() {
-                let cleanup = child.kill_and_reap().await;
-                if let Some(cleanup) = cleanup {
-                    return Err(InspectionError::new(
-                        error.code.clone(),
-                        format!("{}; {cleanup}", error.message),
-                    ));
-                }
-                return Err(error.clone());
-            }
-            if stdout_result.is_some() && stderr_result.is_some() {
-                break;
-            }
-        }
-
-        let status = match tokio::time::timeout(
-            command_deadline.saturating_duration_since(tokio::time::Instant::now()),
-            child
-                .child
-                .as_mut()
-                .expect("owned Herdr child was lost")
-                .wait(),
+        let output = run_bounded_command(
+            self.command(session, args),
+            MAX_TERMINAL_LINE,
+            16 * 1024,
+            Duration::from_secs(5),
+            "Herdr",
         )
-        .await
-        {
-            Ok(Ok(status)) => status,
-            Ok(Err(error)) => {
-                let cleanup = child.kill_and_reap().await;
-                let message = cleanup.map_or_else(
-                    || format!("Herdr command did not finish: {error}"),
-                    |cleanup| format!("Herdr command did not finish: {error}; {cleanup}"),
-                );
-                return Err(InspectionError::new("execution_failed", message));
-            }
-            Err(_) => {
-                let cleanup = child.kill_and_reap().await;
-                let message = cleanup.map_or_else(
-                    || "Herdr command exceeded its deadline".to_owned(),
-                    |cleanup| format!("Herdr command exceeded its deadline; {cleanup}"),
-                );
-                return Err(InspectionError::new("execution_timeout", message));
-            }
-        };
-        child.reaped = true;
-        child.child.take();
-        if !status.success() {
+        .await?;
+        if !output.status.success() {
             return Err(InspectionError::new(
                 "execution_failed",
-                format!("Herdr command failed with status {status}"),
+                format!("Herdr command failed with status {}", output.status),
             ));
         }
-        let value = serde_json::from_slice(
-            stdout_result
-                .expect("stdout capture completed")
-                .expect("stdout capture succeeded")
-                .as_slice(),
-        )
-        .map_err(|error| {
+        let value = serde_json::from_slice(&output.stdout).map_err(|error| {
             InspectionError::new(
                 "malformed_json",
                 format!("Herdr returned invalid JSON: {error}"),
@@ -1323,15 +1086,66 @@ impl HerdrCliAdapter {
         Ok(parent.join(format!("{stem}-client.sock")))
     }
 
+    fn process_start_identity(pid: Option<i32>) -> Option<u64> {
+        #[cfg(target_os = "linux")]
+        {
+            let pid = pid?;
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let close = stat.rfind(')')?;
+            stat.get(close + 2..)?
+                .split_whitespace()
+                .nth(19)?
+                .parse()
+                .ok()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    fn socket_peer_identity(path: &Path, stream: &UnixStream) -> Result<String, InspectionError> {
+        let credentials = stream.peer_cred().map_err(|error| {
+            InspectionError::new(
+                "endpoint_identity_unavailable",
+                format!("could not read Herdr Unix socket peer credentials: {error}"),
+            )
+        })?;
+        let process_start = Self::process_start_identity(credentials.pid())
+            .map_or_else(|| "unavailable".to_owned(), |start| start.to_string());
+        Ok(format!(
+            "unix-socket:{}:pid={}:uid={}:gid={}:start={process_start}",
+            path.display(),
+            credentials
+                .pid()
+                .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string()),
+            credentials.uid(),
+            credentials.gid(),
+        ))
+    }
+
     async fn socket_request(
         &self,
         session_id: &str,
         method: &str,
         params: Value,
     ) -> Result<Value, InspectionError> {
+        self.socket_request_with_identity(session_id, method, params, None)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    async fn socket_request_with_identity(
+        &self,
+        session_id: &str,
+        method: &str,
+        params: Value,
+        expected_identity: Option<&str>,
+    ) -> Result<(Value, String), InspectionError> {
         let path = self.socket_path(session_id)?;
         let mut stream =
-            match tokio::time::timeout(FINITE_CONNECT_TIMEOUT, UnixStream::connect(path)).await {
+            match tokio::time::timeout(FINITE_CONNECT_TIMEOUT, UnixStream::connect(&path)).await {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(error)) => {
                     return Err(InspectionError::new(
@@ -1346,6 +1160,17 @@ impl HerdrCliAdapter {
                     ));
                 }
             };
+        let actual_identity = Self::socket_peer_identity(&path, &stream)?;
+        if let Some(expected_identity) = expected_identity
+            && actual_identity != expected_identity
+        {
+            return Err(InspectionError::new(
+                "stale_identity",
+                format!(
+                    "Herdr endpoint identity changed; expected {expected_identity}, connected to {actual_identity}; mutation was not dispatched"
+                ),
+            ));
+        }
         let id = format!(
             "cockpit-{}",
             NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
@@ -1451,7 +1276,7 @@ impl HerdrCliAdapter {
             }
         })
         .await;
-        match response {
+        let result = match response {
             Ok(result) => result.map_err(|error| {
                 if request_is_mutating(method)
                     && matches!(error.code.as_str(), "disconnected" | "connection_failed")
@@ -1472,7 +1297,8 @@ impl HerdrCliAdapter {
                 "response_timeout",
                 "Herdr response deadline expired",
             )),
-        }
+        }?;
+        Ok((result, actual_identity))
     }
 
     async fn start_server_and_wait(&self, session: Option<&str>) -> Result<Value, InspectionError> {
@@ -1692,27 +1518,42 @@ impl HerdrCliAdapter {
         &self,
         session_id: &str,
     ) -> Result<SessionSnapshotResponse, InspectionError> {
+        self.read_snapshot_with_identity(session_id, None).await
+    }
+
+    async fn read_snapshot_with_identity(
+        &self,
+        session_id: &str,
+        expected_identity: Option<&str>,
+    ) -> Result<SessionSnapshotResponse, InspectionError> {
         self.selected_session(session_id)?;
-        let result = self
-            .socket_request(session_id, "session.snapshot", json!({}))
+        let (result, _) = self
+            .socket_request_with_identity(
+                session_id,
+                "session.snapshot",
+                json!({}),
+                expected_identity,
+            )
             .await?;
         let mut snapshot = parse_snapshot(json!({"result": result}), session_id)?;
         let git_summaries = join_all(snapshot.spaces.iter().map(|space| async {
             match self
-                .socket_request(
+                .socket_request_with_identity(
                     session_id,
                     "worktree.list",
                     json!({"workspace_id": space.id}),
+                    expected_identity,
                 )
                 .await
             {
-                Ok(result) => parse_space_git_summary(&result, &space.id).ok().flatten(),
-                Err(_) => None,
+                Ok((result, _)) => Ok(parse_space_git_summary(&result, &space.id).ok().flatten()),
+                Err(error) if expected_identity.is_some() => Err(error),
+                Err(_) => Ok(None),
             }
         }))
         .await;
         for (space, git) in snapshot.spaces.iter_mut().zip(git_summaries) {
-            space.git = git;
+            space.git = git?;
         }
         Ok(snapshot)
     }

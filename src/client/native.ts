@@ -1,3 +1,9 @@
+import {
+  matchProjectSession, parseProjectConfiguration, parseRepositoryList,
+  parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
+  parseWorkspaceReconcileRequest,
+  parseWorkspaceSetupRequest, validateProjectOperationId,
+} from "./projectProtocol";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
   FocusRequest,
@@ -194,6 +200,38 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
 
 export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channelFactory: NativeChannelFactory = defaultChannel): CockpitClient {
   return {
+    projectConfiguration() { return invokeAndParse(invoke, "cockpit_project_configuration", undefined, "project configuration", parseProjectConfiguration); },
+    repositories() { return invokeAndParse(invoke, "cockpit_repositories", undefined, "repositories", parseRepositoryList); },
+    async planWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceSetupRequest(value);
+      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_plan", { sessionId, request }, "workspace plan", parseWorkspaceSetupPlan), sessionId);
+    },
+    async startWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceOperationRequest(value);
+      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_start", { sessionId, request }, "workspace start", parseWorkspaceOperation), sessionId, request.operation_id);
+    },
+    async workspaceOperation(sessionId, operationId) {
+      validateSessionId(sessionId);
+      validateProjectOperationId(operationId);
+      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_operation", { sessionId, operationId }, "workspace operation", parseWorkspaceOperation), sessionId, operationId);
+    },
+    async resumeWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceOperationRequest(value);
+      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_resume", { sessionId, request }, "workspace resume", parseWorkspaceOperation), sessionId, request.operation_id);
+    },
+    async cancelWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceOperationRequest(value);
+      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_cancel", { sessionId, request }, "workspace cancellation", parseWorkspaceOperation), sessionId, request.operation_id);
+    },
+    async reconcileWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceReconcileRequest(value);
+      return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_reconcile", { sessionId, request }, "workspace reconciliation", parseWorkspaceOperation), sessionId, request.operation_id);
+    },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },
     sessionSnapshot(sessionId: string): Promise<SessionSnapshotResponse> {

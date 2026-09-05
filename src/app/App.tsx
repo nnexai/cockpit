@@ -18,6 +18,7 @@ import type {
 } from "../protocol/generated/v1";
 import { initialSessionState, sessionReducer, type SessionState } from "./sessionReducer";
 import { TerminalPane } from "./TerminalPane";
+import { SetupDialog } from "./projects/SetupDialog";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
@@ -732,9 +733,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sessionChooserOpen, setSessionChooserOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const [prefixActive, setPrefixActive] = useState(false);
   const mutationBusy = mutations.pending !== null;
-  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen;
+  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen;
   const streamRegistry = useRef(new Set<TerminalStream>());
   const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
   useEffect(() => () => { streamRegistry.current.forEach((stream) => stream.close()); streamRegistry.current.clear(); }, []);
@@ -803,7 +805,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button><button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}>Swap...</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}>Move...</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}>Close</button></ContextMenu>;
   };
   return <div className="workbench">
-    <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} mutate={onMutate} /><div className="sidebar-divider"><button type="button" disabled={mutationBusy || modalOpen} onClick={() => onMutate("space:new", { type: "space_create", label: null, cwd: null }, true)}>new</button><button type="button" disabled={modalOpen} onClick={() => setCommandsOpen(true)}>menu</button></div><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
+    <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} mutate={onMutate} /><div className="sidebar-divider"><button type="button" disabled={mutationBusy || modalOpen} onClick={() => onMutate("space:new", { type: "space_create", label: null, cwd: null }, true)}>new</button><button type="button" disabled={modalOpen} onClick={() => setCommandsOpen(true)}>menu</button><button type="button" aria-label="New task Space…" disabled={mutationBusy || modalOpen || state.sync !== "live"} onClick={() => setSetupOpen(true)}>task…</button></div><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
     <main className="main-workarea">
       {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} mutate={onMutate} /> : null}
       <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
@@ -817,6 +819,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
     {commandsOpen ? <CommandOverlay run={(command) => { setCommandsOpen(false); runCommand(command); }} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
+    {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetry={onRetry} onRetryMutation={onRetryMutation} />
   </div>;

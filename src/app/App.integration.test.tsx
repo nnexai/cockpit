@@ -104,6 +104,14 @@ class AppFixture {
 
   readonly client: CockpitClient = {
     status: vi.fn(async () => status),
+    projectConfiguration: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    startWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    workspaceOperation: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    resumeWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    cancelWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    reconcileWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     sessions: this.sessionsCalls,
     sessionSnapshot: this.snapshotCalls,
     focus: this.focusCalls,

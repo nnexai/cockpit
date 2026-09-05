@@ -1,4 +1,10 @@
 import {
+  matchProjectSession, parseProjectConfiguration, parseRepositoryList,
+  parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
+  parseWorkspaceReconcileRequest,
+  parseWorkspaceSetupRequest, validateProjectOperationId,
+} from "./projectProtocol";
+import {
   CockpitClientError,
   parseErrorEnvelope,
   parseFocusRequest,
@@ -235,6 +241,48 @@ export function createBrowserClient(
   webSocketFactory: BrowserWebSocketFactory = defaultWebSocket,
 ): CockpitClient {
   return {
+    projectConfiguration() { return getJson(request, "/api/v1/project/configuration", "project configuration", parseProjectConfiguration); },
+    repositories() { return getJson(request, "/api/v1/project/repositories", "repositories", parseRepositoryList); },
+    async planWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceSetupRequest(value);
+      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-plans`, "workspace plan", parseWorkspaceSetupPlan, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId);
+    },
+    async startWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceOperationRequest(value);
+      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations`, "workspace start", parseWorkspaceOperation, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId, body.operation_id);
+    },
+    async workspaceOperation(sessionId, operationId) {
+      validateSessionId(sessionId);
+      validateProjectOperationId(operationId);
+      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/${encodeURIComponent(operationId)}`, "workspace operation", parseWorkspaceOperation), sessionId, operationId);
+    },
+    async resumeWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceOperationRequest(value);
+      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/resume`, "workspace resume", parseWorkspaceOperation, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId, body.operation_id);
+    },
+    async cancelWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceOperationRequest(value);
+      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/cancel`, "workspace cancellation", parseWorkspaceOperation, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId, body.operation_id);
+    },
+    async reconcileWorkspace(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceReconcileRequest(value);
+      return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/reconcile`, "workspace reconciliation", parseWorkspaceOperation, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId, body.operation_id);
+    },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },
     sessionSnapshot(sessionId: string): Promise<SessionSnapshotResponse> {

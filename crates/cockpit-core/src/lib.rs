@@ -1,3 +1,12 @@
+pub mod config;
+pub mod process;
+pub mod project_adapter;
+mod project_store;
+pub mod projects;
+pub mod repositories;
+
+pub use project_adapter::ProjectHerdrAdapter;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -99,6 +108,7 @@ pub struct CockpitService {
     mode: CockpitMode,
     adapter: Arc<dyn HerdrAdapter>,
     compatibility: Arc<RwLock<CompatibilityCache>>,
+    projects: Option<Arc<projects::ProjectService>>,
 }
 
 #[derive(Default)]
@@ -157,7 +167,22 @@ impl CockpitService {
             mode,
             adapter,
             compatibility: Arc::new(RwLock::new(CompatibilityCache::default())),
+            projects: None,
         }
+    }
+
+    pub fn with_projects(mut self, projects: projects::ProjectService) -> Self {
+        self.projects = Some(Arc::new(projects));
+        self
+    }
+
+    pub fn projects(&self) -> Result<&Arc<projects::ProjectService>, InspectionError> {
+        self.projects.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "project_configuration_unavailable",
+                "Project operations are not configured in this host",
+            )
+        })
     }
 
     pub async fn status(&self) -> StatusResponse {

@@ -1,3 +1,5 @@
+mod projects;
+
 use std::{
     collections::HashMap,
     sync::{
@@ -781,7 +783,17 @@ pub fn run() {
         HerdrCliConfig::from_options(None, None, None).expect("failed to load Herdr configuration");
     let inspector = Arc::new(HerdrCliAdapter::new(config).with_server_autostart());
     let startup_inspector = Arc::clone(&inspector);
-    let service = CockpitService::new(CockpitMode::Normal, inspector);
+    let project_config = cockpit_core::config::load_project_configuration(None, None)
+        .expect("failed to load project configuration");
+    let project_service =
+        cockpit_core::projects::ProjectService::new(project_config, inspector.clone())
+            .expect("failed to initialize project operations");
+    let service =
+        CockpitService::new(CockpitMode::Normal, inspector).with_projects(project_service);
+    let shutdown_projects = service
+        .projects()
+        .expect("project operations configured")
+        .clone();
 
     tauri::Builder::default()
         .manage(service)
@@ -795,6 +807,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            projects::cockpit_project_configuration,
+            projects::cockpit_repositories,
+            projects::cockpit_workspace_plan,
+            projects::cockpit_workspace_start,
+            projects::cockpit_workspace_operation,
+            projects::cockpit_workspace_resume,
+            projects::cockpit_workspace_cancel,
+            projects::cockpit_workspace_reconcile,
             cockpit_status,
             cockpit_sessions,
             cockpit_session_snapshot,
@@ -805,6 +825,20 @@ pub fn run() {
             cockpit_terminal_command,
             cockpit_stream_cancel
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Cockpit Tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building Cockpit Tauri application")
+        .run(move |app, event| {
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
+                api.prevent_exit();
+                let projects = shutdown_projects.clone();
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    projects.shutdown().await;
+                    app.exit(0);
+                });
+            }
+        });
 }

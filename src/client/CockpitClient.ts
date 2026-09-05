@@ -23,6 +23,13 @@ import type {
   TerminalOpenRequest,
   TerminalOwnershipState,
   TerminalStreamMessage,
+  ProjectConfiguration,
+  RepositoryListResponse,
+  WorkspaceSetupRequest,
+  WorkspaceSetupPlan,
+  WorkspaceOperationRequest,
+  WorkspaceReconcileRequest,
+  WorkspaceOperation,
 } from "../protocol/generated/v1";
 
 export type CockpitStatus = StatusResponse;
@@ -62,6 +69,14 @@ export interface TerminalStream extends ClosableStream {
 /** The transport-neutral surface exposed to the presentation layer. */
 export interface CockpitClient {
   status(): Promise<CockpitStatus>;
+  projectConfiguration(): Promise<ProjectConfiguration>;
+  repositories(): Promise<RepositoryListResponse>;
+  planWorkspace(sessionId: string, request: WorkspaceSetupRequest): Promise<WorkspaceSetupPlan>;
+  startWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
+  workspaceOperation(sessionId: string, operationId: string): Promise<WorkspaceOperation>;
+  resumeWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
+  cancelWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
+  reconcileWorkspace(sessionId: string, request: WorkspaceReconcileRequest): Promise<WorkspaceOperation>;
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string): Promise<CockpitSessionSnapshot>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;

@@ -249,4 +249,20 @@ Workbench prefix commands are consumed before xterm input. Normal xterm pointer 
 
 Installation and per-session compatibility probes commit only within their captured invalidation generations. Event subscriptions retain their initial identity across reconnects and terminate on an identity mismatch so a new subscription must re-inspect it.
 
-The application-mouse investigation found a separate stable `MouseCapture` control message: Herdr's client applies it, while Cockpit currently discards it. The next mouse increment will propagate that message to xterm and retain Herdr's raw, owned terminal-input path rather than substitute full-app coordinates.
+Stock Herdr 0.8.2 sends `MouseCapture` only to full-app clients, never direct terminal attachments. Its direct-attach client captures host mouse input for scrolling but discards non-wheel reports. Neither the public schema nor the attach handshake exposes per-terminal mouse modes. Full-app coordinates cannot safely substitute for pane-targeted input because dispatch uses mutable global layout.
+
+The user explicitly chose to retain the stock Homebrew binary, record application mouse as blocked, and continue product features. Do not patch Herdr, force application mouse capture in shells, or expand the terminal investigation. The unshippable forwarding experiment is archived outside the repository; production source retains the verified recovery/selection implementation from `fe53b86`.
+
+Prioritize repository/worktree setup and graphical Context, then the remaining selected reference, source, and review workflows. Outstanding terminal/repair gates remain recorded; they do not authorize calling the release complete, but they no longer hold independent feature implementation behind additional terminal experiments.
+
+## Reviewed repository and worktree setup
+
+The `task…` entry point discovers only configured local repositories, reviews exact create/open effects, then delegates worktree mutations to stock Herdr. Open resolves exactly one branch or checkout-path selector from fresh inventory. Cockpit's repository ID is a filesystem-bound catalog identity; Herdr's repository key is the canonical Git common directory. They are not interchangeable.
+
+Inspect effective configuration with `cockpit configuration --config /absolute/cockpit.toml --repository-root /absolute/repositories`. The same options are accepted by `cockpit serve`. Configuration precedence is invocation, environment, versioned TOML, then defaults. `COCKPIT_REPOSITORY_ROOTS`, `COCKPIT_WORKTREE_ROOT`, `COCKPIT_COMPANION_ROOT`, and `COCKPIT_STATE_ROOT` select local roots; no repository is cloned.
+
+Stock Herdr cannot suppress configured repository actions, so planning requires explicit per-operation consent. The reviewed endpoint identity binds the socket's connected process identity, not merely its pathname. Unknown dispatch outcomes are not automatically retried. Journals use descriptor-owned execution leases and transactional updates; companion publication is no-replace and currently supported on GNU/Linux.
+
+Worktree creation returns a root pane, not a context-bearing process. Only a separate successful terminal creation supplies the operation's context tab/pane receipt. That new terminal receives allowlisted `COCKPIT_*` variables; the original root pane remains visible and unchanged. Opened checkouts remain borrowed even when Cockpit creates a new companion and context tab.
+
+Browser acceptance created a linked checkout, reopened that exact checkout without creating another workspace, and resumed a companion-write failure after restarting the gateway. The terminal fixture recorded the expected context environment; its root-pane control recorded none. Teardown/removal, graphical Context rendering, and the remaining source/reference/review workflows are not covered by this increment.
