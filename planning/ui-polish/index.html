@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cockpit · workflow concepts</title>
+  <link rel="stylesheet" href="concepts.css">
+</head>
+<body>
+  <header class="comparison-bar">
+    <nav id="concept-choices" aria-label="Concept"></nav>
+    <nav class="scene-choices" aria-label="Preview scene">
+      <button data-scene="review">Review</button>
+      <button data-scene="files">Files</button>
+      <button data-scene="workspace">New workspace</button>
+    </nav>
+    <button id="about-toggle" aria-expanded="false">Why this layout?</button>
+    <button id="original-toggle" aria-pressed="false">Original</button>
+  </header>
+  <aside id="concept-notes" hidden></aside>
+  <div class="preview-viewport">
+    <main id="concept-artboard" aria-label="Cockpit layout concept"></main>
+  </div>
+  <script src="reference-content.js"></script>
+  <script src="concepts.js"></script>
+</body>
+</html>
