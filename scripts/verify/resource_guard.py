@@ -606,6 +606,10 @@ def build_subprocess_argv(
     if cleanup:
         if argv not in cleanup_commands:
             raise ResourceGuardError("cleanup permits only exact session stop for the target")
+    elif argv == ("tui",):
+        if target.session.status != "running":
+            raise ResourceGuardError("TUI attachment requires a running run-owned session")
+        return [target.executable.path, "--session", target.session.name]
     elif argv in _READ_ONLY_COMMANDS:
         pass
     elif argv == ("server",):
@@ -648,10 +652,13 @@ def prepare_subprocess(
 
     target = validate_target(ledger, run_id, session_name, cleanup=cleanup)
     validate_recorded_executable(target)
+    environment = build_subprocess_environment(target, base_environment)
+    if tuple(command) == ("tui",):
+        _validate_runtime_path(target, environment.get("HOME", ""), "TUI HOME")
     return (
         target,
         build_subprocess_argv(target, command, cleanup=cleanup),
-        build_subprocess_environment(target, base_environment),
+        environment,
     )
 
 

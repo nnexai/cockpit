@@ -3,7 +3,7 @@
   "status": "PASS",
   "run_id": "run-20260904T214621Z",
   "tested_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
-  "delivery_commit": null,
+  "delivery_commit": "41101de",
   "required_subchecks": [
     {
       "id": "stable_identity",
@@ -143,5 +143,16 @@
       "scripts/verify/resource_guard.py": "a7f24ea5c7d0cfdfebbd7769e6b5b971ca0bdb581b9a399eed8b088c4d04687c",
       "scripts/verify/test_resource_guard.py": "4b77caa10a887bb1518206356d6121b0f891afe7e388ccaad4612b1db6828ccf"
     }
+  },
+  "tui_extension": {
+    "status": "PASS",
+    "source_hashes": {
+      "scripts/verify/resource_guard.py": "849701d94b3c332e979eaa709120cc0d5977c1497503d77687f61e3cfe495186",
+      "scripts/verify/test_resource_guard.py": "32ab7ccbb4ea57c1ea9b0395a4fe57766f2d4a25b1629457b7025bcb39129b92"
+    },
+    "review": "TerraGuardReview ACCEPT",
+    "guard_tests_passed": 19,
+    "evidence": "18guardtestspassed in28testsuite; newlyadded19th canonicalpositiveTUI testpassed independently. ActualguardedTUI renderedmarker andstoppedexit0.",
+    "runtime_transcript": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-tui-transcript.json"
   }
 }

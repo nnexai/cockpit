@@ -75,6 +75,26 @@ class ResourceGuardTests(unittest.TestCase):
             with self.assertRaises(ResourceGuardError):
                 prepare_subprocess(ledger, RUN_ID, SESSION, ("status", "server", "--json"))
 
+    def test_tui_rejects_missing_or_foreign_home_before_invocation(self) -> None:
+        self._write_ledger(status="running")
+        ledger = load_ledger(self.ledger_path)
+        for environment in ({}, {"HOME": str(self.protected_config.parent)}):
+            with self.subTest(environment=environment):
+                with self.assertRaises(ResourceGuardError):
+                    prepare_subprocess(ledger, RUN_ID, SESSION, ("tui",), base_environment=environment)
+
+    def test_running_tui_requires_exact_target_and_owned_home(self) -> None:
+        self._write_ledger(status="running")
+        home = self.resource_root / "home"
+        home.mkdir()
+        _target, argv, environment = prepare_subprocess(
+            load_ledger(self.ledger_path), RUN_ID, SESSION, ("tui",),
+            base_environment={"HOME": str(home), "HERDR_SESSION": "default"},
+        )
+        self.assertEqual(argv, [str(self.executable), "--session", SESSION])
+        self.assertEqual(environment["HOME"], str(home))
+        self.assertNotIn("HERDR_SESSION", environment)
+
     def _write_ledger(
         self,
         *,

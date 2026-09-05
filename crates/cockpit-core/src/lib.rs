@@ -138,7 +138,10 @@ impl CockpitService {
             cockpit_version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: self.mode,
             capabilities: CockpitCapabilities {
-                terminal_mouse_input: true,
+                // Protocol 20 exposes structured mouse input only in full-app
+                // coordinates. Direct terminal attach lacks a race-free pane
+                // content-origin translation, so Cockpit must not emit it.
+                terminal_mouse_input: false,
             },
             herdr,
         }

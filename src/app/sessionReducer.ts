@@ -233,7 +233,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
             },
           };
         }
-        if (!message.full && old.terminalSequence !== null && sequence !== old.terminalSequence + 1n) {
+        if (old.terminalSequence !== null && sequence !== old.terminalSequence + 1n) {
           return {
             ...state,
             attachments: {
@@ -247,15 +247,6 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           attachments: {
             ...state.attachments,
             [action.paneId]: { ...old, terminalSequence: sequence, error: null },
-          },
-        };
-      }
-      if (message.type === "graphics") {
-        return {
-          ...state,
-          attachments: {
-            ...state.attachments,
-            [action.paneId]: { ...old, error: null },
           },
         };
       }
@@ -279,31 +270,5 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
   }
 }
 
-export function makeTerminalRequest(
-  clientSurfaceId: string,
-  sessionId: string,
-  paneId: string,
-  mode: "observe" | "control",
-  cols: number,
-  rows: number,
-  cellWidthPx: number,
-  cellHeightPx: number,
-  surfaceCols: number,
-  surfaceRows: number,
-): TerminalOpenRequest {
-  return {
-    client_surface_id: clientSurfaceId,
-    session_id: sessionId,
-    pane_id: paneId,
-    mode,
-    takeover: false,
-    cols,
-    rows,
-    cell_width_px: cellWidthPx,
-    cell_height_px: cellHeightPx,
-    surface_cols: surfaceCols,
-    surface_rows: surfaceRows,
-  };
-}
 
 export type { FocusRequest, SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalOpenRequest, TerminalStreamMessage };

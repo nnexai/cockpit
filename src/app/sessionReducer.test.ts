@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { SessionSnapshotResponse } from "../protocol/generated/v1";
+import type { SessionSnapshotResponse, TerminalStreamMessage } from "../protocol/generated/v1";
 import { initialSessionState, sessionReducer } from "./sessionReducer";
 
 function snapshot(sessionId: string, pane = "pane-1", focused = pane): SessionSnapshotResponse {
   return {
     session_id: sessionId,
     version: "0.8.2",
-    protocol: 22,
+    protocol: 20,
     focused_space_id: "space-1",
     focused_tab_id: "tab-1",
     focused_pane_id: focused,
@@ -20,6 +20,20 @@ function snapshot(sessionId: string, pane = "pane-1", focused = pane): SessionSn
 
 function stream(sessionId: string, generation: number, sequence: number, value = snapshot(sessionId)) {
   return { type: "snapshot", session_id: sessionId, generation, sequence, snapshot: value } as const;
+}
+function terminalFrame(seq: string, full = true): TerminalStreamMessage {
+  return {
+    type: "frame",
+    session_id: "one",
+    pane_id: "pane-1",
+    stream_id: "stream-1",
+    seq,
+    encoding: "ansi",
+    width: 80,
+    height: 24,
+    full,
+    bytes: "",
+  };
 }
 
 function ready(sessionId: string) {
@@ -155,6 +169,39 @@ describe("sessionReducer", () => {
     expect(state.focusPending).toBeNull();
     expect(state.focusError).toBeNull();
   });
+  it("rejects duplicate and skipped terminal full frames", () => {
+    for (const invalidSequence of ["1", "3"]) {
+      let state = ready("one");
+      state = sessionReducer(state, {
+        type: "attachment/opened",
+        epoch: state.epoch,
+        sessionId: "one",
+        paneId: "pane-1",
+        streamId: "stream-1",
+        mode: "observe",
+      });
+      state = sessionReducer(state, {
+        type: "attachment/message",
+        epoch: state.epoch,
+        sessionId: "one",
+        paneId: "pane-1",
+        message: terminalFrame("1"),
+      });
+      const rejected = sessionReducer(state, {
+        type: "attachment/message",
+        epoch: state.epoch,
+        sessionId: "one",
+        paneId: "pane-1",
+        message: terminalFrame(invalidSequence),
+      });
+      expect(rejected.attachments["pane-1"].terminalSequence).toBe(1n);
+      expect(rejected.attachments["pane-1"].error).toEqual({
+        code: "terminal_sequence",
+        message: "Terminal output sequence is not consecutive",
+      });
+    }
+  });
+
 
   it("tracks disconnect and ownership, and ignores disposed late attachment messages", () => {
     let state = ready("one");

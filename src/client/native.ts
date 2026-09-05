@@ -172,7 +172,7 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
         if (activeStreamId !== undefined) cancel(activeStreamId);
         return;
       }
-      if (receivedFrame && !message.full && current !== lastFrameSequence! + 1n) {
+      if (receivedFrame && current !== lastFrameSequence! + 1n) {
         closed = true;
         onError(streamFailure("Terminal frame sequence is not consecutive"));
         if (activeStreamId !== undefined) cancel(activeStreamId);

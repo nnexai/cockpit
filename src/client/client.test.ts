@@ -21,7 +21,7 @@ import {
 const snapshot: CockpitSessionSnapshot = {
   session_id: "session-1",
   version: "0.8.2",
-  protocol: 22,
+  protocol: 20,
   focused_space_id: "space-1",
   focused_tab_id: "tab-1",
   focused_pane_id: "pane-1",
@@ -34,7 +34,6 @@ const snapshot: CockpitSessionSnapshot = {
 const status = { protocol_version: "v1", cockpit_version: "0.1.0", mode: "normal" as const, capabilities: { terminal_mouse_input: true }, herdr: { status: "unavailable" as const, code: "test", message: "test" } };
 const sessions = { sessions: [{ id: "session-1", label: "Main", is_default: true, running: true }] };
 const terminalRequest: TerminalOpenRequest = {
-  client_surface_id: "surface-1",
   session_id: "session-1",
   pane_id: "pane-1",
   mode: "observe" as const,
@@ -43,8 +42,6 @@ const terminalRequest: TerminalOpenRequest = {
   rows: 24,
   cell_width_px: 8,
   cell_height_px: 16,
-  surface_cols: 80,
-  surface_rows: 24,
 };
 function terminalOpen(overrides: Partial<typeof terminalRequest> = {}) {
   return { ...terminalRequest, ...overrides };
@@ -112,8 +109,8 @@ describe("client DTO parsers", () => {
     expect(() => parseTerminalOpenRequest({ ...terminalRequest, session_id: "../session" })).toThrow(/invalid target/);
     expect(() => parseTerminalOpenRequest({ ...terminalRequest, pane_id: "pane/child" })).toThrow(/invalid target/);
     expect(parseTerminalOpenRequest(terminalRequest)).toEqual(terminalRequest);
-    expect(parseTerminalStreamMessage({ type: "graphics", session_id: "session-1", pane_id: "pane-1", stream_id: "stream-1", revision: "7", bytes: "S0lUVA==" })).toMatchObject({ type: "graphics", revision: "7", bytes: "S0lUVA==" });
-    expect(() => parseTerminalStreamMessage({ type: "graphics", session_id: "session-1", pane_id: "pane-1", stream_id: "stream-1", revision: "7", bytes: "bad" })).toThrow(/graphics/);
+    expect(() => parseTerminalStreamMessage({ type: "graphics", session_id: "session-1", pane_id: "pane-1", stream_id: "stream-1", revision: "7", bytes: "S0lUVA==" })).toThrow(/unknown type/);
+    expect(() => parseTerminalStreamMessage({ type: "graphics", session_id: "session-1", pane_id: "pane-1", stream_id: "stream-1", revision: "7", bytes: "bad" })).toThrow(/unknown type/);
     expect(() => parseTerminalCommand({ type: "terminal.mouse", kind: "moved", button: "left", column: 12, row: 7, modifiers: 0 })).toThrow(CockpitClientError);
   });
   it("validates every resource mutation discriminant and required nullable field", () => {
@@ -206,26 +203,58 @@ describe("browser CockpitClient", () => {
   });
 
 
-  it("opens terminal with encoded ids, sends exact JSON, and forwards graphics", async () => {
+  it("opens a per-pane terminal with fitted dimensions and forwards text and bytes", async () => {
     const socket = new FakeSocket();
     const factory = vi.fn(() => socket);
     const client = createBrowserClient(vi.fn(async () => jsonResponse(snapshot)), factory);
     const messages = vi.fn();
     const open = client.openTerminal(terminalOpen({ session_id: "s_1", pane_id: "w1A:p1", mode: "control" }), messages, vi.fn());
-    expect(factory).toHaveBeenCalledWith("/api/v1/sessions/s_1/panes/w1A%3Ap1/terminal?mode=control&takeover=false&client_surface_id=surface-1&cols=80&rows=24&cell_width_px=8&cell_height_px=16&surface_cols=80&surface_rows=24");
+    expect(factory).toHaveBeenCalledWith("/api/v1/sessions/s_1/panes/w1A%3Ap1/terminal?mode=control&takeover=false&cols=80&rows=24&cell_width_px=8&cell_height_px=16");
     socket.open();
     const stream = await open;
-    socket.message(JSON.stringify({ type: "graphics", session_id: "s_1", pane_id: "w1A:p1", stream_id: "stream-1", revision: "1", bytes: "S0lUVA==" }));
-    expect(messages).toHaveBeenCalledWith(expect.objectContaining({ type: "graphics", revision: "1" }));
+    socket.message(JSON.stringify({ type: "ownership", session_id: "s_1", pane_id: "w1A:p1", stream_id: "stream-1", state: "owned", message: null }));
+    socket.message(JSON.stringify({ type: "frame", session_id: "s_1", pane_id: "w1A:p1", stream_id: "stream-1", seq: "1", encoding: "ansi", width: 80, height: 24, full: true, bytes: "aGVsbG8=" }));
+    expect(messages).toHaveBeenCalledWith(expect.objectContaining({ type: "frame", seq: "1", full: true }));
     stream.send({ type: "terminal.input", text: "hello", bytes: null });
+    stream.send({ type: "terminal.input", text: null, bytes: "AP8=" });
     stream.send({ type: "terminal.mouse", kind: "down", button: "left", column: 12, row: 7, modifiers: 0 });
     expect(socket.sent).toEqual([
       JSON.stringify({ type: "terminal.input", text: "hello", bytes: null }),
+      JSON.stringify({ type: "terminal.input", text: null, bytes: "AP8=" }),
       JSON.stringify({ type: "terminal.mouse", kind: "down", button: "left", column: 12, row: 7, modifiers: 0 }),
     ]);
     stream.close();
     stream.close();
     expect(socket.readyState).toBe(3);
+  });
+
+  it("rejects duplicate and skipped terminal full frames", async () => {
+    for (const invalidSequence of ["1", "3"]) {
+      const socket = new FakeSocket();
+      const errors: CockpitClientError[] = [];
+      const messages: unknown[] = [];
+      const client = createBrowserClient(vi.fn(async () => jsonResponse(snapshot)), () => socket);
+      const open = client.openTerminal(terminalOpen(), (message) => messages.push(message), (error) => errors.push(error));
+      socket.open();
+      await open;
+      const frame = (seq: string) => ({
+        type: "frame",
+        session_id: "session-1",
+        pane_id: "pane-1",
+        stream_id: "stream-1",
+        seq,
+        encoding: "ansi",
+        width: 80,
+        height: 24,
+        full: true,
+        bytes: "",
+      });
+      socket.message(JSON.stringify(frame("1")));
+      socket.message(JSON.stringify(frame(invalidSequence)));
+      expect(messages).toHaveLength(1);
+      expect(errors.at(-1)?.message).toMatch(/not consecutive/);
+      expect(socket.readyState).toBe(3);
+    }
   });
 
   it("rejects terminal target mismatches and initial incremental frames", async () => {
@@ -313,6 +342,43 @@ describe("native CockpitClient", () => {
     expect(errors).toHaveLength(1);
     stream.close();
     expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "term-1" });
+  });
+
+  it("rejects duplicate and skipped native terminal full frames", async () => {
+    for (const invalidSequence of ["1", "3"]) {
+      let channel: NativeChannel<unknown> | undefined;
+      const invoke = vi.fn(async (command: string) => command === "cockpit_terminal_open" ? "term-1" : undefined);
+      const channelFactory = <T,>(onMessage: (message: T) => void): NativeChannel<T> => {
+        const created = { onmessage: onMessage };
+        channel = created as NativeChannel<unknown>;
+        return created;
+      };
+      const errors: CockpitClientError[] = [];
+      const messages: unknown[] = [];
+      const stream = await createNativeClient(invoke, channelFactory).openTerminal(
+        terminalOpen(),
+        (message) => messages.push(message),
+        (error) => errors.push(error),
+      );
+      const frame = (seq: string) => ({
+        type: "frame",
+        session_id: "session-1",
+        pane_id: "pane-1",
+        stream_id: "term-1",
+        seq,
+        encoding: "ansi",
+        width: 80,
+        height: 24,
+        full: true,
+        bytes: "",
+      });
+      channel!.onmessage(frame("1"));
+      channel!.onmessage(frame(invalidSequence));
+      expect(messages).toHaveLength(1);
+      expect(errors.at(-1)?.message).toMatch(/not consecutive/);
+      expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "term-1" });
+      stream.close();
+    }
   });
 
   it("preserves native backend error envelopes", async () => {

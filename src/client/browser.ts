@@ -190,7 +190,7 @@ function openTerminalStream(
 ): Promise<TerminalStream> {
   let validated: TerminalOpenRequest;
   try { validated = parseTerminalOpenRequest(request); } catch (error) { return Promise.reject(error); }
-  const path = `/api/v1/sessions/${encodeURIComponent(validated.session_id)}/panes/${encodeURIComponent(validated.pane_id)}/terminal?mode=${validated.mode}&takeover=${validated.takeover ? "true" : "false"}&client_surface_id=${encodeURIComponent(validated.client_surface_id)}&cols=${validated.cols}&rows=${validated.rows}&cell_width_px=${validated.cell_width_px}&cell_height_px=${validated.cell_height_px}&surface_cols=${validated.surface_cols}&surface_rows=${validated.surface_rows}`;
+  const path = `/api/v1/sessions/${encodeURIComponent(validated.session_id)}/panes/${encodeURIComponent(validated.pane_id)}/terminal?mode=${validated.mode}&takeover=${validated.takeover ? "true" : "false"}&cols=${validated.cols}&rows=${validated.rows}&cell_width_px=${validated.cell_width_px}&cell_height_px=${validated.cell_height_px}`;
   return new Promise((resolve, reject) => {
     let socket: BrowserWebSocket;
     let settled = false;
@@ -232,7 +232,7 @@ function openTerminalStream(
       if (message.type === "frame") {
         const current = BigInt(message.seq);
         if (!receivedFrame && !message.full) { fail(streamError("Terminal stream must begin with a full frame")); return; }
-        if (receivedFrame && !message.full && current !== lastFrameSequence! + 1n) {
+        if (receivedFrame && current !== lastFrameSequence! + 1n) {
           fail(streamError("Terminal frame sequence is not consecutive"));
           return;
         }

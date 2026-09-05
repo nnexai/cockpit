@@ -86,16 +86,16 @@ This records the decisions made during the architecture refinement interview. It
 
 ### Terminal attachment
 
-- Herdr owns the PTY, process, terminal model, and client-shell surface. xterm.js owns browser rendering and input capture only.
-- Terminal attachment requires Herdr protocol 22 and the generation-1 client-shell endpoint. Cockpit does not use the protocol-20 direct terminal socket.
-- One endpoint is shared by every visible pane in a Cockpit surface. `PaneSurface` and `Patch` messages provide authoritative cells, styles, cursor state, pane rectangles, and graphics; Cockpit slices the surface into per-pane xterm renderers.
-- The JSON API remains authoritative for hierarchy discovery and resource mutations. Surface geometry and targeted terminal input travel through the client-shell endpoint.
+- Herdr owns the PTY, process, and terminal model. xterm.js owns rendering and input capture only.
+- The selected runtime is Homebrew Herdr 0.8.2, protocol 20, schema 1. Each visible pane uses a direct `TerminalAnsi` / `TerminalAttach` stream.
+- Stable `TerminalFrame` ANSI bytes are authoritative. The first frame is full; every later sequence must be consecutive. Full repaints never reset xterm.
+- The JSON API remains authoritative for hierarchy, focus, and layout. One bounded reader owns each framed terminal socket without cancellation between its header and payload.
 - xterm.js renderers are mounted only for panes visible in the selected tab. Hidden tabs detach renderers/subscriptions while Herdr processes continue running.
-- Cockpit fits the shared surface before attachment and sends both character dimensions and measured cell pixels in the endpoint hello.
-- Focused xterm forwards text, pointer, and scroll input as targeted Herdr pane events only when local control intent allows it. Herdr performs pane hit-testing and application mouse-mode routing; Cockpit does not force xterm mouse modes or send raw SGR reports at shell prompts.
-- Kitty keyboard negotiation remains enabled. A terminal application still controls whether enhanced key reporting is active.
-- Cockpit re-encodes Herdr graphics assets and placements as Kitty direct-transmission commands for xterm's image addon. The built-in xterm renderer is intentional: the WebGL addon obscures the Kitty image layer.
-- Client-shell endpoints do not expose the previous exclusive writable takeover/loss transitions. Local control intent, semantic focus, and terminal process closure remain independent.
+- Cockpit fits each pane before attachment and sends character dimensions and measured cell pixels.
+- Text/binary input uses stable raw `Input`; wheel/page scrolling uses `AttachScroll`, gated by local control intent and attachment state.
+- Click-to-focus remains available. Safe application-mouse routing is not exposed by the selected direct-attach contract; G01 remains blocked rather than substituting global coordinates or unconditional SGR.
+- Terminal graphics are parked and the image addon is removed. Known auxiliary/graphics traffic is bounded and consumed without disconnecting text terminals. Enhanced keyboard reporting is a separate capability to revalidate.
+- Control and observe requests use stable attach modes. Semantic focus, local control intent, attachment state, and process closure remain independent.
 - Attach/reconnect failure leaves the resource visible with stale/disconnected status, retry, and resync; the Herdr process is not silently closed.
 - Errors are inline on the affected resource. Toasts may supplement but are not the only error surface.
 
@@ -108,7 +108,7 @@ This records the decisions made during the architecture refinement interview. It
 - The original extension keeps running independently. Terminal fallback reveals its own state; GUI drafts remain in Cockpit. A future TUI backport is a separate reusable-core story.
 - Context renders Markdown with Mermaid, frontmatter, bounded source/text/logs, and safe images. It discovers user files, watches changes, and uses bounded core-mediated ripgrep.
 - Whole-file and selected-line comments can be collected across files, edited, removed, and previewed as one batch. Full-file comments carry path/comment; line comments also carry exact original lines and line numbers.
-- Paste targets an explicitly selected agent in the same actual tab. It never submits Enter. A dedicated acknowledged task uses the existing public Herdr byte-write capability with proven paste framing; ordinary terminal input stays on the client-shell path. Pending, rejected, and unknown outcomes retain drafts/receipts and never cause automatic duplicate retries.
+- Paste targets an explicitly selected agent in the same actual tab. It never submits Enter. A dedicated acknowledged task uses the existing public Herdr byte-write capability with proven paste framing; ordinary terminal input stays on the stable per-pane attach path. Pending, rejected, and unknown outcomes retain drafts/receipts and never cause automatic duplicate retries.
 - Full local graphical review is a separately selectable feature using Cockpit's own read-only Git model and shared comment behavior. Review/MR URLs are setup inputs, not Build/Review workbench modes.
 
 ### Accessibility and settings
@@ -172,8 +172,8 @@ This records the decisions made during the architecture refinement interview. It
 
 ## Known risks
 
-1. **Client-shell compatibility is a hard runtime boundary.** Cockpit requires protocol 22 plus generation-1 endpoint negotiation, fixture-tests the schema, and rejects older Herdr servers before attachment.
-2. **Terminal input is endpoint-targeted, not exclusively leased.** Cockpit gates forwarding with local control intent, but a second client-shell endpoint can still send input to the same pane.
+1. **Stable compatibility is a hard runtime boundary.** The active adapter targets protocol 20/schema 1 with Herdr 0.8.2 fixtures; incompatible protocols are rejected before attachment. Protocol-22 history remains reachable.
+2. **Required application mouse and temporal acceptance remain incomplete.** Successful text/input bootstrap does not establish safe app-mode mouse routing or G01 scrolling/temporal passage.
 3. **Accessibility is intentionally best effort for this personal proof of concept, not a gate for broader distribution.**
 4. **No index/scratchpad means context membership is derived from the companion tree and frontmatter; human-created files are displayed but not managed by Cockpit.**
 5. **Herdr “Space” UI labels map to Herdr API “workspace” resources.** The adapter must keep this translation explicit.
@@ -224,3 +224,13 @@ The user chose to give up the custom protocol-22 path for now, preserving it in 
 ## Orchestrator startup constraint
 
 The user will downgrade the Herdr default session to stable before starting the implementation orchestrator. Astra runs inside that default session; it must never restart, upgrade/downgrade, close, or send test input to it. The current frontend will initially be incompatible, so BOOT-01 restores the actual stable protocol/transport first, then runtime smokes run only in explicit disposable sessions. A current-frontend or old protocol-22 smoke is not a bootstrap prerequisite.
+
+## Stable transport bootstrap
+
+The implementation run `run-20260904T214621Z` pins the installed Homebrew Herdr and preserves the protected default session. The shadowing local executable was archived only at the user's explicit request; neither the default server nor shared live configuration was changed.
+
+Browser and native AppImage smokes rendered the stable ANSI fixture and delivered byte-exact input to their recorded disposable panes. Source review corrected partial-read cancellation, repaint resets, nonconsecutive full-frame acceptance, and auxiliary-message disconnects. These checks establish bootstrap behavior, not full migration or release acceptance.
+
+The user selected WebUI-first behavioral verification and native AppImage startup/simple compatibility checks for this run. Required browser temporal, scrolling, focus, and application-mouse assertions remain in scope. A missing stable mouse API is a blocker, not a waiver.
+
+On this Fedora host, linuxdeploy's bundled `strip` cannot parse `.relr.dyn`. The supported `NO_STRIP=1` packaging option preserves the ELF data instead of applying the incompatible rewrite; it does not bypass compilation or runtime smoke. The resulting AppImage is stored only with run-owned artifacts, not installed.

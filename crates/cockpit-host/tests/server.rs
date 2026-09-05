@@ -70,7 +70,7 @@ impl HerdrAdapter for FakeAdapter {
         Ok(HerdrCompatibility::Compatible {
             identity: HerdrIdentity {
                 version: "0.8.2".to_owned(),
-                protocol: 22,
+                protocol: 20,
                 schema_version: 1,
             },
         })
@@ -172,7 +172,7 @@ fn snapshot() -> SessionSnapshotResponse {
     SessionSnapshotResponse {
         session_id: "session-1".to_owned(),
         version: "0.8.2".to_owned(),
-        protocol: 22,
+        protocol: 20,
         focused_space_id: Some("space-1".to_owned()),
         focused_tab_id: Some("tab-1".to_owned()),
         focused_pane_id: Some("pane-1".to_owned()),
@@ -345,7 +345,7 @@ async fn serves_live_session_routes() {
     let response = websocket_router
         .oneshot(
             Request::builder()
-                .uri("/api/v1/sessions/session-1/panes/w1A:p1/terminal?mode=observe&takeover=false&client_surface_id=surface-1&cols=80&rows=24&cell_width_px=8&cell_height_px=16&surface_cols=80&surface_rows=24")
+                .uri("/api/v1/sessions/session-1/panes/w1A:p1/terminal?mode=observe&takeover=false&cols=80&rows=24&cell_width_px=8&cell_height_px=16")
                 .header("host", addr.to_string())
                 .header("connection", "Upgrade")
                 .header("upgrade", "websocket")

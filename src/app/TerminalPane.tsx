@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
-import { ImageAddon } from "@xterm/addon-image";
 import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
@@ -14,11 +13,7 @@ export function appendPendingControlCommand(queue: TerminalCommand[], command: T
 }
 export type TerminalPaneProps = {
   client: CockpitClient;
-  request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px" | "surface_cols" | "surface_rows">;
-  surfaceCols: number;
-  surfaceRows: number;
-  paneCols: number;
-  paneRows: number;
+  request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px">;
   selected: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
@@ -44,18 +39,6 @@ function applicationFontSize(): number {
   return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16;
 }
 
-function invalidateImageCanvas(canvas: HTMLCanvasElement): void {
-  const context = canvas.getContext("2d");
-  if (!context) return;
-  try {
-    // Re-writing one unchanged pixel makes Chromium repaint xterm's transparent image layer.
-    const firstPixel = context.getImageData(0, 0, 1, 1);
-    context.putImageData(firstPixel, 0, 0);
-  } catch {
-    // A tainted or not-yet-ready canvas is retried by the caller.
-  }
-}
-
 export function createCockpitTerminal(fontSize = applicationFontSize()): Terminal {
   return new Terminal({
     convertEol: false,
@@ -67,6 +50,7 @@ export function createCockpitTerminal(fontSize = applicationFontSize()): Termina
     vtExtensions: { kittyKeyboard: true },
   });
 }
+
 
 function commandInput(text: string | null, bytes: string | null): TerminalCommand {
   return { type: "terminal.input", text, bytes };
@@ -149,11 +133,8 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
     cell_height_px: bounds && terminal.rows > 0 ? Math.max(1, Math.round(bounds.height / terminal.rows)) : 0,
   };
 }
-export function sharedSurfaceDimension(paneFitCells: number, surfaceCells: number, paneSurfaceCells: number): number {
-  return Math.max(1, Math.min(4096, Math.round(paneFitCells * surfaceCells / Math.max(1, paneSurfaceCells))));
-}
 
-export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCols, paneRows, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
@@ -163,7 +144,6 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
   const [closed, setClosed] = useState(false);
   const [terminalReady, setTerminalReady] = useState(false);
   const lastSequence = useRef<bigint | null>(null);
-  const graphicsReadyRef = useRef(false);
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
   const [controlRequested, setControlRequested] = useState(controlAllowed);
@@ -201,41 +181,13 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
     const fit = new FitAddon();
     terminal.open(host);
     terminal.loadAddon(fit);
-    try {
-      terminal.loadAddon(new ImageAddon({
-        kittySupport: true,
-        sixelSupport: false,
-        iipSupport: false,
-      }));
-      graphicsReadyRef.current = true;
-    } catch {
-      graphicsReadyRef.current = false;
-    }
     fit.fit();
     setTerminalReady(true);
     terminalRef.current = terminal;
-    let layerTimer: number | null = null;
-    const refreshLayer = () => {
-      if (layerTimer !== null) window.clearTimeout(layerTimer);
-      let attempts = 0;
-      const inspect = () => {
-        layerTimer = null;
-        const imageLayer = terminal.element?.querySelector<HTMLCanvasElement>(".xterm-image-layer-top");
-        if (imageLayer) invalidateImageCanvas(imageLayer);
-        attempts += 1;
-        if (attempts < 10) layerTimer = window.setTimeout(inspect, 500);
-      };
-      layerTimer = window.setTimeout(inspect, 100);
-    };
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
-      fit.fit();
-      refreshLayer();
-    });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => fit.fit());
     observer?.observe(host);
     return () => {
-      graphicsReadyRef.current = false;
       observer?.disconnect();
-      if (layerTimer !== null) window.clearTimeout(layerTimer);
       terminal.dispose();
       terminalRef.current = null;
     };
@@ -259,8 +211,8 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
       stream.send({
         type: "terminal.resize",
-        cols: sharedSurfaceDimension(cols, surfaceCols, paneCols),
-        rows: sharedSurfaceDimension(rows, surfaceRows, paneRows),
+        cols,
+        rows,
         cell_width_px: bounds ? Math.max(1, Math.round(bounds.width / Math.max(1, cols))) : 0,
         cell_height_px: bounds ? Math.max(1, Math.round(bounds.height / Math.max(1, rows))) : 0,
       });
@@ -291,7 +243,7 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
       terminal.attachCustomWheelEventHandler(() => true);
       terminal.attachCustomKeyEventHandler(() => true);
     };
-  }, [selected, onSelect, surfaceCols, surfaceRows, paneCols, paneRows]);
+  }, [selected, onSelect]);
   useEffect(() => {
     if (controlAllowed) {
       controlRequestPendingRef.current = false;
@@ -330,24 +282,9 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
       cell_width_px: geometry.cell_width_px,
       cell_height_px: geometry.cell_height_px,
-      surface_cols: sharedSurfaceDimension(terminal.cols || 80, surfaceCols, paneCols),
-      surface_rows: sharedSurfaceDimension(terminal.rows || 24, surfaceRows, paneRows),
     };
     let cancelled = false;
     let stream: TerminalStream | null = null;
-    let layerTimer: number | null = null;
-    const refreshGraphicsLayer = () => {
-      if (layerTimer !== null) window.clearTimeout(layerTimer);
-      let attempts = 0;
-      const inspect = () => {
-        layerTimer = null;
-        const imageLayer = terminal.element?.querySelector<HTMLCanvasElement>(".xterm-image-layer-top");
-        if (imageLayer) invalidateImageCanvas(imageLayer);
-        attempts += 1;
-        if (attempts < 10) layerTimer = window.setTimeout(inspect, 500);
-      };
-      layerTimer = window.setTimeout(inspect, 100);
-    };
     lastSequence.current = null;
     setError(null);
     setClosed(false);
@@ -371,18 +308,6 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
         if (message.state === "owned") flushPending();
         return;
       }
-      if (message.type === "graphics") {
-        if (!graphicsReadyRef.current) {
-          fail("terminal_frame", "Terminal graphics are unavailable");
-          return;
-        }
-        try {
-          terminal.write(decodeFrame(message.bytes), refreshGraphicsLayer);
-        } catch {
-          fail("terminal_frame", "Terminal sent an invalid graphics payload");
-        }
-        return;
-      }
       if (message.type === "frame") {
         let sequence: bigint;
         try {
@@ -395,20 +320,14 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
           fail("terminal_sequence", "Terminal stream must begin with a full frame");
           return;
         }
-        if (!message.full && sequence !== lastSequence.current! + 1n) {
+        if (lastSequence.current !== null && sequence !== lastSequence.current + 1n) {
           fail("terminal_sequence", "Terminal output sequence is not consecutive");
           return;
         }
         lastSequence.current = sequence;
         try {
           const text = decodeFrame(message.bytes);
-          if (message.full) terminal.reset();
           terminal.write(text);
-          if (controlRequested) {
-            ownershipRef.current = "owned";
-            setOwnership("owned");
-            flushPending();
-          }
         } catch {
           fail("terminal_frame", "Terminal sent an invalid frame");
         }
@@ -430,8 +349,7 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
     void client.openTerminal(openRequest, onMessage, (cause: unknown) => {
       if (cancelled) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
-      const code = /graphics/i.test(typed.message) ? "terminal_frame" : (typed as Error & { code?: string }).code ?? "terminal_attach_failed";
-      fail(code, typed.message);
+      fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
     }).then((opened) => {
       if (cancelled) {
         opened.close();
@@ -444,17 +362,15 @@ export function TerminalPane({ client, request, surfaceCols, surfaceRows, paneCo
     }, (cause: unknown) => {
       if (cancelled) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
-      const code = /graphics/i.test(typed.message) ? "terminal_frame" : (typed as Error & { code?: string }).code ?? "terminal_attach_failed";
-      fail(code, typed.message);
+      fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
     });
     return () => {
       cancelled = true;
-      if (layerTimer !== null) window.clearTimeout(layerTimer);
       if (streamRef.current === stream) streamRef.current = null;
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, request.session_id, request.pane_id, request.client_surface_id, controlRequested, terminalReady, attempt, registerStream]);
+  }, [client, request.session_id, request.pane_id, controlRequested, terminalReady, attempt, registerStream]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;

@@ -470,7 +470,6 @@ function isOwnershipState(value: unknown): value is TerminalOwnershipState {
 export function parseTerminalOpenRequest(value: unknown): TerminalOpenRequest {
   if (
     !isRecord(value) ||
-    !isString(value.client_surface_id) ||
     !isString(value.session_id) ||
     !isString(value.pane_id) ||
     (value.mode !== "observe" && value.mode !== "control") ||
@@ -480,23 +479,17 @@ export function parseTerminalOpenRequest(value: unknown): TerminalOpenRequest {
     value.cols === 0 ||
     value.rows === 0 ||
     !isU32(value.cell_width_px) ||
-    !isU32(value.cell_height_px) ||
-    !isU16(value.surface_cols) ||
-    !isU16(value.surface_rows) ||
-    value.surface_cols === 0 ||
-    value.surface_rows === 0
+    !isU32(value.cell_height_px)
   ) {
     return malformed("Terminal open request is malformed");
   }
   try {
     validateSessionId(value.session_id);
     validateResourceId(value.pane_id);
-    validateResourceId(value.client_surface_id);
   } catch {
     return malformed("Terminal open request has an invalid target");
   }
   return {
-    client_surface_id: value.client_surface_id,
     session_id: value.session_id,
     pane_id: value.pane_id,
     mode: value.mode,
@@ -505,8 +498,6 @@ export function parseTerminalOpenRequest(value: unknown): TerminalOpenRequest {
     rows: value.rows,
     cell_width_px: value.cell_width_px,
     cell_height_px: value.cell_height_px,
-    surface_cols: value.surface_cols,
-    surface_rows: value.surface_rows,
   };
 }
 export function parseTerminalCommand(value: unknown): TerminalCommand {
@@ -544,18 +535,6 @@ export function parseTerminalStreamMessage(value: unknown): TerminalStreamMessag
   if (value.type === "ownership") {
     if (!isOwnershipState(value.state) || !isNullableString(value.message)) return malformed("Terminal ownership message is malformed");
     return { type: "ownership", session_id: value.session_id, pane_id: value.pane_id, stream_id: value.stream_id, state: value.state, message: value.message };
-  }
-  if (value.type === "graphics") {
-    if (!isString(value.revision) || !/^[0-9]+$/.test(value.revision) || !isBase64(value.bytes)) return malformed("Terminal graphics message is malformed");
-    try { BigInt(value.revision); } catch { return malformed("Terminal graphics revision is malformed"); }
-    return {
-      type: "graphics",
-      session_id: value.session_id,
-      pane_id: value.pane_id,
-      stream_id: value.stream_id,
-      revision: value.revision,
-      bytes: value.bytes,
-    };
   }
   if (value.type === "frame") {
     if (!isString(value.seq) || !/^[0-9]+$/.test(value.seq) || !isString(value.encoding) || value.encoding !== "ansi" || !isU16(value.width) || !isU16(value.height) || !isBoolean(value.full) || !isBase64(value.bytes)) return malformed("Terminal frame message is malformed");

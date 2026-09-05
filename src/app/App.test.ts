@@ -24,13 +24,13 @@ import {
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
-import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, sharedSurfaceDimension, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
+import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
   return {
     session_id: sessionId,
     version: "0.8.2",
-    protocol: 22,
+    protocol: 20,
     focused_space_id: "space-1",
     focused_tab_id: "tab-1",
     focused_pane_id: focusedPaneId,
@@ -376,11 +376,6 @@ describe("desktop command routing", () => {
     expect(queue.at(-1)).toMatchObject({ text: String(MAX_PENDING_CONTROL_COMMANDS + 2) });
   });
 
-  it("scales pane fits into shared ClientShell surface dimensions", () => {
-    expect(sharedSurfaceDimension(50, 120, 40)).toBe(150);
-    expect(sharedSurfaceDimension(0, 120, 40)).toBe(1);
-    expect(sharedSurfaceDimension(65535, 120, 1)).toBe(4096);
-  });
 });
 
 describe("pane interactions", () => {

@@ -1,7 +1,7 @@
 {
   "run_id": "run-20260904T214621Z",
   "initial_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
-  "current_integration_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
+  "current_integration_commit": "41101de",
   "stage": "S01",
   "selected_stories": [
     "CLEAN-01",
@@ -76,14 +76,15 @@
       "goals": [
         "G00B"
       ],
-      "implementation": "Rust/frontend migration settled; generated TypeScript regenerated; Main running integrated frontend/Rust checks. Runtime remains gated by G00A repair."
+      "implementation": "Stable transport, browser/native refreshed input, strict paired inventories and review repairs verified; staging owned delivery commit."
     },
     "TERM-01": {
-      "status": "not_started",
+      "status": "running",
       "stage": "S02",
       "goals": [
         "G01"
-      ]
+      ],
+      "implementation": "Real60s/100-wheel browser control measured43ms p95 with pixel-identical away-tail behavior; strict CLI/replay and remaining controls pending."
     },
     "TERM-02": {
       "status": "not_started",
@@ -377,7 +378,7 @@
       "id": "TerraGuardReview",
       "role": "terra-reviewer",
       "status": "completed",
-      "verdict": "REJECT",
+      "verdict": "ACCEPT after repairs and TUI guard extension",
       "owned_paths": []
     },
     {
@@ -392,7 +393,7 @@
     {
       "id": "LunaStartupInventory",
       "role": "luna-implementer",
-      "status": "running",
+      "status": "cancelled; superseded by completed inventory repairs",
       "owned_paths": [
         "scripts/verify/startup-inventory",
         "scripts/verify/startup_inventory.py"
@@ -401,19 +402,118 @@
     {
       "id": "LunaTemporalFixture",
       "role": "luna-implementer",
-      "status": "running",
+      "status": "completed; detector repairs delegated",
       "owned_paths": [
         "scripts/verify/terminal_fixture.py",
         "scripts/verify/temporal_detector.py",
         "scripts/verify/test_temporal_detector.py"
       ]
+    },
+    {
+      "id": "TerraDecoderRepair",
+      "owned_paths": [
+        "scripts/verify/temporal_detector.py",
+        "scripts/verify/test_temporal_detector.py"
+      ],
+      "status": "completed; Main real5fps and31s stress pass; Main closed decoderpipes"
+    },
+    {
+      "id": "TerraBootstrapReview",
+      "owned_paths": [
+        "read-only bootstrap integration"
+      ],
+      "status": "completed; ACCEPT afterrepairs; native/runtime gates remain"
+    },
+    {
+      "id": "TerraWireRepair",
+      "owned_paths": [
+        "crates/cockpit-herdr/src/terminal_wire.rs"
+      ],
+      "status": "completed; MainfixedDuplexsplit;84workspace tests pass"
+    },
+    {
+      "id": "LunaFrameRepair",
+      "owned_paths": [
+        "src/app/TerminalPane.tsx",
+        "src/app/sessionReducer.ts",
+        "src/app/sessionReducer.test.ts",
+        "src/client/browser.ts",
+        "src/client/native.ts",
+        "src/client/client.test.ts"
+      ],
+      "status": "completed; Mainremovedoptionalreplacementreset;57frontendtestspass"
+    },
+    {
+      "id": "InventoryContractRepair",
+      "owned_paths": [
+        "scripts/verify/startup_inventory.py",
+        "scripts/verify/test_startup_inventory.py"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "TemporalContractRepair",
+      "owned_paths": [
+        "scripts/verify/terminal_temporal.py",
+        "scripts/verify/temporal_detector.py",
+        "scripts/verify/test_terminal_temporal.py"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "FinalInventoryReview",
+      "owned_paths": [
+        "read-only startup evidence"
+      ],
+      "status": "completed",
+      "result": "Findings repaired; 44 Python regressions and actual paired/default negative controls verified"
+    },
+    {
+      "id": "FinalTemporalReview",
+      "owned_paths": [
+        "read-only temporal evidence"
+      ],
+      "status": "completed",
+      "result": "Remaining temporal replay/control composition and typed identity repairs pending Main"
     }
   ],
   "tested_hashes": {
     "baseline_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
     "G00A": {
-      "scripts/verify/resource_guard.py": "a7f24ea5c7d0cfdfebbd7769e6b5b971ca0bdb581b9a399eed8b088c4d04687c",
-      "scripts/verify/test_resource_guard.py": "4b77caa10a887bb1518206356d6121b0f891afe7e388ccaad4612b1db6828ccf"
+      "scripts/verify/resource_guard.py": "849701d94b3c332e979eaa709120cc0d5977c1497503d77687f61e3cfe495186",
+      "scripts/verify/test_resource_guard.py": "32ab7ccbb4ea57c1ea9b0395a4fe57766f2d4a25b1629457b7025bcb39129b92"
+    },
+    "BOOT-01": {
+      "crates/cockpit-core/src/lib.rs": "3b4a8d1b947dbdfd495be2dbfca680fe06dc72c22e1fe6db8d8ca9102998adec",
+      "crates/cockpit-core/tests/status.rs": "1ec8c146c58c9b5131fd046c0733ac7eb5f14fe7c37f0d94bb40a069cca57383",
+      "crates/cockpit-herdr/src/cli.rs": "346945ed495f3599676048d6e5957afa9d5887454b860c5fe0729a3033a97a94",
+      "crates/cockpit-herdr/src/terminal_wire.rs": "67c7adceec65cb667731cc39de7b30f08454c8243e6ecd31b65e897063cc09df",
+      "crates/cockpit-herdr/tests/compatibility.rs": "297b75e9081f987b3d48eea156e89bcac8e512798675ff4957009dc299495491",
+      "crates/cockpit-herdr/tests/session.rs": "24998b4dc42ed128a95185003f5a9b1acfaa8fe1fb107de78b24aeaf4f622b0e",
+      "crates/cockpit-herdr/tests/fixtures/herdr-0.8.2-protocol-20-schema-1.json": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150",
+      "crates/cockpit-host/src/server.rs": "ff5d7cf941cd122745e3e73cba6d486d59fd1202f0de5ac76c0d460eddd680b9",
+      "crates/cockpit-host/tests/server.rs": "c376973e311a42449d1c70b4f183f5a77e546fa4687003eb4a819cfe715a6562",
+      "crates/cockpit-protocol/src/v1.rs": "b50c1d241bb937cf061abbcbe6534658fa4b4e12fa3caf98a853b76f6ae61b83",
+      "crates/cockpit-protocol/tests/typescript.rs": "e6e480d107179537b60166b34243683a5af259398b24add2e77448b9cb8477a8",
+      "src-tauri/src/lib.rs": "6d1b1a15c685f590ad06083350846c7c3c32eb302e89db02cd09923adb120329",
+      "src/app/App.test.ts": "eeb9fa1adc6c372242b66c4f630814534439aa209c72561bd8b96f5dba2e0e48",
+      "src/app/App.tsx": "fc3ad9d8db2bc65aea133e7cdd32c25e1648ecf766bf434aedd625c75eee6d3c",
+      "src/app/TerminalPane.tsx": "cf2ed04ea5ffc1f1cede8275a9241d898452da00322133054333ff838f762dfd",
+      "src/app/sessionReducer.ts": "0c3fdc32362072d6b1aa710b2b6544a32e6832e33a847cdaad42eb572f774b30",
+      "src/app/sessionReducer.test.ts": "c9c51d8850558826e1e93e3bcf89d34a2166e364220ac445117d28467d01145d",
+      "src/client/CockpitClient.ts": "e23b9de6812a3c3f4603f7c9ab840db73179d77f51d6073256af19cea1c59cb0",
+      "src/client/browser.ts": "f312d01fb0a185542ad32ba9694ac523566f499acee0c24460448b16b1cd5585",
+      "src/client/native.ts": "bd5d1623becf83920f3af9c174b0aeab47233cd342ff25de2f1a2f852d1d4157",
+      "src/client/client.test.ts": "7f580d89aee2f7aeb82ed3f3f3f966cc0722efdab0a2c5ac6f39c0d35cce7c3e",
+      "src/protocol/generated/v1.ts": "aa156a47f1b56da12cbf19018ef81265bd693c48243d353638245c155fcd8143",
+      "package.json": "e3b5ac27d82caeda0130c52a71f1d4b98380411b26e362151b4312c380ce87dd",
+      "bun.lock": "175df10a70e7a8e5c09ad567c449eee41d4ab8af5b35947c4f9959c7c191fc29",
+      "Cargo.lock": "1b26045b60fbd15a883beb873a237aeaaf642f111d73d930958945c7641eb344"
+    },
+    "temporal_infrastructure": {
+      "scripts/verify/terminal_fixture.py": "c9085a556ab4331061e8ff33e65c91cf73a2ba33ddae51852007bb45c53580c0",
+      "scripts/verify/temporal_detector.py": "2522de3e4f69e3bcfeaed14505f17228d8511a56bee799657dd4ef6cbb37afaa",
+      "scripts/verify/test_temporal_detector.py": "c9b21ea7692ace1193be245e58e3d145e42788d7383ef604d1003f026185f569"
     }
   },
   "evidence": [
@@ -421,6 +521,30 @@
       "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/source-baseline.tar",
       "sha256": "3aa905d01e185284ce48c31ecfcddcbaa8435e74366038e124ba505a0ed59dcf",
       "kind": "immutable source baseline"
+    },
+    {
+      "goal": "G00B",
+      "kind": "corrected-binary browser input",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-final-input-evidence.json"
+    },
+    {
+      "goal": "G00B",
+      "kind": "corrected-binary browser screenshot",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-browser-final.png"
+    },
+    {
+      "goal": "G00A/G00B",
+      "kind": "actual guarded upstream TUI parity",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-tui-transcript.json"
+    },
+    {
+      "goal": "G01 infrastructure only",
+      "kind": "actual5fps rejected and31s1440x900 bounded stress",
+      "paths": [
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-after.json",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/detector-stress-report.json",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/detector-stress-resource-usage.txt"
+      ]
     }
   ],
   "failures": [
@@ -455,9 +579,38 @@
       "status": "investigating",
       "owner": "Main",
       "finding": "Stable direct attach has no target-relative structured mouse or app mode projection; global InputEvents coordinates require metadata absent from pane.layout."
+    },
+    {
+      "stage": "S01",
+      "id": "partial_read_cancel_and_full_reset",
+      "status": "resolved_source_and_tests",
+      "evidence": "TerraBootstrapReview accepted soleboundedreader, noxtermreset, consecutivefullframes, parkedauxiliarymessages.84Rust/57frontendpass and finalbrowser exactinputpass."
+    },
+    {
+      "stage": "S01",
+      "id": "native_appimage_old_strip",
+      "status": "repair_running",
+      "evidence": "Tauri releasecompilepass; linuxdeploy bundled2024strip rejects FedoraELF .relr.dyn type0x13. Actual linuxdeploy --version succeeds. Source659c9db supportsNO_STRIP, hasnoSTRIPoverride. Packaging retryusesNO_STRIP=1 retainingELFdata; no usercache/binaryreplacement.",
+      "diagnostic_output": "artifact://171"
+    },
+    {
+      "stage": "S02",
+      "id": "detector_false_cadence_and_unbounded_frames",
+      "status": "resolved",
+      "evidence": "Old5fps falselyPASS thenfirstrepairNameErrordeadline. Terra repair actualPTS200ms returns2INCONCLUSIVE;31s1440x900x60 returnsPASS1860frames in9.58s maxRSS214748KiB includingdecoder. Not runtimeG01proof."
     }
   ],
-  "external_blocks": [],
+  "external_blocks": [
+    {
+      "id": "stable_application_mouse",
+      "goal": "G01",
+      "status": "unresolved",
+      "required_operation": "safe pane-targeted application mouse coordinates/buttons/modifiers",
+      "evidence": "Pinned stable direct-attach only forwards rawInput; InputEvents are full-app globally routed; public pane layout lacks atomic content origin and app mouse mode contract. Stable source review/scout and TerraBootstrapReview agree.",
+      "constraint": "No Herdr-server modification; Homebrewstable only. No unsafe global coordinates or unconditionalSGR.",
+      "independent_work": "Continue text/scroll/temporal, downstream capability discovery and independent selected implementations; no dependent final acceptance whileG01inconclusive."
+    }
+  ],
   "protected_user_work": [],
   "observations": [
     {
@@ -500,5 +653,22 @@
       "id": "BOOT-preparation",
       "decision": "Read-only inventory complete. BOOT source migration proceeds independently while S00 guards repair; runtime dispatch and G00B acceptance remain blocked until G00A passes."
     }
-  ]
+  ],
+  "latest_observation": {
+    "behavior": "real browser scroll compositor control",
+    "frames": 3601,
+    "duration_ms": 60000,
+    "wheel_samples": 100,
+    "p95_visible_latency_ms": 43,
+    "all_authoritative_offsets_match": true,
+    "all_full_frames_match_verified_references": true,
+    "artifact": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-measured.json",
+    "aggregate_goal": "G01 remains INCONCLUSIVE; no paired control or application mouse pass"
+  },
+  "next_action": "Commit staged BOOT increment and reports, record its hash, then repair temporal replay/control composition and continue selected timeline.",
+  "latest_goal_status": {
+    "G00A": "PASS",
+    "G00B": "PASS; source delivery commit next",
+    "G01": "INCONCLUSIVE"
+  }
 }

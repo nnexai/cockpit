@@ -8,7 +8,7 @@
       "xdg_config_home": "/tmp/cockpit-214621Z-gqhguyl2/config",
       "config_path": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/config.toml",
       "socket_path": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/sessions/run-20260904T214621Z-boot/herdr.sock",
-      "status": "planned",
+      "status": "running",
       "xdg_state_home": "/tmp/cockpit-214621Z-gqhguyl2/state"
     }
   ],
@@ -80,12 +80,16 @@
       "cleanup": "retain tool binaries for repeatable evidence"
     },
     {
-      "kind": "native test display",
+      "kind": "x11_display",
       "owner": "run-20260904T214621Z",
       "display": ":191",
       "hub_name": "cockpit-run-xvfb",
       "status": "ready",
-      "cleanup": "hub stop cockpit-run-xvfb"
+      "cleanup": "hub stop cockpit-run-xvfb",
+      "resource_id": "cockpit-run-xvfb",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser"
     },
     {
       "path": "/tmp/cockpit-214621Z-gqhguyl2",
@@ -97,8 +101,138 @@
       "kind": "isolated Herdr configuration",
       "path": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/config.toml",
       "owner": "run-20260904T214621Z",
-      "sha256": "aed61540732b52dcc95428db3d55a91b8a6ae50b1b30a5a1b56272344453d4a4",
+      "sha256": "dfa58a6f339da53750f21b9ca242ee3a4ee88bc1bba2cf5cdedc2bc365ba358d",
       "cleanup": "remove with owned runtime root after session stop"
+    },
+    {
+      "path": "/tmp/cockpit-214621Z-gqhguyl2/home",
+      "kind": "isolated fixture HOME",
+      "owner": "run-20260904T214621Z",
+      "cleanup": "remove with owned runtime root after session stop"
+    },
+    {
+      "path": "/tmp/cockpit-214621Z-gqhguyl2/fixture-shell",
+      "kind": "fixed harmless raw-input fixture launcher",
+      "owner": "run-20260904T214621Z",
+      "sha256": "35f63f681f2da3761bfe961a59ca64fc09154c12032f021d3eb0fb2bd7c32cf7",
+      "cleanup": "remove with owned runtime root after session stop"
+    },
+    {
+      "kind": "run-owned Herdr server",
+      "hub_name": "cockpit-run-herdr-boot",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "status": "ready",
+      "cleanup": "guarded session stop followed by hub stop",
+      "pid": 1548755,
+      "readiness": {
+        "status": "running",
+        "running": true,
+        "version": "0.8.2",
+        "protocol": 20,
+        "capabilities": {
+          "live_handoff": true,
+          "detached_server_daemon": true
+        },
+        "compatible": true,
+        "socket": "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/sessions/run-20260904T214621Z-boot/herdr.sock",
+        "session": "run-20260904T214621Z-boot",
+        "restart_needed": false
+      }
+    },
+    {
+      "kind": "run-owned WebUI gateway",
+      "hub_name": "cockpit-run-web",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "status": "ready",
+      "argv": [
+        "/home/nnex/dev/prj/cockpit/target/debug/cockpit",
+        "serve",
+        "--herdr",
+        "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+        "--herdr-session",
+        "run-20260904T214621Z-boot",
+        "--herdr-socket",
+        "/tmp/cockpit-214621Z-gqhguyl2/config/herdr/sessions/run-20260904T214621Z-boot/herdr.sock",
+        "--bind",
+        "127.0.0.1:38339",
+        "--static-dir",
+        "/home/nnex/dev/prj/cockpit/dist"
+      ],
+      "cleanup": "hub stop cockpit-run-web",
+      "url": "http://127.0.0.1:38339",
+      "pid": 1705455
+    },
+    {
+      "kind": "run-owned Herdr TUI client",
+      "hub_name": "cockpit-run-tui",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "argv": [
+        "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+        "--session",
+        "run-20260904T214621Z-boot"
+      ],
+      "status": "stopped",
+      "cleanup": "revalidate owned session then hub stop cockpit-run-tui",
+      "readiness": "COCKPIT-STABLE-MARKER",
+      "cleanup_result": {
+        "text": "Stopped cockpit-run-tui: exited exit=0 uptime=1m42s restarts=0",
+        "details": {
+          "op": "stop",
+          "daemon": {
+            "name": "cockpit-run-tui",
+            "id": "0865a85a-3661-439a-a0dc-00fcf9074e41",
+            "state": "exited",
+            "createdAt": 1788562031465,
+            "startedAt": 1788562031466,
+            "readyAt": 1788562031648,
+            "exitedAt": 1788562133787,
+            "exitCode": 0,
+            "restartCount": 0,
+            "outputBytes": 97579,
+            "owner": "01a06e60-73c7-7023-9bba-d394984f927e",
+            "readyMatch": "COCKPIT-STABLE-MARKER",
+            "persist": false,
+            "detached": false
+          }
+        }
+      }
+    },
+    {
+      "kind": "native bootstrap AppImage",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/Cockpit-bootstrap-stable-0.1.0-amd64.AppImage",
+      "owner": "run-20260904T214621Z",
+      "sha256": "ca1ce374f6293accc64efbe92f47430ae5c0de4692f8494c64f8829cd935e064",
+      "build_environment": {
+        "NO_STRIP": "1"
+      },
+      "cleanup": "retain evidence, no user installation"
+    },
+    {
+      "kind": "run-owned native Cockpit client",
+      "hub_name": "cockpit-run-native",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "display": ":191",
+      "status": "stopped",
+      "cleanup": "revalidate owned target then hub stop cockpit-run-native",
+      "window_id": 2097155,
+      "window_pid": 2081378,
+      "readiness": "visible WebKit window and exact input verified",
+      "cleanup_result": "hub stop completed after refreshed exact input, exit143"
+    },
+    {
+      "kind": "run-owned Chromium client",
+      "hub_name": "cockpit-run-chromium-presented",
+      "path": "/tmp/cockpit-214621Z-gqhguyl2/chromium-presented",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "display": ":191",
+      "status": "stopped",
+      "cleanup": "close managed CDP handle then hub stop cockpit-run-chromium-presented",
+      "cleanup_result": "hub stop completed, exit143; managed CDP connection released"
     }
   ],
   "cleanup_outcomes": [],

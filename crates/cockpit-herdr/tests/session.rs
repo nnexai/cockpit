@@ -445,7 +445,7 @@ async fn propagates_subscription_setup_error_without_id() {
     let snapshot = cockpit_protocol::v1::SessionSnapshotResponse {
         session_id: "default".into(),
         version: "0.8.2".into(),
-        protocol: 22,
+        protocol: 20,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -558,7 +558,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
     let initial_snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
         version: "0.8.2".into(),
-        protocol: 22,
+        protocol: 20,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -605,7 +605,6 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     let error = adapter.session_snapshot("bad/name").await.unwrap_err();
     assert_eq!(error.code, "invalid_session_id");
     let request = cockpit_protocol::v1::TerminalOpenRequest {
-        client_surface_id: "surface-1".into(),
         session_id: "default".into(),
         pane_id: "bad/id".into(),
         mode: cockpit_protocol::v1::TerminalMode::Observe,
@@ -614,8 +613,6 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
         rows: 24,
         cell_width_px: 0,
         cell_height_px: 0,
-        surface_cols: 80,
-        surface_rows: 24,
     };
     let error = adapter.open_terminal(&request).await.unwrap_err();
     assert_eq!(error.code, "invalid_pane_id");

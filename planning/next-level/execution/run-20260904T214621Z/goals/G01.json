@@ -2,67 +2,94 @@
   "goal_id": "G01",
   "status": "INCONCLUSIVE",
   "run_id": "run-20260904T214621Z",
-  "tested_source_commit": null,
+  "tested_production_sha256": "d7d975b677a70a57cf41bb5fe8ab392489cb1257ce5b5202328f23f222161abb",
   "delivery_commit": null,
-  "required_subchecks": [],
-  "commands": [
+  "required_subchecks": [
     {
-      "argv": [
-        "python",
-        "-m",
-        "unittest",
-        "discover",
-        "-s",
-        "scripts/verify",
-        "-p",
-        "test_temporal_detector.py",
-        "-v"
-      ],
-      "exit_status": 0,
-      "tests_passed": 5,
-      "assertion_scope": "Synthetic frame controls only; production decode cadence/fixture validity rejected on review"
+      "id": "real_browser_text_scroll_control_once",
+      "status": "PASS",
+      "frames": 3601,
+      "duration_ms": 60000,
+      "motion_samples": 100,
+      "p95_visible_latency_ms": 43,
+      "all_authoritative_offsets_match": true,
+      "all_presented_frames_equal_verified_reference_viewports": true,
+      "away_tail_live_output_without_movement": true
     },
     {
-      "argv": [
-        "python",
-        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/temporal-detector-pre-cadence-fix.py",
-        "--input",
-        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-5fps.mkv",
-        "--marker-roi",
-        "0,0,32,32",
-        "--expected-cadence-ms",
-        "16.6666667",
-        "--report",
-        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-before.json"
-      ],
-      "exit_status": 0,
-      "expected_status": 2,
-      "assertion": "False-positive cadence acceptance reproduced: actual5fps was reported60fps.",
-      "result": "FAIL"
+      "id": "paired_text_control_ratio",
+      "status": "INCONCLUSIVE"
+    },
+    {
+      "id": "remaining_workloads_and_three_replays",
+      "status": "INCONCLUSIVE"
+    },
+    {
+      "id": "application_mouse_coordinates",
+      "status": "INCONCLUSIVE",
+      "reason": "stable public API lacks safe pane-targeted coordinate contract"
+    },
+    {
+      "id": "native_temporal_replays",
+      "status": "NOT_APPLICABLE",
+      "reason": "Explicit user override OBS-004 limits native to startup/simple compatibility"
     }
   ],
-  "identities": {},
-  "assertions": [],
+  "assertions": [
+    "Capture contained exactly3601 lossless presented RGB frames over60000ms, with16/17ms timestamp gaps.",
+    "100 distinct trusted wheel inputs correlated to independently captured A/B references; p95=43ms.",
+    "All3601 full-frame hashes were one of the two verified viewports; no unintended intermediate blank/dark frame occurred in this run.",
+    "Both away-tail intervals remained full-frame pixel-identical while21 and20 new history lines arrived."
+  ],
   "artifacts": [
     {
-      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/temporal-detector-pre-cadence-fix.py",
-      "sha256": "0dd2f38d4047a508d6cbc7c92e41f0c1812300cf26df10587f134594cb19638c",
-      "kind": "pre-fix decoder source"
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one.mkv",
+      "sha256": "0e1980516de7b55c2f2479f82323a111382ed1d69d88663eed6466f2afca0fe4"
     },
     {
-      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-5fps.mkv",
-      "sha256": "fbb78053c96cdd7925719ca4dc52ecec9bb02a1046c5e3159a55d12353c62df4",
-      "kind": "5fps negative control"
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-raw.json",
+      "sha256": "33dbdef18710c844cf1b7035cbc97823853ef4c63104035d3fa248e3554096f5"
     },
     {
-      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/cadence-negative-before.json",
-      "sha256": "48a529052205fb1fe5dd118a65e8d455dc1eef559e1508418840d656236ae48a",
-      "kind": "invalid pre-fix PASS report preserved as failure evidence"
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one.framehash",
+      "sha256": "3fa3afb2fbbc60a3d44bfa7ac7fbf348e90582c01b8f2427cfa0c8346cb5c304"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-packet-pts.json",
+      "sha256": "90d7194dd537fff81673670ef36fd74d87eaeb4f45749514539a635105e6d70d"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-reference-a.png",
+      "sha256": "6a24696fa6b8cb56df009d9a9e25a2b12654b219fca4286512a12673224cccaa"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-reference-b.png",
+      "sha256": "0d62e3edd4b913a7020c0b6bc753bf00ce617594aebf350fc46dc0b37ca2ab6a"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-measured.json",
+      "sha256": "628990392bdea3f5f904ee14e6acad5bfd50b1224279506355aefa5b784750e8"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-region-red.json",
+      "sha256": "5d9e36a4445ce25954b59444fa46b4413023774f38823b3f4dc70a28e79817cb"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-region-green.json",
+      "sha256": "4ab2b1ffd70f100faeb957d879caaebc2c27c64700d98782a89501e1b348976a"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/fixture-nonblocking-red.json",
+      "sha256": "8e372c751983c4bf0a9a5de118a2752b10ddbd6ff0f66d2588e6046286e31c63"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/fixture-blocking-green.json",
+      "sha256": "042d944f0629319d79ef3630a8ad9cc98cd014683e9c90a87e0d7ef2f9dc59a8"
     }
   ],
-  "unresolved_limitations": [
-    "BOOT/G00B runtime prerequisite pending.",
-    "Stable target has no verified safe per-pane application mouse route.",
-    "Temporal fixture must preserve marker/build history; decoder must use real PTS and bounded streaming before capture acceptance."
+  "limitations": [
+    "This single control run does not satisfy aggregate G01.",
+    "Raw scenario was executed through Main browser.run/Bun driver and ffmpeg, not yet through the repaired terminal-temporal capture/replay CLI.",
+    "One earlier ffprobe full-frame inspection timed out at30s during concurrent decoding; packet PTS and framehash decoding completed independently."
   ]
 }

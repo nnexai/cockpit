@@ -370,8 +370,8 @@ pub enum TerminalMode {
 
 /// A request to attach to a pane's terminal stream.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
 pub struct TerminalOpenRequest {
-    pub client_surface_id: String,
     pub session_id: String,
     pub pane_id: String,
     pub mode: TerminalMode,
@@ -380,17 +380,12 @@ pub struct TerminalOpenRequest {
     pub rows: u16,
     pub cell_width_px: u32,
     pub cell_height_px: u32,
-    pub surface_cols: u16,
-    pub surface_rows: u16,
 }
 
 impl TerminalOpenRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.cols == 0 || self.rows == 0 {
             return Err("terminal dimensions must be greater than zero");
-        }
-        if self.surface_cols == 0 || self.surface_rows == 0 {
-            return Err("terminal surface dimensions must be greater than zero");
         }
         Ok(())
     }
@@ -412,7 +407,7 @@ pub enum TerminalScrollSource {
     PageKey,
 }
 
-/// Mouse button forwarded through Herdr's structured input path.
+/// Mouse button for the capability-gated semantic terminal mouse command.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalMouseButton {
@@ -421,7 +416,7 @@ pub enum TerminalMouseButton {
     Middle,
 }
 
-/// Mouse event kind forwarded through Herdr's structured input path.
+/// Mouse event kind for the capability-gated semantic terminal mouse command.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalMouseKind {
@@ -459,6 +454,8 @@ pub enum TerminalCommand {
         row: Option<u16>,
         modifiers: u8,
     },
+    /// Semantic terminal mouse input. Clients may emit this only when
+    /// `StatusResponse.capabilities.terminal_mouse_input` is true.
     #[ts(rename = "terminal.mouse")]
     Mouse {
         kind: TerminalMouseKind,
@@ -728,13 +725,6 @@ pub enum TerminalStreamMessage {
         width: u16,
         height: u16,
         full: bool,
-        bytes: String,
-    },
-    Graphics {
-        session_id: String,
-        pane_id: String,
-        stream_id: String,
-        revision: String,
         bytes: String,
     },
     Closed {

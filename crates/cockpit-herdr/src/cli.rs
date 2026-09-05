@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 use crate::schema::{schema_fields, status_fields};
 pub const REQUIRED_VERSION: &str = "0.8.2";
-pub const REQUIRED_PROTOCOL: u32 = 22;
+pub const REQUIRED_PROTOCOL: u32 = 20;
 pub const REQUIRED_SCHEMA_VERSION: u32 = 1;
 const REQUIRED_METHODS: [&str; 20] = [
     "ping",
@@ -844,7 +844,6 @@ pub struct HerdrCliAdapter {
     config: HerdrCliConfig,
     autostart_server: bool,
     server_start: Arc<Mutex<()>>,
-    endpoint_registry: crate::terminal_wire::EndpointRegistry,
 }
 
 fn valid_pane_id(pane_id: &str) -> bool {
@@ -875,7 +874,6 @@ impl HerdrCliAdapter {
             config,
             autostart_server: false,
             server_start: Arc::new(Mutex::new(())),
-            endpoint_registry: crate::terminal_wire::EndpointRegistry::default(),
         }
     }
 
@@ -1661,9 +1659,7 @@ impl HerdrCliAdapter {
             NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)
         );
         let socket_path = self.client_socket_path(&request.session_id)?;
-        self.endpoint_registry
-            .open(&socket_path, request, stream_id)
-            .await
+        crate::terminal_wire::open_terminal(&socket_path, request, stream_id).await
     }
 }
 

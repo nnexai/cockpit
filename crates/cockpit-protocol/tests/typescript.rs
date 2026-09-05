@@ -38,7 +38,7 @@ fn compatibility_uses_stable_status_tag() {
         cockpit_version: "0.1.0".to_owned(),
         mode: CockpitMode::Test,
         capabilities: CockpitCapabilities {
-            terminal_mouse_input: true,
+            terminal_mouse_input: false,
         },
         herdr: HerdrCompatibility::Unavailable {
             code: "live_inspection_disabled".to_owned(),
@@ -53,7 +53,7 @@ fn compatibility_uses_stable_status_tag() {
             "cockpit_version": "0.1.0",
             "mode": "test",
             "capabilities": {
-                "terminal_mouse_input": true
+                "terminal_mouse_input": false
             },
             "herdr": {
                 "status": "unavailable",
@@ -92,7 +92,7 @@ fn session_dtos_use_exact_snake_case_wire_fields() {
     let response = SessionSnapshotResponse {
         session_id: "session-1".to_owned(),
         version: "0.8.2".to_owned(),
-        protocol: 22,
+        protocol: 20,
         focused_space_id: Some("space-1".to_owned()),
         focused_tab_id: Some("tab-1".to_owned()),
         focused_pane_id: Some("pane-1".to_owned()),
@@ -160,7 +160,7 @@ fn session_dtos_use_exact_snake_case_wire_fields() {
         json!({
             "session_id": "session-1",
             "version": "0.8.2",
-            "protocol": 22,
+            "protocol": 20,
             "focused_space_id": "space-1",
             "focused_tab_id": "tab-1",
             "focused_pane_id": "pane-1",
@@ -300,7 +300,6 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
     );
 
     let open = TerminalOpenRequest {
-        client_surface_id: "surface-1".to_owned(),
         session_id: "session-1".to_owned(),
         pane_id: "pane-1".to_owned(),
         mode: TerminalMode::Control,
@@ -309,13 +308,22 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
         rows: 40,
         cell_width_px: 8,
         cell_height_px: 16,
-        surface_cols: 120,
-        surface_rows: 40,
     };
     assert_eq!(
         serde_json::to_value(open).expect("terminal open serializes"),
         json!({
-            "client_surface_id": "surface-1",
+            "session_id": "session-1",
+            "pane_id": "pane-1",
+            "mode": "control",
+            "takeover": true,
+            "cols": 120,
+            "rows": 40,
+            "cell_width_px": 8,
+            "cell_height_px": 16
+        })
+    );
+    assert!(
+        serde_json::from_value::<TerminalOpenRequest>(json!({
             "session_id": "session-1",
             "pane_id": "pane-1",
             "mode": "control",
@@ -324,9 +332,9 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
             "rows": 40,
             "cell_width_px": 8,
             "cell_height_px": 16,
-            "surface_cols": 120,
-            "surface_rows": 40
-        })
+            "client_surface_id": "obsolete"
+        }))
+        .is_err()
     );
 
     let text = TerminalCommand::input_text("hello");
@@ -636,27 +644,6 @@ fn pane_move_destinations_preserve_space_terminology() {
         json!({"type": "new_space", "label": "Space", "tab_label": "Tab"})
     );
 }
-#[test]
-fn graphics_stream_message_contains_revision_and_base64_payload() {
-    let message = TerminalStreamMessage::Graphics {
-        session_id: "session-1".into(),
-        pane_id: "pane-1".into(),
-        stream_id: "stream-1".into(),
-        revision: "9".into(),
-        bytes: "G1".into(),
-    };
-    assert_eq!(
-        serde_json::to_value(message).unwrap(),
-        json!({
-            "type": "graphics",
-            "session_id": "session-1",
-            "pane_id": "pane-1",
-            "stream_id": "stream-1",
-            "revision": "9",
-            "bytes": "G1"
-        })
-    );
-}
 
 #[test]
 fn check_accepts_exact_generated_bytes() {
@@ -696,7 +683,7 @@ fn compatible_status_round_trips() {
     let compatibility = HerdrCompatibility::Compatible {
         identity: HerdrIdentity {
             version: "0.8.2".to_owned(),
-            protocol: 22,
+            protocol: 20,
             schema_version: 1,
         },
     };

@@ -1,15 +1,355 @@
 {
   "goal_id": "G00B",
-  "status": "INCONCLUSIVE",
+  "status": "PASS",
   "run_id": "run-20260904T214621Z",
-  "tested_source_commit": null,
+  "tested_source_commit": "41101de4ef26e8e92754a173979a526e61026344 with explicitly recorded dirty production manifest",
   "delivery_commit": null,
-  "required_subchecks": [],
-  "commands": [],
-  "identities": {},
-  "assertions": [],
-  "artifacts": [],
+  "required_subchecks": [
+    {
+      "id": "stable_named_server_identity",
+      "status": "PASS"
+    },
+    {
+      "id": "session_snapshot",
+      "status": "PASS"
+    },
+    {
+      "id": "browser_visible_fixture",
+      "status": "PASS"
+    },
+    {
+      "id": "browser_exact_utf8_input",
+      "status": "PASS"
+    },
+    {
+      "id": "native_appimage_startup_simple_compatibility",
+      "status": "PASS"
+    },
+    {
+      "id": "native_browser_inventory_agreement",
+      "status": "PASS"
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace"
+      ],
+      "exit_status": 0,
+      "tests_passed": 84
+    },
+    {
+      "argv": [
+        "cargo",
+        "check",
+        "-p",
+        "cockpit-tauri"
+      ],
+      "exit_status": 0
+    },
+    {
+      "argv": [
+        "cargo",
+        "build",
+        "-p",
+        "cockpit-host",
+        "--bin",
+        "cockpit"
+      ],
+      "exit_status": 0
+    },
+    {
+      "argv": [
+        "bun",
+        "run",
+        "typecheck"
+      ],
+      "exit_status": 0
+    },
+    {
+      "argv": [
+        "bun",
+        "run",
+        "test"
+      ],
+      "exit_status": 0,
+      "tests_passed": 57
+    },
+    {
+      "argv": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "exit_status": 0
+    },
+    {
+      "argv": [
+        "bunx",
+        "tauri",
+        "build",
+        "--bundles",
+        "appimage",
+        "--no-sign"
+      ],
+      "exit_status": 1,
+      "note": "releasecompilepass, bundler oldstrip cannotparse .relr.dyn; retryNO_STRIP=1 running"
+    },
+    {
+      "command": "python -W error::ResourceWarning -m unittest discover -s scripts/verify -p test_*.py",
+      "exit_status": 0,
+      "result": "41 tests passed after settled evidence-tool changes"
+    },
+    {
+      "command": "scripts/verify/startup-inventory --client browser --paired-evidence native-startup-host-evidence.json [explicit ledger/run/session/owned output]",
+      "exit_status": 0,
+      "result": "PASS"
+    },
+    {
+      "command": "scripts/verify/startup-inventory --client native --paired-evidence browser-startup-host-evidence.json [explicit ledger/run/session/owned output]",
+      "exit_status": 0,
+      "result": "PASS"
+    },
+    {
+      "argv": [
+        "python",
+        "-W",
+        "error::ResourceWarning",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/verify",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_status": 0,
+      "result": "44 tests passed; 31 belong to committed BOOT guard/inventory scope, 13 to pending temporal tooling"
+    },
+    {
+      "argv": [
+        "scripts/verify/startup-inventory",
+        "--ledger",
+        "/home/nnex/dev/prj/cockpit/planning/next-level/execution/run-20260904T214621Z/resources.json",
+        "--run-id",
+        "run-20260904T214621Z",
+        "--session",
+        "run-20260904T214621Z-boot",
+        "--client",
+        "browser",
+        "--host-url",
+        "http://127.0.0.1:38339",
+        "--host-evidence",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/browser-startup-host-evidence.json",
+        "--paired-evidence",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-mismatched-protocol-evidence.json",
+        "--output",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/paired-protocol-green.json"
+      ],
+      "exit_status": 1,
+      "expected_exit_status": 1,
+      "result": "Intentional paired protocol mismatch rejected"
+    },
+    {
+      "argv": [
+        "scripts/verify/startup-inventory",
+        "--ledger",
+        "/home/nnex/dev/prj/cockpit/planning/next-level/execution/run-20260904T214621Z/resources.json",
+        "--run-id",
+        "run-20260904T214621Z",
+        "--session",
+        "default",
+        "--client",
+        "browser",
+        "--output",
+        "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/startup-default-negative.json"
+      ],
+      "exit_status": 2,
+      "expected_exit_status": 2,
+      "result": "Protected target rejected before Herdr command plans"
+    }
+  ],
+  "identities": {
+    "herdr": {
+      "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.8.2/bin/herdr",
+      "sha256": "450cb7b1c67fa8c8312653917bbe1cd89a5223c2248e6c87f680907ade93f621",
+      "version": "0.8.2",
+      "protocol": 20,
+      "schema_version": 1,
+      "schema_path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/homebrew-stable-schema.json",
+      "schema_sha256": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150",
+      "source_archive": {
+        "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-v0.8.2.tar.gz",
+        "sha256": "60453051025ee44ebf055d26cdaf665a0accd99a992cddd22c166a26c49cd161",
+        "root": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-0.8.2"
+      }
+    },
+    "production_manifest": {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/bootstrap-tested-production-hashes.json",
+      "sha256": "c66ab7b83eba11ec6702df4877835355c917046dc3855c43ed857ffd8a19d5d0"
+    },
+    "appimage": {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/Cockpit-bootstrap-stable-0.1.0-amd64.AppImage",
+      "sha256": "ca1ce374f6293accc64efbe92f47430ae5c0de4692f8494c64f8829cd935e064"
+    },
+    "fixture_source_sha256": "982f8795707194ed4c2ae0c65cc7bd32389d0fd75b6c1353a863e468d64aaef8",
+    "generated_client_sha256": "aa156a47f1b56da12cbf19018ef81265bd693c48243d353638245c155fcd8143"
+  },
+  "assertions": [
+    "ActualHomebrew stable0.8.2 protocol20 namedserverready at ledger-owned socket.",
+    "Corrected gateway and new index-Co9u8SvK.js renderedtext fixture; Chromiumclick focusedinput and BOOT-FINAL-\u00e9-\u6f22\u5b57-456 plusEnter arrived exactUTF8/CR atw4:p1.",
+    "ActualHerdrTUI renderedAthenB workspaces, topTab1, loweragents, selectedA; browser matchedhierarchy/order. TUIclient alone stopped cleanly.",
+    "Initialgatewaystop producedvisibleCouldnotreachsession snapshotendpoint+Resync, notsilentPASS.",
+    "Refreshed browser wB:p1 received exact BOOT-REFRESH-\u00e9-\u6f22\u5b57-789 plus CR using the corrected fixture.",
+    "Actual refreshed AppImage window rendered the same wB:p1 fixture and received exact NATIVE-REFRESH-456 plus CR.",
+    "Strict browser/native startup inventories both exited0 and report PASS with matching protocol20/schema1/schema SHA/effective configuration. Capabilities explicitly report unsupported application mouse and parked graphics."
+  ],
+  "artifacts": [
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-final-input-evidence.json",
+      "sha256": "a767cb63129a4fb11db5cee64299a5c7d79ed3631f6031b518b926e7d196d858"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-final-input-capture.bin",
+      "sha256": "b318e2fd7183d1211627cace8e79b42b388bcedac5113b0398bbc5f922ce56e7"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-browser-final.png",
+      "sha256": "2ee474d7efd7116ac8b95a677442b7cdba6208780684aef57a77294bdc607f8f"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-gateway-unavailable.png",
+      "sha256": "fb2ede5f3851533b5078b838f4a2208d0da1eee6f8e66de912da09caaed6a8c4"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/boot-tui-transcript.json",
+      "sha256": "e9885831bda108d4aea76e54979f7f76ec9bd5c7da3c1d510584e6d9c885aaa8"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/browser-startup-inventory.json",
+      "sha256": "65f738972d82356f9f21f407d17cb6dcbae73711d9acada836fda6360d296634"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-startup-inventory.json",
+      "sha256": "ddcbcab6fd271a8ae500a6a0c4e86580c97f81e151c9b56e0109e968221c46a9"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/browser-startup-host-evidence.json",
+      "sha256": "0460e5b127f6ce76c97d91a24580da532940007a1bbc6e7a67f2adf36552edbf"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-startup-host-evidence.json",
+      "sha256": "347fca949602cff578399cd67e84c06678eec5e2fdc785b4512d5b6fb53b393f"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/browser-refresh.png",
+      "sha256": "bc3f521769548868a35a13fc5a55216af16b90156520862849377d3cb7c7ca3f"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-refresh.png",
+      "sha256": "a70d7a579a86262bb54acaba9b800a3364424327398817fceac0d096a5d929a2"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/browser-refresh-input.json",
+      "sha256": "8db20e9602f2bc096ad1f500f86bb973a95678bf746529ee90f539d6dcb0c55f"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-refresh-input.json",
+      "sha256": "6e682e57abc408ab686236a180d24f12f38f75b062c709fe7ac988bd4591eb14"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/refresh-input-capture.bin",
+      "sha256": "4458baa02f946ed7800a2717d109ca8386979a49f4288787936c9ac33b0f81b4"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/native-refresh-launch.json",
+      "sha256": "baed852abb376101f12b7faf1eb4c0d1391113d58b71a1fd1ceb5d3341b3d74d"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/paired-protocol-red.json",
+      "sha256": "61fd1c863b89d7dc268e2c25985dfa044b6543e074bf8b2e3679af3513a9b3ce"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/paired-protocol-green.json",
+      "sha256": "34c694b77c84f6d13e9793bb258defc86ee0f32666a2eb9e011225e1b7ab3aaa"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/paired-protocol-regression.json",
+      "sha256": "a51796deec413b4ec8ea340e7d803e0d8969af2922ccbb98d88d7b5628a9c24e"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/startup-default-negative.json",
+      "sha256": "27e148b7069ba485b645b9b3fb55ff7b90b55aeab54ecfae831cf3490afa1d4e"
+    }
+  ],
   "unresolved_limitations": [
-    "Not yet executed."
-  ]
+    "Application mouse coordinates remain an explicit G01 external API block, not a bootstrap capability pass.",
+    "Native verification is startup/simple input compatibility only per explicit user override OBS-004; software-rendered Xvfb is not native temporal proof."
+  ],
+  "tested_source_hashes": {
+    "Cargo.lock": "1b26045b60fbd15a883beb873a237aeaaf642f111d73d930958945c7641eb344",
+    "Cargo.toml": "31091a705cc3fc2307f1b71158567fc69ecec7281ddffbcf416c016613bfd0a6",
+    "bun.lock": "175df10a70e7a8e5c09ad567c449eee41d4ab8af5b35947c4f9959c7c191fc29",
+    "crates/cockpit-core/Cargo.toml": "0c731553a1137759946ce6f713275e7342b67b11dd64d8d037d9e8dbcac921bd",
+    "crates/cockpit-core/src/lib.rs": "3b4a8d1b947dbdfd495be2dbfca680fe06dc72c22e1fe6db8d8ca9102998adec",
+    "crates/cockpit-core/tests/status.rs": "1ec8c146c58c9b5131fd046c0733ac7eb5f14fe7c37f0d94bb40a069cca57383",
+    "crates/cockpit-herdr/Cargo.toml": "4e8c71bc7294bad310cb92e719a2de89d7dea8cd30f95d4df418705f1776cfdc",
+    "crates/cockpit-herdr/src/cli.rs": "346945ed495f3599676048d6e5957afa9d5887454b860c5fe0729a3033a97a94",
+    "crates/cockpit-herdr/src/lib.rs": "1e6fb838d7b31cbe1f4a0af1a91c5e5ee60527d8ffa7c1c0c2e7af1902812c00",
+    "crates/cockpit-herdr/src/schema.rs": "aefc44424f6639c8c0014811e53e8450eef1e395e16325a5c35b0c3df809bbdd",
+    "crates/cockpit-herdr/src/terminal_wire.rs": "67c7adceec65cb667731cc39de7b30f08454c8243e6ecd31b65e897063cc09df",
+    "crates/cockpit-herdr/tests/compatibility.rs": "297b75e9081f987b3d48eea156e89bcac8e512798675ff4957009dc299495491",
+    "crates/cockpit-herdr/tests/fixtures/herdr-0.8.2-protocol-20-schema-1.json": "c48f1f54ee0150ca27e11fd44455fe94aeadb20fdf4e4a62393ed822a4e5b150",
+    "crates/cockpit-herdr/tests/fixtures/session-snapshot.json": "140e3381cabde5029738fc71844cda5cb646be495a1e960d30bc8e54f3783130",
+    "crates/cockpit-herdr/tests/session.rs": "24998b4dc42ed128a95185003f5a9b1acfaa8fe1fb107de78b24aeaf4f622b0e",
+    "crates/cockpit-host/Cargo.toml": "cddd9bd649aa3d42693cab12d2b5dc5eb043b25ff06a2e7440aa7fb5e0ad20a1",
+    "crates/cockpit-host/src/bin/cockpit.rs": "1ee09ef10b906c0b870e83df248d973d7db3072ad2e7821ccb4486423150026d",
+    "crates/cockpit-host/src/lib.rs": "35c976dcb96931c0a0e2088aa7c525ad1f2efa5e39e817e33c62b18755d5d396",
+    "crates/cockpit-host/src/server.rs": "ff5d7cf941cd122745e3e73cba6d486d59fd1202f0de5ac76c0d460eddd680b9",
+    "crates/cockpit-host/tests/server.rs": "c376973e311a42449d1c70b4f183f5a77e546fa4687003eb4a819cfe715a6562",
+    "crates/cockpit-protocol/Cargo.toml": "6c8f6a2cf5402789cdbf8e24dc4b7375e46d5aafc18befb53c5085de91fe197c",
+    "crates/cockpit-protocol/src/bin/export-typescript.rs": "69bd751797ee597f5b94591e10252dad90fd00d27737f7227b5f796dada6c80c",
+    "crates/cockpit-protocol/src/lib.rs": "ec12a099459f45398428f0f25410112a04b43f900b152ff273273482b8c61838",
+    "crates/cockpit-protocol/src/typescript.rs": "31fde13d6b1615db87dd0923fa83bce3801be2de0992a6fb9df3ecb26cc7261c",
+    "crates/cockpit-protocol/src/v1.rs": "b50c1d241bb937cf061abbcbe6534658fa4b4e12fa3caf98a853b76f6ae61b83",
+    "crates/cockpit-protocol/tests/typescript.rs": "e6e480d107179537b60166b34243683a5af259398b24add2e77448b9cb8477a8",
+    "package.json": "e3b5ac27d82caeda0130c52a71f1d4b98380411b26e362151b4312c380ce87dd",
+    "src-tauri/Cargo.toml": "ab17b4db78bb0d27ec5e7ef4e138a97357f09b18d3bb481e0e877cfc07c8ebce",
+    "src-tauri/build.rs": "60ffa9d00b96ac10c9213a62841e0df4b471605a6cceb6a4b381b5a815ed41a2",
+    "src-tauri/capabilities/default.json": "0698dc1e147fb044dc43973eeae4b1924cb5ab38cae908439236d36e329154b0",
+    "src-tauri/icons/icon.png": "6ac46dfb2f2f22c2e5b9018a4326d5956d357a37507e9852d3e3ff7036052fc0",
+    "src-tauri/icons/icon.svg": "15496c74c733a757790ecd3772fdf94eb65186841977313a3f6b6ed5572ea413",
+    "src-tauri/src/lib.rs": "6d1b1a15c685f590ad06083350846c7c3c32eb302e89db02cd09923adb120329",
+    "src-tauri/src/main.rs": "6f53c7f67d8856a543e4d8a5210882ed0aca01428d9cc4bacab847e0734d0a39",
+    "src-tauri/tauri.conf.json": "d1a6202225a837b3a9f944cce7db29f34385527bf6333922fd1c3c0512a56a32",
+    "src/app/App.test.ts": "eeb9fa1adc6c372242b66c4f630814534439aa209c72561bd8b96f5dba2e0e48",
+    "src/app/App.tsx": "fc3ad9d8db2bc65aea133e7cdd32c25e1648ecf766bf434aedd625c75eee6d3c",
+    "src/app/TerminalPane.tsx": "cf2ed04ea5ffc1f1cede8275a9241d898452da00322133054333ff838f762dfd",
+    "src/app/sessionReducer.test.ts": "c9c51d8850558826e1e93e3bcf89d34a2166e364220ac445117d28467d01145d",
+    "src/app/sessionReducer.ts": "0c3fdc32362072d6b1aa710b2b6544a32e6832e33a847cdaad42eb572f774b30",
+    "src/app/styles.css": "b191047fe078c84ade3bf11a78f0ce8caed87cc8792c6f8cf09a8f4cf4167890",
+    "src/client/CockpitClient.ts": "e23b9de6812a3c3f4603f7c9ab840db73179d77f51d6073256af19cea1c59cb0",
+    "src/client/browser.ts": "f312d01fb0a185542ad32ba9694ac523566f499acee0c24460448b16b1cd5585",
+    "src/client/client.test.ts": "7f580d89aee2f7aeb82ed3f3f3f966cc0722efdab0a2c5ac6f39c0d35cce7c3e",
+    "src/client/native.ts": "bd5d1623becf83920f3af9c174b0aeab47233cd342ff25de2f1a2f852d1d4157",
+    "src/client/select.ts": "89b91f99077e174a43379f2a5e8b7ebfbff704a4b332758d76651c9281f3fc3f",
+    "src/main.tsx": "828d332b8ab54b5195f3ee0213ca5fa5db99d829ce69048bcc7c6ac6d7b1d62c",
+    "src/protocol/generated/v1.ts": "aa156a47f1b56da12cbf19018ef81265bd693c48243d353638245c155fcd8143",
+    "src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+    "tsconfig.json": "1c923b223e8e7a749855ea11d4291e7cda4d54b0af8578e918b5526cd0a71d90",
+    "vite.config.ts": "304f1e172aa9ae7e3c5262072032e0d3058dba5821854bd3f3e31a77c2d7f86e",
+    "scripts/verify/resource_guard.py": "849701d94b3c332e979eaa709120cc0d5977c1497503d77687f61e3cfe495186",
+    "scripts/verify/test_resource_guard.py": "32ab7ccbb4ea57c1ea9b0395a4fe57766f2d4a25b1629457b7025bcb39129b92",
+    "scripts/verify/startup-inventory": "39fae4e0e496a14e2bc87769f55a590ddb80aa8b85c8f9a0ae3b857ac1cf2938",
+    "scripts/verify/startup_inventory.py": "daa3f6417d902b5513487c6811790d7419cddc456d8c46c425dae3e687609a55",
+    "scripts/verify/test_startup_inventory.py": "84f31dec6f0d7314079128cf92289199af26939a8f7ede9e1516f2384981a69d",
+    "scripts/verify/terminal_fixture.py": "982f8795707194ed4c2ae0c65cc7bd32389d0fd75b6c1353a863e468d64aaef8"
+  },
+  "review": {
+    "production": "TerraBootstrapReview ACCEPT after wire/frame repairs",
+    "inventory": "FinalInventoryReview findings repaired by Main: exact gateway DTO, paired mismatch aggregation, required ownership roots, bounded PNG, complete source enumeration and deterministic deep JSON handling",
+    "regression_evidence": "Actual mismatched paired protocol changed from exit0/PASS to exit1/FAIL; empty roots/oversize PNG/deep invalid evidence/output hardlinks covered by passing regressions"
+  }
 }
