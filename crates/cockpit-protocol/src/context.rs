@@ -142,8 +142,8 @@ pub struct ContextLaunchRequest {
 pub struct ReviewLaunchRequest {
     pub pane_id: String,
     pub binding_id: String,
-    /// Configured primary repository whose checkout must equal the current
-    /// source pane cwd at the launch boundary.
+    /// Opaque repository identity resolved from the authoritative source
+    /// pane's Git checkout at the launch boundary.
     pub repository_id: String,
     pub direction: ContextSplitDirection,
 }

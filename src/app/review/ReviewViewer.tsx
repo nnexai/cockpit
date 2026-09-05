@@ -23,8 +23,9 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     return result;
   }, [client, session, pane]);
   const file = useCallback((request: ReviewFileRequest, signal: AbortSignal) => client.reviewFile(session, pane, request, signal), [client, session, pane]);
-  const repositoryId = (presentation.roots.find(root => root.kind === "repository") ?? presentation.roots[0])?.repository_id;
-  if (!repositoryId) return <div className="review-empty">This Review pane has no configured local repository.<button type="button" onClick={onTerminalView}>Show terminal view</button></div>;
+  const repositoryId = (presentation.roots.find(root => root.root_id === presentation.default_root_id)
+    ?? presentation.roots.find(root => root.kind === "repository"))?.repository_id;
+  if (!repositoryId) return <div className="review-empty">No Git checkout could be resolved for this Review pane.<button type="button" onClick={onTerminalView}>Show terminal view</button></div>;
   return <div className="review-viewer" onPointerDown={onRequestControl}>
     <div className="review-surface-actions"><span>Cockpit review comments are independent of the original TUI.</span><button type="button" onClick={onTerminalView}>Show terminal view</button></div>
     <ReviewPane identity={`${session}\0${pane}\0${binding}`} sessionId={session} paneId={pane} bindingId={binding} repositoryId={repositoryId} snapshot={snapshot} file={file}

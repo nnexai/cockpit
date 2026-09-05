@@ -695,11 +695,12 @@ impl ContextService {
         if !presentation.can_open_review {
             return Err(InspectionError::new(
                 "review_open_unavailable",
-                "Reviewr is unavailable for the current configured repository checkout",
+                "Reviewr is unavailable for the current Git checkout",
             ));
         }
-        let checkout =
-            self.review_checkout_for_presentation(&presentation, &request.repository_id)?;
+        let checkout = self
+            .review_checkout_for_evidence(&presentation, &source, &request.repository_id)
+            .await?;
         let launched = self
             .adapter
             .launch_review_pane(
@@ -717,34 +718,73 @@ impl ContextService {
         self.presentation(session_id, &launched).await
     }
 
-    fn review_checkout_for_presentation(
+    async fn review_checkout_for_evidence(
         &self,
         presentation: &PanePresentation,
+        evidence: &ExtensionPaneEvidence,
         repository_id: &str,
     ) -> Result<PathBuf, InspectionError> {
-        let root = presentation
-            .roots
-            .iter()
-            .find(|root| {
-                matches!(
-                    root.kind,
-                    ContextRootKind::Repository | ContextRootKind::Companion
-                ) && root.repository_id == repository_id
-            })
-            .ok_or_else(|| {
+        if presentation.extension == Some(ExtensionKind::Context)
+            && presentation.renderer == Some(ExtensionKind::Context)
+            && verified_confidence(presentation.confidence)
+        {
+            let root_id = presentation.default_root_id.as_deref().ok_or_else(|| {
                 InspectionError::new(
                     "context_root_not_authorized",
-                    "selected repository is not authorized for this source pane",
+                    "the Context pane has no verified companion root",
                 )
             })?;
-        let (checkout, _, _) =
-            canonical_directory(Path::new(&root.checkout_path)).map_err(|_| {
+            let root = presentation
+                .roots
+                .iter()
+                .find(|root| root.root_id == root_id)
+                .filter(|root| {
+                    root.kind == ContextRootKind::Companion
+                        && root.repository_id == repository_id
+                        && evidence
+                            .viewer_cwd
+                            .as_deref()
+                            .and_then(evidence_path)
+                            .as_deref()
+                            == Some(Path::new(&root.path))
+                })
+                .ok_or_else(|| {
+                    InspectionError::new(
+                        "context_root_not_authorized",
+                        "Review from Context requires its verified companion checkout",
+                    )
+                })?;
+            let (checkout, _, _) =
+                canonical_directory(Path::new(&root.checkout_path)).map_err(|_| {
+                    InspectionError::new(
+                        "review_open_unavailable",
+                        "the Context companion checkout is unavailable",
+                    )
+                })?;
+            return Ok(checkout);
+        }
+        let cwd = evidence_cwd(evidence).ok_or_else(|| {
+            InspectionError::new(
+                "review_open_unavailable",
+                "the source pane cwd is unavailable or unsafe",
+            )
+        })?;
+        let repository = RepositoryCatalog::new(self.configuration.clone())
+            .discover_checkout(&cwd)
+            .await
+            .map_err(|_| {
                 InspectionError::new(
                     "review_open_unavailable",
-                    "selected repository checkout is unavailable",
+                    "the source pane cwd is not an available Git checkout",
                 )
             })?;
-        Ok(checkout)
+        if repository.repository_id != repository_id {
+            return Err(InspectionError::new(
+                "context_root_not_authorized",
+                "selected repository is not the source pane's current checkout",
+            ));
+        }
+        Ok(PathBuf::from(repository.checkout_path))
     }
 
     async fn presentation(
@@ -752,7 +792,7 @@ impl ContextService {
         session_id: &str,
         evidence: &ExtensionPaneEvidence,
     ) -> Result<PanePresentation, InspectionError> {
-        let (roots, diagnostics, viewer_companion_id) =
+        let (roots, diagnostics, viewer_companion_id, current_repository_id) =
             self.authorized_roots(session_id, evidence).await?;
         let mut roots: Vec<_> = roots.into_values().collect();
         roots.sort_by_key(|root| {
@@ -794,15 +834,17 @@ impl ContextService {
         let default_root_id = if renderer == Some(ExtensionKind::Context) {
             viewer_companion_id.clone()
         } else {
-            actual_cwd
+            current_repository_id
                 .as_deref()
-                .and_then(|cwd| {
+                .and_then(|repository_id| {
                     roots
                         .iter()
-                        .filter(|root| is_within(cwd, Path::new(&root.root.path)))
-                        .max_by_key(|root| Path::new(&root.root.path).components().count())
+                        .find(|root| {
+                            root.root.kind == ContextRootKind::Repository
+                                && root.root.repository_id == repository_id
+                        })
+                        .map(|root| root.root.root_id.clone())
                 })
-                .map(|root| root.root.root_id.clone())
                 .or_else(|| roots.first().map(|root| root.root.root_id.clone()))
         };
         let mut reason = evidence.reason.clone();
@@ -845,14 +887,22 @@ impl ContextService {
             BTreeMap<String, AuthorizedRoot>,
             Vec<ProjectDiagnostic>,
             Option<String>,
+            Option<String>,
         ),
         InspectionError,
     > {
-        let listed = RepositoryCatalog::new(self.configuration.clone())
-            .list()
-            .await?;
+        let catalog = RepositoryCatalog::new(self.configuration.clone());
+        let listed = catalog.list().await?;
         let mut diagnostics = listed.diagnostics;
         let actual_cwd = evidence_cwd(evidence);
+        let mut repositories = listed.repositories;
+        let mut current_repository_id = None;
+        if let Some(cwd) = actual_cwd.as_deref() {
+            if let Ok(candidate) = catalog.discover_checkout(cwd).await {
+                current_repository_id = Some(candidate.repository_id.clone());
+                repositories.push(candidate);
+            }
+        }
         let mut companion_roots = Vec::new();
         if !evidence.workspace_id.is_empty() && !evidence.endpoint_identity.is_empty() {
             match self
@@ -910,7 +960,7 @@ impl ContextService {
             .as_ref()
             .map(|(root_id, _)| root_id.clone());
         let mut roots = BTreeMap::new();
-        for candidate in listed.repositories {
+        for candidate in repositories {
             let (checkout, dir, metadata) =
                 match canonical_directory(Path::new(&candidate.checkout_path)) {
                     Ok(opened) => opened,
@@ -959,7 +1009,12 @@ impl ContextService {
             let root_id = companion.root.root_id.clone();
             roots.insert(root_id, companion);
         }
-        Ok((roots, diagnostics, viewer_companion_id))
+        Ok((
+            roots,
+            diagnostics,
+            viewer_companion_id,
+            current_repository_id,
+        ))
     }
 }
 
@@ -1423,7 +1478,12 @@ fn evidence_path(path: &str) -> Option<PathBuf> {
 }
 
 fn evidence_cwd(evidence: &ExtensionPaneEvidence) -> Option<PathBuf> {
-    let absolute = evidence_path(evidence.cwd.as_deref()?)?;
+    let absolute = evidence_path(
+        evidence
+            .foreground_cwd
+            .as_deref()
+            .or(evidence.cwd.as_deref())?,
+    )?;
     let dir = open_dir_nofollow_absolute(&absolute).ok()?;
     let metadata = dir.dir_metadata().ok()?;
     metadata.is_dir().then_some(absolute)
@@ -1755,5 +1815,359 @@ mod source_authority_tests {
                 .code,
             "source_primary_origin_mismatch"
         );
+    }
+}
+
+#[cfg(test)]
+mod review_checkout_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use cockpit_protocol::{
+        context::ContextSplitDirection,
+        projects::{ProjectLimits, ProjectProvider},
+        v1::{
+            FocusRequest, FocusResponse, HerdrCompatibility, ResourceMutationRequest,
+            ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
+            TerminalOpenRequest,
+        },
+    };
+    use tokio::sync::Mutex;
+    use uuid::Uuid;
+
+    use crate::{
+        HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
+        project_adapter::{
+            ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
+            ProjectWorktreeRemoveRequest, ProjectWorktreeRequest, ProjectWorktreeResult,
+        },
+    };
+
+    struct TestAdapter {
+        evidence: ExtensionPaneEvidence,
+        review_launches: Mutex<Vec<ExtensionLaunch>>,
+    }
+
+    fn unavailable<T>() -> Result<T, InspectionError> {
+        Err(InspectionError::new(
+            "test_adapter_unused",
+            "test adapter method is not expected",
+        ))
+    }
+
+    #[async_trait::async_trait]
+    impl HerdrAdapter for TestAdapter {
+        async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
+            unavailable()
+        }
+        async fn inspect_session(&self, _: &str) -> Result<HerdrCompatibility, InspectionError> {
+            unavailable()
+        }
+        async fn sessions(&self) -> Result<SessionListResponse, InspectionError> {
+            unavailable()
+        }
+        async fn session_snapshot(
+            &self,
+            _: &str,
+        ) -> Result<SessionSnapshotResponse, InspectionError> {
+            unavailable()
+        }
+        async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> {
+            unavailable()
+        }
+        async fn mutate(
+            &self,
+            _: &str,
+            _: &ResourceMutationRequest,
+        ) -> Result<ResourceMutationResponse, InspectionError> {
+            unavailable()
+        }
+        async fn subscribe_session(
+            &self,
+            _: &str,
+            _: &SessionSnapshotResponse,
+        ) -> Result<SessionSubscription, InspectionError> {
+            unavailable()
+        }
+        async fn open_terminal(
+            &self,
+            _: &TerminalOpenRequest,
+        ) -> Result<TerminalSession, InspectionError> {
+            unavailable()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProjectHerdrAdapter for TestAdapter {
+        async fn project_inventory(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<ProjectInventory, InspectionError> {
+            unavailable()
+        }
+        async fn project_worktree(
+            &self,
+            _: &str,
+            _: &ProjectWorktreeRequest,
+        ) -> Result<ProjectWorktreeResult, InspectionError> {
+            unavailable()
+        }
+        async fn project_terminal(
+            &self,
+            _: &str,
+            _: &ProjectTerminalRequest,
+        ) -> Result<ProjectTerminalResult, InspectionError> {
+            unavailable()
+        }
+        async fn project_worktree_dirty(
+            &self,
+            _: &str,
+            _: u32,
+            _: u32,
+        ) -> Result<bool, InspectionError> {
+            unavailable()
+        }
+        async fn project_close_workspace(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), InspectionError> {
+            unavailable()
+        }
+        async fn project_remove_worktree(
+            &self,
+            _: &str,
+            _: &ProjectWorktreeRemoveRequest,
+        ) -> Result<(), InspectionError> {
+            unavailable()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ExtensionHerdrAdapter for TestAdapter {
+        async fn inspect_extension_pane(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<ExtensionPaneEvidence, InspectionError> {
+            Ok(self.evidence.clone())
+        }
+        async fn launch_context_pane(
+            &self,
+            _: &str,
+            _: &ExtensionLaunch,
+        ) -> Result<ExtensionPaneEvidence, InspectionError> {
+            unavailable()
+        }
+        async fn launch_review_pane(
+            &self,
+            _: &str,
+            request: &ExtensionLaunch,
+        ) -> Result<ExtensionPaneEvidence, InspectionError> {
+            self.review_launches.lock().await.push(request.clone());
+            Ok(self.evidence.clone())
+        }
+    }
+
+    fn configuration(root: &Path) -> ProjectConfiguration {
+        ProjectConfiguration {
+            version: 1,
+            repository_roots: vec![root.to_string_lossy().into_owned()],
+            worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
+            companion_root: root.join("companions").to_string_lossy().into_owned(),
+            state_root: root.join("state").to_string_lossy().into_owned(),
+            branch_template: "{repo}/{task_id}".to_owned(),
+            checkout_template: "{repo}-{task_id}".to_owned(),
+            providers: vec![ProjectProvider {
+                id: "test".to_owned(),
+                base_url: "https://example.test/".to_owned(),
+                executable: "false".to_owned(),
+                login: None,
+            }],
+            limits: ProjectLimits {
+                catalog_depth: 4,
+                catalog_entries: 256,
+                git_timeout_ms: 2_000,
+                git_output_bytes: 2 * 1024 * 1024,
+                operation_timeout_ms: 2_000,
+                context_preview_bytes: 1024 * 1024,
+                context_preview_lines: 2_000,
+                context_directory_entries: 64,
+                context_tree_depth: 8,
+            },
+            origins: BTreeMap::new(),
+        }
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("git starts");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_fixture(root: &Path) {
+        std::fs::create_dir_all(root).expect("fixture directory");
+        git(root, &["init"]);
+        git(root, &["config", "user.email", "fixture@example.test"]);
+        git(root, &["config", "user.name", "Fixture"]);
+        std::fs::write(root.join("base.txt"), "base\n").expect("write base");
+        git(root, &["add", "--all"]);
+        git(root, &["commit", "-m", "base"]);
+    }
+
+    #[tokio::test]
+    async fn review_uses_the_foreground_nested_checkout_and_refuses_its_parent() {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-context-review-{}", Uuid::new_v4()));
+        let parent = workspace.join("parent");
+        git_fixture(&parent);
+        let child = parent.join("child");
+        git_fixture(&child);
+        let non_git_cwd = workspace.join("ordinary-folder");
+        std::fs::create_dir(&non_git_cwd).expect("ordinary directory");
+        let adapter = Arc::new(TestAdapter {
+            evidence: ExtensionPaneEvidence {
+                endpoint_identity: String::new(),
+                pane_id: "pane".to_owned(),
+                terminal_id: "terminal".to_owned(),
+                workspace_id: String::new(),
+                tab_id: "tab".to_owned(),
+                cwd: Some(non_git_cwd.to_string_lossy().into_owned()),
+                foreground_cwd: Some(child.to_string_lossy().into_owned()),
+                viewer_cwd: None,
+                process_identity: "process".to_owned(),
+                extension: None,
+                confidence: DetectionConfidence::None,
+                reason: "fixture".to_owned(),
+                can_open_context: false,
+                can_open_review: true,
+            },
+            review_launches: Mutex::new(Vec::new()),
+        });
+        let configuration = configuration(&workspace);
+        let projects = Arc::new(
+            ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
+        );
+        let context = ContextService::new(configuration.clone(), adapter.clone(), projects);
+        let catalog = RepositoryCatalog::new(configuration);
+        let listed = catalog.list().await.expect("catalog listing");
+        let parent_id = listed
+            .repositories
+            .iter()
+            .find(|candidate| candidate.checkout_path == parent.to_string_lossy())
+            .expect("parent checkout")
+            .repository_id
+            .clone();
+        let child_id = listed
+            .repositories
+            .iter()
+            .find(|candidate| candidate.checkout_path == child.to_string_lossy())
+            .expect("child checkout")
+            .repository_id
+            .clone();
+
+        let presentation = context
+            .inspect_pane("session", "pane")
+            .await
+            .expect("presentation");
+        assert!(presentation.can_open_review);
+        let default = presentation
+            .default_root_id
+            .as_deref()
+            .expect("current checkout root");
+        assert_eq!(
+            presentation
+                .roots
+                .iter()
+                .find(|root| root.root_id == default)
+                .expect("default root")
+                .repository_id,
+            child_id
+        );
+
+        let child_request = ReviewLaunchRequest {
+            pane_id: "pane".to_owned(),
+            binding_id: presentation.binding_id.clone(),
+            repository_id: child_id,
+            direction: ContextSplitDirection::Right,
+        };
+        context
+            .open_review("session", &child_request)
+            .await
+            .expect("foreground checkout launch");
+        assert_eq!(
+            adapter.review_launches.lock().await[0].cwd,
+            child.to_string_lossy()
+        );
+
+        let parent_request = ReviewLaunchRequest {
+            repository_id: parent_id,
+            ..child_request
+        };
+        assert_eq!(
+            context
+                .open_review("session", &parent_request)
+                .await
+                .expect_err("parent selection is refused")
+                .code,
+            "context_root_not_authorized"
+        );
+
+        // A verified companion remains a valid task-context launch source,
+        // even though its own directory is intentionally outside Git.
+        let companion = workspace.join("companion");
+        std::fs::create_dir(&companion).unwrap();
+        let mut companion_evidence = adapter.evidence.clone();
+        companion_evidence.cwd = Some(companion.to_string_lossy().into_owned());
+        companion_evidence.foreground_cwd = companion_evidence.cwd.clone();
+        companion_evidence.viewer_cwd = companion_evidence.cwd.clone();
+        let mut companion_presentation = presentation.clone();
+        companion_presentation.extension = Some(ExtensionKind::Context);
+        companion_presentation.renderer = Some(ExtensionKind::Context);
+        companion_presentation.confidence = DetectionConfidence::VerifiedProcess;
+        companion_presentation.default_root_id = Some("companion".into());
+        let mut associated = presentation
+            .roots
+            .iter()
+            .find(|root| root.root_id == default)
+            .unwrap()
+            .clone();
+        associated.root_id = "companion".into();
+        associated.kind = ContextRootKind::Companion;
+        associated.path = companion.to_string_lossy().into_owned();
+        let associated_id = associated.repository_id.clone();
+        companion_presentation.roots = vec![associated];
+        assert_eq!(
+            context
+                .review_checkout_for_evidence(
+                    &companion_presentation,
+                    &companion_evidence,
+                    &associated_id
+                )
+                .await
+                .unwrap(),
+            child
+        );
+        assert!(
+            context
+                .review_checkout_for_evidence(
+                    &companion_presentation,
+                    &companion_evidence,
+                    "unrelated"
+                )
+                .await
+                .is_err()
+        );
+        std::fs::remove_dir_all(workspace).expect("cleanup");
     }
 }

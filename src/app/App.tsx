@@ -289,7 +289,7 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }}>{children}</div>;
 }
 
-function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, onContext, mutate }: {
+function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate }: {
   spaces: Space[];
   selectedSpaceId: string | null;
   editingId: string | null;
@@ -297,6 +297,8 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
   onEdit: (id: string | null) => void;
   onSelect: (space: Space) => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
+  onSetup: () => void;
+  setupEnabled: boolean;
   mutate: Mutate;
 }) {
   const [collapsedRepositoryKeys, setCollapsedRepositoryKeys] = useState<Set<string>>(() => new Set());
@@ -310,7 +312,7 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
     });
   };
   return <section className="sidebar-section spaces-section" aria-labelledby="spaces-heading">
-    <div className="sidebar-section-heading"><h2 id="spaces-heading">spaces</h2></div>
+    <div className="sidebar-section-heading"><h2 id="spaces-heading">spaces</h2><button type="button" className="space-setup" aria-label="Set up a task Space" title="Set up a task Space" disabled={busy || !setupEnabled} onClick={onSetup}>+</button></div>
     <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row, index) => {
       const space = row.space;
       const status = spaceStatus(space.agent_status);
@@ -350,18 +352,21 @@ function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]
   })}</div></section>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onContext, onCreate, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, hasSelectedPane, onEdit, onSelect, onContext, onCreate, onPaneMenu, onCommands, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
   busy: boolean;
+  hasSelectedPane: boolean;
   onEdit: (id: string | null) => void;
   onSelect: (tab: Tab) => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
   onCreate: () => void;
+  onPaneMenu: (event: MouseEvent<HTMLButtonElement>) => void;
+  onCommands: () => void;
   mutate: Mutate;
 }) {
-  return <nav className="tab-strip" role="tablist" aria-label="Tabs">{tabs.map((tab, index) => {
+  return <nav className="tab-toolbar" aria-label="Tabs"><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
     const displayedNumber = index + 1;
     const redundantLabel = tabLabelIsRedundant(tab.label, displayedNumber);
     const accessibleLabel = redundantLabel ? `Tab ${displayedNumber}` : `Tab ${displayedNumber}: ${tab.label}`;
@@ -384,7 +389,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
         : <button type="button" disabled={busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div><div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={busy || !hasSelectedPane} onClick={onPaneMenu}>Pane</button><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
@@ -485,7 +490,7 @@ function CommandOverlay({ run, onSwitchSession, onDismiss, contextActions }: { r
     "rename pane": "rename-pane", "split right": "split-right", "split down": "split-down", "toggle zoom": "zoom-pane",
     "close pane": "close-pane", "focus a resize border": "resize", resize: "resize",
   };
-  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={ref} className="command-overlay" role="dialog" aria-modal="true" aria-labelledby="commands-title" onKeyDown={(event) => trapModalTab(event, ref.current)}><header><h2 id="commands-title">commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><button type="button" className="session-command" onClick={onSwitchSession}><span>switch session...</span></button>{contextActions}<div className="shortcut-list">{shortcutRows.map(([keys, label]) => clickable[label] ? <button type="button" key={keys} onClick={() => run(clickable[label]!)}><kbd>{keys}</kbd><span>{label}</span></button> : <div key={keys}><kbd>{keys}</kbd><span>{label}</span></div>)}</div></section></div>;
+  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={ref} className="command-overlay" role="dialog" aria-modal="true" aria-labelledby="commands-title" onKeyDown={(event) => trapModalTab(event, ref.current)}><header><h2 id="commands-title">commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><div className="command-actions"><button type="button" className="session-command" onClick={onSwitchSession}><span>switch session...</span></button>{contextActions}</div><div className="shortcut-list">{shortcutRows.map(([keys, label]) => clickable[label] ? <button type="button" key={keys} onClick={() => run(clickable[label]!)}><kbd>{keys}</kbd><span>{label}</span></button> : <div className="shortcut-row" key={keys}><kbd>{keys}</kbd><span>{label}</span></div>)}</div></section></div>;
 }
 
 export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
@@ -621,6 +626,12 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     return () => window.removeEventListener("keydown", keydown, true);
   }, [prefixActive, runCommand, modalOpen]);
   const openContext = (event: MouseEvent, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
+  const openSelectedPaneMenu = (event: MouseEvent<HTMLButtonElement>) => {
+    const pane = byId(panes, selection.paneId);
+    if (!pane || mutationBusy || modalOpen) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setMenu({ target: { kind: "pane", id: pane.id }, x: bounds.left, y: bounds.bottom });
+  };
   const dismissMenu = useCallback(() => setMenu(null), []);
   const menuAction = (action: () => boolean | void) => { if (action() !== false) dismissMenu(); };
   const renderMenu = () => {
@@ -643,8 +654,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} onClick={() => menuAction(() => { void renderers.open(pane.id, "right", "review"); })}>Open Review right</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} onClick={() => menuAction(() => { void renderers.open(pane.id, "down", "review"); })}>Open Review below</button>
+      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right", "review"); })}>Open Review right</button>
+      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down", "review"); })}>Open Review below</button>
       <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right"); })}>Open Context right</button>
       <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down"); })}>Open Context below</button>
       <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}>{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : renderer?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
@@ -656,9 +667,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     </ContextMenu>;
   };
   return <div className="workbench">
-    <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} mutate={onMutate} /><div className="sidebar-divider"><button type="button" disabled={mutationBusy || modalOpen} onClick={() => onMutate("space:new", { type: "space_create", label: null, cwd: null }, true)}>new</button><button type="button" disabled={modalOpen} onClick={() => setCommandsOpen(true)}>menu</button><button type="button" aria-label="New task Space…" disabled={mutationBusy || modalOpen || state.sync !== "live"} onClick={() => setSetupOpen(true)}>task…</button></div><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
+    <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} /><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
     <main className="main-workarea">
-      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} mutate={onMutate} /> : null}
+      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} hasSelectedPane={Boolean(byId(panes, selection.paneId))} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={openSelectedPaneMenu} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
@@ -671,6 +682,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
     {commandsOpen ? <CommandOverlay run={(command) => { setCommandsOpen(false); runCommand(command); }} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} contextActions={<>
       <button type="button" className="session-command" onClick={() => { setCommandsOpen(false); setRecoveryOpen(true); }}>Recover task cleanup…</button>
+      <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_review} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "right", "review"); }}>Open Review right</button>
+      <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_review} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "down", "review"); }}>Open Review below</button>
       <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "right"); }}>Open Context right</button>
       <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "down"); }}>Open Context below</button>
       <button type="button" className="session-command" disabled={!renderers.panes[selection.paneId ?? ""]?.presentation.renderer} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) renderers.choose(selection.paneId, (isGraphicalContext(renderers.panes[selection.paneId]) || isGraphicalReview(renderers.panes[selection.paneId])) ? "terminal" : renderers.panes[selection.paneId]?.presentation.renderer ?? "context"); }}>{isGraphicalContext(renderers.panes[selection.paneId ?? ""]) || isGraphicalReview(renderers.panes[selection.paneId ?? ""]) ? "Show terminal view" : renderers.panes[selection.paneId ?? ""]?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>

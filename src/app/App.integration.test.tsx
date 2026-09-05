@@ -7,6 +7,7 @@ import type { CockpitClient } from "../client/CockpitClient";
 import type {
   ResourceMutationRequest,
   ResourceMutationResponse,
+  PanePresentation,
   SessionSnapshotResponse,
   SessionStreamMessage,
   SessionSummary,
@@ -74,6 +75,24 @@ function snapshot(sessionId: string, focusedTabId = "tab-1", focusedPaneId = "pa
   };
 }
 
+function panePresentation(sessionId: string, paneId: string, canOpenReview = false): PanePresentation {
+  return {
+    session_id: sessionId,
+    pane_id: paneId,
+    terminal_id: `terminal-${paneId}`,
+    binding_id: `binding-${paneId}`,
+    extension: null,
+    renderer: null,
+    confidence: "none",
+    reason: canOpenReview ? "" : "Review requires a configured repository",
+    roots: [{ root_id: "repository", kind: "repository", label: "Repository", path: "/repository", repository_id: "repository", checkout_path: "/repository", companion_id: null }],
+    default_root_id: "repository",
+    can_open_context: false,
+    can_open_review: canOpenReview,
+    diagnostics: [],
+  };
+}
+
 function createdSnapshot(sessionId: string): SessionSnapshotResponse {
   const base = snapshot(sessionId);
   return {
@@ -97,6 +116,8 @@ class AppFixture {
   readonly mutateCalls = vi.fn<(sessionId: string, request: ResourceMutationRequest) => Promise<ResourceMutationResponse>>();
   readonly focusCalls = vi.fn<CockpitClient["focus"]>();
   readonly sessionsCalls = vi.fn<() => Promise<{ sessions: SessionSummary[] }>>();
+  readonly inspectPane = vi.fn<CockpitClient["inspectPane"]>();
+  readonly openReview = vi.fn<CockpitClient["openReview"]>();
   readonly subscriptions: Subscription[] = [];
   readonly mutationResponses: Array<Deferred<ResourceMutationResponse>> = [];
   private readonly snapshotQueues = new Map<string, Array<Promise<SessionSnapshotResponse>>>();
@@ -115,7 +136,7 @@ class AppFixture {
     workspaceTeardownPreview: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     workspaceTeardownExecute: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     workspaceTeardownRecoveries: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
-    inspectPane: vi.fn(async () => { throw new Error("Context inspection is unavailable in this terminal fixture"); }),
+    inspectPane: this.inspectPane,
     contextDirectory: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextDocument: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextSearch: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
@@ -123,7 +144,7 @@ class AppFixture {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    contextMedia: vi.fn(), sourceImport: vi.fn(), sourceRefresh: vi.fn(), sourceList: vi.fn(async () => ({ binding_id: "binding", root_id: "root", entries: [], diagnostics: [] })), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    contextMedia: vi.fn(), sourceImport: vi.fn(), sourceRefresh: vi.fn(), sourceList: vi.fn(async () => ({ binding_id: "binding", root_id: "root", entries: [], diagnostics: [] })), openReview: this.openReview, openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -156,6 +177,12 @@ class AppFixture {
       return response.promise;
     });
     this.focusCalls.mockImplementation(async (sessionId, request) => ({ session_id: sessionId, kind: request.kind, target_id: request.target_id, accepted: true }));
+    this.inspectPane.mockImplementation(async (sessionId, paneId) => panePresentation(sessionId, paneId));
+    this.openReview.mockImplementation(async (sessionId, request) => panePresentation(sessionId, request.pane_id, true));
+  }
+
+  setPanePresentation(value: PanePresentation): void {
+    this.inspectPane.mockImplementation(async () => value);
   }
 
   queueSnapshot(sessionId: string, result: Promise<SessionSnapshotResponse>): void {
@@ -253,6 +280,69 @@ function selectSession(sessionId: string): void {
 }
 
 describe("mounted App mutation and session ordering", () => {
+  it("keeps command actions and informational shortcuts in their overlay rows", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true })));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true, cancelable: true })));
+    await settle();
+
+    const overlay = container.querySelector<HTMLElement>(".command-overlay");
+    const shortcuts = overlay?.querySelector<HTMLElement>(".shortcut-list");
+    expect(overlay?.querySelectorAll(".command-actions .session-command")).toHaveLength(7);
+    expect(shortcuts?.querySelectorAll(":scope > .shortcut-row")).toHaveLength(2);
+    expect(button("Open Review right").disabled).toBe(true);
+    expect(button("Open Review right").title).toBe("Review requires a configured repository");
+  });
+
+  it("opens Review from the command overlay for the selected single pane", async () => {
+    const fixture = new AppFixture();
+    const presentation = panePresentation("session-1", "pane-1", true);
+    presentation.roots.unshift({ ...presentation.roots[0], root_id: "ancestor", repository_id: "ancestor" });
+    fixture.setPanePresentation(presentation);
+    await mount(fixture);
+    await settle();
+
+    expect(container.querySelector(".pane-border-label")).toBeNull();
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true })));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true, cancelable: true })));
+    await settle();
+
+    expect(button("Open Review right").disabled).toBe(false);
+    expect(button("Open Review below").disabled).toBe(false);
+    click(button("Open Review right"));
+    await settle();
+    expect(fixture.openReview).toHaveBeenCalledWith("session-1", { pane_id: "pane-1", binding_id: "binding-pane-1", repository_id: "repository", direction: "right" });
+  });
+
+  it("keeps Pane and Commands toolbar controls available for the selected single pane", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+
+    expect(container.querySelector(".pane-border-label")).toBeNull();
+    expect(button("Set up a task Space").closest(".spaces-section .sidebar-section-heading")).not.toBeNull();
+    expect(container.querySelector(".sidebar-divider")).toBeNull();
+    expect(button("Pane").disabled).toBe(false);
+    expect(button("Pane").closest(".tab-strip")).toBeNull();
+    expect(button("Commands").closest(".tab-strip")).toBeNull();
+    expect(button("Pane").closest(".tab-strip-actions")).not.toBeNull();
+    expect(button("Commands").closest(".tab-strip-actions")).not.toBeNull();
+    click(button("Pane"));
+    expect(container.querySelector('[role="menu"][aria-label="pane actions"]')).not.toBeNull();
+    click(button("Commands"));
+    expect(container.querySelector(".command-overlay")).not.toBeNull();
+  });
+
+  it("disables Pane actions while a mutation is pending", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+
+    expect(button("Pane").disabled).toBe(false);
+    click(button("Create tab"));
+    expect(button("Pane").disabled).toBe(true);
+  });
+
   it("keeps a newer stream event when the delayed mutation response arrives after it", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
@@ -296,7 +386,7 @@ describe("mounted App mutation and session ordering", () => {
     await mount(fixture);
 
     click(button("Create tab"));
-    click(button("menu"));
+    click(button("Commands"));
     click(button("switch session..."));
     await settle();
     selectSession("session-2");
@@ -381,9 +471,9 @@ describe("mounted App mutation and session ordering", () => {
     fixture.queueSessions(older.promise);
     fixture.queueSessions(newer.promise);
 
-    click(button("menu"));
+    click(button("Commands"));
     click(button("switch session..."));
-    click(button("menu"));
+    click(button("Commands"));
     click(button("switch session..."));
     newer.resolve({ sessions: [sessions()[1]] });
     await settle();

@@ -126,8 +126,9 @@ export function usePaneRenderers(
       if (currentSession.current !== requestedSession) return;
       requestedBinding = presentation.binding_id;
       if (kind === "review") {
-        const root = (presentation.roots.find(candidate => candidate.kind === "repository") ?? presentation.roots[0]);
-        if (!root || !presentation.can_open_review) throw new Error("Review requires an enabled Reviewr plugin and a configured repository");
+        const root = presentation.roots.find(candidate => candidate.root_id === presentation.default_root_id)
+          ?? presentation.roots.find(candidate => candidate.kind === "repository");
+        if (!root || !presentation.can_open_review) throw new Error(presentation.reason || "Review requires an enabled Reviewr plugin and a Git checkout");
         await client.openReview(sessionId, { pane_id: paneId, binding_id: presentation.binding_id, repository_id: root.repository_id, direction });
       } else {
         const root = presentation.roots.find(candidate => candidate.root_id === presentation.default_root_id);

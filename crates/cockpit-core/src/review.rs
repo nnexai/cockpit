@@ -65,6 +65,7 @@ pub(crate) struct ReviewCommentEvidence {
     pub workspace_id: String,
     pub tab_id: String,
     pub checkout_path: String,
+    pub repository_id: String,
     pub source_id: String,
 }
 
@@ -267,7 +268,10 @@ impl ReviewService {
                 "Reviewr pane identity changed while preparing comments",
             ));
         }
-        let checkout_path = verified_checkout_path(&evidence.cwd, &evidence.foreground_cwd)?;
+        let repository = self
+            .discover_checkout(&evidence.cwd, &evidence.foreground_cwd)
+            .await?;
+        let checkout_path = PathBuf::from(&repository.checkout_path);
         let source_id = checkout_source_id(&checkout_path)?;
         Ok(ReviewCommentEvidence {
             binding_id: presentation.binding_id,
@@ -275,6 +279,7 @@ impl ReviewService {
             workspace_id: evidence.workspace_id,
             tab_id: evidence.tab_id,
             checkout_path: checkout_path.to_string_lossy().into_owned(),
+            repository_id: repository.repository_id,
             source_id,
         })
     }
@@ -299,7 +304,9 @@ impl ReviewService {
             .active_snapshot(session_id, pane_id, binding_id, review_id, generation)
             .await?;
         let snapshot_checkout = PathBuf::from(&stored.snapshot.checkout_path);
-        if checkout_source_id(&snapshot_checkout)? != evidence.source_id {
+        if stored.snapshot.repository_id != evidence.repository_id
+            || checkout_source_id(&snapshot_checkout)? != evidence.source_id
+        {
             return Err(InspectionError::new(
                 "review_checkout_mismatch",
                 "Reviewr checkout was replaced or changed since this snapshot",
@@ -376,7 +383,9 @@ impl ReviewService {
             .active_snapshot(session_id, pane_id, binding_id, review_id, generation)
             .await?;
         let checkout = PathBuf::from(&stored.snapshot.checkout_path);
-        if checkout_source_id(&checkout)? != evidence.source_id {
+        if stored.snapshot.repository_id != evidence.repository_id
+            || checkout_source_id(&checkout)? != evidence.source_id
+        {
             return Err(InspectionError::new(
                 "review_checkout_mismatch",
                 "Reviewr checkout was replaced or changed since this snapshot",
@@ -487,44 +496,25 @@ impl ReviewService {
         foreground_cwd: &Option<String>,
         repository_id: &str,
     ) -> Result<RepositoryCandidate, InspectionError> {
-        let pane_canonical = verified_checkout_path(cwd, foreground_cwd)?;
-        let candidates = RepositoryCatalog::new(self.configuration.clone())
-            .list()
-            .await?
-            .repositories;
-        let primary = candidates
-            .into_iter()
-            .find(|candidate| {
-                candidate.repository_id == repository_id && !candidate.is_linked_worktree
-            })
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "repository_not_found",
-                    "selected configured repository has no primary checkout",
-                )
-            })?;
-        let primary_path = PathBuf::from(&primary.checkout_path);
-        let listed = self
-            .git(&primary_path, &["worktree", "list", "--porcelain", "-z"])
-            .await?;
-        let registered = listed
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter_map(|entry| entry.strip_prefix(b"worktree "))
-            .filter_map(|entry| std::str::from_utf8(entry).ok())
-            .filter_map(|entry| std::fs::canonicalize(entry).ok())
-            .any(|entry| entry == pane_canonical);
-        if !registered {
+        let candidate = self.discover_checkout(cwd, foreground_cwd).await?;
+        if candidate.repository_id != repository_id {
             return Err(InspectionError::new(
                 "review_checkout_mismatch",
-                "Reviewr cwd is not a registered worktree of the selected repository",
+                "Reviewr checkout differs from the selected repository",
             ));
         }
-        Ok(RepositoryCandidate {
-            checkout_path: pane_canonical.to_string_lossy().into_owned(),
-            is_linked_worktree: pane_canonical != primary_path,
-            ..primary
-        })
+        Ok(candidate)
+    }
+
+    async fn discover_checkout(
+        &self,
+        cwd: &Option<String>,
+        foreground_cwd: &Option<String>,
+    ) -> Result<RepositoryCandidate, InspectionError> {
+        let pane_canonical = verified_checkout_path(cwd, foreground_cwd)?;
+        RepositoryCatalog::new(self.configuration.clone())
+            .discover_checkout(&pane_canonical)
+            .await
     }
 
     async fn collect(
@@ -1178,24 +1168,13 @@ fn verified_checkout_path(
         )
     })?;
     let pane_path = PathBuf::from(pane_cwd);
-    let metadata = std::fs::symlink_metadata(&pane_path).map_err(|_| {
-        InspectionError::new(
-            "review_unavailable",
-            "Reviewr checkout directory is unavailable",
-        )
-    })?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !pane_path.is_absolute() {
         return Err(InspectionError::new(
             "review_checkout_mismatch",
-            "Reviewr checkout path is not a direct directory",
+            "Reviewr checkout path is not absolute",
         ));
     }
-    std::fs::canonicalize(&pane_path).map_err(|_| {
-        InspectionError::new(
-            "review_unavailable",
-            "Reviewr checkout directory is unavailable",
-        )
-    })
+    Ok(pane_path)
 }
 
 fn checkout_source_id(checkout: &Path) -> Result<String, InspectionError> {
@@ -2036,7 +2015,10 @@ mod tests {
     }
 
     fn service(root: &Path) -> ReviewService {
-        let configuration = configuration(root);
+        service_with_configuration(configuration(root))
+    }
+
+    fn service_with_configuration(configuration: ProjectConfiguration) -> ReviewService {
         let adapter = Arc::new(NoopAdapter);
         let projects = Arc::new(
             ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
@@ -2051,6 +2033,11 @@ mod tests {
 
     fn fixture(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("cockpit-review-{label}-{}", Uuid::new_v4()));
+        fixture_at(&root);
+        root
+    }
+
+    fn fixture_at(root: &Path) {
         std::fs::create_dir_all(&root).expect("fixture directory");
         for args in [
             ["init"].as_slice(),
@@ -2064,7 +2051,6 @@ mod tests {
                 .expect("git starts");
             assert!(status.success(), "git {args:?}");
         }
-        root
     }
 
     fn git_bytes(root: &Path, args: &[&str]) -> Vec<u8> {
@@ -2107,6 +2093,76 @@ mod tests {
             .await
             .expect("real review collection");
         diffs
+    }
+
+    #[tokio::test]
+    async fn resolves_an_unconfigured_pane_checkout_by_its_opaque_identity() {
+        let root = fixture("unconfigured-checkout");
+        let pane_cwd = root.join("src");
+        std::fs::create_dir(&pane_cwd).expect("pane directory");
+        let configured = configuration(&root);
+        let repository_id = RepositoryCatalog::new(configured.clone())
+            .list()
+            .await
+            .expect("catalog listing")
+            .repositories
+            .into_iter()
+            .next()
+            .expect("fixture checkout")
+            .repository_id;
+        let mut unconfigured = configured;
+        unconfigured.repository_roots.clear();
+        let service = service_with_configuration(unconfigured);
+
+        let resolved = service
+            .resolve_checkout(
+                &Some(pane_cwd.to_string_lossy().into_owned()),
+                &None,
+                &repository_id,
+            )
+            .await
+            .expect("unconfigured checkout resolves from pane cwd");
+
+        assert_eq!(resolved.repository_id, repository_id);
+        assert_eq!(resolved.checkout_path, root.to_string_lossy());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn discovers_a_linked_worktree_from_a_subdirectory_with_its_catalog_identity() {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-review-worktrees-{}", Uuid::new_v4()));
+        let primary = workspace.join("primary");
+        fixture_at(&primary);
+        std::fs::write(primary.join("base.txt"), "base\n").expect("write base");
+        commit(&primary, "base");
+        let linked = workspace.join("linked");
+        let linked_text = linked.to_string_lossy().into_owned();
+        git_bytes(
+            &primary,
+            &["worktree", "add", "-b", "linked-review", &linked_text],
+        );
+        let pane_cwd = linked.join("src");
+        std::fs::create_dir(&pane_cwd).expect("linked pane directory");
+
+        let mut configuration = configuration(&workspace);
+        configuration.repository_roots = vec![workspace.to_string_lossy().into_owned()];
+        let catalog = RepositoryCatalog::new(configuration);
+        let listed = catalog.list().await.expect("catalog listing");
+        let linked_candidate = listed
+            .repositories
+            .into_iter()
+            .find(|candidate| candidate.checkout_path == linked_text)
+            .expect("linked worktree in catalog");
+        let discovered = catalog
+            .discover_checkout(&pane_cwd)
+            .await
+            .expect("linked worktree from pane cwd");
+
+        assert_eq!(discovered.repository_id, linked_candidate.repository_id);
+        assert_eq!(discovered.checkout_path, linked_text);
+        assert!(discovered.is_linked_worktree);
+        std::fs::remove_dir_all(workspace).expect("cleanup");
     }
 
     #[test]

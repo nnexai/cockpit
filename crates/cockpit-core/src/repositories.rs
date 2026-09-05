@@ -187,6 +187,23 @@ impl RepositoryCatalog {
         }
     }
 
+    /// Discover the Git checkout containing a verified runtime directory. This
+    /// does not admit the directory to the configured setup catalog.
+    pub async fn discover_checkout(
+        &self,
+        directory: &Path,
+    ) -> Result<RepositoryCandidate, InspectionError> {
+        let directory = direct_directory(directory)?;
+        let candidate = self.inspect_checkout(&directory).await?;
+        if !is_within(&directory, Path::new(&candidate.checkout_path)) {
+            return Err(InspectionError::new(
+                "repository_checkout_mismatch",
+                "the runtime directory is outside its Git checkout",
+            ));
+        }
+        Ok(candidate)
+    }
+
     pub async fn validate_branch(
         &self,
         candidate: &RepositoryCandidate,
@@ -273,14 +290,14 @@ impl RepositoryCatalog {
         &self,
         directory: &Path,
     ) -> Result<RepositoryCandidate, InspectionError> {
-        let checkout = fs::canonicalize(directory).map_err(|error| {
+        let directory = fs::canonicalize(directory).map_err(|error| {
             InspectionError::new(
                 "repository_unavailable",
-                format!("cannot canonicalize checkout: {error}"),
+                format!("cannot canonicalize runtime directory: {error}"),
             )
         })?;
         let git_root = fs::canonicalize(
-            self.git_text(&checkout, &["rev-parse", "--show-toplevel"])
+            self.git_text(&directory, &["rev-parse", "--show-toplevel"])
                 .await?
                 .trim(),
         )
@@ -291,14 +308,14 @@ impl RepositoryCatalog {
             )
         })?;
         let common_raw = PathBuf::from(
-            self.git_text(&checkout, &["rev-parse", "--git-common-dir"])
+            self.git_text(&git_root, &["rev-parse", "--git-common-dir"])
                 .await?
                 .trim(),
         );
         let common = fs::canonicalize(if common_raw.is_absolute() {
             common_raw
         } else {
-            checkout.join(common_raw)
+            git_root.join(common_raw)
         })
         .map_err(|error| {
             InspectionError::new(
@@ -306,12 +323,15 @@ impl RepositoryCatalog {
                 format!("cannot canonicalize Git common directory: {error}"),
             )
         })?;
-        let root = common.parent().map(Path::to_path_buf).unwrap_or(git_root);
-        let linked = fs::symlink_metadata(checkout.join(".git"))
+        let root = common
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| git_root.clone());
+        let linked = fs::symlink_metadata(git_root.join(".git"))
             .map(|metadata| metadata.is_file())
             .unwrap_or(false);
         let branch_output = self
-            .git_output(&checkout, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .git_output(&git_root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
             .await?;
         let branch = branch_output
             .status
@@ -319,11 +339,11 @@ impl RepositoryCatalog {
             .then(|| stdout_lossy(&branch_output).trim().to_owned())
             .filter(|value| !value.is_empty());
         let head_output = self
-            .git_output(&checkout, &["rev-parse", "--verify", "HEAD"])
+            .git_output(&git_root, &["rev-parse", "--verify", "HEAD"])
             .await?;
         let detached = branch.is_none() && head_output.status.success();
         let unborn = branch.is_some() && !head_output.status.success();
-        let id = repository_identity(&root, &common, &checkout)?;
+        let id = repository_identity(&root, &common, &git_root)?;
         let mut provenance = format!(
             "{};root={};common={}",
             if linked { "linked" } else { "primary" },
@@ -345,7 +365,7 @@ impl RepositoryCatalog {
             repository_id: id,
             name,
             root: root.to_string_lossy().into_owned(),
-            checkout_path: checkout.to_string_lossy().into_owned(),
+            checkout_path: git_root.to_string_lossy().into_owned(),
             common_dir: common.to_string_lossy().into_owned(),
             branch,
             is_linked_worktree: linked,
@@ -379,7 +399,12 @@ impl RepositoryCatalog {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", "");
+            .env("GIT_ASKPASS", "")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_OBJECT_DIRECTORY");
         crate::process::run_bounded_command(
             command,
             self.config.limits.git_output_bytes as usize,
@@ -389,6 +414,55 @@ impl RepositoryCatalog {
         )
         .await
     }
+}
+
+fn direct_directory(path: &Path) -> Result<PathBuf, InspectionError> {
+    if !path.is_absolute() {
+        return Err(InspectionError::new(
+            "repository_unavailable",
+            "runtime checkout directory must be absolute",
+        ));
+    }
+    let mut current = PathBuf::from("/");
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => {
+                current.push(name);
+                let metadata = fs::symlink_metadata(&current).map_err(|_| {
+                    InspectionError::new(
+                        "repository_unavailable",
+                        "runtime checkout directory is unavailable",
+                    )
+                })?;
+                if metadata.file_type().is_symlink() {
+                    return Err(InspectionError::new(
+                        "repository_checkout_mismatch",
+                        "runtime checkout directory contains a symbolic link",
+                    ));
+                }
+            }
+            std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                return Err(InspectionError::new(
+                    "repository_unavailable",
+                    "runtime checkout directory is unsafe",
+                ));
+            }
+        }
+    }
+    let metadata = fs::symlink_metadata(&current).map_err(|_| {
+        InspectionError::new(
+            "repository_unavailable",
+            "runtime checkout directory is unavailable",
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(InspectionError::new(
+            "repository_unavailable",
+            "runtime checkout path is not a directory",
+        ));
+    }
+    Ok(current)
 }
 
 pub fn resolve_artifact(

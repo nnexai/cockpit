@@ -1301,6 +1301,9 @@ impl HerdrCliAdapter {
                 .await
             {
                 Ok((result, _)) => Ok(parse_space_git_summary(&result, &space.id).ok().flatten()),
+                // Git metadata is optional for ordinary Spaces. A pinned
+                // endpoint still needs to accept a home-directory Space.
+                Err(error) if error.code == "not_git_worktree" => Ok(None),
                 Err(error) if expected_identity.is_some() => Err(error),
                 Err(_) => Ok(None),
             }
@@ -2133,6 +2136,53 @@ impl HerdrAdapter for HerdrCliAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn pinned_snapshot_accepts_non_git_spaces() {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-pinned-snapshot-{}.sock",
+            std::process::id()
+        ));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let probe = UnixStream::connect(&path).await.unwrap();
+        let identity = HerdrCliAdapter::socket_peer_identity(&path, &probe).unwrap();
+        drop(probe);
+        drop(listener.accept().await.unwrap());
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        let server = tokio::spawn(async move {
+            for method in ["session.snapshot", "worktree.list"] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], method);
+                let response = if method == "session.snapshot" {
+                    json!({"id":request["id"],"result":fixture["result"]})
+                } else {
+                    json!({"id":request["id"],"error":{"code":"not_git_worktree","message":"not a repository"}})
+                };
+                reader
+                    .into_inner()
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let config =
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(path.clone())).unwrap();
+        let adapter = HerdrCliAdapter::new(config);
+        let result = adapter
+            .read_snapshot_with_identity("default", Some(&identity))
+            .await;
+        server.await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let snapshot = result.expect("a non-Git Space must not prevent pinned pane inspection");
+        assert_eq!(snapshot.spaces.len(), 1);
+        assert!(snapshot.spaces[0].git.is_none());
+    }
 
     fn parsed_title(value: Value) -> Option<String> {
         sanitized_title(value.as_object().unwrap(), "pane").unwrap()

@@ -149,8 +149,8 @@ export type ContextLaunchRequest = { pane_id: string, binding_id: string, root_i
 
 export type ReviewLaunchRequest = { pane_id: string, binding_id: string,
 /**
- * Configured primary repository whose checkout must equal the current
- * source pane cwd at the launch boundary.
+ * Opaque repository identity resolved from the authoritative source
+ * pane's Git checkout at the launch boundary.
  */
 repository_id: string, direction: ContextSplitDirection, };
 
