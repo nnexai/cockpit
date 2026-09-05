@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use cockpit_core::{HerdrAdapter, SessionChange};
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
 use cockpit_protocol::v1::{
-    PaneSummary, ResourceMutationRequest, SessionSnapshotResponse, TerminalMode,
-    TerminalOpenRequest,
+    FocusKind, FocusRequest, PaneSummary, ResourceMutationRequest, SessionSnapshotResponse,
 };
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -16,6 +18,12 @@ use tokio::net::UnixListener;
 
 #[cfg(unix)]
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static TRAMPOLINE_USERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static TRAMPOLINE_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(unix)]
+static TRAMPOLINE: OnceLock<PathBuf> = OnceLock::new();
 
 #[cfg(unix)]
 fn temp_id() -> String {
@@ -27,14 +35,74 @@ fn temp_id() -> String {
 }
 
 #[cfg(unix)]
-fn script(body: &str) -> PathBuf {
+fn shared_trampoline() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let path = std::env::temp_dir().join(format!("cockpit-herdr-test-{}.sh", temp_id()));
-    fs::write(&path, body).unwrap();
+    let _guard = TRAMPOLINE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let path = TRAMPOLINE
+        .get_or_init(|| {
+            std::env::temp_dir().join(format!(
+                "cockpit-herdr-trampoline-session-{}.sh",
+                std::process::id()
+            ))
+        })
+        .clone();
+    if !path.exists() {
+        fs::write(
+            &path,
+            "#!/bin/sh\nfixture=\"${0%.exec}.data\"\n. \"$fixture\"\n",
+        )
+        .unwrap();
+    }
     let mut permissions = fs::metadata(&path).unwrap().permissions();
-    permissions.set_mode(0o700);
+    permissions.set_mode(0o555);
     fs::set_permissions(&path, permissions).unwrap();
+    TRAMPOLINE_USERS.fetch_add(1, Ordering::Relaxed);
     path
+}
+
+#[cfg(unix)]
+struct Fixture {
+    executable: PathBuf,
+    data: PathBuf,
+    trampoline: PathBuf,
+}
+
+#[cfg(unix)]
+impl Fixture {
+    fn path(&self) -> &Path {
+        &self.executable
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.executable);
+        let _ = fs::remove_file(&self.data);
+        let _guard = TRAMPOLINE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if TRAMPOLINE_USERS.fetch_sub(1, Ordering::Relaxed) == 1 {
+            let _ = fs::remove_file(&self.trampoline);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn script(body: &str) -> Fixture {
+    let id = temp_id();
+    let executable = std::env::temp_dir().join(format!("cockpit-herdr-test-{id}.exec"));
+    let data = std::env::temp_dir().join(format!("cockpit-herdr-test-{id}.data"));
+    let trampoline = shared_trampoline();
+    fs::write(&data, body).unwrap();
+    std::os::unix::fs::symlink(&trampoline, &executable).unwrap();
+    Fixture {
+        executable,
+        data,
+        trampoline,
+    }
 }
 
 #[cfg(unix)]
@@ -600,7 +668,8 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
 #[tokio::test]
 async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     let fixture = script("#!/bin/sh\nexit 91\n");
-    let config = HerdrCliConfig::from_options(Some(fixture.clone()), None, None).unwrap();
+    let config =
+        HerdrCliConfig::from_options(Some(fixture.path().to_path_buf()), None, None).unwrap();
     let adapter = HerdrCliAdapter::new(config);
     let error = adapter.session_snapshot("bad/name").await.unwrap_err();
     assert_eq!(error.code, "invalid_session_id");
@@ -616,7 +685,6 @@ async fn rejects_invalid_session_and_pane_before_terminal_spawn() {
     };
     let error = adapter.open_terminal(&request).await.unwrap_err();
     assert_eq!(error.code, "invalid_pane_id");
-    drop(fs::remove_file(fixture));
 }
 
 #[test]
@@ -641,7 +709,7 @@ async fn custom_socket_named_session_is_the_only_advertised_session() {
         "#!/bin/sh\nprintf '%s' '{\"sessions\":[{\"name\":\"default\",\"running\":true,\"default\":true},{\"name\":\"native-smoke\",\"running\":true,\"default\":false}]}'\n",
     );
     let config = HerdrCliConfig::from_options(
-        Some(fixture.clone()),
+        Some(fixture.path().to_path_buf()),
         Some("native-smoke".into()),
         Some(PathBuf::from("/private/native-smoke.sock")),
     )
@@ -649,7 +717,6 @@ async fn custom_socket_named_session_is_the_only_advertised_session() {
     let sessions = HerdrCliAdapter::new(config).sessions().await.unwrap();
     assert_eq!(sessions.sessions.len(), 1);
     assert_eq!(sessions.sessions[0].id, "native-smoke");
-    drop(fs::remove_file(fixture));
 }
 
 #[tokio::test]
@@ -663,4 +730,427 @@ async fn socket_pinned_adapter_rejects_other_sessions() {
     let adapter = HerdrCliAdapter::new(config);
     let result = adapter.session_snapshot("other").await;
     assert_eq!(result.unwrap_err().code, "session_not_selected");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn subscription_receiver_drop_closes_idle_peer_socket() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-events-drop-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        let response = json!({"id": request["id"], "result": {"type": "subscription_started"}});
+        reader
+            .get_mut()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut event = String::new();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut event))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("drop-idle".into()), Some(socket.clone())).unwrap();
+    let snapshot = SessionSnapshotResponse {
+        session_id: "drop-idle".into(),
+        version: "0.8.2".into(),
+        protocol: 20,
+        focused_space_id: None,
+        focused_tab_id: None,
+        focused_pane_id: None,
+        spaces: Vec::new(),
+        tabs: Vec::new(),
+        panes: Vec::new(),
+        layouts: Vec::new(),
+        agents: Vec::new(),
+    };
+    let subscription = HerdrCliAdapter::new(config)
+        .subscribe_session("drop-idle", &snapshot)
+        .await
+        .unwrap();
+    drop(subscription.messages);
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+fn assert_elapsed(start: Instant, max: Duration) {
+    assert!(start.elapsed() <= max, "operation exceeded {:?}", max);
+}
+
+#[cfg(unix)]
+fn focus_request() -> FocusRequest {
+    FocusRequest {
+        kind: FocusKind::Pane,
+        target_id: "pane-1".into(),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_no_response() {
+    let socket =
+        std::env::temp_dir().join(format!("cockpit-herdr-peer-no-response-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+            Ok((_, _)) = listener.accept() => { seen.fetch_add(1, Ordering::Release); }
+        }
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-no-response".into()), Some(socket.clone()))
+            .unwrap();
+    let started = Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        HerdrCliAdapter::new(config).focus("peer-no-response", &focus_request()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_elapsed(started, Duration::from_secs(3));
+    assert_eq!(error.code, "request_outcome_unknown");
+    tokio::time::timeout(Duration::from_secs(4), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_partial_line() {
+    let socket =
+        std::env::temp_dir().join(format!("cockpit-herdr-peer-partial-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        reader.get_mut().write_all(b"{\"id\":").await.unwrap();
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+            Ok((_, _)) = listener.accept() => { seen.fetch_add(1, Ordering::Release); }
+        }
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-partial".into()), Some(socket.clone()))
+            .unwrap();
+    let started = Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        HerdrCliAdapter::new(config).focus("peer-partial", &focus_request()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_elapsed(started, Duration::from_secs(3));
+    assert_eq!(error.code, "request_outcome_unknown");
+    tokio::time::timeout(Duration::from_secs(4), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_unrelated_then_matching() {
+    let socket =
+        std::env::temp_dir().join(format!("cockpit-herdr-peer-unrelated-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        let id = request["id"].clone();
+        let mut stream = reader.into_inner();
+        stream
+            .write_all(b"{\"id\":\"unrelated\",\"result\":{}}\n")
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"id": id, "result": {"type": "pane_info", "pane": {"pane_id": "pane-1", "focused": true}}})
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-unrelated".into()), Some(socket.clone()))
+            .unwrap();
+    let started = Instant::now();
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        HerdrCliAdapter::new(config).focus("peer-unrelated", &focus_request()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_elapsed(started, Duration::from_secs(2));
+    assert!(response.accepted);
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_oversized_line() {
+    let socket =
+        std::env::temp_dir().join(format!("cockpit-herdr-peer-oversized-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        let mut response = vec![b'x'; 1024 * 1024 + 1];
+        response.push(b'\n');
+        reader.into_inner().write_all(&response).await.unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-oversized".into()), Some(socket.clone()))
+            .unwrap();
+    let started = Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        HerdrCliAdapter::new(config).focus("peer-oversized", &focus_request()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_elapsed(started, Duration::from_secs(2));
+    assert_eq!(error.code, "bounded_output");
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_malformed_json() {
+    let socket =
+        std::env::temp_dir().join(format!("cockpit-herdr-peer-malformed-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        reader.into_inner().write_all(b"not-json\n").await.unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-malformed".into()), Some(socket.clone()))
+            .unwrap();
+    let started = Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        HerdrCliAdapter::new(config).focus("peer-malformed", &focus_request()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_elapsed(started, Duration::from_secs(2));
+    assert_eq!(error.code, "malformed_response");
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_matching_server_error() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-peer-error-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        let response = json!({"id": request["id"], "error": {"code": "permission_denied", "message": "focus denied"}});
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-error".into()), Some(socket.clone()))
+            .unwrap();
+    let started = Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        HerdrCliAdapter::new(config).focus("peer-error", &focus_request()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_elapsed(started, Duration::from_secs(2));
+    assert_eq!(error.code, "permission_denied");
+    assert_eq!(error.message, "focus denied");
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_response_after_deadline_is_unknown() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-peer-late-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+            Ok((_, _)) = listener.accept() => { seen.fetch_add(1, Ordering::Release); }
+        }
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-late".into()), Some(socket.clone())).unwrap();
+    let started = Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        HerdrCliAdapter::new(config).mutate(
+            "peer-late",
+            &ResourceMutationRequest::SpaceRename {
+                space_id: "space-1".into(),
+                label: "new".into(),
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_elapsed(started, Duration::from_secs(3));
+    assert_eq!(error.code, "request_outcome_unknown");
+    tokio::time::timeout(Duration::from_secs(4), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_peer_case_caller_cancellation() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-peer-cancel-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let closed = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+    let was_closed = Arc::clone(&closed);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+        seen.fetch_add(1, Ordering::Release);
+        let mut next = String::new();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                result = reader.read_line(&mut next) => {
+                    if result.unwrap() == 0 {
+                        was_closed.store(1, Ordering::Release);
+                    }
+                }
+                Ok((_, _)) = listener.accept() => {
+                    seen.fetch_add(1, Ordering::Release);
+                }
+            }
+        })
+        .await
+        .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("peer-cancel".into()), Some(socket.clone()))
+            .unwrap();
+    let adapter = HerdrCliAdapter::new(config);
+    let task = tokio::spawn(async move { adapter.focus("peer-cancel", &focus_request()).await });
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while requests.load(Ordering::Acquire) == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.load(Ordering::Acquire), 1);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(
+        closed.load(Ordering::Acquire),
+        1,
+        "peer socket was not closed"
+    );
+    drop(fs::remove_file(socket));
 }

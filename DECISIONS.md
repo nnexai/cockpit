@@ -234,3 +234,9 @@ Browser and native AppImage smokes rendered the stable ANSI fixture and delivere
 The user selected WebUI-first behavioral verification and native AppImage startup/simple compatibility checks for this run. Required browser temporal, scrolling, focus, and application-mouse assertions remain in scope. A missing stable mouse API is a blocker, not a waiver.
 
 On this Fedora host, linuxdeploy's bundled `strip` cannot parse `.relr.dyn`. The supported `NO_STRIP=1` packaging option preserves the ELF data instead of applying the incompatible rewrite; it does not bypass compilation or runtime smoke. The resulting AppImage is stored only with run-owned artifacts, not installed.
+
+## Finite Herdr request recovery
+
+Finite socket requests have separate 500ms connect/write limits and a 2s response limit. Commands have a 5s total limit; output overflow stops both capture paths and kills/reaps the owned process group. Live terminal streams retain their separate lifetime.
+
+A mutating request that may have reached Herdr is not safe to retry automatically. The browser offers Resync instead of Retry for `request_outcome_unknown`. Cancellation does not imply rollback. Dropping a Rust future triggers resource cleanup but cannot return an error to that dropped caller; durable cancellation/dispatch reporting remains an explicit open contract.

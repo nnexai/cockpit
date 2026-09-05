@@ -646,7 +646,7 @@ function SessionDialogOverlay({ sessions, currentSessionId, onRefresh, onDismiss
 }
 
 export function mutationFailureCanRetry(request: ResourceMutationRequest, code: string | undefined): boolean {
-  if (code === "mutation_applied_snapshot_failed") return false;
+  if (code === "mutation_applied_snapshot_failed" || code === "request_outcome_unknown") return false;
   if (request.type === "space_rename" || request.type === "space_move_block" || request.type === "tab_rename" || request.type === "tab_move" || request.type === "pane_rename") return true;
   return request.type === "pane_zoom" && request.mode !== "toggle";
 }

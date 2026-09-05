@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::Duration;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+};
 use tokio::net::UnixStream;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 
 use async_trait::async_trait;
@@ -23,6 +25,10 @@ use cockpit_protocol::v1::{
     TabLayout, TabSummary, TerminalOpenRequest,
 };
 use futures_util::future::join_all;
+#[cfg(unix)]
+use nix::sys::signal::{Signal, killpg};
+#[cfg(unix)]
+use nix::unistd::Pid;
 use serde_json::{Value, json};
 
 use crate::schema::{schema_fields, status_fields};
@@ -58,7 +64,11 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVER_START_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
+const FINITE_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+const FINITE_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
+const FINITE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     pub code: String,
@@ -258,6 +268,58 @@ async fn read_bounded_output<R: AsyncRead + Unpin>(
         ));
     }
     Ok(bytes)
+}
+
+async fn write_with_progress<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    bytes: &[u8],
+    progress: &AtomicUsize,
+) -> (usize, std::io::Result<()>) {
+    let mut written = 0;
+    while written < bytes.len() {
+        match writer.write(&bytes[written..]).await {
+            Ok(0) => {
+                return (
+                    written,
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "socket write made no progress",
+                    )),
+                );
+            }
+            Ok(count) => {
+                written += count;
+                progress.store(written, Ordering::Release);
+            }
+            Err(error) => return (written, Err(error)),
+        }
+    }
+    (written, Ok(()))
+}
+
+fn request_is_mutating(method: &str) -> bool {
+    matches!(
+        method,
+        "workspace.create"
+            | "workspace.rename"
+            | "workspace.move_block"
+            | "workspace.close"
+            | "tab.create"
+            | "tab.rename"
+            | "tab.move"
+            | "tab.close"
+            | "pane.split"
+            | "pane.resize"
+            | "pane.rename"
+            | "pane.swap"
+            | "pane.move"
+            | "pane.zoom"
+            | "pane.close"
+            | "workspace.focus"
+            | "tab.focus"
+            | "pane.focus"
+            | "agent.focus"
+    )
 }
 
 fn object<'a>(
@@ -868,6 +930,104 @@ enum EventConnectionEnd {
     TopologyChanged,
 }
 
+struct OwnedChild {
+    child: Option<Child>,
+    pid: Option<u32>,
+    reaped: bool,
+}
+
+impl OwnedChild {
+    fn new(child: Child) -> Self {
+        Self {
+            pid: child.id(),
+            child: Some(child),
+            reaped: false,
+        }
+    }
+
+    async fn kill_and_reap(&mut self) -> Option<String> {
+        if self.reaped {
+            return None;
+        }
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            kill_process_group(pid);
+        }
+        let kill_error = self
+            .child
+            .as_mut()
+            .and_then(|child| child.start_kill().err())
+            .filter(|error| error.kind() != std::io::ErrorKind::NotFound)
+            .map(|error| format!("child kill failed: {error}"));
+        let wait_result = match self.child.as_mut() {
+            Some(child) => Some(tokio::time::timeout(CHILD_CLEANUP_TIMEOUT, child.wait()).await),
+            None => None,
+        };
+        let wait_error = match wait_result {
+            Some(Ok(Ok(_))) => {
+                self.child.take();
+                self.reaped = true;
+                None
+            }
+            Some(Ok(Err(error))) => {
+                if let Some(child) = self.child.take() {
+                    spawn_child_cleanup(child);
+                }
+                Some(format!("child reap failed: {error}"))
+            }
+            Some(Err(_)) => {
+                if let Some(child) = self.child.take() {
+                    spawn_child_cleanup(child);
+                }
+                Some("child reap timed out".to_owned())
+            }
+            None => {
+                self.reaped = true;
+                None
+            }
+        };
+        match (kill_error, wait_error) {
+            (None, None) => None,
+            (Some(error), None) | (None, Some(error)) => Some(error),
+            (Some(kill), Some(wait)) => Some(format!("{kill}; {wait}")),
+        }
+    }
+}
+
+// A dropped future cannot receive a cleanup error. Keep the child in this task
+// long enough for bounded reaping, while synchronous callers report errors from
+// `kill_and_reap` directly.
+fn spawn_child_cleanup(mut child: Child) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
+            let _ = tokio::time::timeout(CHILD_CLEANUP_TIMEOUT, child.wait()).await;
+        });
+    } else {
+        drop(child);
+    }
+}
+
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            kill_process_group(pid);
+        }
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            spawn_child_cleanup(child);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
+}
+
 impl HerdrCliAdapter {
     pub fn new(config: HerdrCliConfig) -> Self {
         Self {
@@ -920,8 +1080,11 @@ impl HerdrCliAdapter {
         session: Option<&str>,
         args: &[&str],
     ) -> Result<Value, InspectionError> {
-        let mut child = self
-            .command(session, args)
+        let mut command = self.command(session, args);
+        command.kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -932,42 +1095,129 @@ impl HerdrCliAdapter {
                     format!("failed to execute Herdr: {error}"),
                 )
             })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            InspectionError::new("execution_failed", "Herdr stdout was not captured")
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            InspectionError::new("execution_failed", "Herdr stderr was not captured")
-        })?;
-        let (stdout, stderr) = tokio::join!(
-            read_bounded_output(stdout, MAX_TERMINAL_LINE, "Herdr stdout"),
-            read_bounded_output(stderr, 16 * 1024, "Herdr stderr")
-        );
-        if let Err(error) = stdout.as_ref() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            return Err(error.clone());
+        let mut child = OwnedChild::new(child);
+        let stdout = match child.child.as_mut().and_then(|child| child.stdout.take()) {
+            Some(stdout) => stdout,
+            None => {
+                let cleanup = child.kill_and_reap().await;
+                let message = cleanup.map_or_else(
+                    || "Herdr stdout was not captured".to_owned(),
+                    |cleanup| format!("Herdr stdout was not captured; {cleanup}"),
+                );
+                return Err(InspectionError::new("execution_failed", message));
+            }
+        };
+        let stderr = match child.child.as_mut().and_then(|child| child.stderr.take()) {
+            Some(stderr) => stderr,
+            None => {
+                let cleanup = child.kill_and_reap().await;
+                let message = cleanup.map_or_else(
+                    || "Herdr stderr was not captured".to_owned(),
+                    |cleanup| format!("Herdr stderr was not captured; {cleanup}"),
+                );
+                return Err(InspectionError::new("execution_failed", message));
+            }
+        };
+
+        let command_deadline = tokio::time::Instant::now() + COMMAND_TIMEOUT;
+        let stdout_reader = read_bounded_output(stdout, MAX_TERMINAL_LINE, "Herdr stdout");
+        let stderr_reader = read_bounded_output(stderr, 16 * 1024, "Herdr stderr");
+        tokio::pin!(stdout_reader);
+        tokio::pin!(stderr_reader);
+        let deadline = tokio::time::sleep(COMMAND_TIMEOUT);
+        tokio::pin!(deadline);
+        let mut stdout_result = None;
+        let mut stderr_result = None;
+        loop {
+            tokio::select! {
+                result = &mut stdout_reader, if stdout_result.is_none() => {
+                    stdout_result = Some(result);
+                }
+                result = &mut stderr_reader, if stderr_result.is_none() => {
+                    stderr_result = Some(result);
+                }
+                _ = &mut deadline => {
+                    let cleanup = child.kill_and_reap().await;
+                    let message = cleanup.map_or_else(
+                        || "Herdr command exceeded its deadline".to_owned(),
+                        |cleanup| format!("Herdr command exceeded its deadline; {cleanup}"),
+                    );
+                    return Err(InspectionError::new("execution_timeout", message));
+                }
+            }
+            if let Some(Err(error)) = stdout_result.as_ref() {
+                let cleanup = child.kill_and_reap().await;
+                if let Some(cleanup) = cleanup {
+                    return Err(InspectionError::new(
+                        error.code.clone(),
+                        format!("{}; {cleanup}", error.message),
+                    ));
+                }
+                return Err(error.clone());
+            }
+            if let Some(Err(error)) = stderr_result.as_ref() {
+                let cleanup = child.kill_and_reap().await;
+                if let Some(cleanup) = cleanup {
+                    return Err(InspectionError::new(
+                        error.code.clone(),
+                        format!("{}; {cleanup}", error.message),
+                    ));
+                }
+                return Err(error.clone());
+            }
+            if stdout_result.is_some() && stderr_result.is_some() {
+                break;
+            }
         }
-        if let Err(error) = stderr.as_ref() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            return Err(error.clone());
-        }
-        let status = child.wait().await.map_err(|_| {
-            InspectionError::new("execution_failed", "Herdr command did not finish")
-        })?;
+
+        let status = match tokio::time::timeout(
+            command_deadline.saturating_duration_since(tokio::time::Instant::now()),
+            child
+                .child
+                .as_mut()
+                .expect("owned Herdr child was lost")
+                .wait(),
+        )
+        .await
+        {
+            Ok(Ok(status)) => status,
+            Ok(Err(error)) => {
+                let cleanup = child.kill_and_reap().await;
+                let message = cleanup.map_or_else(
+                    || format!("Herdr command did not finish: {error}"),
+                    |cleanup| format!("Herdr command did not finish: {error}; {cleanup}"),
+                );
+                return Err(InspectionError::new("execution_failed", message));
+            }
+            Err(_) => {
+                let cleanup = child.kill_and_reap().await;
+                let message = cleanup.map_or_else(
+                    || "Herdr command exceeded its deadline".to_owned(),
+                    |cleanup| format!("Herdr command exceeded its deadline; {cleanup}"),
+                );
+                return Err(InspectionError::new("execution_timeout", message));
+            }
+        };
+        child.reaped = true;
+        child.child.take();
         if !status.success() {
             return Err(InspectionError::new(
                 "execution_failed",
                 format!("Herdr command failed with status {status}"),
             ));
         }
-        let value =
-            serde_json::from_slice(stdout.as_ref().expect("checked stdout")).map_err(|error| {
-                InspectionError::new(
-                    "malformed_json",
-                    format!("Herdr returned invalid JSON: {error}"),
-                )
-            })?;
+        let value = serde_json::from_slice(
+            stdout_result
+                .expect("stdout capture completed")
+                .expect("stdout capture succeeded")
+                .as_slice(),
+        )
+        .map_err(|error| {
+            InspectionError::new(
+                "malformed_json",
+                format!("Herdr returned invalid JSON: {error}"),
+            )
+        })?;
         if let Some(error) = structured_error(&value)? {
             return Err(error);
         }
@@ -1053,9 +1303,22 @@ impl HerdrCliAdapter {
         params: Value,
     ) -> Result<Value, InspectionError> {
         let path = self.socket_path(session_id)?;
-        let mut stream = UnixStream::connect(path).await.map_err(|_error| {
-            InspectionError::new("connection_failed", "Herdr connection failed")
-        })?;
+        let mut stream =
+            match tokio::time::timeout(FINITE_CONNECT_TIMEOUT, UnixStream::connect(path)).await {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(error)) => {
+                    return Err(InspectionError::new(
+                        "request_not_dispatched",
+                        format!("Herdr connection failed before dispatch: {error}"),
+                    ));
+                }
+                Err(_) => {
+                    return Err(InspectionError::new(
+                        "request_not_dispatched",
+                        "Herdr connection timed out before dispatch",
+                    ));
+                }
+            };
         let id = format!(
             "cockpit-{}",
             NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
@@ -1064,109 +1327,231 @@ impl HerdrCliAdapter {
         let mut line = serde_json::to_vec(&request)
             .map_err(|error| InspectionError::new("malformed_json", error.to_string()))?;
         line.push(b'\n');
-        stream.write_all(&line).await.map_err(|error| {
-            InspectionError::new(
-                "connection_failed",
-                format!("Herdr request failed: {error}"),
-            )
-        })?;
-        let mut reader = BufReader::new(stream);
-        let mut response = String::new();
-        loop {
-            response.clear();
-            let read = read_bounded_line(&mut reader, &mut response, MAX_TERMINAL_LINE)
-                .await
-                .map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::InvalidData {
-                        InspectionError::new(
-                            "bounded_output",
-                            "Herdr response line exceeds configured limit or is unterminated",
-                        )
-                    } else {
-                        InspectionError::new("connection_failed", "Herdr response failed")
-                    }
-                })?;
-            if read == 0 {
+        let progress = AtomicUsize::new(0);
+        let write = tokio::time::timeout(
+            FINITE_WRITE_TIMEOUT,
+            write_with_progress(&mut stream, &line, &progress),
+        )
+        .await;
+        match write {
+            Ok((written, Ok(()))) if written == line.len() => {}
+            Ok((written, Ok(()))) => {
                 return Err(InspectionError::new(
-                    "disconnected",
-                    "Herdr closed the connection",
+                    "request_outcome_unknown",
+                    format!("Herdr request write stopped after {written} bytes"),
                 ));
             }
-            if response.len() > MAX_TERMINAL_LINE {
-                return Err(malformed("Herdr response line is too large"));
+            Ok((written, Err(error))) if written == 0 => {
+                return Err(InspectionError::new(
+                    "request_not_dispatched",
+                    format!("Herdr request failed before dispatch: {error}"),
+                ));
             }
-            let value: Value = serde_json::from_str(response.trim_end())
-                .map_err(|error| malformed(format!("Herdr returned invalid JSON: {error}")))?;
-            if value.get("id").and_then(Value::as_str) != Some(id.as_str()) {
-                continue;
+            Ok((written, Err(error))) => {
+                return Err(InspectionError::new(
+                    "request_outcome_unknown",
+                    format!("Herdr request write stopped after {written} bytes: {error}"),
+                ));
             }
-            if let Some(error) = structured_error(&value)? {
-                return Err(error);
+            Err(_) if progress.load(Ordering::Acquire) > 0 => {
+                return Err(InspectionError::new(
+                    "request_outcome_unknown",
+                    "Herdr request write timed out after partial dispatch",
+                ));
             }
-            return value
-                .get("result")
-                .cloned()
-                .ok_or_else(|| malformed("Herdr response.result is required"));
+            Err(_) => {
+                return Err(InspectionError::new(
+                    "request_not_dispatched",
+                    "Herdr request write timed out before dispatch",
+                ));
+            }
+        }
+
+        let response = tokio::time::timeout(FINITE_RESPONSE_TIMEOUT, async {
+            let mut reader = BufReader::new(stream);
+            let mut response = String::new();
+            loop {
+                response.clear();
+                let read = read_bounded_line(&mut reader, &mut response, MAX_TERMINAL_LINE)
+                    .await
+                    .map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            InspectionError::new(
+                                "bounded_output",
+                                "Herdr response line exceeds configured limit or is unterminated",
+                            )
+                        } else {
+                            InspectionError::new("disconnected", "Herdr response failed")
+                        }
+                    })?;
+                if read == 0 {
+                    return Err(InspectionError::new(
+                        "disconnected",
+                        "Herdr closed the connection",
+                    ));
+                }
+                let value: Value = serde_json::from_str(response.trim_end()).map_err(|error| {
+                    InspectionError::new(
+                        "malformed_response",
+                        format!("Herdr returned invalid response JSON: {error}"),
+                    )
+                })?;
+                if value.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+                    continue;
+                }
+                if let Some(response_session) = value.get("session_id").and_then(Value::as_str)
+                    && response_session != session_id
+                {
+                    return Err(InspectionError::new(
+                        "session_mismatch",
+                        "Herdr response belongs to another session",
+                    ));
+                }
+                if let Some(error) = structured_error(&value).map_err(|error| {
+                    InspectionError::new(
+                        "malformed_response",
+                        format!(
+                            "Herdr response error envelope is invalid: {}",
+                            error.message
+                        ),
+                    )
+                })? {
+                    return Err(error);
+                }
+                return value.get("result").cloned().ok_or_else(|| {
+                    InspectionError::new("malformed_response", "Herdr response.result is required")
+                });
+            }
+        })
+        .await;
+        match response {
+            Ok(result) => result.map_err(|error| {
+                if request_is_mutating(method)
+                    && matches!(error.code.as_str(), "disconnected" | "connection_failed")
+                {
+                    InspectionError::new(
+                        "request_outcome_unknown",
+                        format!("Herdr mutation outcome is unknown: {}", error.message),
+                    )
+                } else {
+                    error
+                }
+            }),
+            Err(_) if request_is_mutating(method) => Err(InspectionError::new(
+                "request_outcome_unknown",
+                "Herdr mutation response deadline expired; outcome is unknown",
+            )),
+            Err(_) => Err(InspectionError::new(
+                "response_timeout",
+                "Herdr response deadline expired",
+            )),
         }
     }
 
     async fn start_server_and_wait(&self, session: Option<&str>) -> Result<Value, InspectionError> {
-        let mut child = self
-            .command(session, &["server"])
+        let mut command = self.command(session, &["server"]);
+        command.kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                InspectionError::new(
-                    "server_start_failed",
-                    format!("failed to start Herdr server: {error}"),
-                )
-            })?;
+            .stderr(Stdio::null());
+        let child = command.spawn().map_err(|error| {
+            InspectionError::new(
+                "server_start_failed",
+                format!("failed to start Herdr server: {error}"),
+            )
+        })?;
+        let mut child = OwnedChild::new(child);
         let deadline = tokio::time::Instant::now() + SERVER_START_TIMEOUT;
-        let mut last_error: InspectionError;
+        let mut last_error =
+            InspectionError::new("server_not_running", "Herdr server is not running");
 
         loop {
-            tokio::time::sleep(SERVER_START_POLL_INTERVAL).await;
-            match self
-                .run_json_for(session, &["status", "server", "--json"])
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                let cleanup = child.kill_and_reap().await;
+                let message = cleanup.map_or_else(
+                    || format!("Herdr server did not become ready within {SERVER_START_TIMEOUT:?}; {}", last_error.message),
+                    |cleanup| format!("Herdr server did not become ready within {SERVER_START_TIMEOUT:?}; {}; {cleanup}", last_error.message),
+                );
+                return Err(InspectionError::new("server_start_timeout", message));
+            }
+            if tokio::time::timeout(remaining, tokio::time::sleep(SERVER_START_POLL_INTERVAL))
                 .await
+                .is_err()
             {
-                Ok(status) if !server_not_running(&status) => {
+                let cleanup = child.kill_and_reap().await;
+                let message = cleanup.map_or_else(
+                    || format!("Herdr server did not become ready within {SERVER_START_TIMEOUT:?}; {}", last_error.message),
+                    |cleanup| format!("Herdr server did not become ready within {SERVER_START_TIMEOUT:?}; {}; {cleanup}", last_error.message),
+                );
+                return Err(InspectionError::new("server_start_timeout", message));
+            }
+            let status_result = tokio::time::timeout(
+                remaining,
+                self.run_json_for(session, &["status", "server", "--json"]),
+            )
+            .await;
+            match status_result {
+                Ok(Ok(status)) if !server_not_running(&status) => {
                     tokio::spawn(async move {
-                        let _ = child.wait().await;
+                        let mut child = child;
+                        let wait_error = match child.child.as_mut() {
+                            Some(process) => process.wait().await.err(),
+                            None => None,
+                        };
+                        if wait_error.is_some() {
+                            let _ = child.kill_and_reap().await;
+                        } else {
+                            child.reaped = true;
+                            child.child.take();
+                        }
                     });
                     return Ok(status);
                 }
-                Ok(_) => {
+                Ok(Ok(_)) => {
                     last_error =
                         InspectionError::new("server_not_running", "Herdr server is not running");
                 }
-                Err(error) => last_error = error,
+                Ok(Err(error)) => last_error = error,
+                Err(_) => {
+                    let cleanup = child.kill_and_reap().await;
+                    let message = cleanup.map_or_else(
+                        || format!("Herdr server did not become ready within {SERVER_START_TIMEOUT:?}; {}", last_error.message),
+                        |cleanup| format!("Herdr server did not become ready within {SERVER_START_TIMEOUT:?}; {}; {cleanup}", last_error.message),
+                    );
+                    return Err(InspectionError::new("server_start_timeout", message));
+                }
             }
-            if let Some(status) = child.try_wait().map_err(|error| {
-                InspectionError::new(
-                    "server_start_failed",
-                    format!("could not monitor Herdr server startup: {error}"),
-                )
-            })? {
-                return Err(InspectionError::new(
-                    "server_start_failed",
-                    format!(
-                        "Herdr server exited before becoming ready ({status}); {}",
-                        last_error.message
-                    ),
-                ));
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(InspectionError::new(
-                    "server_start_timeout",
-                    format!(
-                        "Herdr server did not become ready within {} seconds; {}",
-                        SERVER_START_TIMEOUT.as_secs(),
-                        last_error.message
-                    ),
-                ));
+            match child
+                .child
+                .as_mut()
+                .expect("owned Herdr server child was lost")
+                .try_wait()
+            {
+                Ok(Some(status)) => {
+                    child.reaped = true;
+                    return Err(InspectionError::new(
+                        "server_start_failed",
+                        format!(
+                            "Herdr server exited before becoming ready ({status}); {}",
+                            last_error.message
+                        ),
+                    ));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let cleanup = child.kill_and_reap().await;
+                    let message = cleanup.map_or_else(
+                        || format!("could not monitor Herdr server startup: {error}"),
+                        |cleanup| {
+                            format!("could not monitor Herdr server startup: {error}; {cleanup}")
+                        },
+                    );
+                    return Err(InspectionError::new("server_start_failed", message));
+                }
             }
         }
     }
@@ -1484,9 +1869,22 @@ impl HerdrCliAdapter {
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
     ) -> Result<EventConnectionEnd, InspectionError> {
         let path = self.socket_path(session_id)?;
-        let mut stream = UnixStream::connect(path).await.map_err(|_error| {
-            InspectionError::new("connection_failed", "Herdr connection failed")
-        })?;
+        let mut stream =
+            match tokio::time::timeout(FINITE_CONNECT_TIMEOUT, UnixStream::connect(path)).await {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(error)) => {
+                    return Err(InspectionError::new(
+                        "subscription_setup_failed",
+                        format!("Herdr event connection failed: {error}"),
+                    ));
+                }
+                Err(_) => {
+                    return Err(InspectionError::new(
+                        "subscription_setup_timeout",
+                        "Herdr event connection timed out",
+                    ));
+                }
+            };
         let subscriptions = event_subscriptions(snapshot);
         let id = format!(
             "cockpit-sub-{}",
@@ -1496,77 +1894,127 @@ impl HerdrCliAdapter {
         let mut bytes =
             serde_json::to_vec(&request).map_err(|error| malformed(error.to_string()))?;
         bytes.push(b'\n');
-        stream
-            .write_all(&bytes)
-            .await
-            .map_err(|error| InspectionError::new("connection_failed", error.to_string()))?;
+        let progress = AtomicUsize::new(0);
+        match tokio::time::timeout(
+            FINITE_WRITE_TIMEOUT,
+            write_with_progress(&mut stream, &bytes, &progress),
+        )
+        .await
+        {
+            Ok((_, Ok(()))) => {}
+            Ok((written, Err(error))) => {
+                return Err(InspectionError::new(
+                    "subscription_setup_failed",
+                    format!("event subscription write stopped after {written} bytes: {error}"),
+                ));
+            }
+            Err(_) => {
+                return Err(InspectionError::new(
+                    "subscription_setup_timeout",
+                    "event subscription write timed out",
+                ));
+            }
+        }
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        let mut acknowledged = false;
-        loop {
-            let n = read_bounded_line(&mut reader, &mut line, MAX_TERMINAL_LINE)
-                .await
-                .map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::InvalidData {
-                        InspectionError::new(
-                            "bounded_output",
-                            "Herdr event line exceeds configured limit or is unterminated",
-                        )
-                    } else {
-                        InspectionError::new("disconnected", "Herdr event stream read failed")
-                    }
+        tokio::time::timeout(FINITE_RESPONSE_TIMEOUT, async {
+            loop {
+                let n = read_bounded_line(&mut reader, &mut line, MAX_TERMINAL_LINE)
+                    .await
+                    .map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            InspectionError::new(
+                                "bounded_output",
+                                "Herdr event line exceeds configured limit or is unterminated",
+                            )
+                        } else {
+                            InspectionError::new(
+                                "subscription_setup_failed",
+                                "Herdr event stream read failed",
+                            )
+                        }
+                    })?;
+                if n == 0 {
+                    return Err(InspectionError::new(
+                        "subscription_setup_failed",
+                        "Herdr event stream ended before acknowledgement",
+                    ));
+                }
+                let value: Value = serde_json::from_str(line.trim_end()).map_err(|error| {
+                    InspectionError::new("malformed_event", format!("invalid event JSON: {error}"))
                 })?;
+                if value.get("error").is_some()
+                    && value
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                {
+                    return Err(structured_error(&value)?.unwrap_or_else(|| {
+                        InspectionError::new(
+                            "subscription_setup_failed",
+                            "events.subscribe returned an invalid error",
+                        )
+                    }));
+                }
+                if let Some(response_id) = value.get("id").and_then(Value::as_str) {
+                    if response_id != id {
+                        continue;
+                    }
+                    if let Some(error) = structured_error(&value)? {
+                        return Err(error);
+                    }
+                    let result = value.get("result").ok_or_else(|| {
+                        InspectionError::new(
+                            "malformed_event",
+                            "subscription response.result is required",
+                        )
+                    })?;
+                    if result.get("type").and_then(Value::as_str) != Some("subscription_started") {
+                        return Err(InspectionError::new(
+                            "malformed_event",
+                            "events.subscribe acknowledgement is invalid",
+                        ));
+                    }
+                    return Ok::<(), InspectionError>(());
+                }
+                return Err(InspectionError::new(
+                    "malformed_event",
+                    "event arrived before subscription acknowledgement",
+                ));
+            }
+        })
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "subscription_setup_timeout",
+                "events.subscribe acknowledgement deadline expired",
+            )
+        })??;
+        if let Some(readiness) = readiness.as_ref() {
+            let _ = readiness.send(Ok(())).await;
+        }
+        loop {
+            let n = tokio::select! {
+                result = read_bounded_line(&mut reader, &mut line, MAX_TERMINAL_LINE) => {
+                    result.map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            InspectionError::new(
+                                "bounded_output",
+                                "Herdr event line exceeds configured limit or is unterminated",
+                            )
+                        } else {
+                            InspectionError::new("disconnected", "Herdr event stream read failed")
+                        }
+                    })?
+                }
+                _ = sender.closed() => return Ok(EventConnectionEnd::StreamEnded),
+            };
             if n == 0 {
                 return Ok(EventConnectionEnd::StreamEnded);
             }
             let value: Value = serde_json::from_str(line.trim_end()).map_err(|error| {
                 InspectionError::new("malformed_event", format!("invalid event JSON: {error}"))
             })?;
-            if !acknowledged
-                && value.get("error").is_some()
-                && value
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .is_none_or(str::is_empty)
-            {
-                return Err(structured_error(&value)?.unwrap_or_else(|| {
-                    InspectionError::new(
-                        "subscription_setup_failed",
-                        "events.subscribe returned an invalid error",
-                    )
-                }));
-            }
-            if let Some(response_id) = value.get("id").and_then(Value::as_str) {
-                if response_id != id {
-                    continue;
-                }
-                if let Some(error) = structured_error(&value)? {
-                    return Err(error);
-                }
-                let result = value.get("result").ok_or_else(|| {
-                    InspectionError::new(
-                        "malformed_event",
-                        "subscription response.result is required",
-                    )
-                })?;
-                if result.get("type").and_then(Value::as_str) != Some("subscription_started") {
-                    return Err(InspectionError::new(
-                        "malformed_event",
-                        "events.subscribe acknowledgement is invalid",
-                    ));
-                }
-                acknowledged = true;
-                if let Some(readiness) = readiness.as_ref() {
-                    let _ = readiness.send(Ok(())).await;
-                }
-                continue;
-            }
-            if !acknowledged {
-                return Err(InspectionError::new(
-                    "malformed_event",
-                    "event arrived before subscription acknowledgement",
-                ));
-            }
             let Some(event) = value.get("event").and_then(Value::as_str) else {
                 return Err(InspectionError::new(
                     "malformed_event",

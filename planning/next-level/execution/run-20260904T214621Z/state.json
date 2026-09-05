@@ -1,8 +1,8 @@
 {
   "run_id": "run-20260904T214621Z",
   "initial_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
-  "current_integration_commit": "41101de",
-  "stage": "S01",
+  "current_integration_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
+  "stage": "S03",
   "selected_stories": [
     "CLEAN-01",
     "BOOT-01",
@@ -71,12 +71,13 @@
       ]
     },
     "BOOT-01": {
-      "status": "running",
+      "status": "verified",
       "stage": "S01",
       "goals": [
         "G00B"
       ],
-      "implementation": "Stable transport, browser/native refreshed input, strict paired inventories and review repairs verified; staging owned delivery commit."
+      "implementation": "Stable transport, strict paired startup inventories, browser/native UTF-8/input proof and independent review committed.",
+      "delivery_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3"
     },
     "TERM-01": {
       "status": "running",
@@ -122,11 +123,12 @@
       ]
     },
     "REPAIR-04": {
-      "status": "not_started",
+      "status": "running",
       "stage": "S03",
       "goals": [
         "G02"
-      ]
+      ],
+      "implementation": "Bounded request/process lifetimes and non-retryable unknown mutation recovery verified; cancellation reporting contract remains open. See G02."
     },
     "REPAIR-05": {
       "status": "not_started",
@@ -475,6 +477,25 @@
       ],
       "status": "completed",
       "result": "Remaining temporal replay/control composition and typed identity repairs pending Main"
+    },
+    {
+      "id": "TemporalReplayClosure",
+      "status": "completed",
+      "owned_paths": [
+        "scripts/verify/terminal_temporal.py",
+        "scripts/verify/test_terminal_temporal.py"
+      ],
+      "goal": "G01"
+    },
+    {
+      "id": "FiniteHerdrRequests",
+      "status": "completed",
+      "owned_paths": [
+        "crates/cockpit-herdr/src/cli.rs",
+        "crates/cockpit-herdr/tests/compatibility.rs",
+        "crates/cockpit-herdr/tests/session.rs"
+      ],
+      "goal": "G02"
     }
   ],
   "tested_hashes": {
@@ -640,6 +661,35 @@
       "requirement": "Use WebUI first for behavioral feedback; native AppImage startup and simple compatibility smokes suffice",
       "status": "verified",
       "basis": "explicit user verification scope override"
+    },
+    {
+      "id": "OBS-005",
+      "source": "user",
+      "request": "Restart existing Cockpit serve for default for parallel manual testing",
+      "classification": "authorized gateway-only action",
+      "result": "Restarted cockpit-web-real with verified bootstrap binary7ef3b047c82a4cac42c6326e5ff7e3994d0daf41f0843db734b7ea77c0ef3eca and frontend0cc3106776e1d915ed3096929a403f406fe39dc436cbe7d64a7ea06c0f6d9eba. Ready pid2257823; HTTP4173 status compatible Herdr0.8.2/protocol20/schema1. Herdr server/session untouched. No automated input/attachment to default."
+    },
+    {
+      "id": "OBS-006",
+      "source": "user",
+      "observation": "flickering seems fixed and as expected mouse scroll works, click does not",
+      "classification": "queued required acceptance",
+      "scope": "TERM-02 browser stable attachment",
+      "decision": "Accept reported flicker/scroll improvement and click failure as ground truth; investigate clicks only in disposable session. Do not infer whether pane focus or in-application click was intended without evidence."
+    },
+    {
+      "id": "OBS-007",
+      "source": "user",
+      "observation": "Focus change works; application clicks do not. Scrolling has no flicker. Content selection unavailable. Otherwise usable.",
+      "classification": "queued",
+      "decision": "Treat as ground truth. Do not repeat confirmation runs. Application clicks and selection remain open."
+    },
+    {
+      "id": "OBS-008",
+      "source": "user",
+      "observation": "Continue toward the full goal; do not pause. Verification must produce useful implementation, automation or maintenance improvements.",
+      "classification": "execution priority",
+      "decision": "Close verified bounded reliability increment and advance correctness/features. Do not expand terminal capture matrix now; retain G01 limitations."
     }
   ],
   "verification_policy": {
@@ -665,10 +715,10 @@
     "artifact": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-measured.json",
     "aggregate_goal": "G01 remains INCONCLUSIVE; no paired control or application mouse pass"
   },
-  "next_action": "Commit staged BOOT increment and reports, record its hash, then repair temporal replay/control composition and continue selected timeline.",
+  "next_action": "Main prepares owned browser/capture driver while TemporalReplayClosure and FiniteHerdrRequests edit exclusively. Integrate once, run CLI capture/replay and finite-request regressions, review, commit.",
   "latest_goal_status": {
     "G00A": "PASS",
-    "G00B": "PASS; source delivery commit next",
+    "G00B": "PASS; delivery45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
     "G01": "INCONCLUSIVE"
   }
 }

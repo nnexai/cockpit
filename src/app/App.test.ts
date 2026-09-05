@@ -345,6 +345,7 @@ describe("desktop command routing", () => {
     retryable.forEach((request) => expect(mutationFailureCanRetry(request, "transport_error")).toBe(true));
     ambiguous.forEach((request) => expect(mutationFailureCanRetry(request, "transport_error")).toBe(false));
     retryable.forEach((request) => expect(mutationFailureCanRetry(request, "mutation_applied_snapshot_failed")).toBe(false));
+    expect(mutationFailureCanRetry(retryable[0], "request_outcome_unknown")).toBe(false);
   });
 
   it("reconciles removed sessions and exposes human move destinations", () => {

@@ -2,14 +2,105 @@
   "goal_id": "G02",
   "status": "INCONCLUSIVE",
   "run_id": "run-20260904T214621Z",
-  "tested_source_commit": null,
+  "tested_base_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
   "delivery_commit": null,
-  "required_subchecks": [],
-  "commands": [],
-  "identities": {},
-  "assertions": [],
-  "artifacts": [],
-  "unresolved_limitations": [
-    "Not yet executed."
+  "required_subchecks": [
+    {
+      "id": "finite_socket_requests",
+      "status": "PASS",
+      "evidence": "62 cockpit-herdr tests include eight bounded fake-peer cases, success, dispatch/unknown codes, no retry and cancellation EOF."
+    },
+    {
+      "id": "finite_child_lifetimes",
+      "status": "PASS",
+      "evidence": "Six subprocess cases plus autostart timeout/cancellation assert bounded exit and parent/descendant cleanup."
+    },
+    {
+      "id": "real_cli_overflow_red_green",
+      "status": "PASS",
+      "evidence": "Baseline hang reproduced; rebuilt CLI returns bounded_output in 145ms and fixture child is reaped."
+    },
+    {
+      "id": "unknown_mutation_browser_recovery",
+      "status": "PASS",
+      "evidence": "Same injected rename response shows Retry before fix and only Resync after fix; actual resync returns owned Herdr snapshot with zero mutation requests."
+    },
+    {
+      "id": "remaining_ordering_input_attachment_compatibility_repairs",
+      "status": "INCONCLUSIVE"
+    }
+  ],
+  "commands": [
+    {
+      "command": "cargo test --workspace && cargo check -p cockpit-tauri && cargo build -p cockpit-host --bin cockpit",
+      "exit_status": 0,
+      "tests": 101,
+      "output": "artifact://361"
+    },
+    {
+      "command": "cargo fmt --all && cargo test -p cockpit-herdr",
+      "exit_status": 0,
+      "tests": 62,
+      "output": "artifact://368"
+    },
+    {
+      "command": "bun run typecheck && bun run test",
+      "exit_status": 0,
+      "tests": 57
+    },
+    {
+      "command": "bun run build --outDir /tmp/cockpit-214621Z-gqhguyl2/finite-web-dist",
+      "exit_status": 0
+    }
+  ],
+  "tested_files": {
+    "Cargo.toml": "c046d2caebd27eeedcf9cd93d6d66f958d4767ea7915840d271340f3be1e3feb",
+    "Cargo.lock": "fa8176bdbb6ad2a80cd65280e2cf39fe9b79569b63d6a34a7cf33c654295573d",
+    "crates/cockpit-herdr/Cargo.toml": "f8e45b4e8d9aff09ab8ef11babda5529852e38b53200027b1975ca2fc8f991c3",
+    "crates/cockpit-herdr/src/cli.rs": "31df3b1239ed0434ccd59d86e2927684f71fa1721616185118a080372b3bec6e",
+    "crates/cockpit-herdr/tests/compatibility.rs": "a77ebd1da76284bcd4900a8ce2297c342463ab50702b7dbb449fae8a03875dbf",
+    "crates/cockpit-herdr/tests/session.rs": "aea2ad272f2836bf9dfc1328527a43256131efac69af398117b3ee848c182a2d",
+    "src/app/App.tsx": "ba9e7c16a04fba68ac0672148b30b5c6a4da856aa9cbc812a6a8f2b736c6ee33",
+    "src/app/App.test.ts": "483119bbc25eca729558d2f4327aeaee52d7eaf2bacbcd6e5b0a2fa47d53c450"
+  },
+  "artifacts": [
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-overflow-green.json",
+      "sha256": "5e36952bc3709261df403cd448c883aae8019336aa579fdc68a752ae85d6a4b8"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-stable-positive.json",
+      "sha256": "5a9a148ee41aea544dfe2a4ff3255dcfcc4972b8ad6e78dea452a8ad20ac562a"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-red.json",
+      "sha256": "90f62088548b293a8a3c8eb71fdaa67abc3cecd906ac0ee7a5e64b1fb94224cc"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-red.png",
+      "sha256": "114888a91dd0c7a2c905b4a112b1d2abae9a4edd2ecc75ad5a4831aa32c75c6c"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-green.json",
+      "sha256": "e30a1a5702bf8aef4b1c10ae1b96c125193227341c8f3702f861001a4047a48a"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-green.png",
+      "sha256": "e28f0e835b14478603df7e6435dd4f7db2ac7cca2c8cee372359fe54d01611c4"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-resync.json",
+      "sha256": "38d445a3d6bb55d1a08d7814a8fe541bbefc7b82cf1621e8f5444aeea4795bd0"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-resync.png",
+      "sha256": "ccc83b4540a0c2997241c27ada682519e8e287dbca4c486266ddcf00a47821d5"
+    }
+  ],
+  "limitations": [
+    "Browser failure response is explicitly injected into a run-owned rename; it is not claimed to reproduce a live Herdr timeout. Actual adapter fixtures and real CLI separately exercise the failure.",
+    "A dropped Rust future cannot receive InspectionError; cancellation is observed as JoinError::is_cancelled and peer EOF/process cleanup. No durable request_cancelled/dispatch receipt exists yet.",
+    "Cleanup during Tokio runtime shutdown falls back to process-group kill and kill_on_drop; asynchronous reap completion requires a running runtime.",
+    "G02 remains open for REPAIR-01/02/03/05 and the cancellation reporting contract. No native failure-UI test is claimed."
   ]
 }
