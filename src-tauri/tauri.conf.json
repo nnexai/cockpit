@@ -16,6 +16,7 @@
         "title": "Cockpit",
         "width": 1280,
         "height": 800,
+        "decorations": false,
         "resizable": true
       }
     ],

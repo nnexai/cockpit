@@ -303,3 +303,5 @@ Verified `herdr-file-viewer` panes may render any safe browsing folder without t
 - Markdown uses the available document width. Saved scroll positions restore when entering a document, not on every scroll-state update. HTML preview is static and isolated: styles render in a sandboxed iframe, scripts/forms/navigation are disabled, and external resource requests are blocked.
 
 - Pane and Commands menus expose Open files right/below beside Review. Files launch the installed file viewer at the selected pane's verified Git root or working directory without task setup. Open Context retains its companion-only launch meaning; both actions use Herdr's existing plugin pane operation and Cockpit's bounded root checks.
+
+- The native window disables toolkit decorations. Cockpit starts at its existing application UI; the compositor manages moving, resizing, and closing the window. This removes the redundant GTK title bar requested by the user on niri.
