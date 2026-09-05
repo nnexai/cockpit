@@ -159,3 +159,24 @@ it("opens a collapsed directory before keyboard focus reaches its file", async (
     expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("collapsed-2");
   } finally { await act(async () => mounted.unmount()); host.remove(); }
 });
+
+it("starts previous hunk navigation at the last hunk and does not skip a missing selection", async () => {
+  const host = window.document.createElement("div");
+  window.document.body.append(host);
+  const mounted = createRoot(host);
+  const onSelectLines = vi.fn();
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      snapshot={async () => snapshot} file={async () => diff} selectedLines={{ fileId: "file", side: "new", start: 99, end: 99 }} onSelectLines={onSelectLines} />));
+    const surface = host.querySelector<HTMLElement>(".review-diff")!;
+    surface.focus();
+    await act(async () => surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp", altKey: true })));
+    expect(host.querySelector<HTMLElement>(".review-hunk:focus")?.textContent).toContain("@@ -2 +2 @@");
+    expect(onSelectLines).toHaveBeenLastCalledWith(changedFile, "new", 2, 2, ["two"], false);
+
+    surface.focus();
+    await act(async () => surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+    expect(onSelectLines).toHaveBeenLastCalledWith(changedFile, "new", 1, 1, ["one"], false);
+    expect(window.document.activeElement).toBe(host.querySelector('[data-new-line="1"]'));
+  } finally { await act(async () => mounted.unmount()); host.remove(); }
+});

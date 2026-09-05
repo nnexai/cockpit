@@ -1,6 +1,6 @@
 import type { CommentReviewRef, ExtensionKind } from "../../protocol/generated/v1";
 import { CommentPasteControls } from "./CommentPasteControls";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
   CommentAnchor,
@@ -297,6 +297,14 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     }
   };
 
+  const onCommentKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat || event.nativeEvent.isComposing) return;
+    void saveDraft();
+  };
+
   const openOverview = async () => {
     if (pending || loading) return;
     setOverviewOpen(true); setError(null);
@@ -406,8 +414,8 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setError(null);
   };
 
-  const editorContent = editor ? <section className="comment-editor" aria-label={editing ? "Edit comment" : "New comment"}><h3>{editing ? `Edit ${draftAnchorLabel(editing.anchor).toLowerCase()}` : editor === "whole_file" ? "Comment on whole file" : editorSelection ? `Comment on lines ${editorSelection.start}–${editorSelection.end}` : "Comment on selected lines"}{editorPath && editorPath !== path ? ` · ${editorPath}` : ""}</h3>{staleReviewEditor ? <p role="status">The displayed review source changed. Your text is retained. Select the intended source lines again before using the current source.<button type="button" onClick={recaptureEditor} disabled={!document?.text || document.truncated || (editor === "lines" && !selection)}>Use current source</button></p> : null}<textarea value={text} onChange={(event) => { const nextText = event.target.value; setText(nextText); if (editorState) onEditorStateChange({ ...editorState, text: nextText }); }} rows={4} maxLength={8192} autoFocus aria-label="Comment text" placeholder="Describe what should be changed…" /><div className="comment-editor-actions"><button type="button" onClick={clearEditor}>Cancel</button><button type="button" onClick={() => void saveDraft()} disabled={pending || staleReviewEditor || removedEditorDraft || !text.trim()}>{pending ? "Saving…" : "Save comment"}</button></div></section> : null;
-  const inlineEditorLine = inlineEditor && sourceKind === "review" && editor === "lines" && editorPath === path && editorSelection
+  const editorContent = editor ? <section className="comment-editor" aria-label={editing ? "Edit comment" : "New comment"}><h3>{editing ? `Edit ${draftAnchorLabel(editing.anchor).toLowerCase()}` : editor === "whole_file" ? "Comment on whole file" : editorSelection ? `Comment on lines ${editorSelection.start}–${editorSelection.end}` : "Comment on selected lines"}{editorPath && editorPath !== path ? ` · ${editorPath}` : ""}</h3>{staleReviewEditor ? <p role="status">The displayed review source changed. Your text is retained. Select the intended source lines again before using the current source.<button type="button" onClick={recaptureEditor} disabled={!document?.text || document.truncated || (editor === "lines" && !selection)}>Use current source</button></p> : null}<textarea value={text} onChange={(event) => { const nextText = event.target.value; setText(nextText); if (editorState) onEditorStateChange({ ...editorState, text: nextText }); }} onKeyDown={onCommentKeyDown} rows={4} maxLength={8192} autoFocus aria-label="Comment text" placeholder="Describe what should be changed…" /><div className="comment-editor-actions"><span><kbd>Ctrl/⌘+Enter</kbd> save</span><button type="button" onClick={clearEditor}>Cancel</button><button type="button" onClick={() => void saveDraft()} disabled={pending || staleReviewEditor || removedEditorDraft || !text.trim()}>{pending ? "Saving…" : "Save comment"}</button></div></section> : null;
+  const inlineEditorLine = inlineEditor && editor === "lines" && editorPath === path && editorSelection
     ? Math.max(editorSelection.start, editorSelection.end) : null;
   const renderInlineEditor: InlineCommentEditor | undefined = inlineEditorLine === null ? undefined : (line) => line === inlineEditorLine
     ? <div className="comment-inline-editor">{editorContent}</div> : null;

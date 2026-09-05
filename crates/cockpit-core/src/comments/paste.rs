@@ -934,7 +934,7 @@ impl CommentsService {
                 ))
                 .await;
         }
-        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+        self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
         let pending = CommentPasteReceipt {
             operation_id: request.operation_id.clone(),
@@ -1093,7 +1093,7 @@ impl CommentsService {
                 "only an unknown or reconciliation-required accepted paste can be marked pasted",
             ));
         }
-        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+        self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
 
         let outcome = if let Some(frozen_drafts) = stored.sent_drafts.as_ref() {

@@ -230,7 +230,7 @@ impl CommentsService {
             }
         }
         self.refresh_states(&mut batch, &evidence).await;
-        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+        self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
         let committed = self
             .store
@@ -248,7 +248,7 @@ impl CommentsService {
         request: &CommentBatchMutation,
     ) -> Result<CommentBatchList, InspectionError> {
         let (_, evidence) = self.attachment(session_id, pane_id, &request.scope).await?;
-        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+        self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
         let mut remaining = self.list(session_id, pane_id, &request.scope).await?;
         self.store
@@ -294,7 +294,7 @@ impl CommentsService {
             ));
         }
         self.refresh_states(&mut batch, &evidence).await;
-        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+        self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
         let committed = self
             .store
@@ -331,7 +331,7 @@ impl CommentsService {
         batch.owner = attachment.owner.clone();
         batch.last_known_location = attachment.location.clone();
         self.refresh_states(&mut batch, &evidence).await;
-        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+        self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
         let committed = self
             .store
@@ -426,10 +426,11 @@ impl CommentsService {
                 review: Some(value),
             }
         } else {
-            let value = self
-                .context
-                .comment_evidence(session_id, pane_id, &scope.binding_id)
-                .await?;
+            let value = self.context.comment_evidence_for_presentation(
+                &presentation,
+                &runtime_evidence,
+                &scope.binding_id,
+            )?;
             CommentEvidence {
                 binding_id: value.binding_id,
                 terminal_id: value.terminal_id,
@@ -471,7 +472,7 @@ impl CommentsService {
         if capture.root_id != evidence.root_id {
             return Err(InspectionError::new(
                 "comments_source_mismatch",
-                "capture root is not the currently verified Context companion",
+                "capture root is not the currently verified browsing root",
             ));
         }
         let document = if evidence.source_kind == ExtensionKind::Review {
@@ -748,13 +749,29 @@ impl CommentsService {
         }
     }
 
-    async fn revalidate_review_evidence(
+    async fn revalidate_source_evidence(
         &self,
         session_id: &str,
         pane_id: &str,
         evidence: &CommentEvidence,
     ) -> Result<(), InspectionError> {
         let Some(expected) = evidence.review.as_ref() else {
+            let current = self
+                .context
+                .comment_evidence(session_id, pane_id, &evidence.binding_id)
+                .await?;
+            if current.terminal_id != evidence.terminal_id
+                || current.workspace_id != evidence.workspace_id
+                || current.tab_id != evidence.tab_id
+                || current.root_id != evidence.root_id
+                || current.companion_id != evidence.companion_id
+                || current.companion_path != evidence.companion_path
+            {
+                return Err(InspectionError::new(
+                    "comments_detached",
+                    "file-viewer pane or browsing root changed during this comment operation",
+                ));
+            }
             return Ok(());
         };
         let review = self.reviews.as_ref().ok_or_else(|| {

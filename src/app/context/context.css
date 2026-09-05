@@ -74,7 +74,7 @@
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, min(232px, 38%)) minmax(0, 1fr);
 }
 .context-tree {
   min-width: 0;
@@ -102,12 +102,12 @@
 .context-tree-row {
   display: flex;
   width: 100%;
-  min-height: 28px;
+  min-height: 24px;
   align-items: center;
   gap: 4px;
-  padding-top: 4px;
+  padding-top: 2px;
   padding-right: 8px;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
   border: 0;
   border-left: 2px solid transparent;
   background: transparent;
@@ -157,7 +157,7 @@
 .context-frontmatter summary { padding: 6px 8px; color: var(--text-secondary); cursor: pointer; }
 .context-frontmatter .context-source-scroll { max-height: 220px; border-top: 1px solid var(--border); }
 .context-frontmatter .context-source-lines { padding-bottom: 8px; }
-.context-markdown-body { max-width: 88ch; padding: 16px 32px 40px; color: var(--text-primary); font-size: 14px; line-height: 22px; }
+.context-markdown-body { width: 100%; box-sizing: border-box; padding: 16px 32px 40px; color: var(--text-primary); font-size: 14px; line-height: 22px; }
 .context-markdown-body h1,
 .context-markdown-body h2,
 .context-markdown-body h3,
@@ -175,12 +175,19 @@
 .context-markdown-body :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre)[data-source-start] { cursor: pointer; }
 .context-markdown-body :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre)[data-source-start]:hover { background: color-mix(in srgb, var(--surface-hover) 70%, transparent); }
 .context-media-refusal { display: inline-block; padding: 2px 6px; border: 1px solid var(--border-strong); color: var(--text-secondary); font-family: "IBM Plex Mono", "Noto Sans Mono", monospace; font-size: 12px; }
+.context-html-preview { display: block; width: 100%; min-height: 0; flex: 1; border: 0; background: var(--terminal-bg); }
 .context-empty { display: grid; min-height: 100%; place-items: center; padding: 24px; color: var(--text-secondary); }
 .context-notice { display: flex; min-height: 32px; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--font-size-sm); }
 .context-notice strong { flex: 0 0 auto; }
 .context-notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .context-notice-error { color: var(--blocked); }
 .context-notice-warning { color: var(--working); }
+.context-comment-status { display: flex; flex-wrap: wrap; min-height: 24px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 8px; border-top: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.context-comment-status-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.context-comment-status button { min-height: 20px; padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); font: inherit; cursor: pointer; }
+.context-comment-status button:hover { background: var(--surface-hover); }
+.context-comment-status button:disabled { cursor: default; opacity: .55; }
+.context-comment-status kbd { color: var(--text-primary); font: inherit; }
 .context-viewer-empty { align-items: center; justify-content: center; gap: 12px; padding: 24px; }
 .context-viewer-empty .context-notice { max-width: 560px; border: 1px solid var(--border); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }

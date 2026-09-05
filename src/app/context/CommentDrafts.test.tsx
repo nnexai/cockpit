@@ -89,6 +89,46 @@ it("opens an inline Review editor from C at the current SourceLines selection", 
   } finally { await act(async () => mounted.unmount()); host.remove(); }
 });
 
+it("saves a comment with Ctrl or Command Enter without leaking the shortcut", async () => {
+  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const batch: CommentBatch = { batch_id: "batch", generation: 1, owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
+  const upsert = vi.fn(async () => ({ ...batch, generation: 2 }));
+  const onEditorDismissed = vi.fn();
+  const client = { commentBatch: vi.fn(async () => batch), commentUpsert: upsert } as unknown as CockpitClient;
+  const host = window.document.createElement("div");
+  window.document.body.append(host);
+  const mounted = createRoot(host);
+  const escapedKeys = vi.fn();
+  window.document.body.addEventListener("keydown", escapedKeys);
+  try {
+    await act(async () => mounted.render(<CommentDrafts client={client} presentation={presentation} root={root} path="file.md" document={{ text: "source", revision: "revision" } as ContextDocument} selection={null} mode="source" editorState={{ rootId: "root", path: "file.md", revision: "revision", draftId: null, editor: "whole_file", text: "Save me", selection: null }} onEditorStateChange={() => undefined} onEditorDismissed={onEditorDismissed} />));
+    const textarea = host.querySelector<HTMLTextAreaElement>("textarea")!;
+
+    const plainEnter = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
+    textarea.dispatchEvent(plainEnter);
+    expect(plainEnter.defaultPrevented).toBe(false);
+    expect(escapedKeys).toHaveBeenCalledTimes(1);
+
+    const composing = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", ctrlKey: true, isComposing: true });
+    textarea.dispatchEvent(composing);
+    const repeated = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", metaKey: true, repeat: true });
+    textarea.dispatchEvent(repeated);
+    expect(composing.defaultPrevented).toBe(true);
+    expect(repeated.defaultPrevented).toBe(true);
+    expect(escapedKeys).toHaveBeenCalledTimes(1);
+    expect(upsert).not.toHaveBeenCalled();
+
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", ctrlKey: true })));
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(onEditorDismissed).toHaveBeenCalledTimes(1);
+  } finally {
+    window.document.body.removeEventListener("keydown", escapedKeys);
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
 it("confirms saved-batch discard inline and resets the active batch", async () => {
   const root = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" } as ContextRoot;
   const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;

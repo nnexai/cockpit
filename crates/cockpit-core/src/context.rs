@@ -208,20 +208,29 @@ impl ContextService {
             ));
         }
         let presentation = self.presentation(session_id, &evidence).await?;
-        require_binding(&presentation, binding_id)?;
+        self.comment_evidence_for_presentation(&presentation, &evidence, binding_id)
+    }
+
+    pub(crate) fn comment_evidence_for_presentation(
+        &self,
+        presentation: &PanePresentation,
+        evidence: &ExtensionPaneEvidence,
+        binding_id: &str,
+    ) -> Result<ContextCommentEvidence, InspectionError> {
+        require_binding(presentation, binding_id)?;
         if presentation.extension != Some(ExtensionKind::Context)
             || presentation.renderer != Some(ExtensionKind::Context)
             || !verified_confidence(presentation.confidence)
         {
             return Err(InspectionError::new(
                 "comments_detached",
-                "comments require a verified Context companion pane",
+                "comments require a verified file-viewer pane",
             ));
         }
-        let root_id = presentation.default_root_id.ok_or_else(|| {
+        let root_id = presentation.default_root_id.clone().ok_or_else(|| {
             InspectionError::new(
                 "comments_detached",
-                "the Context pane has no verified companion root",
+                "the file-viewer pane has no verified browsing root",
             )
         })?;
         let root = presentation
@@ -231,26 +240,29 @@ impl ContextService {
             .ok_or_else(|| {
                 InspectionError::new(
                     "comments_detached",
-                    "the Context companion root is no longer authorized",
+                    "the file-viewer root is no longer authorized",
                 )
             })?;
-        if root.kind != ContextRootKind::Companion {
-            return Err(InspectionError::new(
-                "comments_detached",
-                "comments can only attach to a Context companion",
-            ));
-        }
-        let companion_id = root.companion_id.clone().ok_or_else(|| {
-            InspectionError::new(
-                "comments_detached",
-                "the Context companion has no verified identity",
-            )
-        })?;
+        let companion_id = match root.kind {
+            ContextRootKind::Companion => root.companion_id.clone().ok_or_else(|| {
+                InspectionError::new(
+                    "comments_detached",
+                    "the companion has no verified identity",
+                )
+            })?,
+            ContextRootKind::Folder => root.root_id.clone(),
+            ContextRootKind::Repository => {
+                return Err(InspectionError::new(
+                    "comments_detached",
+                    "comments require the file-viewer's verified browsing root",
+                ));
+            }
+        };
         Ok(ContextCommentEvidence {
-            binding_id: presentation.binding_id,
-            terminal_id: presentation.terminal_id,
-            workspace_id: evidence.workspace_id,
-            tab_id: evidence.tab_id,
+            binding_id: presentation.binding_id.clone(),
+            terminal_id: presentation.terminal_id.clone(),
+            workspace_id: evidence.workspace_id.clone(),
+            tab_id: evidence.tab_id.clone(),
             root_id,
             companion_id,
             companion_path: root.path.clone(),
@@ -744,7 +756,7 @@ impl ContextService {
             let root_id = presentation.default_root_id.as_deref().ok_or_else(|| {
                 InspectionError::new(
                     "context_root_not_authorized",
-                    "the Context pane has no verified companion root",
+                    "the file-viewer pane has no verified browsing root",
                 )
             })?;
             let root = presentation
@@ -2289,7 +2301,11 @@ mod review_checkout_tests {
         let projects = Arc::new(
             ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
         );
-        let context = ContextService::new(configuration, adapter, projects);
+        let context = Arc::new(ContextService::new(
+            configuration.clone(),
+            adapter,
+            projects,
+        ));
 
         let presentation = context
             .inspect_pane("session", "pane")
@@ -2336,7 +2352,7 @@ mod review_checkout_tests {
                 "session",
                 "pane",
                 &ContextDocumentRequest {
-                    binding_id: presentation.binding_id,
+                    binding_id: presentation.binding_id.clone(),
                     root_id: root.root_id.clone(),
                     path: "notes.md".to_owned(),
                     expected_revision: None,
@@ -2345,6 +2361,64 @@ mod review_checkout_tests {
             .await
             .expect("ordinary folder document");
         assert_eq!(document.text.as_deref(), Some("ordinary context\n"));
+        let comments = crate::comments::CommentsService::new(configuration, context.clone())
+            .expect("comments");
+        let scope = cockpit_protocol::comments::CommentRequestScope {
+            binding_id: presentation.binding_id.clone(),
+            client_id: "client".to_owned(),
+        };
+        let batch = comments
+            .batch(
+                "session",
+                "pane",
+                &cockpit_protocol::comments::CommentBatchRequest {
+                    scope: scope.clone(),
+                    batch_id: None,
+                },
+            )
+            .await
+            .expect("ordinary folder comments");
+        let request = cockpit_protocol::comments::CommentUpsertRequest {
+            batch: cockpit_protocol::comments::CommentBatchMutation {
+                scope: scope.clone(),
+                batch_id: batch.batch_id.clone(),
+                expected_generation: batch.generation,
+            },
+            draft_id: None,
+            capture: Some(cockpit_protocol::comments::CommentCapture {
+                root_id: root_id.clone(),
+                path: "notes.md".to_owned(),
+                expected_revision: document.revision.clone(),
+                start_line: Some(1),
+                end_line: Some(1),
+                review: None,
+            }),
+            comment_text: "Folder comment".to_owned(),
+        };
+        let saved = comments
+            .upsert("session", "pane", &request)
+            .await
+            .expect("capture ordinary folder source");
+        assert_eq!(
+            saved.drafts[0].file_ref.absolute_path,
+            folder.join("notes.md").to_string_lossy()
+        );
+        assert_eq!(saved.owner.source_id, root_id);
+        let mut outside = request.clone();
+        outside.batch.expected_generation = saved.generation;
+        outside.capture.as_mut().unwrap().path = "../plugin-install/outside.md".to_owned();
+        assert!(
+            comments.upsert("session", "pane", &outside).await.is_err(),
+            "comments preserve bounded reads"
+        );
+        std::fs::rename(&folder, workspace.join("old-folder")).expect("replace root");
+        std::fs::create_dir(&folder).expect("new root");
+        std::fs::write(folder.join("notes.md"), "ordinary context\n").expect("same text new root");
+        outside.capture = request.capture.clone();
+        assert!(
+            comments.upsert("session", "pane", &outside).await.is_err(),
+            "old batch cannot attach to replacement root"
+        );
         std::fs::remove_dir_all(workspace).expect("cleanup");
     }
 

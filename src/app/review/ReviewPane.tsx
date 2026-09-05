@@ -205,7 +205,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const moveHunk = (delta: number) => {
     const hunks = diffRef.current?.querySelectorAll<HTMLElement>(".review-hunk");
     if (!hunks?.length || !diff) return;
-    const index = Math.max(0, Math.min(hunks.length - 1, hunkIndex + delta));
+    const index = hunkIndex < 0 ? (delta > 0 ? 0 : hunks.length - 1) : Math.max(0, Math.min(hunks.length - 1, hunkIndex + delta));
     const selection = selectedLines?.fileId === diff.file.file_id ? selectedLines : null;
     const side = selection?.side ?? (diff.new_source === null && diff.old_source !== null ? "old" : "new");
     const line = diff.hunks[index]?.lines.find((candidate) => side === "old" ? candidate.old_line !== null : candidate.new_line !== null);
@@ -241,13 +241,15 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       return lineNumber === null ? [] : [{ lineNumber, text: line.text }];
     }));
     if (!lines.length) return;
-    const currentIndex = selection ? Math.max(0, lines.findIndex((line) => line.lineNumber === selection.end)) : -1;
+    const currentIndex = selection ? lines.findIndex((line) => line.lineNumber === selection.end) : -1;
     const target = direction === "first" ? lines[0]
       : direction === "last" ? lines[lines.length - 1]
         : currentIndex < 0 ? (direction === "next" ? lines[0] : lines[lines.length - 1])
           : lines[Math.max(0, Math.min(lines.length - 1, currentIndex + (direction === "next" ? 1 : -1)))];
     onSelectLines?.(diff.file, side, target.lineNumber, target.lineNumber, [target.text], extend);
-    diffRef.current?.querySelector<HTMLElement>(`.review-line[data-${side}-line="${target.lineNumber}"]`)?.scrollIntoView({ block: "nearest" });
+    const lineElement = diffRef.current?.querySelector<HTMLElement>(`.review-line[data-${side}-line="${target.lineNumber}"]`);
+    lineElement?.scrollIntoView({ block: "nearest" });
+    lineElement?.focus({ preventScroll: true });
   };
   const onDiffKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.ctrlKey || event.metaKey || isEditingTarget(event.target)) return;

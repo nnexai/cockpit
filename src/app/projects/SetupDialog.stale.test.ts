@@ -1,9 +1,85 @@
-import { describe, expect, it } from "vitest";
-import type { WorkspaceOperation } from "../../protocol/generated/v1";
-import { operationSnapshotIsNewer } from "./SetupDialog";
+// @vitest-environment jsdom
+
+import { act, createElement, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it } from "vitest";
+import type { CockpitClient } from "../../client/CockpitClient";
+import type { ProjectConfiguration, RepositoryListResponse, WorkspaceOperation } from "../../protocol/generated/v1";
+import { operationSnapshotIsNewer, SetupDialog } from "./SetupDialog";
 
 function operation(generation: number, sequence: number): WorkspaceOperation {
   return { generation, sequence } as WorkspaceOperation;
+}
+
+const configuration: ProjectConfiguration = {
+  version: 1,
+  repository_roots: ["/repositories"],
+  worktree_root: "/worktrees",
+  companion_root: "/companions",
+  state_root: "/state",
+  branch_template: "{task}",
+  checkout_template: "{task}",
+  providers: [],
+  limits: {
+    catalog_depth: 4,
+    catalog_entries: 100,
+    git_timeout_ms: 1_000,
+    git_output_bytes: 1_000,
+    operation_timeout_ms: 1_000,
+    context_preview_bytes: 1_000,
+    context_preview_lines: 100,
+    context_directory_entries: 100,
+    context_tree_depth: 4,
+  },
+  origins: {},
+};
+
+const repositories: RepositoryListResponse = {
+  repositories: [{
+    repository_id: "repository",
+    name: "Repository",
+    root: "/repositories/repository",
+    checkout_path: "/repositories/repository",
+    common_dir: "/repositories/repository/.git",
+    branch: "main",
+    is_linked_worktree: false,
+    is_detached: false,
+    provenance: "configured",
+  }],
+  diagnostics: [],
+};
+
+const client = {
+  projectConfiguration: async () => configuration,
+  repositories: async () => repositories,
+} as CockpitClient;
+
+let root: Root | null = null;
+let container: HTMLDivElement | null = null;
+let emitTerminalUpdate: (() => void) | null = null;
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = null;
+  container?.remove();
+  container = null;
+  emitTerminalUpdate = null;
+});
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function SetupDialogHarness() {
+  const [open, setOpen] = useState(true);
+  const [, setTerminalRevision] = useState(1);
+  emitTerminalUpdate = () => setTerminalRevision((value) => value + 1);
+  return createElement(SetupDialog, { client, sessionId: "session-1", open, onClose: () => setOpen(false), onCompleted: () => undefined });
 }
 
 describe("SetupDialog operation snapshot ordering", () => {
@@ -18,5 +94,28 @@ describe("SetupDialog operation snapshot ordering", () => {
 
   it("accepts the first authoritative snapshot without inventing an ordering", () => {
     expect(operationSnapshotIsNewer(null, operation(0, 0))).toBe(true);
+  });
+
+  it("keeps the typed field focused across terminal updates and its own rerender", async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    await act(async () => {
+      root = createRoot(container!);
+      root.render(createElement(SetupDialogHarness));
+    });
+    await settle();
+
+    const taskName = container.querySelector<HTMLInputElement>("#setup-task-name")!;
+    taskName.focus();
+    act(() => emitTerminalUpdate?.());
+    expect(document.activeElement).toBe(taskName);
+
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(taskName, "retain focus");
+      taskName.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle();
+    expect(document.activeElement).toBe(taskName);
+    expect(taskName.value).toBe("retain focus");
   });
 });

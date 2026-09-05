@@ -325,6 +325,12 @@ export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: S
     if (!root) return;
     const first = root.querySelector<HTMLElement>("input, select, button");
     first?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const root = dialogRef.current;
+    if (!root) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
