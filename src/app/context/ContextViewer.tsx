@@ -1,3 +1,4 @@
+import { SnapshotImport } from "./SnapshotImport";
 import { Component, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,9 +9,15 @@ import type {
   ContextDocument,
   ContextDocumentRequest,
   ContextEntry,
+  ContextInvalidation,
+  ContextKnownRevision,
   ContextRoot,
   PanePresentation,
+  CommentDraft,
 } from "../../protocol/generated/v1";
+import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "./CommentDrafts";
+import { ContextSearch } from "./ContextSearch";
+import { splitSourceLines } from "./sourceLines";
 import "./context.css";
 
 export type ContextViewMode = "source" | "markdown";
@@ -22,17 +29,30 @@ export interface ContextFileViewState {
   selectionStart: number | null;
   selectionEnd: number | null;
   scrollTop: number;
+  revision?: string | null;
+}
+
+export interface ContextCommentEditorState {
+  rootId: string;
+  path: string;
+  revision: string;
+  draftId: string | null;
+  editor: "whole_file" | "lines";
+  text: string;
+  selection: { start: number; end: number } | null;
 }
 
 export interface ContextViewState {
   rootId: string | null;
   path: string | null;
   files: Record<string, ContextFileViewState>;
+  commentEditor: ContextCommentEditorState | null;
 }
 
 export function createContextViewState(): ContextViewState {
-  return { rootId: null, path: null, files: {} };
+  return { rootId: null, path: null, files: {}, commentEditor: null };
 }
+
 
 export type ContextViewerProps = {
   client: CockpitClient;
@@ -100,7 +120,6 @@ function retainDocumentState(current: Record<string, DocumentState>, key: string
 }
 
 
-type SourceLine = { text: string; raw: string };
 type SourceSpan = { start: number; end: number };
 
 type DerivedMarkdown = {
@@ -123,24 +142,8 @@ function readableError(error: unknown): string {
   return "The Context request could not be completed.";
 }
 
-function splitSource(source: string): SourceLine[] {
-  const result: SourceLine[] = [];
-  let start = 0;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (character !== "\r" && character !== "\n") continue;
-    const end = character === "\r" && source[index + 1] === "\n" ? index + 2 : index + 1;
-    result.push({ text: source.slice(start, index), raw: source.slice(start, end) });
-    start = end;
-    if (end === source.length) break;
-    if (end > index + 1) index += 1;
-  }
-  if (start < source.length || result.length === 0) result.push({ text: source.slice(start), raw: source.slice(start) });
-  return result;
-}
-
 function sourceLinesForMarkdown(source: string): DerivedMarkdown {
-  const lines = splitSource(source);
+  const lines = splitSourceLines(source);
   let frontmatter: SourceSpan | null = null;
   let bodyStart = 0;
   if (lines[0]?.text.trim() === "---") {
@@ -160,7 +163,7 @@ function sourceLinesForMarkdown(source: string): DerivedMarkdown {
   };
 }
 function metadataSummary(source: string): string | null {
-  const lines = splitSource(source);
+  const lines = splitSourceLines(source);
   if (lines[0]?.text.trim() !== "---") return null;
   const fields: Record<string, string> = {};
   for (const line of lines.slice(1)) {
@@ -225,15 +228,22 @@ function SourceLines({
   state,
   onSelect,
   onScroll,
+  commentDrafts = [],
+  commentActions,
 }: {
   text: string;
   state: ContextFileViewState;
   onSelect: (start: number, end: number, extend: boolean) => void;
   onScroll: (scrollTop: number) => void;
+  commentDrafts?: CommentDraft[];
+  commentActions?: CommentDraftActions;
 }) {
-  const lines = useMemo(() => splitSource(text), [text]);
+  const lines = useMemo(() => splitSourceLines(text), [text]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<number | null>(null);
+  useEffect(() => {
+    anchorRef.current = null;
+  }, [state.rootId, state.path, state.revision, text]);
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop;
   }, [state.path, state.scrollTop]);
@@ -250,24 +260,26 @@ function SourceLines({
           const lineNumber = index + 1;
           const selected = state.selectionStart !== null && state.selectionEnd !== null && lineNumber >= Math.min(state.selectionStart, state.selectionEnd) && lineNumber <= Math.max(state.selectionStart, state.selectionEnd);
           return (
-            <button
-              type="button"
-              role="row"
-              className={`context-source-line${selected ? " is-selected" : ""}`}
-              aria-selected={selected}
-              data-line={lineNumber}
-              key={lineNumber}
-              onClick={(event) => {
-                const anchor = anchorRef.current;
-                const start = event.shiftKey && anchor !== null ? Math.min(anchor, lineNumber) : lineNumber;
-                const end = event.shiftKey && anchor !== null ? Math.max(anchor, lineNumber) : lineNumber;
-                anchorRef.current = lineNumber;
-                onSelect(start, end, event.shiftKey);
-              }}
-            >
-              <span className="context-line-number" aria-hidden="true">{lineNumber}</span>
-              <code className="context-line-text">{line.text || " "}</code>
-            </button>
+            <span className="context-source-line-wrap" key={lineNumber}>
+              <button
+                type="button"
+                role="row"
+                className={`context-source-line${selected ? " is-selected" : ""}`}
+                aria-selected={selected}
+                data-line={lineNumber}
+                onClick={(event) => {
+                  const anchor = anchorRef.current;
+                  const start = event.shiftKey && anchor !== null ? Math.min(anchor, lineNumber) : lineNumber;
+                  const end = event.shiftKey && anchor !== null ? Math.max(anchor, lineNumber) : lineNumber;
+                  anchorRef.current = lineNumber;
+                  onSelect(start, end, event.shiftKey);
+                }}
+              >
+                <span className="context-line-number" aria-hidden="true">{lineNumber}</span>
+                <code className="context-line-text">{line.text || " "}</code>
+              </button>
+              {commentActions ? <InlineCommentDrafts drafts={commentDrafts} line={lineNumber} actions={commentActions} rootId={state.rootId} path={state.path} /> : null}
+            </span>
           );
         })}
       </div>
@@ -316,7 +328,7 @@ function MarkdownView({
       {derived.frontmatter ? (
         <details className="context-frontmatter">
           <summary>Metadata</summary>
-          <SourceLines text={splitSource(text).slice(derived.frontmatter.start - 1, derived.frontmatter.end).map((line) => line.raw).join("")} state={{ rootId: "", path: "", mode: "source", selectionStart: null, selectionEnd: null, scrollTop: 0 }} onSelect={() => undefined} onScroll={() => undefined} />
+          <SourceLines text={splitSourceLines(text).slice(derived.frontmatter.start - 1, derived.frontmatter.end).map((line) => line.raw).join("")} state={{ rootId: "", path: "", mode: "source", selectionStart: null, selectionEnd: null, scrollTop: 0 }} onSelect={() => undefined} onScroll={() => undefined} />
         </details>
       ) : null}
       <article className="context-markdown-body">
@@ -349,6 +361,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const protectedDirectoryKeysRef = useRef<Set<string>>(new Set());
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [invalidationGeneration, setInvalidationGeneration] = useState(0);
   const [rootId, setRootId] = useState<string | null>(value.rootId ?? presentation.default_root_id ?? presentation.roots[0]?.root_id ?? null);
   const directoriesRef = useRef(directories);
   directoriesRef.current = directories;
@@ -398,10 +411,15 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }
   protectedDirectoryKeysRef.current = protectedDirectoryKeys;
   const document = documentState?.document;
+  const knownRevisions = useMemo<ContextKnownRevision[]>(() => Object.values(documents)
+    .map((state) => state.document)
+    .filter((candidate): candidate is ContextDocument => candidate !== undefined && candidate.root_id === activeRootId)
+    .map((candidate) => ({ path: candidate.path, revision: candidate.revision }))
+    .sort((left, right) => left.path.localeCompare(right.path)), [activeRootId, documents]);
 
   const updateFile = useCallback((patch: Partial<ContextFileViewState>) => {
     if (!root || !selectedPath || !selectedKey) return;
-    const previous = value.files[selectedKey] ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0 };
+    const previous = value.files[selectedKey] ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision: selectedRevision };
     const files = { ...value.files };
     delete files[selectedKey];
     files[selectedKey] = { ...previous, ...patch };
@@ -413,6 +431,10 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     }
     onChange({ ...value, rootId: root.root_id, path: selectedPath, files });
   }, [onChange, root, selectedKey, selectedPath, value]);
+  useEffect(() => {
+    if (!selectedKey || !document || !selectedFileState || selectedFileState.revision === document.revision) return;
+    updateFile({ revision: document.revision, selectionStart: null, selectionEnd: null });
+  }, [document?.revision, selectedFileState, selectedKey, updateFile]);
 
   const loadDirectory = useCallback(async (directoryRoot: ContextRoot, path: string, force = false) => {
     const key = keyFor(directoryRoot.root_id, path);
@@ -495,7 +517,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const chooseEntry = (entry: ContextEntry) => {
     if (entry.kind !== "file" || entry.refusal || !entry.path || !root) return;
     const fileKey = keyFor(root.root_id, entry.path);
-    const next = value.files[fileKey] ?? { rootId: root.root_id, path: entry.path, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0 };
+    const next = value.files[fileKey] ?? { rootId: root.root_id, path: entry.path, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision: entry.revision };
     const files = { ...value.files };
     delete files[fileKey];
     files[fileKey] = next;
@@ -526,6 +548,57 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const path = selectedPath ? directoryPathForFile : "";
     void loadDirectory(root, path, true);
   };
+  const searchContext = useCallback((request: Parameters<CockpitClient["contextSearch"]>[2], signal: AbortSignal) =>
+    client.contextSearch(sessionId, paneId, request, signal), [client, paneId, sessionId]);
+  const pollContext = useCallback((request: Parameters<CockpitClient["contextInvalidate"]>[2], signal: AbortSignal) =>
+    client.contextInvalidate(sessionId, paneId, request, signal), [client, paneId, sessionId]);
+  const selectSearchResult = useCallback((result: { path: string; line: number; revision: string }) => {
+    if (!root) return;
+    const fileKey = keyFor(root.root_id, result.path);
+    const files = { ...value.files, [fileKey]: {
+      ...(value.files[fileKey] ?? {
+        rootId: root.root_id,
+        path: result.path,
+        mode: "source" as const,
+        selectionStart: null,
+        selectionEnd: null,
+        scrollTop: 0,
+      }),
+      revision: result.revision,
+      selectionStart: result.line,
+      selectionEnd: result.line,
+    } };
+    onChange({ ...value, rootId: root.root_id, path: result.path, files });
+  }, [onChange, root, value]);
+  const invalidateVisibleFiles = useCallback((invalidations: ContextInvalidation[]) => {
+    if (!root || invalidations.length === 0) return;
+    const invalidated = new Set(invalidations.map((item) => item.path));
+    const files = { ...value.files };
+    let changed = false;
+    for (const path of invalidated) {
+      const key = keyFor(root.root_id, path);
+      const state = files[key];
+      if (!state) continue;
+      const update = invalidations.find((item) => item.path === path);
+      files[key] = {
+        ...state,
+        revision: update?.revision ?? state.revision,
+        selectionStart: null,
+        selectionEnd: null,
+      };
+      changed = true;
+    }
+    setDocuments((current) => {
+      const next = { ...current };
+      for (const path of invalidated) delete next[keyFor(root.root_id, path)];
+      return next;
+    });
+    if (selectedPath && invalidated.has(selectedPath)) {
+      void loadDirectory(root, directoryPathForFile, true);
+    }
+    if (changed) onChange({ ...value, files });
+    setInvalidationGeneration((generation) => generation + 1);
+  }, [directoryPathForFile, loadDirectory, onChange, root, selectedPath, value]);
   const renderDirectory = (path: string, depth: number): ReactNode => {
     if (!root || depth > 32) return null;
     const state = directories[keyFor(root.root_id, path)];
@@ -555,29 +628,51 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     );
   };
   const renderDocument = (): ReactNode => {
-    if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
-    if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
-    if (documentState.status === "error" && !document) {
-      return <div className="context-notice context-notice-error"><strong>Unable to read source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Retry</button></div>;
-    }
-    if (!document) return null;
-    const fileState = selectedFileState ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0 };
-    const metadata = metadataSummary(document.text ?? "");
-    const selectedLines = fileState.selectionStart !== null && fileState.selectionEnd !== null
-      ? `Lines ${Math.min(fileState.selectionStart, fileState.selectionEnd)}–${Math.max(fileState.selectionStart, fileState.selectionEnd)}`
+    const fileState = selectedPath
+      ? selectedFileState ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision: selectedRevision }
+      : null;
+    const selectedRange = fileState && fileState.selectionStart !== null && fileState.selectionEnd !== null
+      ? { start: fileState.selectionStart, end: fileState.selectionEnd }
       : null;
     return (
-      <>
-        <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
-        {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
-        {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
-        {document.text === null ? <div className="context-notice context-notice-error"><strong>File refused</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
-          <div className="context-mode-switch" role="tablist" aria-label="Document view"><button type="button" role="tab" aria-selected={fileState.mode === "source"} className={fileState.mode === "source" ? "is-selected" : ""} onClick={() => updateFile({ mode: "source" })}>Source</button>{isMarkdown(document, selectedPath) ? <button type="button" role="tab" aria-selected={fileState.mode === "markdown"} className={fileState.mode === "markdown" ? "is-selected" : ""} onClick={() => updateFile({ mode: "markdown" })}>Markdown</button> : null}</div>
-          <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text} state={{ ...fileState, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} /></div>}>
-            {fileState.mode === "markdown" ? <MarkdownView text={document.text} state={fileState} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text} state={fileState} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} />}
-          </RenderErrorBoundary>
-        </>}
-      </>
+      <CommentDrafts
+        client={client}
+        presentation={presentation}
+        root={root}
+        path={selectedPath ?? ""}
+        document={document ?? null}
+        selection={selectedRange}
+        mode={fileState?.mode ?? "source"}
+        editorState={value.commentEditor ?? null}
+        onEditorStateChange={(commentEditor) => onChange({ ...value, commentEditor })}
+        invalidationGeneration={invalidationGeneration}
+      >
+        {(drafts, actions) => {
+          if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
+          if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
+          if (documentState.status === "error" && !document) {
+            return <div className="context-notice context-notice-error"><strong>Unable to read source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Retry</button></div>;
+          }
+          if (!document) return null;
+          const metadata = metadataSummary(document.text ?? "");
+          const selectedLines = selectedRange
+            ? `Lines ${Math.min(selectedRange.start, selectedRange.end)}–${Math.max(selectedRange.start, selectedRange.end)}`
+            : null;
+          return (
+            <>
+              <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
+              {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
+              {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
+              {document.text === null ? <div className="context-notice context-notice-error"><strong>File refused</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
+                <div className="context-mode-switch" role="tablist" aria-label="Document view"><button type="button" role="tab" aria-selected={fileState!.mode === "source"} className={fileState!.mode === "source" ? "is-selected" : ""} onClick={() => updateFile({ mode: "source" })}>Source</button>{isMarkdown(document, selectedPath) ? <button type="button" role="tab" aria-selected={fileState!.mode === "markdown"} className={fileState!.mode === "markdown" ? "is-selected" : ""} onClick={() => updateFile({ mode: "markdown" })}>Markdown</button> : null}</div>
+                <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
+                  {fileState!.mode === "markdown" ? <MarkdownView text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} />}
+                </RenderErrorBoundary>
+              </>}
+            </>
+          );
+        }}
+      </CommentDrafts>
     );
   };
 
@@ -595,6 +690,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         <span className="context-readonly-badge">Read-only</span>
         {presentation.roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = presentation.roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{presentation.roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
         <span className="context-toolbar-spacer" />
+
         <button type="button" onClick={refresh} aria-label="Refresh Context files">Refresh</button>
         <button type="button" onClick={onTerminalView}>Show terminal</button>
       </header>
@@ -602,6 +698,24 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       <div className="context-body">
         <aside className="context-tree" aria-label="Context files">
           <div className="context-tree-header">FILES <span>{root.label}</span></div>
+        {root.kind === "companion" ? <ContextSearch
+          identity={identityKey}
+          bindingId={bindingId}
+          rootId={root.root_id}
+          known={knownRevisions}
+          search={searchContext}
+          poll={pollContext}
+          onSelect={selectSearchResult}
+          onInvalidate={invalidateVisibleFiles}
+          disabled={!controlAllowed}
+        /> : null}
+          {root.kind === "companion" ? <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={(result) => {
+            const parts = result.snapshot_path.split("/");
+            const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+            setExpanded(current => new Set([...current, ...paths]));
+            void loadDirectory(root, "", true);
+            for (const path of paths) void loadDirectory(root, path, true);
+          }} /> : null}
           {renderDirectory("", 0)}
         </aside>
         <main className="context-document">

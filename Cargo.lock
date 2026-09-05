@@ -561,6 +561,7 @@ dependencies = [
  "cockpit-protocol",
  "fs2",
  "nix",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -583,6 +584,7 @@ dependencies = [
  "nix",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

@@ -1,4 +1,5 @@
 mod cli;
+mod paste;
 pub mod schema;
 mod terminal_wire;
 

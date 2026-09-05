@@ -28,6 +28,13 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, .32);
 }
 
+.setup-header,
+.setup-stepper,
+.setup-progress,
+.setup-footer {
+  flex: 0 0 auto;
+}
+
 .setup-header {
   display: flex;
   align-items: flex-start;
@@ -117,7 +124,7 @@
 .setup-step.is-current .setup-step-number { border-color: var(--accent); color: var(--accent); }
 
 .setup-body,
-.setup-complete { min-height: 0; overflow: auto; }
+.setup-complete { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .setup-step-content,
 .setup-complete { padding: 20px 24px 24px; }
 .setup-section-heading { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 18px; }

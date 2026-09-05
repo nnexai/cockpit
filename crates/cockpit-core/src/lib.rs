@@ -1,13 +1,19 @@
+pub mod context_assets;
+pub mod comments;
 pub mod config;
 pub mod context;
+pub mod context_search;
 pub mod extension_adapter;
 pub mod process;
 pub mod project_adapter;
+pub mod paste_adapter;
 mod project_store;
 pub mod projects;
+pub mod project_teardown;
 pub mod repositories;
 
 pub use extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
+pub use paste_adapter::CommentPasteAdapter;
 pub use project_adapter::ProjectHerdrAdapter;
 
 use std::collections::{HashMap, HashSet};
@@ -113,6 +119,7 @@ pub struct CockpitService {
     compatibility: Arc<RwLock<CompatibilityCache>>,
     projects: Option<Arc<projects::ProjectService>>,
     contexts: Option<Arc<context::ContextService>>,
+    comments: Option<Arc<comments::CommentsService>>,
 }
 
 #[derive(Default)]
@@ -173,6 +180,7 @@ impl CockpitService {
             compatibility: Arc::new(RwLock::new(CompatibilityCache::default())),
             projects: None,
             contexts: None,
+            comments: None,
         }
     }
 
@@ -200,6 +208,20 @@ impl CockpitService {
             InspectionError::new(
                 "context_configuration_unavailable",
                 "Context operations are not configured in this host",
+            )
+        })
+    }
+
+    pub fn with_comments(mut self, comments: comments::CommentsService) -> Self {
+        self.comments = Some(Arc::new(comments));
+        self
+    }
+
+    pub fn comments(&self) -> Result<&Arc<comments::CommentsService>, InspectionError> {
+        self.comments.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "comments_configuration_unavailable",
+                "Comment operations are not configured in this host",
             )
         })
     }

@@ -42,6 +42,30 @@ pub struct CompanionManifest {
     pub ownership: String,
 }
 
+/// Durable evidence for a teardown removal that may need explicit recovery.
+/// The receipt is separate from setup progress so an indeterminate teardown
+/// never reopens or rewrites the original workspace lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TeardownReceipt {
+    pub operation_id: String,
+    pub workspace_id: String,
+    pub endpoint_identity: String,
+    pub checkout_path: String,
+    pub companion: CompanionManifest,
+    pub state: TeardownReceiptState,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TeardownReceiptState {
+    Pending,
+    OutcomeUnknown,
+    OrphanedCompanion,
+    Completed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredOperation {
@@ -51,7 +75,7 @@ struct StoredOperation {
 /// A short journal compare-and-swap lock. The lock file is retained forever;
 /// ownership is the kernel lock on its open descriptor, not its age.
 #[derive(Debug)]
-struct LockGuard {
+pub(crate) struct LockGuard {
     _file: File,
 }
 
@@ -78,6 +102,26 @@ impl ProjectStore {
         Ok(Self {
             root_dir: Arc::new(root_dir),
         })
+    }
+    pub(crate) fn state_dir(&self) -> &Dir {
+        self.root_dir.as_ref()
+    }
+
+    /// Acquire a lock in this store for a sibling persistence module.
+    pub(crate) fn acquire_named_lock(
+        &self,
+        name: &str,
+        code: &'static str,
+    ) -> Result<LockGuard, InspectionError> {
+        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('\0') {
+            return Err(InspectionError::new("unsafe_path", "invalid lock name"));
+        }
+        self.acquire_file_lock(name, code).map(|file| LockGuard { _file: file })
+    }
+
+    pub(crate) fn acquire_record_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
+        validate_operation_id(id)?;
+        self.acquire_named_lock(&format!(".{id}.lock"), "state_lock")
     }
 
     pub fn persist_plan(
@@ -418,6 +462,99 @@ impl ProjectStore {
         Ok(companion_root.as_ref().to_path_buf().join(id))
     }
 
+    /// Remove one exactly reviewed Cockpit-owned companion directory. The
+    /// descriptor-relative operation cannot traverse outside `companion_root`;
+    /// the manifest must still exactly match the reviewed association.
+    pub fn remove_owned_companion(
+        &self,
+        companion_root: impl AsRef<Path>,
+        manifest: &CompanionManifest,
+    ) -> Result<(), InspectionError> {
+        validate_operation_id(&manifest.cockpit_operation_id)?;
+        if manifest.ownership != "cockpit" {
+            return Err(InspectionError::new(
+                "invalid_ownership",
+                "companion ownership must be cockpit",
+            ));
+        }
+        let _lock = self.acquire_lock(&manifest.cockpit_operation_id)?;
+        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
+        let id = manifest.cockpit_operation_id.as_str();
+        let child = root.open_dir_nofollow(id).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                InspectionError::new("companion_missing", "companion directory does not exist")
+            } else {
+                map_io(error, "companion_read")
+            }
+        })?;
+        let existing: CompanionManifest = read_json(&child, "manifest.json")?;
+        if existing != *manifest {
+            return Err(InspectionError::new(
+                "association_conflict",
+                "companion association changed after teardown review",
+            ));
+        }
+        root.remove_dir_all(id).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new("unsafe_path", "companion destination is unsafe")
+            } else {
+                map_io(error, "companion_remove")
+            }
+        })
+    }
+
+    pub(crate) fn read_teardown_receipt(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<TeardownReceipt>, InspectionError> {
+        validate_operation_id(operation_id)?;
+        let _lock = self.acquire_named_lock(&teardown_lock_name(operation_id), "teardown_lock")?;
+        let name = teardown_record_name(operation_id);
+        match self.root_dir.symlink_metadata(&name) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
+                InspectionError::new("unsafe_path", "teardown receipt is not a regular file"),
+            ),
+            Ok(_) => read_json(&self.root_dir, &name).map(Some),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(map_io(error, "teardown_read")),
+        }
+    }
+
+    pub(crate) fn write_teardown_receipt(
+        &self,
+        receipt: &TeardownReceipt,
+    ) -> Result<(), InspectionError> {
+        validate_operation_id(&receipt.operation_id)?;
+        validate_resource_id(&receipt.workspace_id, "workspace")?;
+        if receipt.companion.cockpit_operation_id != receipt.operation_id
+            || receipt.companion.ownership != "cockpit"
+            || receipt.checkout_path != receipt.companion.checkout_path
+            || receipt.endpoint_identity != receipt.companion.herdr_session_identity
+            || receipt.workspace_id != receipt.companion.herdr_workspace_id
+        {
+            return Err(InspectionError::new(
+                "association_conflict",
+                "teardown receipt does not match its reviewed companion",
+            ));
+        }
+        let _lock = self.acquire_named_lock(
+            &teardown_lock_name(&receipt.operation_id),
+            "teardown_lock",
+        )?;
+        atomic_write_json(
+            &self.root_dir,
+            &teardown_record_name(&receipt.operation_id),
+            receipt,
+        )
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new("unsafe_path", "teardown receipt destination is unsafe")
+            } else {
+                map_io(error, "teardown_write")
+            }
+        })
+    }
+
     fn acquire_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
         let file = self.acquire_file_lock(&format!(".{id}.lock"), "state_lock")?;
         Ok(LockGuard { _file: file })
@@ -721,7 +858,15 @@ fn lease_name(id: &str) -> String {
     format!(".{id}.exec.lock")
 }
 
-fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) -> io::Result<()> {
+fn teardown_record_name(id: &str) -> String {
+    format!("{id}.teardown.json")
+}
+
+fn teardown_lock_name(id: &str) -> String {
+    format!(".{id}.teardown.lock")
+}
+
+pub(crate) fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) -> io::Result<()> {
     let tmp = format!(".{}.tmp", Uuid::new_v4());
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -748,9 +893,16 @@ fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) -> io::Resu
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(dir: &Dir, name: &str) -> Result<T, InspectionError> {
+    read_json_bounded(dir, name, MAX_RECORD_BYTES)
+}
+
+pub(crate) fn read_json_bounded<T: for<'de> Deserialize<'de>>(
+    dir: &Dir,
+    name: &str,
+    max_bytes: u64,
+) -> Result<T, InspectionError> {
     let metadata = dir.symlink_metadata(name).map_err(io_error("state_read"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES
-    {
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
         return Err(InspectionError::new(
             "unsafe_path",
             "state record is not a bounded regular file",
@@ -767,9 +919,15 @@ fn read_json<T: for<'de> Deserialize<'de>>(dir: &Dir, name: &str) -> Result<T, I
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.read_to_end(&mut bytes)
         .map_err(io_error("state_read"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(InspectionError::new(
+            "unsafe_path",
+            "state record exceeded its bounded size while reading",
+        ));
+    }
     serde_json::from_slice(&bytes).map_err(|e| InspectionError::new("state_corrupt", e.to_string()))
-}
 
+}
 fn validate_operation_id(value: &str) -> Result<(), InspectionError> {
     if Uuid::parse_str(value).is_err() {
         return Err(InspectionError::new(
@@ -795,7 +953,7 @@ fn validate_resource_id(value: &str, kind: &str) -> Result<(), InspectionError> 
     Ok(())
 }
 
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -872,6 +1030,58 @@ mod tests {
             updated_at: "1".to_owned(),
             ownership: "cockpit".to_owned(),
         }
+    }
+
+    fn teardown_receipt(id: &str, state: TeardownReceiptState) -> TeardownReceipt {
+        let mut companion = manifest(id);
+        companion.herdr_session_identity = "endpoint-a".to_owned();
+        companion.herdr_workspace_id = "workspace-a".to_owned();
+        TeardownReceipt {
+            operation_id: id.to_owned(),
+            workspace_id: "workspace-a".to_owned(),
+            endpoint_identity: "endpoint-a".to_owned(),
+            checkout_path: companion.checkout_path.clone(),
+            companion,
+            state,
+            updated_at: "1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn teardown_receipt_survives_reopen_and_preserves_unknown_state() {
+        let root = temp_root("teardown-receipt-restart");
+        let id = Uuid::new_v4().to_string();
+        let mut receipt = teardown_receipt(&id, TeardownReceiptState::Pending);
+        ProjectStore::new(&root)
+            .expect("first store")
+            .write_teardown_receipt(&receipt)
+            .expect("write pending receipt");
+
+        let reopened = ProjectStore::new(&root).expect("reopened store");
+        assert_eq!(
+            reopened
+                .read_teardown_receipt(&id)
+                .expect("read pending receipt")
+                .expect("receipt"),
+            receipt,
+        );
+        receipt.state = TeardownReceiptState::OutcomeUnknown;
+        receipt.updated_at = "2".to_owned();
+        reopened
+            .write_teardown_receipt(&receipt)
+            .expect("persist unknown receipt");
+        drop(reopened);
+
+        assert_eq!(
+            ProjectStore::new(&root)
+                .expect("second reopened store")
+                .read_teardown_receipt(&id)
+                .expect("read unknown receipt")
+                .expect("receipt")
+                .state,
+            TeardownReceiptState::OutcomeUnknown,
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

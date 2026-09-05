@@ -12,17 +12,25 @@ use cockpit_protocol::projects::{
     WorkspaceOwnedResource, WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode,
     WorkspaceSetupPlan, WorkspaceSetupRequest,
 };
+use cockpit_protocol::project_teardown::{
+    WorkspaceTeardownExecuteRequest, WorkspaceTeardownOutcome, WorkspaceTeardownPreview,
+    WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecovery,
+    WorkspaceTeardownRecoveryList, WorkspaceTeardownRecoveryState, WorkspaceTeardownResult,
+};
 use cockpit_protocol::v1::ErrorResponse;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::project_adapter::{
-    ProjectTerminalRequest, ProjectWorktreeRequest, ProjectWorktreeResult,
+    ProjectTerminalRequest, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
+    ProjectWorktreeResult,
 };
 use crate::project_store::{
-    CompanionManifest, ProjectStore, prepare_project_root, validate_project_root,
+    CompanionManifest, ProjectStore, TeardownReceipt, TeardownReceiptState, prepare_project_root,
+    timestamp, validate_project_root,
 };
+use crate::project_teardown::{self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree};
 use crate::repositories::{self, RepositoryCatalog};
 use crate::{InspectionError, ProjectHerdrAdapter};
 /// sessions, workspaces, tabs, panes, and worktrees; this service only journals
@@ -34,6 +42,30 @@ pub struct ProjectService {
     shutting_down: AtomicBool,
     cancelled: Mutex<HashSet<String>>,
     workers: Mutex<HashSet<String>>,
+}
+
+struct FreshTeardownEvidence {
+    operation: WorkspaceOperation,
+    companion: Option<CompanionManifest>,
+    endpoint_identity: String,
+    repository_key: String,
+    repository_root: String,
+    worktrees: Vec<WorkspaceTeardownWorktree>,
+    receipt: Option<TeardownReceipt>,
+}
+
+impl FreshTeardownEvidence {
+    fn evidence(&self) -> WorkspaceTeardownEvidence<'_> {
+        WorkspaceTeardownEvidence {
+            operation: &self.operation,
+            companion: self.companion.as_ref(),
+            endpoint_identity: &self.endpoint_identity,
+            repository_key: &self.repository_key,
+            repository_root: &self.repository_root,
+            worktrees: &self.worktrees,
+            receipt: self.receipt.as_ref(),
+        }
+    }
 }
 
 impl ProjectService {
@@ -364,6 +396,488 @@ impl ProjectService {
         }
         Ok(operation)
     }
+
+    /// Obtain a fresh, non-mutating teardown preview. Git status failures are
+    /// represented as `unknown` evidence, which safely blocks removal.
+    pub async fn teardown_preview(
+        &self,
+        session: &str,
+        request: &WorkspaceTeardownPreviewRequest,
+    ) -> Result<WorkspaceTeardownPreview, InspectionError> {
+        validate_session(session)?;
+        let operation = self.load_teardown_operation_for_workspace(session, &request.workspace_id)?;
+        let evidence = self.fresh_teardown_evidence(session, operation).await?;
+        project_teardown::preview(request, evidence.evidence())
+    }
+
+    /// List durable cleanup records for this session. Entries are journal
+    /// pointers only; opening one must still obtain a fresh teardown preview.
+    pub fn teardown_recoveries(
+        &self,
+        session: &str,
+    ) -> Result<WorkspaceTeardownRecoveryList, InspectionError> {
+        validate_session(session)?;
+        let mut recoveries = Vec::new();
+        for operation in self.store.list()? {
+            if operation.session_id != session {
+                continue;
+            }
+            let Some(receipt) = self.store.read_teardown_receipt(&operation.operation_id)? else {
+                continue;
+            };
+            let Some(workspace_id) = operation.workspace_id.as_deref() else {
+                continue;
+            };
+            if receipt.operation_id != operation.operation_id
+                || receipt.workspace_id != workspace_id
+                || receipt.endpoint_identity != operation.plan.endpoint_identity
+                || receipt.checkout_path != operation.plan.checkout_path
+            {
+                return Err(InspectionError::new(
+                    "association_conflict",
+                    "teardown receipt differs from its operation journal",
+                ));
+            }
+            let state = match receipt.state {
+                TeardownReceiptState::Pending => WorkspaceTeardownRecoveryState::Pending,
+                TeardownReceiptState::OutcomeUnknown => {
+                    WorkspaceTeardownRecoveryState::OutcomeUnknown
+                }
+                TeardownReceiptState::OrphanedCompanion => {
+                    WorkspaceTeardownRecoveryState::OrphanedCompanion
+                }
+                TeardownReceiptState::Completed => continue,
+            };
+            recoveries.push(WorkspaceTeardownRecovery {
+                operation_id: operation.operation_id,
+                workspace_id: workspace_id.to_owned(),
+                checkout_path: operation.plan.checkout_path,
+                state,
+            });
+        }
+        recoveries.sort_by(|left, right| {
+            left.checkout_path
+                .cmp(&right.checkout_path)
+                .then(left.operation_id.cmp(&right.operation_id))
+        });
+        Ok(WorkspaceTeardownRecoveryList { recoveries })
+    }
+
+    /// Execute one explicitly reviewed teardown action. A worktree removal is
+    /// always non-force and removes the companion only after Herdr confirms the
+    /// exact requested checkout was removed.
+    pub async fn teardown_execute(
+        &self,
+        session: &str,
+        request: &WorkspaceTeardownExecuteRequest,
+    ) -> Result<WorkspaceTeardownResult, InspectionError> {
+        validate_session(session)?;
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(InspectionError::new(
+                "shutdown",
+                "project service is shutting down",
+            ));
+        }
+        let operation = self.load_teardown_operation(session, &request.operation_id)?;
+        let _lease = self
+            .store
+            .acquire_execution_lease(&operation.operation_id)?;
+        // Reload after acquiring the cross-host lease so a prior executor's
+        // durable receipt is always part of the command decision.
+        let operation = self.load_teardown_operation(session, &request.operation_id)?;
+        let evidence = self.fresh_teardown_evidence(session, operation).await?;
+        let command = project_teardown::command(request, evidence.evidence())?;
+        match command {
+            WorkspaceTeardownCommand::CloseSpace {
+                workspace_id,
+                endpoint_identity,
+            } => {
+                self.adapter
+                    .project_close_workspace(session, &endpoint_identity, &workspace_id)
+                    .await?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: request.operation_id.clone(),
+                    workspace_id,
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::Completed,
+                    message: "workspace closed; the checkout and companion were retained".to_owned(),
+                })
+            }
+            WorkspaceTeardownCommand::ForgetAssociation { operation_id } => {
+                self.store.update(&operation_id, None, |operation| {
+                    if operation.session_id != session {
+                        return Err(InspectionError::new(
+                            "stale_identity",
+                            "operation belongs to another session",
+                        ));
+                    }
+                    operation.companion_id = None;
+                    operation.owned_resources.retain(|resource| {
+                        resource.kind != "companion" || resource.created_by_operation
+                    });
+                    Ok(())
+                })?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id,
+                    workspace_id: request.workspace_id.clone(),
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::Retained,
+                    message: "borrowed checkout association forgotten; no files were removed".to_owned(),
+                })
+            }
+            WorkspaceTeardownCommand::RemoveOwnedWorktree {
+                workspace_id,
+                endpoint_identity,
+                checkout_path,
+                force,
+                ..
+            } => {
+                let mut receipt = self.reviewed_teardown_receipt(&evidence)?;
+                receipt.state = TeardownReceiptState::Pending;
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                let remove = ProjectWorktreeRemoveRequest {
+                    endpoint_identity,
+                    workspace_id: workspace_id.clone(),
+                    checkout_path,
+                    force,
+                };
+                match self.adapter.project_remove_worktree(session, &remove).await {
+                    Ok(()) => {}
+                    Err(_) => {
+                        receipt.state = TeardownReceiptState::OutcomeUnknown;
+                        receipt.updated_at = timestamp();
+                        // If this write fails, the prior pending receipt remains
+                        // durable and still prohibits a blind redispatch.
+                        self.store.write_teardown_receipt(&receipt)?;
+                        return Ok(WorkspaceTeardownResult {
+                            operation_id: request.operation_id.clone(),
+                            workspace_id,
+                            action: request.action,
+                            outcome: WorkspaceTeardownOutcome::OutcomeUnknown,
+                            message: "Herdr did not confirm removal; reconcile before retrying and the companion remains retained".to_owned(),
+                        });
+                    }
+                }
+                match self
+                    .store
+                    .remove_owned_companion(&self.configuration.companion_root, &receipt.companion)
+                {
+                    Ok(()) => {
+                        receipt.state = TeardownReceiptState::Completed;
+                        receipt.updated_at = timestamp();
+                        self.store.write_teardown_receipt(&receipt)?;
+                        Ok(WorkspaceTeardownResult {
+                            operation_id: request.operation_id.clone(),
+                            workspace_id,
+                            action: request.action,
+                            outcome: WorkspaceTeardownOutcome::Completed,
+                            message: "Herdr removed the owned worktree without force".to_owned(),
+                        })
+                    }
+                    Err(error) if error.code == "companion_missing" => {
+                        receipt.state = TeardownReceiptState::Completed;
+                        receipt.updated_at = timestamp();
+                        self.store.write_teardown_receipt(&receipt)?;
+                        Ok(WorkspaceTeardownResult {
+                            operation_id: request.operation_id.clone(),
+                            workspace_id,
+                            action: request.action,
+                            outcome: WorkspaceTeardownOutcome::Completed,
+                            message: "Herdr removed the owned worktree without force".to_owned(),
+                        })
+                    }
+                    Err(error) => {
+                        receipt.state = TeardownReceiptState::OrphanedCompanion;
+                        receipt.updated_at = timestamp();
+                        self.store.write_teardown_receipt(&receipt)?;
+                        Ok(WorkspaceTeardownResult {
+                            operation_id: request.operation_id.clone(),
+                            workspace_id,
+                            action: request.action,
+                            outcome: WorkspaceTeardownOutcome::OrphanedCompanion,
+                            message: format!(
+                                "Herdr removed the worktree; the reviewed companion was retained: {}",
+                                error.message
+                            ),
+                        })
+                    }
+                }
+            }
+            WorkspaceTeardownCommand::ReconcileRemoveOutcome { operation_id } => {
+                self.reconcile_teardown_removal(session, &operation_id, request, &evidence)
+                    .await
+            }
+            WorkspaceTeardownCommand::RemoveOrphanedCompanion { operation_id } => {
+                self.recover_orphaned_companion(&operation_id, request, &evidence)
+            }
+        }
+    }
+
+    fn load_teardown_operation(
+        &self,
+        session: &str,
+        operation_id: &str,
+    ) -> Result<WorkspaceOperation, InspectionError> {
+        let operation = self.store.load(operation_id)?;
+        if operation.session_id != session {
+            return Err(InspectionError::new(
+                "stale_identity",
+                "operation belongs to another session",
+            ));
+        }
+        Ok(operation)
+    }
+
+    fn load_teardown_operation_for_workspace(
+        &self,
+        session: &str,
+        workspace_id: &str,
+    ) -> Result<WorkspaceOperation, InspectionError> {
+        let matches = self
+            .store
+            .list()?
+            .into_iter()
+            .filter(|operation| {
+                operation.session_id == session
+                    && operation.workspace_id.as_deref() == Some(workspace_id)
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [operation] => Ok(operation.clone()),
+            [] => Err(InspectionError::new(
+                "workspace_operation_not_found",
+                "no Cockpit operation is associated with this workspace",
+            )),
+            _ => Err(InspectionError::new(
+                "association_conflict",
+                "multiple Cockpit operations are associated with this workspace",
+            )),
+        }
+    }
+
+    fn reviewed_teardown_receipt(
+        &self,
+        evidence: &FreshTeardownEvidence,
+    ) -> Result<TeardownReceipt, InspectionError> {
+        let companion = evidence.companion.clone().ok_or_else(|| {
+            InspectionError::new(
+                "teardown_not_allowed",
+                "the reviewed companion is no longer available",
+            )
+        })?;
+        Ok(TeardownReceipt {
+            operation_id: evidence.operation.operation_id.clone(),
+            workspace_id: evidence.operation.workspace_id.clone().ok_or_else(|| {
+                InspectionError::new("stale_identity", "operation no longer has a workspace")
+            })?,
+            endpoint_identity: evidence.endpoint_identity.clone(),
+            checkout_path: evidence.operation.plan.checkout_path.clone(),
+            companion,
+            state: TeardownReceiptState::Pending,
+            updated_at: timestamp(),
+        })
+    }
+
+    fn recovery_receipt(
+        &self,
+        evidence: &FreshTeardownEvidence,
+        expected: TeardownReceiptState,
+        require_companion: bool,
+    ) -> Result<TeardownReceipt, InspectionError> {
+        let receipt = evidence.receipt.clone().ok_or_else(|| {
+            InspectionError::new("teardown_receipt_missing", "teardown recovery receipt is missing")
+        })?;
+        if receipt.state != expected
+            || receipt.operation_id != evidence.operation.operation_id
+            || receipt.workspace_id != evidence.operation.workspace_id.as_deref().unwrap_or_default()
+            || receipt.endpoint_identity != evidence.endpoint_identity
+            || receipt.checkout_path != evidence.operation.plan.checkout_path
+            || (require_companion && evidence.companion.as_ref() != Some(&receipt.companion))
+        {
+            return Err(InspectionError::new(
+                "stale_identity",
+                "teardown recovery receipt no longer matches fresh provenance",
+            ));
+        }
+        Ok(receipt)
+    }
+
+    async fn reconcile_teardown_removal(
+        &self,
+        _session: &str,
+        operation_id: &str,
+        request: &WorkspaceTeardownExecuteRequest,
+        evidence: &FreshTeardownEvidence,
+    ) -> Result<WorkspaceTeardownResult, InspectionError> {
+        let mut receipt = self.recovery_receipt(evidence, TeardownReceiptState::OutcomeUnknown, false)
+            .or_else(|error| {
+                if error.code == "stale_identity" {
+                    self.recovery_receipt(evidence, TeardownReceiptState::Pending, false)
+                } else {
+                    Err(error)
+                }
+            })?;
+        match evidence.worktrees.as_slice() {
+            [] => {
+                let companion_missing = evidence.companion.is_none();
+                receipt.state = if companion_missing {
+                    TeardownReceiptState::Completed
+                } else {
+                    TeardownReceiptState::OrphanedCompanion
+                };
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: operation_id.to_owned(),
+                    workspace_id: request.workspace_id.clone(),
+                    action: request.action,
+                    outcome: if companion_missing {
+                        WorkspaceTeardownOutcome::Completed
+                    } else {
+                        WorkspaceTeardownOutcome::OrphanedCompanion
+                    },
+                    message: if companion_missing {
+                        "fresh Herdr inventory confirms the worktree and reviewed companion are gone".to_owned()
+                    } else {
+                        "fresh Herdr inventory confirms the worktree is gone; explicitly review companion cleanup".to_owned()
+                    },
+                })
+            }
+            [worktree]
+                if worktree.open_workspace_id.as_deref() == Some(request.workspace_id.as_str()) =>
+            {
+                receipt.state = TeardownReceiptState::Completed;
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: operation_id.to_owned(),
+                    workspace_id: request.workspace_id.clone(),
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::Retained,
+                    message: "fresh Herdr inventory confirms the worktree remains; request a new removal review before dispatching again".to_owned(),
+                })
+            }
+            _ => Ok(WorkspaceTeardownResult {
+                operation_id: operation_id.to_owned(),
+                workspace_id: request.workspace_id.clone(),
+                action: request.action,
+                outcome: WorkspaceTeardownOutcome::OutcomeUnknown,
+                message: "fresh Herdr inventory is ambiguous; removal remains blocked".to_owned(),
+            }),
+        }
+    }
+
+    fn recover_orphaned_companion(
+        &self,
+        operation_id: &str,
+        request: &WorkspaceTeardownExecuteRequest,
+        evidence: &FreshTeardownEvidence,
+    ) -> Result<WorkspaceTeardownResult, InspectionError> {
+        let mut receipt = self.recovery_receipt(
+            evidence,
+            TeardownReceiptState::OrphanedCompanion,
+            true,
+        )?;
+        match self
+            .store
+            .remove_owned_companion(&self.configuration.companion_root, &receipt.companion)
+        {
+            Ok(()) => {
+                receipt.state = TeardownReceiptState::Completed;
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: operation_id.to_owned(),
+                    workspace_id: request.workspace_id.clone(),
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::Completed,
+                    message: "the reviewed orphaned companion was removed".to_owned(),
+                })
+            }
+            Err(error) if error.code == "companion_missing" => {
+                receipt.state = TeardownReceiptState::Completed;
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: operation_id.to_owned(),
+                    workspace_id: request.workspace_id.clone(),
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::Completed,
+                    message: "the reviewed orphaned companion was removed".to_owned(),
+                })
+            }
+            Err(error) => {
+                receipt.updated_at = timestamp();
+                self.store.write_teardown_receipt(&receipt)?;
+                Ok(WorkspaceTeardownResult {
+                    operation_id: operation_id.to_owned(),
+                    workspace_id: request.workspace_id.clone(),
+                    action: request.action,
+                    outcome: WorkspaceTeardownOutcome::OrphanedCompanion,
+                    message: format!("the reviewed companion was retained: {}", error.message),
+                })
+            }
+        }
+    }
+
+    async fn fresh_teardown_evidence(
+        &self,
+        session: &str,
+        operation: WorkspaceOperation,
+    ) -> Result<FreshTeardownEvidence, InspectionError> {
+        let inventory = self
+            .adapter
+            .project_inventory(session, &operation.plan.repository.checkout_path)
+            .await?;
+        verify_inventory(&inventory, &operation.plan.repository)?;
+        let matching_count = inventory
+            .worktrees
+            .iter()
+            .filter(|entry| entry.checkout_path == operation.plan.checkout_path)
+            .count();
+        let dirty = if matching_count == 1 {
+            self.adapter
+                .project_worktree_dirty(
+                    &operation.plan.checkout_path,
+                    self.configuration.limits.git_timeout_ms,
+                    self.configuration.limits.git_output_bytes,
+                )
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let worktrees = inventory
+            .worktrees
+            .into_iter()
+            .filter(|entry| entry.checkout_path == operation.plan.checkout_path)
+            .map(|entry| WorkspaceTeardownWorktree {
+                checkout_path: entry.checkout_path,
+                open_workspace_id: entry.open_workspace_id,
+                is_linked_worktree: entry.is_linked_worktree,
+                dirty,
+            })
+            .collect();
+        let companion = match self
+            .store
+            .read_companion(&self.configuration.companion_root, &operation.plan.companion_id)
+        {
+            Ok(manifest) => Some(manifest),
+            Err(error) if error.code == "companion_missing" => None,
+            Err(error) => return Err(error),
+        };
+        let receipt = self.store.read_teardown_receipt(&operation.operation_id)?;
+        Ok(FreshTeardownEvidence {
+            endpoint_identity: inventory.endpoint_identity,
+            repository_key: inventory.repository_key,
+            repository_root: inventory.repository_root,
+            operation,
+            companion,
+            worktrees,
+            receipt,
+        })
+    }
     /// Return companions whose durable metadata is still authorized by the
     /// current Herdr endpoint and a fresh worktree inventory. Paths supplied by
     /// callers are never used as authorization.
@@ -427,7 +941,7 @@ impl ProjectService {
             }
             let inventory = self
                 .adapter
-                .project_inventory(session_id, &manifest.checkout_path)
+                .project_inventory(session_id, &operation.plan.repository.checkout_path)
                 .await?;
             if inventory.endpoint_identity != endpoint_identity
                 || inventory.repository_key != manifest.repository_key
@@ -675,7 +1189,12 @@ impl ProjectService {
                             path: entry.checkout_path.clone(),
                             created_by_operation: false,
                         });
-                        operation.step = WorkspaceOperationStep::HerdrObserved;
+                        // An uncertain checkout without a workspace is opened
+                        // explicitly above. Its returned workspace is already
+                        // proven by fresh inventory, so resume must continue
+                        // from worktree readiness instead of dispatching Open
+                        // a second time.
+                        operation.step = WorkspaceOperationStep::WorktreeReady;
                         if operation.cancel_requested {
                             operation.state = WorkspaceOperationState::Cancelled;
                             operation.resume_allowed = false;
@@ -937,6 +1456,22 @@ impl ProjectService {
             ));
         }
         let companion_id = plan.companion_id.as_str();
+        let _association_lock = if plan.mode == WorkspaceSetupMode::Open {
+            Some(self.store.acquire_named_lock(
+                &companion_association_lock_name(&plan),
+                "association_lock",
+            )?)
+        } else {
+            None
+        };
+        if plan.mode == WorkspaceSetupMode::Open {
+            validate_open_companion_association(
+                &self
+                    .store
+                    .list_companions(&self.configuration.companion_root)?,
+                &plan,
+            )?;
+        }
         let companion = match self
             .store
             .read_companion(&self.configuration.companion_root, companion_id)
@@ -1407,6 +1942,54 @@ fn verify_manifest(
     Ok(())
 }
 
+/// Lock names must be filesystem-safe. The association itself is keyed by the
+/// canonical repository provenance and exact checkout, so concurrent Open
+/// operations cannot each publish a different companion for that worktree.
+fn companion_association_lock_name(plan: &WorkspaceSetupPlan) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        plan.repository.common_dir.as_str(),
+        plan.repository.root.as_str(),
+        plan.checkout_path.as_str(),
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    format!(".association-{encoded}.lock")
+}
+
+fn validate_open_companion_association(
+    companions: &[(String, CompanionManifest)],
+    plan: &WorkspaceSetupPlan,
+) -> Result<(), InspectionError> {
+    let matches = companions
+        .iter()
+        .filter(|(_, manifest)| {
+            manifest.repository_key == plan.repository.common_dir
+                && manifest.repository_root == plan.repository.root
+                && manifest.checkout_path == plan.checkout_path
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(()),
+        [(id, _)] if id == &plan.companion_id => Ok(()),
+        [(_, _)] => Err(InspectionError::new(
+            "association_conflict",
+            "an exact checkout companion was created after this Open operation was reviewed",
+        )),
+        _ => Err(InspectionError::new(
+            "association_conflict",
+            "multiple companions are associated with the exact checkout",
+        )),
+    }
+}
+
 fn stable_companion_root_id(
     root_path: &str,
     companion_id: &str,
@@ -1653,6 +2236,86 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn open_plan(companion_id: &str) -> WorkspaceSetupPlan {
+        WorkspaceSetupPlan {
+            operation_id: "operation".to_owned(),
+            generation: 1,
+            endpoint_identity: "endpoint".to_owned(),
+            session_id: "session".to_owned(),
+            repository: RepositoryCandidate {
+                repository_id: "repository".to_owned(),
+                name: "repository".to_owned(),
+                root: "/repositories/repository".to_owned(),
+                checkout_path: "/repositories/repository".to_owned(),
+                common_dir: "/repositories/repository/.git".to_owned(),
+                branch: Some("main".to_owned()),
+                is_linked_worktree: false,
+                is_detached: false,
+                provenance: "catalog".to_owned(),
+            },
+            mode: WorkspaceSetupMode::Open,
+            branch: Some("feature/example".to_owned()),
+            base: None,
+            checkout_path: "/worktrees/example".to_owned(),
+            companion_path: format!("/companions/{companion_id}"),
+            companion_id: companion_id.to_owned(),
+            companion_created_by_operation: false,
+            label: "Example".to_owned(),
+            focus: true,
+            trust_repository: true,
+            artifact: None,
+            effects: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn companion(id: &str) -> CompanionManifest {
+        CompanionManifest {
+            schema_version: 1,
+            cockpit_operation_id: id.to_owned(),
+            herdr_session_identity: "endpoint".to_owned(),
+            herdr_workspace_id: "workspace".to_owned(),
+            repository_key: "/repositories/repository/.git".to_owned(),
+            repository_root: "/repositories/repository".to_owned(),
+            checkout_path: "/worktrees/example".to_owned(),
+            artifact: None,
+            created_at: "0".to_owned(),
+            updated_at: "0".to_owned(),
+            ownership: "cockpit".to_owned(),
+        }
+    }
+
+    #[test]
+    fn open_reuses_only_its_exact_checkout_companion() {
+        let plan = open_plan("current");
+        assert!(validate_open_companion_association(
+            &[("current".to_owned(), companion("current"))],
+            &plan,
+        )
+        .is_ok());
+
+        let error = validate_open_companion_association(
+            &[("other".to_owned(), companion("other"))],
+            &plan,
+        )
+        .expect_err("a second companion must not be published for one checkout");
+        assert_eq!(error.code, "association_conflict");
+    }
+
+    #[test]
+    fn open_rejects_preexisting_duplicate_checkout_companions() {
+        let plan = open_plan("current");
+        let error = validate_open_companion_association(
+            &[
+                ("current".to_owned(), companion("current")),
+                ("other".to_owned(), companion("other")),
+            ],
+            &plan,
+        )
+        .expect_err("ambiguous companion provenance requires review");
+        assert_eq!(error.code, "association_conflict");
+    }
 
     #[test]
     fn relative_and_absolute_destinations_are_contained() {

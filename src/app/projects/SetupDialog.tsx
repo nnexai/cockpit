@@ -177,7 +177,7 @@ function PlanSummary({ plan }: { plan: WorkspaceSetupPlan }) {
 function Progress({ operation, readError, busy, onCancel, onResume, onReview }: { operation: WorkspaceOperation; readError: string | null; busy: boolean; onCancel: () => void; onResume: () => void; onReview: (action: WorkspaceRecoveryAction) => void }) {
   const failed = operation.state === "partial" || operation.state === "needs_review";
   const recoveryAction = recoveryActionFor(operation);
-  const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Accept existing worktree" : recoveryAction === "retry_environment" ? "Retry environment" : null;
+  const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Recover existing checkout" : recoveryAction === "retry_environment" ? "Retry environment" : null;
   return (
     <section className="setup-progress" aria-live="polite" aria-busy={busy} aria-label="Workspace setup progress">
       <div className="setup-progress-heading"><div><span className="setup-eyebrow">Durable operation</span><h3>{operation.step.replaceAll("_", " ")}</h3></div><span className={`setup-state setup-state-${operation.state}`}>{operation.state.replaceAll("_", " ")}</span></div>
@@ -192,7 +192,7 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
         {recoveryAction && recoveryLabel ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>{recoveryLabel}</button> : null}
       </div>
       {failed ? <p className="setup-recovery-note">Completed effects remain in place. Resume addresses only the recorded failed step.</p> : null}
-      {recoveryAction === "accept_existing_worktree" ? <p className="setup-recovery-note">The worktree outcome is uncertain. This action only revalidates the exact existing checkout; it does not create another worktree. Reconcile does not dispatch Herdr mutations. Review the resulting state, then explicitly resume if offered.</p> : null}
+      {recoveryAction === "accept_existing_worktree" ? <p className="setup-recovery-note">The worktree outcome is uncertain. Cockpit validates the exact checkout and, only when Herdr has no workspace open for it, explicitly opens that checkout once. It never redispatches Create. Review the resulting state, then explicitly resume if offered.</p> : null}
       {recoveryAction === "retry_environment" ? <p className="setup-recovery-note">The environment outcome is uncertain. A previous request may have opened a tab. Retrying may create a new environment tab; any uncertain old tab or pane remains untouched. Reconcile does not dispatch Herdr mutations. Review the resulting state, then explicitly resume if offered.</p> : null}
     </section>
   );
@@ -553,4 +553,3 @@ export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: S
     </div>
   );
 }
-

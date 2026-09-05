@@ -5,6 +5,11 @@ use cockpit_protocol::{
         WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupPlan,
         WorkspaceSetupRequest,
     },
+    project_teardown::{
+        WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreview,
+        WorkspaceTeardownPreviewRequest, WorkspaceTeardownRecoveryList,
+        WorkspaceTeardownResult,
+    },
     v1::ErrorResponse,
 };
 use serde_json::Value;
@@ -120,5 +125,47 @@ pub async fn cockpit_workspace_reconcile(
         .map_err(inspection_error_response)?
         .reconcile(&session_id, &request)
         .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_workspace_teardown_preview(
+    session_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<WorkspaceTeardownPreview, ErrorResponse> {
+    let request: WorkspaceTeardownPreviewRequest = decode_request(request, "project teardown")?;
+    service
+        .projects()
+        .map_err(inspection_error_response)?
+        .teardown_preview(&session_id, &request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_workspace_teardown_execute(
+    session_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<WorkspaceTeardownResult, ErrorResponse> {
+    let request: WorkspaceTeardownExecuteRequest = decode_request(request, "project teardown")?;
+    service
+        .projects()
+        .map_err(inspection_error_response)?
+        .teardown_execute(&session_id, &request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_workspace_teardown_recoveries(
+    session_id: String,
+    service: State<'_, CockpitService>,
+) -> Result<WorkspaceTeardownRecoveryList, ErrorResponse> {
+    service
+        .projects()
+        .map_err(inspection_error_response)?
+        .teardown_recoveries(&session_id)
         .map_err(inspection_error_response)
 }

@@ -36,6 +36,7 @@ use tokio::net::TcpListener;
 use tower_http::services::{ServeDir, ServeFile};
 const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 
+mod comments;
 mod context;
 mod projects;
 
@@ -171,6 +172,7 @@ fn build_router_with_validated_root(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/terminal",
             get(terminal_ws),
         )
+        .merge(comments::routes())
         .merge(projects::routes())
         .merge(context::routes())
         // Keep API resolution ahead of the static service. This prevents a static file
@@ -369,7 +371,10 @@ fn valid_dimensions(cols: u16, rows: u16) -> bool {
 fn inspection_error(error: InspectionError) -> Response {
     let status = if error.code.starts_with("invalid_") {
         StatusCode::BAD_REQUEST
-    } else if error.code == "focus_conflict" || error.code == "terminal_ownership_conflict" {
+    } else if error.code == "focus_conflict"
+        || error.code == "terminal_ownership_conflict"
+        || error.code == "stale_generation"
+    {
         StatusCode::CONFLICT
     } else {
         StatusCode::SERVICE_UNAVAILABLE

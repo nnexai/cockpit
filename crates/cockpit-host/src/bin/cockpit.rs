@@ -101,14 +101,23 @@ fn make_service(
                 .map_err(|error| error.to_string())?;
             let service = service.with_projects(projects);
             let contexts = cockpit_core::context::ContextService::new(
-                config,
+                config.clone(),
                 adapter.extension_adapter(),
                 service
                     .projects()
                     .map_err(|error| error.to_string())?
                     .clone(),
             );
-            Ok(service.with_contexts(contexts))
+            let service = service.with_contexts(contexts);
+            let comments = cockpit_core::comments::CommentsService::new(
+                config,
+                service
+                    .contexts()
+                    .map_err(|error| error.to_string())?
+                    .clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(service.with_comments(comments.with_paste_adapter(adapter.paste_adapter())))
         }
         None => Ok(service),
     }

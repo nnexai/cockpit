@@ -182,3 +182,27 @@
 .context-viewer-empty { align-items: center; justify-content: center; gap: 12px; padding: 24px; }
 .context-viewer-empty .context-notice { max-width: 560px; border: 1px solid var(--border); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+
+.context-search { padding: 8px; border-bottom: 1px solid var(--border); }
+.context-search-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.context-search-form label { grid-column: 1 / -1; color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.context-search input,
+.context-search button { min-width: 0; min-height: 28px; padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--text-primary); font: inherit; }
+.context-search button { cursor: pointer; }
+.context-search button:disabled { opacity: .6; cursor: default; }
+.context-search button:hover { background: var(--surface-hover); }
+.context-search-results { padding: 0; margin: 8px 0 0; list-style: none; max-height: 240px; overflow: auto; }
+.context-search-results button { display: grid; width: 100%; text-align: left; border: 0; gap: 3px; }
+.context-search-results code,
+.context-search-results span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-search-results span { color: var(--text-secondary); }
+.context-search-error,
+.context-search-poll,
+.context-search-truncated { margin: 6px 0 0; color: var(--blocked); overflow-wrap: anywhere; }
+
+.context-snapshot { padding: 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.context-snapshot summary { cursor: pointer; }
+.context-snapshot p { color: var(--text-muted); overflow-wrap: anywhere; }
+.context-snapshot label { display: grid; gap: 4px; }
+.context-snapshot select { width: 100%; min-width: 0; }
+.context-snapshot button { margin-top: 6px; }

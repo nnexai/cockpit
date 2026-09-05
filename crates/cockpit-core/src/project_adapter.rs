@@ -11,6 +11,7 @@ pub struct ProjectWorktreeEntry {
     pub branch: Option<String>,
     pub open_workspace_id: Option<String>,
     pub is_primary: bool,
+    pub is_linked_worktree: bool,
     pub dirty: Option<bool>,
 }
 
@@ -63,6 +64,14 @@ pub struct ProjectTerminalResult {
     pub pane_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProjectWorktreeRemoveRequest {
+    pub endpoint_identity: String,
+    pub workspace_id: String,
+    pub checkout_path: String,
+    pub force: bool,
+}
+
 /// Typed lifecycle operations, separate from ordinary workbench layout mutations.
 #[async_trait]
 pub trait ProjectHerdrAdapter: HerdrAdapter {
@@ -83,4 +92,24 @@ pub trait ProjectHerdrAdapter: HerdrAdapter {
         session_id: &str,
         request: &ProjectTerminalRequest,
     ) -> Result<ProjectTerminalResult, InspectionError>;
+
+    async fn project_worktree_dirty(
+        &self,
+        checkout_path: &str,
+        timeout_ms: u32,
+        output_bytes: u32,
+    ) -> Result<bool, InspectionError>;
+
+    async fn project_close_workspace(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        workspace_id: &str,
+    ) -> Result<(), InspectionError>;
+
+    async fn project_remove_worktree(
+        &self,
+        session_id: &str,
+        request: &ProjectWorktreeRemoveRequest,
+    ) -> Result<(), InspectionError>;
 }

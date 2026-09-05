@@ -1,4 +1,6 @@
 mod context;
+mod context_search;
+mod comments;
 mod projects;
 mod requests;
 
@@ -797,11 +799,18 @@ pub fn run() {
         .expect("project operations configured")
         .clone();
     let contexts = cockpit_core::context::ContextService::new(
-        project_config,
+        project_config.clone(),
         inspector.extension_adapter(),
         shutdown_projects.clone(),
     );
     let service = service.with_contexts(contexts);
+    let comments = cockpit_core::comments::CommentsService::new(
+        project_config,
+        service.contexts().expect("context operations configured").clone(),
+    )
+    .unwrap_or_else(|error| panic!("failed to initialize comment operations: {error}"))
+    .with_paste_adapter(inspector.paste_adapter());
+    let service = service.with_comments(comments);
 
     tauri::Builder::default()
         .manage(service)
@@ -823,10 +832,25 @@ pub fn run() {
             projects::cockpit_workspace_resume,
             projects::cockpit_workspace_cancel,
             projects::cockpit_workspace_reconcile,
+            projects::cockpit_workspace_teardown_preview,
+            projects::cockpit_workspace_teardown_execute,
+            projects::cockpit_workspace_teardown_recoveries,
             context::cockpit_pane_presentation,
             context::cockpit_context_directory,
             context::cockpit_context_document,
             context::cockpit_context_open,
+            context_search::cockpit_context_search,
+            context_search::cockpit_context_snapshot,
+            context_search::cockpit_context_invalidate,
+            comments::cockpit_comments_list,
+            comments::cockpit_comments_batch,
+            comments::cockpit_comments_upsert,
+            comments::cockpit_comments_remove,
+            comments::cockpit_comments_attach,
+            comments::cockpit_comments_preview,
+            comments::cockpit_comments_paste_prepare,
+            comments::cockpit_comments_paste_send,
+            comments::cockpit_comments_paste_mark_pasted,
             cockpit_status,
             cockpit_sessions,
             cockpit_session_snapshot,

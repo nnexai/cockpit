@@ -613,6 +613,10 @@ mod tests {
                 git_timeout_ms: 1000,
                 git_output_bytes: 1024,
                 operation_timeout_ms: 1000,
+                context_preview_bytes: 1024 * 1024,
+                context_preview_lines: 5000,
+                context_directory_entries: 1000,
+                context_tree_depth: 32,
             },
             origins: BTreeMap::new(),
         }

@@ -1,0 +1,616 @@
+mod format;
+mod paste;
+pub(super) mod store;
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use cockpit_protocol::comments::{
+    CommentAnchor, CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation,
+    CommentBatchRequest, CommentBatchSummary, CommentCapture, CommentDraft, CommentFileRef,
+    CommentLocation, CommentOwner, CommentPreview, CommentPreviewRequest, CommentRemoveRequest,
+    CommentRequestScope, CommentSourceState, CommentUpsertRequest,
+};
+use cockpit_protocol::context::{ContextDocumentRequest, ExtensionKind};
+use cockpit_protocol::projects::ProjectConfiguration;
+use uuid::Uuid;
+
+use crate::context::{ContextCommentEvidence, ContextService};
+use crate::paste_adapter::CommentPasteAdapter;
+use crate::InspectionError;
+use crate::project_store::timestamp;
+
+use self::format::{capture_lines, format_batch};
+use self::store::CommentStore;
+use self::paste::PasteStore;
+
+const MAX_DRAFTS: usize = 64;
+const MAX_COMMENT_BYTES: usize = 8 * 1024;
+
+#[derive(Clone)]
+pub struct CommentsService {
+    store: CommentStore,
+    paste_store: PasteStore,
+    context: Arc<ContextService>,
+    paste_adapter: Option<Arc<dyn CommentPasteAdapter>>,
+}
+
+impl CommentsService {
+    pub fn new(
+        configuration: ProjectConfiguration,
+        context: Arc<ContextService>,
+    ) -> Result<Self, InspectionError> {
+        let root = Path::new(&configuration.state_root).join("comments");
+        Ok(Self {
+            store: CommentStore::new(&root)?,
+            paste_store: PasteStore::new(&root)?,
+            context,
+            paste_adapter: None,
+        })
+    }
+
+    /// Add the separately capability-gated raw-byte paste adapter.
+    pub fn with_paste_adapter(mut self, adapter: Arc<dyn CommentPasteAdapter>) -> Self {
+        self.paste_adapter = Some(adapter);
+        self
+    }
+
+    pub async fn list(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentRequestScope,
+    ) -> Result<CommentBatchList, InspectionError> {
+        let (attachment, _) = self.attachment(session_id, pane_id, request).await?;
+        let (batches, truncated) = self.store.list().await?;
+        let batches = batches
+            .into_iter()
+            .map(|batch| CommentBatchSummary {
+                batch_id: batch.batch_id,
+                generation: batch.generation,
+                owner: batch.owner,
+                last_known_location: batch.last_known_location,
+                draft_count: batch.drafts.len() as u32,
+                updated_at: batch.updated_at,
+            })
+            .collect();
+        Ok(CommentBatchList {
+            attachment,
+            batches,
+            truncated,
+        })
+    }
+
+    pub async fn batch(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentBatchRequest,
+    ) -> Result<CommentBatch, InspectionError> {
+        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.scope).await?;
+        let Some(batch_id) = request.batch_id.as_deref() else {
+            let (batches, _) = self.store.list().await?;
+            if let Some(mut batch) = batches.into_iter().find(|batch| {
+                same_owner(&batch.owner, &attachment.owner)
+                    && batch.last_known_location == attachment.location
+            }) {
+                if same_attachment(&batch, &attachment, &evidence) {
+                    batch.live_attachment = Some(attachment);
+                    self.refresh_states(&mut batch, &evidence).await;
+                } else {
+                    // A matching owner with a replaced root is recoverable but detached.
+                    batch.live_attachment = None;
+                }
+                return Ok(batch);
+            }
+            return Ok(empty_batch(&attachment));
+        };
+        let mut batch = self
+            .store
+            .load(batch_id)
+            .await?
+            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        if same_attachment(&batch, &attachment, &evidence) {
+            batch.live_attachment = Some(attachment);
+            self.refresh_states(&mut batch, &evidence).await;
+        } else {
+            // Recovery is intentionally inspectable but never implicitly attached.
+            batch.live_attachment = None;
+        }
+        Ok(batch)
+    }
+
+    pub async fn upsert(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentUpsertRequest,
+    ) -> Result<CommentBatch, InspectionError> {
+        validate_comment_text(&request.comment_text)?;
+        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let mut batch = match self.store.load(&request.batch.batch_id).await? {
+            Some(batch) => {
+                require_owner(&batch, &attachment, &evidence)?;
+                batch
+            }
+            None if request.batch.expected_generation == 0 => empty_batch_with_id(&attachment, &request.batch.batch_id),
+            None => return Err(InspectionError::new("comments_batch_not_found", "comment batch does not exist")),
+        };
+        if batch.generation != request.batch.expected_generation {
+            return Err(InspectionError::new(
+                "stale_generation",
+                "comment batch generation is no longer current",
+            ));
+        }
+        if request.draft_id.is_some() && request.capture.is_some() {
+            return Err(InspectionError::new(
+                "comments_invalid_capture",
+                "editing a comment cannot include a new source capture",
+            ));
+        }
+        match request.draft_id.as_deref() {
+            Some(draft_id) => {
+                let draft = batch
+                    .drafts
+                    .iter_mut()
+                    .find(|draft| draft.draft_id == draft_id)
+                    .ok_or_else(|| InspectionError::new("comments_draft_not_found", "comment draft does not exist"))?;
+                // An edit changes only prose; its captured source is immutable.
+                draft.comment_text = request.comment_text.clone();
+                draft.updated_at = timestamp();
+            }
+            None => {
+                if batch.drafts.len() >= MAX_DRAFTS {
+                    return Err(InspectionError::new(
+                        "comments_limit",
+                        "comment batch draft limit exceeded",
+                    ));
+                }
+                let capture = request.capture.as_ref().ok_or_else(|| {
+                    InspectionError::new("comments_capture_required", "new drafts require a source capture")
+                })?;
+                let draft = self
+                    .capture_draft(
+                        session_id,
+                        pane_id,
+                        capture,
+                        &request.comment_text,
+                        &evidence,
+                    )
+                    .await?;
+                batch.drafts.push(draft);
+            }
+        }
+        self.refresh_states(&mut batch, &evidence).await;
+        let committed = self
+            .store
+            .commit(batch, request.batch.expected_generation)
+            .await?;
+        Ok(with_attachment(committed, attachment))
+    }
+
+    pub async fn remove(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentRemoveRequest,
+    ) -> Result<CommentBatch, InspectionError> {
+        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let mut batch = self
+            .store
+            .load(&request.batch.batch_id)
+            .await?
+            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        require_owner(&batch, &attachment, &evidence)?;
+        if batch.generation != request.batch.expected_generation {
+            return Err(InspectionError::new(
+                "stale_generation",
+                "comment batch generation is no longer current",
+            ));
+        }
+        let before = batch.drafts.len();
+        batch.drafts.retain(|draft| draft.draft_id != request.draft_id);
+        if batch.drafts.len() == before {
+            return Err(InspectionError::new("comments_draft_not_found", "comment draft does not exist"));
+        }
+        self.refresh_states(&mut batch, &evidence).await;
+        let committed = self
+            .store
+            .commit(batch, request.batch.expected_generation)
+            .await?;
+        Ok(with_attachment(committed, attachment))
+    }
+
+    pub async fn attach(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentBatchMutation,
+    ) -> Result<CommentBatch, InspectionError> {
+        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.scope).await?;
+        let mut batch = self
+            .store
+            .load(&request.batch_id)
+            .await?
+            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        if batch.owner.source_kind != ExtensionKind::Context
+            || batch.owner.source_id != attachment.owner.source_id
+            || !captured_roots_match(&batch, &evidence)
+        {
+            return Err(InspectionError::new(
+                "comments_source_mismatch",
+                "a detached batch can only reattach to its original Context source root",
+            ));
+        }
+        if batch.generation != request.expected_generation {
+            return Err(InspectionError::new(
+                "stale_generation",
+                "comment batch generation is no longer current",
+            ));
+        }
+        batch.owner = attachment.owner.clone();
+        batch.last_known_location = attachment.location.clone();
+        self.refresh_states(&mut batch, &evidence).await;
+        let committed = self.store.commit(batch, request.expected_generation).await?;
+        Ok(with_attachment(committed, attachment))
+    }
+
+    pub async fn preview(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentPreviewRequest,
+    ) -> Result<CommentPreview, InspectionError> {
+        let (attachment, evidence) = self.attachment(session_id, pane_id, &request.batch.scope).await?;
+        let mut batch = self
+            .store
+            .load(&request.batch.batch_id)
+            .await?
+            .ok_or_else(|| InspectionError::new("comments_batch_not_found", "comment batch does not exist"))?;
+        require_owner(&batch, &attachment, &evidence)?;
+        if batch.generation != request.batch.expected_generation {
+            return Err(InspectionError::new(
+                "stale_generation",
+                "comment batch generation is no longer current",
+            ));
+        }
+        self.refresh_states(&mut batch, &evidence).await;
+        let formatted = format_batch(&batch, request.retain_stale_excerpts);
+        if formatted.payload_bytes > format::MAX_PREVIEW_PAYLOAD_BYTES {
+            return Err(InspectionError::new(
+                "comments_preview_bounded",
+                "comment preview exceeds the 4 MiB response payload limit",
+            ));
+        }
+        Ok(CommentPreview {
+            batch_id: batch.batch_id,
+            generation: batch.generation,
+            payload: formatted.payload,
+            payload_bytes: formatted.payload_bytes,
+            framed_bytes: formatted.framed_bytes,
+            limit_bytes: format::PREVIEW_LIMIT_BYTES,
+            sanitized_controls: formatted.sanitized_controls,
+            stale_draft_ids: formatted.stale_draft_ids,
+            exportable: formatted.exportable,
+            reason: formatted.reason,
+        })
+    }
+
+    async fn attachment(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        scope: &CommentRequestScope,
+    ) -> Result<(CommentAttachment, ContextCommentEvidence), InspectionError> {
+        if scope.binding_id.is_empty() || scope.client_id.is_empty() {
+            return Err(InspectionError::new("comments_invalid_scope", "comment scope is incomplete"));
+        }
+        let evidence = self
+            .context
+            .comment_evidence(session_id, pane_id, &scope.binding_id)
+            .await?;
+        let owner = CommentOwner {
+            session_id: session_id.to_owned(),
+            pane_id: pane_id.to_owned(),
+            terminal_id: evidence.terminal_id.clone(),
+            source_kind: ExtensionKind::Context,
+            source_id: evidence.companion_id.clone(),
+        };
+        let attachment = CommentAttachment {
+            owner,
+            location: CommentLocation {
+                workspace_id: evidence.workspace_id.clone(),
+                tab_id: evidence.tab_id.clone(),
+            },
+            binding_id: evidence.binding_id.clone(),
+            client_id: scope.client_id.clone(),
+        };
+        Ok((attachment, evidence))
+    }
+    async fn capture_draft(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        capture: &CommentCapture,
+        comment_text: &str,
+        evidence: &ContextCommentEvidence,
+    ) -> Result<CommentDraft, InspectionError> {
+        if capture.root_id != evidence.root_id {
+            return Err(InspectionError::new(
+                "comments_source_mismatch",
+                "capture root is not the currently verified Context companion",
+            ));
+        }
+        let document = self
+            .context
+            .document(
+                session_id,
+                pane_id,
+                &ContextDocumentRequest {
+                    binding_id: evidence.binding_id.clone(),
+                    root_id: evidence.root_id.clone(),
+                    path: capture.path.clone(),
+                    expected_revision: Some(capture.expected_revision.clone()),
+                },
+            )
+            .await
+            .map_err(|error| {
+                if error.code == "context_stale_revision"
+                    || error.code == "context_changed_during_read"
+                {
+                    InspectionError::new("comments_stale_source", error.message)
+                } else {
+                    InspectionError::new("comments_capture_unavailable", error.message)
+                }
+            })?;
+        let truncated = document.truncated;
+        let text = match document.text {
+            Some(text) => text,
+            None => {
+                return Err(InspectionError::new(
+                    if truncated {
+                        "comments_source_truncated"
+                    } else {
+                        "comments_capture_unavailable"
+                    },
+                    "the selected Context document is not available as complete UTF-8 text",
+                ));
+            }
+        };
+        if truncated {
+            return Err(InspectionError::new(
+                "comments_source_truncated",
+                "the selected Context document exceeds its bounded read limit",
+            ));
+        }
+        let anchor = match (capture.start_line, capture.end_line) {
+            (None, None) => CommentAnchor::WholeFile,
+            (Some(start_line), Some(end_line)) => {
+                let selected_lines = capture_lines(&text, start_line, end_line).map_err(|message| {
+                    InspectionError::new("comments_invalid_range", message)
+                })?;
+                CommentAnchor::Lines {
+                    start_line,
+                    end_line,
+                    selected_lines,
+                }
+            }
+            _ => {
+                return Err(InspectionError::new(
+                    "comments_invalid_range",
+                    "line capture must provide both bounds or neither",
+                ));
+            }
+        };
+        let absolute_path = Path::new(&evidence.companion_path)
+            .join(&document.path)
+            .to_string_lossy()
+            .into_owned();
+        Ok(CommentDraft {
+            draft_id: Uuid::new_v4().to_string(),
+            file_ref: CommentFileRef {
+                root_id: document.root_id,
+                path: document.path,
+                absolute_path,
+                revision: document.revision,
+                content_hash: document.content_hash,
+            },
+            anchor,
+            comment_text: comment_text.to_owned(),
+            source_state: CommentSourceState::Current,
+            updated_at: timestamp(),
+        })
+    }
+
+    async fn refresh_states(&self, batch: &mut CommentBatch, evidence: &ContextCommentEvidence) {
+        let session_id = batch.owner.session_id.clone();
+        let pane_id = batch.owner.pane_id.clone();
+        let mut reads: HashMap<(String, String), Result<(String, Option<String>), String>> =
+            HashMap::new();
+        for draft in &mut batch.drafts {
+            if draft.file_ref.root_id != evidence.root_id {
+                draft.source_state = CommentSourceState::Unavailable;
+                continue;
+            }
+            let key = (draft.file_ref.root_id.clone(), draft.file_ref.path.clone());
+            if !reads.contains_key(&key) {
+                let result = self
+                    .context
+                    .document(
+                        &session_id,
+                        &pane_id,
+                        &ContextDocumentRequest {
+                            binding_id: evidence.binding_id.clone(),
+                            root_id: evidence.root_id.clone(),
+                            path: draft.file_ref.path.clone(),
+                            expected_revision: None,
+                        },
+                    )
+                    .await
+                    .map(|document| (document.revision, document.content_hash))
+                    .map_err(|error| error.code);
+                reads.insert(key.clone(), result);
+            }
+            let result = reads
+                .get(&key)
+                .expect("source read inserted before state comparison");
+            draft.source_state = match result {
+                Ok((revision, content_hash))
+                    if revision == &draft.file_ref.revision
+                        && content_hash == &draft.file_ref.content_hash =>
+                {
+                    CommentSourceState::Current
+                }
+                Ok(_) => CommentSourceState::Changed,
+                Err(code) if code == "context_file_missing" => CommentSourceState::Missing,
+                Err(_) => CommentSourceState::Unavailable,
+            };
+        }
+    }
+}
+
+fn empty_batch(attachment: &CommentAttachment) -> CommentBatch {
+    empty_batch_with_id(attachment, &Uuid::new_v4().to_string())
+}
+
+fn empty_batch_with_id(attachment: &CommentAttachment, batch_id: &str) -> CommentBatch {
+    CommentBatch {
+        batch_id: batch_id.to_owned(),
+        generation: 0,
+        owner: attachment.owner.clone(),
+        last_known_location: attachment.location.clone(),
+        live_attachment: Some(attachment.clone()),
+        drafts: Vec::new(),
+        updated_at: timestamp(),
+    }
+}
+
+fn with_attachment(mut batch: CommentBatch, attachment: CommentAttachment) -> CommentBatch {
+    batch.live_attachment = Some(attachment);
+    batch
+}
+
+fn same_owner(left: &CommentOwner, right: &CommentOwner) -> bool {
+    left.session_id == right.session_id
+        && left.pane_id == right.pane_id
+        && left.terminal_id == right.terminal_id
+        && left.source_kind == right.source_kind
+        && left.source_id == right.source_id
+}
+
+fn captured_roots_match(batch: &CommentBatch, evidence: &ContextCommentEvidence) -> bool {
+    batch
+        .drafts
+        .iter()
+        .all(|draft| draft.file_ref.root_id == evidence.root_id)
+}
+
+fn same_attachment(
+    batch: &CommentBatch,
+    attachment: &CommentAttachment,
+    evidence: &ContextCommentEvidence,
+) -> bool {
+    same_owner(&batch.owner, &attachment.owner)
+        && batch.last_known_location == attachment.location
+        && captured_roots_match(batch, evidence)
+}
+
+fn require_owner(
+    batch: &CommentBatch,
+    attachment: &CommentAttachment,
+    evidence: &ContextCommentEvidence,
+) -> Result<(), InspectionError> {
+    if !same_owner(&batch.owner, &attachment.owner)
+        || batch.last_known_location != attachment.location
+    {
+        return Err(InspectionError::new(
+            "comments_detached",
+            "comment batch is detached from this Context pane or tab",
+        ));
+    }
+    if !captured_roots_match(batch, evidence) {
+        return Err(InspectionError::new(
+            "comments_source_mismatch",
+            "comment batch belongs to a replaced Context source root",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_comment_text(text: &str) -> Result<(), InspectionError> {
+    if text.as_bytes().len() > MAX_COMMENT_BYTES {
+        return Err(InspectionError::new(
+            "comments_limit",
+            "comment text exceeds the 8 KiB limit",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attachment() -> CommentAttachment {
+        CommentAttachment {
+            owner: CommentOwner {
+                session_id: "session".to_owned(),
+                pane_id: "pane".to_owned(),
+                terminal_id: "terminal".to_owned(),
+                source_kind: ExtensionKind::Context,
+                source_id: "companion".to_owned(),
+            },
+            location: CommentLocation {
+                workspace_id: "workspace".to_owned(),
+                tab_id: "tab".to_owned(),
+            },
+            binding_id: "binding".to_owned(),
+            client_id: "client".to_owned(),
+        }
+    }
+
+    fn evidence(root_id: &str) -> ContextCommentEvidence {
+        ContextCommentEvidence {
+            binding_id: "binding".to_owned(),
+            terminal_id: "terminal".to_owned(),
+            workspace_id: "workspace".to_owned(),
+            tab_id: "tab".to_owned(),
+            root_id: root_id.to_owned(),
+            companion_id: "companion".to_owned(),
+            companion_path: "/companion".to_owned(),
+        }
+    }
+
+    #[test]
+    fn initial_batch_has_a_transport_valid_timestamp() {
+        let batch = empty_batch(&attachment());
+        assert_eq!(batch.generation, 0);
+        assert!(batch.drafts.is_empty());
+        assert!(batch.updated_at.parse::<u128>().is_ok());
+        assert!(batch.live_attachment.is_some());
+    }
+
+    #[test]
+    fn captured_root_identity_blocks_replacement_but_keeps_empty_batch_attachable() {
+        let attachment = attachment();
+        let mut batch = empty_batch(&attachment);
+        assert!(captured_roots_match(&batch, &evidence("root-a")));
+        batch.drafts.push(CommentDraft {
+            draft_id: Uuid::new_v4().to_string(),
+            file_ref: CommentFileRef {
+                root_id: "root-a".to_owned(),
+                path: "notes.md".to_owned(),
+                absolute_path: "/companion/notes.md".to_owned(),
+                revision: "rev".to_owned(),
+                content_hash: None,
+            },
+            anchor: CommentAnchor::WholeFile,
+            comment_text: "review".to_owned(),
+            source_state: CommentSourceState::Current,
+            updated_at: String::new(),
+        });
+        assert!(captured_roots_match(&batch, &evidence("root-a")));
+        assert!(!captured_roots_match(&batch, &evidence("root-b")));
+    }
+}

@@ -1,14 +1,33 @@
+import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
+import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
   matchContextResponse, matchPanePresentation, parseContextDirectory,
   parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
   parseContextLaunchRequest, parsePanePresentation,
 } from "./contextProtocol";
 import {
+  matchContextInvalidationResponse, matchContextSearchResponse,
+  parseContextInvalidationRequest, parseContextInvalidationResponse,
+  parseContextSearchRequest, parseContextSearchResponse,
+} from "./contextSearchProtocol";
+import {
+  matchCommentAttachment, matchCommentBatch, matchCommentPreview,
+  parseCommentBatch, parseCommentBatchList, parseCommentBatchRequest, parseCommentMutation,
+  parseCommentPreview, parseCommentPreviewRequest, parseCommentRemove, parseCommentScope,
+  parseCommentUpsert,
+} from "./commentProtocol";
+import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
   parseWorkspaceReconcileRequest,
   parseWorkspaceSetupRequest, validateProjectOperationId,
 } from "./projectProtocol";
+import {
+  matchWorkspaceTeardownPreview, matchWorkspaceTeardownResult,
+  parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownPreview,
+  parseWorkspaceTeardownPreviewRequest, parseWorkspaceTeardownRecoveryList,
+  parseWorkspaceTeardownResult,
+} from "./projectTeardownProtocol";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
   FocusRequest,
@@ -238,6 +257,20 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const request = parseWorkspaceReconcileRequest(value);
       return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_reconcile", { sessionId, request }, "workspace reconciliation", parseWorkspaceOperation), sessionId, request.operation_id);
     },
+    async workspaceTeardownPreview(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceTeardownPreviewRequest(value);
+      return matchWorkspaceTeardownPreview(await invokeAndParse(invoke, "cockpit_workspace_teardown_preview", { sessionId, request }, "workspace teardown preview", parseWorkspaceTeardownPreview), request);
+    },
+    async workspaceTeardownExecute(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseWorkspaceTeardownExecuteRequest(value);
+      return matchWorkspaceTeardownResult(await invokeAndParse(invoke, "cockpit_workspace_teardown_execute", { sessionId, request }, "workspace teardown execution", parseWorkspaceTeardownResult), request);
+    },
+    async workspaceTeardownRecoveries(sessionId) {
+      validateSessionId(sessionId);
+      return invokeAndParse(invoke, "cockpit_workspace_teardown_recoveries", { sessionId }, "workspace teardown recoveries", parseWorkspaceTeardownRecoveryList);
+    },
     async inspectPane(sessionId, paneId, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
@@ -264,10 +297,110 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       signal?.throwIfAborted();
       return matchContextResponse(response, request);
     },
+    async contextSnapshot(sessionId, paneId, value) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseContextSnapshotRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_snapshot", { sessionId, paneId, request }, "Context snapshot", parseContextSnapshotResponse);
+      return matchContextSnapshot(response, request);
+    },
+    async contextSearch(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseContextSearchRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_search", { sessionId, paneId, request }, "Context search", parseContextSearchResponse);
+      signal?.throwIfAborted();
+      return matchContextSearchResponse(response, request);
+    },
+    async contextInvalidate(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseContextInvalidationRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_invalidate", { sessionId, paneId, request }, "Context invalidation", parseContextInvalidationResponse);
+      signal?.throwIfAborted();
+      return matchContextInvalidationResponse(response, request);
+    },
     async openContext(sessionId, value) {
       validateSessionId(sessionId);
       const request = parseContextLaunchRequest(value);
       return matchPanePresentation(await invokeAndParse(invoke, "cockpit_context_open", { sessionId, request }, "Context launch", parsePanePresentation), sessionId);
+    },
+    async commentBatches(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentScope(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_list", { sessionId, paneId, request }, "comment batches", parseCommentBatchList);
+      signal?.throwIfAborted();
+      matchCommentAttachment(response.attachment, sessionId, paneId, request);
+      return response;
+    },
+    async commentBatch(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentBatchRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_batch", { sessionId, paneId, request }, "comment batch", parseCommentBatch);
+      signal?.throwIfAborted();
+      return matchCommentBatch(response, sessionId, paneId, request.scope, request.batch_id);
+    },
+    async commentUpsert(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentUpsert(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_upsert", { sessionId, paneId, request }, "comment upsert", parseCommentBatch);
+      signal?.throwIfAborted();
+      return matchCommentBatch(response, sessionId, paneId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
+    },
+    async commentRemove(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentRemove(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_remove", { sessionId, paneId, request }, "comment remove", parseCommentBatch);
+      signal?.throwIfAborted();
+      return matchCommentBatch(response, sessionId, paneId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
+    },
+    async commentAttach(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentMutation(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_attach", { sessionId, paneId, request }, "comment attach", parseCommentBatch);
+      signal?.throwIfAborted();
+      return matchCommentBatch(response, sessionId, paneId, request.scope, request.batch_id, request.expected_generation, true);
+    },
+    async commentPastePrepare(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(paneId);
+      const parsed = parseCommentPastePrepareRequest(value);
+      signal?.throwIfAborted();
+      const response = await invokeAndParse(invoke, "cockpit_comments_paste_prepare", { sessionId, paneId, request: parsed }, "comment paste prepare", parseCommentPastePrepare);
+      signal?.throwIfAborted();
+      return matchPastePrepare(response, sessionId, parsed);
+    },
+    async commentPasteSend(sessionId, paneId, value) {
+      validateSessionId(sessionId); validateResourceId(paneId);
+      const parsed = parseCommentPasteSendRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_paste_send", { sessionId, paneId, request: parsed }, "comment paste send", parseCommentPasteReceipt);
+      return matchPasteReceipt(response, parsed);
+    },
+    async commentPasteMarkPasted(sessionId, paneId, value) {
+      validateSessionId(sessionId); validateResourceId(paneId);
+      const parsed = parseCommentPasteMarkPastedRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_paste_mark_pasted", { sessionId, paneId, request: parsed }, "comment paste resolution", parseCommentPasteReceipt);
+      return matchMarkedReceipt(response, parsed);
+    },
+    async commentPreview(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentPreviewRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_preview", { sessionId, paneId, request }, "comment preview", parseCommentPreview);
+      signal?.throwIfAborted();
+      return matchCommentPreview(response, request.batch);
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },

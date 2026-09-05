@@ -1,14 +1,33 @@
+import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
+import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
   matchContextResponse, matchPanePresentation, parseContextDirectory,
   parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
   parseContextLaunchRequest, parsePanePresentation,
 } from "./contextProtocol";
 import {
+  matchContextInvalidationResponse, matchContextSearchResponse,
+  parseContextInvalidationRequest, parseContextInvalidationResponse,
+  parseContextSearchRequest, parseContextSearchResponse,
+} from "./contextSearchProtocol";
+import {
+  matchCommentAttachment, matchCommentBatch, matchCommentPreview,
+  parseCommentBatch, parseCommentBatchList, parseCommentBatchRequest, parseCommentMutation,
+  parseCommentPreview, parseCommentPreviewRequest, parseCommentRemove, parseCommentScope,
+  parseCommentUpsert,
+} from "./commentProtocol";
+import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
   parseWorkspaceReconcileRequest,
   parseWorkspaceSetupRequest, validateProjectOperationId,
 } from "./projectProtocol";
+import {
+  matchWorkspaceTeardownPreview, matchWorkspaceTeardownResult,
+  parseWorkspaceTeardownExecuteRequest, parseWorkspaceTeardownPreview,
+  parseWorkspaceTeardownPreviewRequest, parseWorkspaceTeardownRecoveryList,
+  parseWorkspaceTeardownResult,
+} from "./projectTeardownProtocol";
 import {
   CockpitClientError,
   parseErrorEnvelope,
@@ -289,6 +308,24 @@ export function createBrowserClient(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       }), sessionId, body.operation_id);
     },
+    async workspaceTeardownPreview(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceTeardownPreviewRequest(value);
+      return matchWorkspaceTeardownPreview(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/preview`, "workspace teardown preview", parseWorkspaceTeardownPreview, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), body);
+    },
+    async workspaceTeardownExecute(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseWorkspaceTeardownExecuteRequest(value);
+      return matchWorkspaceTeardownResult(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/execute`, "workspace teardown execution", parseWorkspaceTeardownResult, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), body);
+    },
+    async workspaceTeardownRecoveries(sessionId) {
+      validateSessionId(sessionId);
+      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-teardown/recoveries`, "workspace teardown recoveries", parseWorkspaceTeardownRecoveryList);
+    },
     async inspectPane(sessionId, paneId, signal) {
       validateSessionId(sessionId);
       validateResourceId(paneId);
@@ -310,12 +347,132 @@ export function createBrowserClient(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       }), body);
     },
+    async contextSnapshot(sessionId, paneId, value) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseContextSnapshotRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/snapshot`, "Context snapshot", parseContextSnapshotResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      return matchContextSnapshot(response, body);
+    },
+    async contextSearch(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseContextSearchRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/search`, "Context search", parseContextSearchResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      });
+      return matchContextSearchResponse(response, body);
+    },
+    async contextInvalidate(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseContextInvalidationRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/invalidate`, "Context invalidation", parseContextInvalidationResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      });
+      return matchContextInvalidationResponse(response, body);
+    },
     async openContext(sessionId, value) {
       validateSessionId(sessionId);
       const body = parseContextLaunchRequest(value);
       return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/context/open`, "Context launch", parsePanePresentation, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       }), sessionId);
+    },
+    async commentBatches(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentScope(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/list`, "comment batches", parseCommentBatchList, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      matchCommentAttachment(response.attachment, sessionId, paneId, body);
+      return response;
+    },
+    async commentBatch(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentBatchRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/batch`, "comment batch", parseCommentBatch, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      return matchCommentBatch(response, sessionId, paneId, body.scope, body.batch_id);
+    },
+    async commentUpsert(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentUpsert(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/upsert`, "comment upsert", parseCommentBatch, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      return matchCommentBatch(response, sessionId, paneId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
+    },
+    async commentRemove(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentRemove(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/remove`, "comment remove", parseCommentBatch, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      return matchCommentBatch(response, sessionId, paneId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
+    },
+    async commentAttach(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentMutation(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/attach`, "comment attach", parseCommentBatch, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      return matchCommentBatch(response, sessionId, paneId, body.scope, body.batch_id, body.expected_generation, true);
+    },
+    async commentPastePrepare(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId); validateResourceId(paneId);
+      const parsed = parseCommentPastePrepareRequest(value);
+      signal?.throwIfAborted();
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/paste-prepare`, "comment paste prepare", parseCommentPastePrepare, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+      signal?.throwIfAborted();
+      return matchPastePrepare(response, sessionId, parsed);
+    },
+    async commentPasteSend(sessionId, paneId, value) {
+      validateSessionId(sessionId); validateResourceId(paneId);
+      const parsed = parseCommentPasteSendRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/paste-send`, "comment paste send", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
+      return matchPasteReceipt(response, parsed);
+    },
+    async commentPasteMarkPasted(sessionId, paneId, value) {
+      validateSessionId(sessionId); validateResourceId(paneId);
+      const parsed = parseCommentPasteMarkPastedRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/paste-mark-pasted`, "comment paste resolution", parseCommentPasteReceipt, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed) });
+      return matchMarkedReceipt(response, parsed);
+    },
+    async commentPreview(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentPreviewRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/preview`, "comment preview", parseCommentPreview, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      return matchCommentPreview(response, body.batch);
     },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },

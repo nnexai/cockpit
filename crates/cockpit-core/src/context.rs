@@ -11,9 +11,11 @@ use cockpit_protocol::context::{
     ContextEntry, ContextEntryKind, ContextLaunchRequest, ContextRoot, ContextRootKind,
     DetectionConfidence, ExtensionKind, PanePresentation,
 };
+use cockpit_protocol::context_assets::{ContextSnapshotRequest, ContextSnapshotResponse};
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 
 use crate::InspectionError;
 use crate::extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
@@ -25,12 +27,30 @@ pub struct ContextService {
     configuration: ProjectConfiguration,
     adapter: Arc<dyn ExtensionHerdrAdapter>,
     projects: Arc<ProjectService>,
+    /// Shared across transient host handlers so bounded searches cannot exhaust blocking workers.
+    pub(crate) search_permits: Arc<Semaphore>,
 }
 
-struct AuthorizedRoot {
+/// Fresh, internal proof used by the durable reference-comment service.
+///
+/// The proof intentionally contains only identity and the authorized companion
+/// root. Callers cannot provide any of these values as authority.
+#[derive(Debug, Clone)]
+pub(crate) struct ContextCommentEvidence {
+    pub binding_id: String,
+    pub terminal_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub root_id: String,
+    pub companion_id: String,
+    pub companion_path: String,
+}
+
+pub(crate) struct AuthorizedRoot {
     root: ContextRoot,
     canonical: PathBuf,
     dir: Dir,
+    max_depth: u32,
 }
 
 impl ContextService {
@@ -43,8 +63,141 @@ impl ContextService {
             configuration,
             adapter,
             projects,
+            search_permits: Arc::new(Semaphore::new(2)),
         }
     }
+    /// Resolve the current Context pane and its companion-only source
+    /// association. This is deliberately crate-visible: comments must use
+    /// fresh Herdr/process evidence rather than persisted or caller-supplied
+    /// attachment fields.
+    pub(crate) async fn comment_evidence(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        binding_id: &str,
+    ) -> Result<ContextCommentEvidence, InspectionError> {
+        let evidence = self
+            .adapter
+            .inspect_extension_pane(session_id, pane_id)
+            .await?;
+        if evidence.pane_id != pane_id {
+            return Err(InspectionError::new(
+                "pane_identity_mismatch",
+                "Herdr returned evidence for a different pane",
+            ));
+        }
+        let presentation = self.presentation(session_id, &evidence).await?;
+        require_binding(&presentation, binding_id)?;
+        if presentation.extension != Some(ExtensionKind::Context)
+            || presentation.renderer != Some(ExtensionKind::Context)
+            || !verified_confidence(presentation.confidence)
+        {
+            return Err(InspectionError::new(
+                "comments_detached",
+                "comments require a verified Context companion pane",
+            ));
+        }
+        let root_id = presentation.default_root_id.ok_or_else(|| {
+            InspectionError::new(
+                "comments_detached",
+                "the Context pane has no verified companion root",
+            )
+        })?;
+        let root = presentation
+            .roots
+            .iter()
+            .find(|root| root.root_id == root_id)
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "comments_detached",
+                    "the Context companion root is no longer authorized",
+                )
+            })?;
+        if root.kind != ContextRootKind::Companion {
+            return Err(InspectionError::new(
+                "comments_detached",
+                "comments can only attach to a Context companion",
+            ));
+        }
+        let companion_id = root.companion_id.clone().ok_or_else(|| {
+            InspectionError::new(
+                "comments_detached",
+                "the Context companion has no verified identity",
+            )
+        })?;
+        Ok(ContextCommentEvidence {
+            binding_id: presentation.binding_id,
+            terminal_id: presentation.terminal_id,
+            workspace_id: evidence.workspace_id,
+            tab_id: evidence.tab_id,
+            root_id,
+            companion_id,
+            companion_path: root.path.clone(),
+        })
+    }
+
+    /// Freshly authorize a companion root for a bounded, read-only operation.
+    /// The returned descriptor capability cannot be constructed by a caller and
+    /// retains the same root identity and no-follow policy as Context reads.
+    pub(crate) async fn authorize_companion_root(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        binding_id: &str,
+        root_id: &str,
+    ) -> Result<AuthorizedRoot, InspectionError> {
+        let presentation = self.inspect_pane(session_id, pane_id).await?;
+        require_binding(&presentation, binding_id)?;
+        let mut authorized = find_root(&presentation.roots, root_id)?;
+        if authorized.root.kind != ContextRootKind::Companion {
+            return Err(InspectionError::new(
+                "context_root_not_companion",
+                "bounded Context search is available only for companion roots",
+            ));
+        }
+        authorized.max_depth = self.configuration.limits.context_tree_depth;
+        Ok(authorized)
+    }
+
+    /// Materialize a freshly resolved local repository under this pane's
+    /// currently authorized companion. The request never carries a filesystem
+    /// path, so it cannot widen the Context root capability.
+    pub async fn snapshot_local_repository(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &ContextSnapshotRequest,
+    ) -> Result<ContextSnapshotResponse, InspectionError> {
+        let authorized = self
+            .authorize_companion_root(
+                session_id,
+                pane_id,
+                &request.binding_id,
+                &request.root_id,
+            )
+            .await?;
+        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
+            InspectionError::new(
+                "context_snapshot_companion_unavailable",
+                "the authorized companion has no durable identity",
+            )
+        })?;
+        let repository = RepositoryCatalog::new(self.configuration.clone())
+            .resolve(&request.repository_id)
+            .await?;
+        let mut response = crate::context_assets::snapshot_working_tree(
+            &self.configuration,
+            companion_id,
+            &authorized.dir,
+            &authorized.canonical,
+            &repository,
+        )
+        .await?;
+        response.binding_id = request.binding_id.clone();
+        response.root_id = authorized.root.root_id;
+        Ok(response)
+    }
+
 
     pub async fn inspect_pane(
         &self,
@@ -124,6 +277,9 @@ impl ContextService {
             } else {
                 relative.join(&name)
             };
+            if reserved_context_path(authorized.root.kind, &child_relative).is_some() {
+                continue;
+            }
             let entry_id = stable_id(&authorized.root.root_id, &child_relative.to_string_lossy());
             let metadata = match directory.symlink_metadata(Path::new(&name)) {
                 Ok(metadata) => metadata,
@@ -192,7 +348,7 @@ impl ContextService {
         let (parent, leaf) = resolve_parent(&authorized.dir, &relative)?;
         let before = parent.symlink_metadata(&leaf).map_err(|error| {
             InspectionError::new(
-                "context_file_unavailable",
+                if error.kind() == ErrorKind::NotFound { "context_file_missing" } else { "context_file_unavailable" },
                 format!("cannot inspect context file: {error}"),
             )
         })?;
@@ -252,6 +408,8 @@ impl ContextService {
         let file = parent.open_with(&leaf, &options).map_err(|error| {
             let code = if error.kind() == ErrorKind::WouldBlock || is_symlink_open_error(&error) {
                 "context_special_file_refused"
+            } else if error.kind() == ErrorKind::NotFound {
+                "context_file_missing"
             } else {
                 "context_file_unavailable"
             };
@@ -517,6 +675,7 @@ impl ContextService {
                             root,
                             canonical: path,
                             dir,
+                            max_depth: self.configuration.limits.context_tree_depth,
                         });
                     }
                 }
@@ -574,6 +733,7 @@ impl ContextService {
                     root,
                     canonical: checkout,
                     dir,
+                    max_depth: self.configuration.limits.context_tree_depth,
                 },
             );
         }
@@ -631,8 +791,36 @@ fn find_root(roots: &[ContextRoot], root_id: &str) -> Result<AuthorizedRoot, Ins
         root: root.clone(),
         canonical: path,
         dir,
+        max_depth: 0,
     })
 }
+impl AuthorizedRoot {
+    pub(crate) fn root_id(&self) -> &str {
+        &self.root.root_id
+    }
+
+    pub(crate) fn relative_path(&self, value: &str) -> Result<PathBuf, InspectionError> {
+        let relative = relative_path(value)?;
+        check_depth(&relative, self.max_depth)?;
+        if let Some(message) = reserved_context_path(self.root.kind, &relative) {
+            return Err(InspectionError::new("context_reserved_path", message));
+        }
+        Ok(relative)
+    }
+
+    pub(crate) fn resolve_parent(&self, relative: &Path) -> Result<(Dir, PathBuf), InspectionError> {
+        resolve_parent(&self.dir, relative)
+    }
+
+    pub(crate) fn resolve_directory(&self, relative: &Path) -> Result<Dir, InspectionError> {
+        resolve_directory(&self.dir, relative)
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), InspectionError> {
+        revalidate_root(&self.dir, &self.root.root_id)
+    }
+}
+
 fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'static str> {
     let components = relative.components().filter_map(|component| {
         let Component::Normal(name) = component else {
@@ -646,12 +834,19 @@ fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'sta
             return Some("Git metadata is not exposed");
         }
         if kind == ContextRootKind::Companion {
-            if first && name == "manifest.json" {
+            if first
+                && (name == "manifest.json"
+                    || name == "context-manifest.json"
+                    || name == ".context-assets.lock")
+            {
                 return Some("Cockpit companion metadata is not exposed");
             }
             if name
                 .to_str()
-                .is_some_and(|name| name.starts_with(".companion-") && name.ends_with(".tmp"))
+                .is_some_and(|name| {
+                    (name.starts_with(".companion-") || name.starts_with(".context-snapshot-"))
+                        && name.ends_with(".tmp")
+                })
             {
                 return Some("Cockpit staging internals are not exposed");
             }
@@ -704,7 +899,7 @@ fn resolve_directory(root: &Dir, relative: &Path) -> Result<Dir, InspectionError
         };
         let metadata = current.symlink_metadata(name).map_err(|error| {
             InspectionError::new(
-                "context_path_unavailable",
+                if error.kind() == ErrorKind::NotFound { "context_file_missing" } else { "context_path_unavailable" },
                 format!("cannot access context path: {error}"),
             )
         })?;
@@ -724,7 +919,7 @@ fn resolve_directory(root: &Dir, relative: &Path) -> Result<Dir, InspectionError
             .open_dir_nofollow(Path::new(name))
             .map_err(|error| {
                 InspectionError::new(
-                    "context_path_unavailable",
+                    if error.kind() == ErrorKind::NotFound { "context_file_missing" } else { "context_path_unavailable" },
                     format!("cannot open context directory: {error}"),
                 )
             })?;
@@ -1000,7 +1195,7 @@ fn is_symlink_open_error(error: &std::io::Error) -> bool {
         false
     }
 }
-fn metadata_revision(metadata: &Metadata) -> String {
+pub(crate) fn metadata_revision(metadata: &Metadata) -> String {
     format!(
         "{}:{}:{}",
         filesystem_identity(metadata),

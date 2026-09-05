@@ -1,5 +1,10 @@
+pub mod context_assets;
+pub mod comments;
+pub mod comment_paste;
 pub mod context;
+pub mod context_search;
 pub mod projects;
+pub mod project_teardown;
 pub mod typescript;
 pub mod v1;
 

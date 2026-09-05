@@ -282,6 +282,7 @@ fn request_is_mutating(method: &str) -> bool {
             | "workspace.rename"
             | "workspace.move_block"
             | "workspace.close"
+            | "worktree.remove"
             | "workspace.focus"
             | "tab.create"
             | "tab.rename"
@@ -297,6 +298,7 @@ fn request_is_mutating(method: &str) -> bool {
             | "pane.close"
             | "pane.focus"
             | "agent.focus"
+            | "pane.send_text"
             | "plugin.pane.open"
     )
 }
@@ -972,6 +974,11 @@ impl HerdrCliAdapter {
         Arc::new(extensions::ExtensionHerdrAdapter::new(self.clone()))
     }
 
+    /// Construct the capability-gated acknowledged raw-paste adapter.
+    pub fn paste_adapter(&self) -> Arc<dyn cockpit_core::CommentPasteAdapter> {
+        Arc::new(self.clone())
+    }
+
     fn command(&self, session: Option<&str>, args: &[&str]) -> Command {
         let mut command = Command::new(&self.config.executable);
         command
@@ -1134,7 +1141,7 @@ impl HerdrCliAdapter {
         ))
     }
 
-    async fn socket_request(
+    pub(crate) async fn socket_request(
         &self,
         session_id: &str,
         method: &str,
@@ -1145,7 +1152,7 @@ impl HerdrCliAdapter {
             .map(|(result, _)| result)
     }
 
-    async fn socket_request_with_identity(
+    pub(crate) async fn socket_request_with_identity(
         &self,
         session_id: &str,
         method: &str,
@@ -2191,7 +2198,7 @@ fn known_event(event: &str, data: &Value, snapshot: &SessionSnapshotResponse) ->
     false
 }
 
-fn parse_focus_result(
+pub(crate) fn parse_focus_result(
     result: Value,
     kind: FocusKind,
     target_id: &str,

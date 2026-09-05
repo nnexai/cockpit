@@ -19,6 +19,8 @@ import type {
 import { initialSessionState, sessionReducer, type SessionState } from "./sessionReducer";
 import { TerminalPane } from "./TerminalPane";
 import { SetupDialog } from "./projects/SetupDialog";
+import { TeardownDialog } from "./projects/TeardownDialog";
+import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
 import { isGraphicalContext, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
 
@@ -773,9 +775,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sessionChooserOpen, setSessionChooserOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [teardownSpaceId, setTeardownSpaceId] = useState<string | null>(null);
   const [prefixActive, setPrefixActive] = useState(false);
   const mutationBusy = mutations.pending !== null || renderers.busy;
-  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen;
+  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null;
   const streamRegistry = useRef(new Set<TerminalStream>());
   const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
   useEffect(() => () => { streamRegistry.current.forEach((stream) => stream.close()); streamRegistry.current.clear(); }, []);
@@ -832,7 +836,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (menu.target.kind === "space") {
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button></ContextMenu>;
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}>Review task cleanup…</button></ContextMenu>;
     }
     if (menu.target.kind === "tab") {
       const tab = allTabs.find((candidate) => candidate.id === menu.target.id);
@@ -865,18 +869,21 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
         const renderer = renderers.panes[pane.id];
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (state.focusError && pane.id === selection.paneId) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
     {commandsOpen ? <CommandOverlay run={(command) => { setCommandsOpen(false); runCommand(command); }} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} contextActions={<>
+      <button type="button" className="session-command" onClick={() => { setCommandsOpen(false); setRecoveryOpen(true); }}>Recover task cleanup…</button>
       <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "right"); }}>Open Context right</button>
       <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "down"); }}>Open Context below</button>
       <button type="button" className="session-command" disabled={renderers.panes[selection.paneId ?? ""]?.presentation.renderer !== "context"} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) renderers.choose(selection.paneId, isGraphicalContext(renderers.panes[selection.paneId]) ? "terminal" : "context"); }}>{isGraphicalContext(renderers.panes[selection.paneId ?? ""]) ? "Show terminal view" : "Render as Context"}</button>
     </>} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
+    {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
+    {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetry={onRetry} onRetryMutation={onRetryMutation} />
   </div>;

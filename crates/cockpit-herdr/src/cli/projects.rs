@@ -1,15 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::project_adapter::{
     ProjectHerdrAdapter, ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
-    ProjectWorktreeEntry, ProjectWorktreeRequest, ProjectWorktreeResult,
+    ProjectWorktreeEntry, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
+    ProjectWorktreeResult,
 };
 use cockpit_core::{HerdrAdapter, InspectionError};
 use cockpit_protocol::projects::WorkspaceSetupMode;
 use cockpit_protocol::v1::HerdrCompatibility;
 use serde_json::{Map, Value, json};
+use tokio::process::Command;
 
 use super::{
     HerdrCliAdapter, object, optional_string, required_array, required_bool, required_string,
@@ -168,6 +171,7 @@ fn parse_worktree_list(
             },
             open_workspace_id,
             is_primary,
+            is_linked_worktree: is_linked,
             dirty: None,
         });
     }
@@ -391,6 +395,48 @@ fn parse_tab_result(value: &Value, workspace_id: &str) -> Result<String, Inspect
     Ok(tab_id)
 }
 
+fn parse_workspace_closed(value: &Value) -> Result<(), InspectionError> {
+    let result = object(value, "workspace.close result")?;
+    if required_string(result, "type", "workspace.close result")? != "workspace_closed" {
+        return Err(InspectionError::new(
+            "malformed_workspace_response",
+            "workspace.close returned an unexpected result",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_worktree_removed(
+    value: &Value,
+    request: &ProjectWorktreeRemoveRequest,
+) -> Result<(), InspectionError> {
+    let result = object(value, "worktree.remove result")?;
+    if required_string(result, "type", "worktree.remove result")? != "worktree_removed"
+        || required_string(result, "workspace_id", "worktree.remove result")? != request.workspace_id
+        || required_bool(result, "forced", "worktree.remove result")? != request.force
+    {
+        return Err(InspectionError::new(
+            "malformed_worktree_response",
+            "worktree.remove returned an unexpected result",
+        ));
+    }
+    let worktree = object(
+        result.get("worktree").ok_or_else(|| {
+            InspectionError::new("malformed_worktree_response", "removed worktree is required")
+        })?,
+        "worktree.remove result.worktree",
+    )?;
+    if required_string(worktree, "path", "worktree.remove result.worktree")?
+        != request.checkout_path
+    {
+        return Err(InspectionError::new(
+            "provenance_conflict",
+            "worktree.remove returned a different checkout path",
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl ProjectHerdrAdapter for HerdrCliAdapter {
     async fn project_inventory(
@@ -504,6 +550,104 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
             tab_id,
             pane_id: panes[0].id.clone(),
         })
+    }
+
+    async fn project_worktree_dirty(
+        &self,
+        checkout_path: &str,
+        timeout_ms: u32,
+        output_bytes: u32,
+    ) -> Result<bool, InspectionError> {
+        ensure_text(checkout_path, "checkout_path")?;
+        if !Path::new(checkout_path).is_absolute() || timeout_ms == 0 || output_bytes == 0 {
+            return Err(invalid("worktree status"));
+        }
+        let mut command = Command::new("git");
+        command
+            .current_dir(checkout_path)
+            .arg("-c")
+            .arg("core.hooksPath=/dev/null")
+            .arg("-c")
+            .arg("core.fsmonitor=false")
+            .arg("status")
+            .arg("--porcelain=v1")
+            .arg("--untracked-files=all")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "");
+        let output = cockpit_core::process::run_bounded_command(
+            command,
+            output_bytes as usize,
+            output_bytes as usize,
+            Duration::from_millis(timeout_ms as u64),
+            "worktree_status",
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(InspectionError::new(
+                "worktree_status_failed",
+                "Git could not determine worktree status",
+            ));
+        }
+        Ok(!output.stdout.is_empty())
+    }
+
+    async fn project_close_workspace(
+        &self,
+        session_id: &str,
+        endpoint_identity: &str,
+        workspace_id: &str,
+    ) -> Result<(), InspectionError> {
+        ensure_endpoint_identity(endpoint_identity)?;
+        ensure_text(workspace_id, "workspace_id")?;
+        if !valid_pane_id(workspace_id) {
+            return Err(invalid("workspace_id"));
+        }
+        let methods = self.project_methods(session_id).await?;
+        if !methods.contains("workspace.close") {
+            return Err(unsupported("Herdr method workspace.close is unavailable"));
+        }
+        let (result, _) = self
+            .socket_request_with_identity(
+                session_id,
+                "workspace.close",
+                json!({"workspace_id": workspace_id}),
+                Some(endpoint_identity),
+            )
+            .await?;
+        parse_workspace_closed(&result)
+    }
+
+    async fn project_remove_worktree(
+        &self,
+        session_id: &str,
+        request: &ProjectWorktreeRemoveRequest,
+    ) -> Result<(), InspectionError> {
+        ensure_endpoint_identity(&request.endpoint_identity)?;
+        ensure_text(&request.workspace_id, "workspace_id")?;
+        ensure_text(&request.checkout_path, "checkout_path")?;
+        if !valid_pane_id(&request.workspace_id)
+            || !Path::new(&request.checkout_path).is_absolute()
+            || request.force
+        {
+            return Err(invalid("worktree removal"));
+        }
+        let methods = self.project_methods(session_id).await?;
+        if !methods.contains("worktree.remove") {
+            return Err(unsupported("Herdr method worktree.remove is unavailable"));
+        }
+        let (result, _) = self
+            .socket_request_with_identity(
+                session_id,
+                "worktree.remove",
+                json!({"workspace_id": request.workspace_id, "force": false}),
+                Some(&request.endpoint_identity),
+            )
+            .await?;
+        parse_worktree_removed(&result, request)
     }
 }
 

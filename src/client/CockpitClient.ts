@@ -1,3 +1,5 @@
+import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protocol/generated/v1";
+import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
   AgentSummary,
   CockpitCapabilities,
@@ -30,12 +32,30 @@ import type {
   WorkspaceOperationRequest,
   WorkspaceReconcileRequest,
   WorkspaceOperation,
+  WorkspaceTeardownExecuteRequest,
+  WorkspaceTeardownPreview,
+  WorkspaceTeardownPreviewRequest,
+  WorkspaceTeardownRecoveryList,
+  WorkspaceTeardownResult,
   PanePresentation,
   ContextDirectoryRequest,
   ContextDirectory,
   ContextDocumentRequest,
   ContextDocument,
   ContextLaunchRequest,
+  ContextSearchRequest,
+  ContextSearchResponse,
+  ContextInvalidationRequest,
+  ContextInvalidationResponse,
+  CommentBatch,
+  CommentBatchList,
+  CommentBatchMutation,
+  CommentBatchRequest,
+  CommentPreview,
+  CommentPreviewRequest,
+  CommentRemoveRequest,
+  CommentRequestScope,
+  CommentUpsertRequest,
 } from "../protocol/generated/v1";
 
 export type CockpitStatus = StatusResponse;
@@ -83,10 +103,25 @@ export interface CockpitClient {
   resumeWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
   cancelWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
   reconcileWorkspace(sessionId: string, request: WorkspaceReconcileRequest): Promise<WorkspaceOperation>;
+  workspaceTeardownPreview(sessionId: string, request: WorkspaceTeardownPreviewRequest): Promise<WorkspaceTeardownPreview>;
+  workspaceTeardownExecute(sessionId: string, request: WorkspaceTeardownExecuteRequest): Promise<WorkspaceTeardownResult>;
+  workspaceTeardownRecoveries(sessionId: string): Promise<WorkspaceTeardownRecoveryList>;
   inspectPane(sessionId: string, paneId: string, signal?: AbortSignal): Promise<PanePresentation>;
   contextDirectory(sessionId: string, paneId: string, request: ContextDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
   contextDocument(sessionId: string, paneId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
+  contextSnapshot(sessionId: string, paneId: string, request: ContextSnapshotRequest): Promise<ContextSnapshotResponse>;
+  contextSearch(sessionId: string, paneId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
+  contextInvalidate(sessionId: string, paneId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
   openContext(sessionId: string, request: ContextLaunchRequest): Promise<PanePresentation>;
+  commentBatches(sessionId: string, paneId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;
+  commentBatch(sessionId: string, paneId: string, request: CommentBatchRequest, signal?: AbortSignal): Promise<CommentBatch>;
+  commentUpsert(sessionId: string, paneId: string, request: CommentUpsertRequest, signal?: AbortSignal): Promise<CommentBatch>;
+  commentRemove(sessionId: string, paneId: string, request: CommentRemoveRequest, signal?: AbortSignal): Promise<CommentBatch>;
+  commentAttach(sessionId: string, paneId: string, request: CommentBatchMutation, signal?: AbortSignal): Promise<CommentBatch>;
+  commentPastePrepare(sessionId: string, paneId: string, request: CommentPastePrepareRequest, signal?: AbortSignal): Promise<CommentPastePrepareResponse>;
+  commentPasteMarkPasted(sessionId: string, paneId: string, request: CommentPasteMarkPastedRequest): Promise<CommentPasteReceipt>;
+  commentPasteSend(sessionId: string, paneId: string, request: CommentPasteSendRequest): Promise<CommentPasteReceipt>;
+  commentPreview(sessionId: string, paneId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string): Promise<CockpitSessionSnapshot>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;

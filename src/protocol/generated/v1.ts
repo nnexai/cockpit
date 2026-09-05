@@ -116,7 +116,7 @@ export type ContextRootKind = "repository" | "companion";
 
 export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, companion_id: string | null, };
 
-export type PanePresentation = { session_id: string, pane_id: string, terminal_id: string, binding_id: string, extension: ExtensionKind | null, 
+export type PanePresentation = { session_id: string, pane_id: string, terminal_id: string, binding_id: string, extension: ExtensionKind | null,
 /**
  * Eligible automatic replacement, distinct from detected extension identity.
  */
@@ -137,3 +137,159 @@ export type ContextDocument = { binding_id: string, root_id: string, path: strin
 export type ContextSplitDirection = "right" | "down";
 
 export type ContextLaunchRequest = { pane_id: string, binding_id: string, root_id: string, direction: ContextSplitDirection, };
+
+export type CommentRequestScope = { binding_id: string, client_id: string, };
+
+export type CommentOwner = { session_id: string, pane_id: string, terminal_id: string, source_kind: ExtensionKind,
+/**
+ * Companion identity for Context; a separate review identity for Review.
+ */
+source_id: string, };
+
+export type CommentLocation = { workspace_id: string, tab_id: string, };
+
+export type CommentAttachment = { owner: CommentOwner, location: CommentLocation, binding_id: string, client_id: string, };
+
+export type CommentFileRef = { root_id: string, path: string, absolute_path: string, revision: string, content_hash: string | null, };
+
+export type CommentSourceState = "current" | "changed" | "missing" | "unavailable";
+
+export type CommentAnchor = { "kind": "whole_file" } | { "kind": "lines", start_line: number, end_line: number,
+/**
+ * Exact physical source lines, retaining CRLF/LF and a missing final newline.
+ */
+selected_lines: Array<string>, };
+
+export type CommentDraft = { draft_id: string, file_ref: CommentFileRef, anchor: CommentAnchor, comment_text: string, source_state: CommentSourceState, updated_at: string, };
+
+export type CommentBatch = { batch_id: string, generation: number, owner: CommentOwner, last_known_location: CommentLocation,
+/**
+ * Derived from fresh runtime proof; never persisted as an active attachment.
+ */
+live_attachment: CommentAttachment | null, drafts: Array<CommentDraft>, updated_at: string, };
+
+export type CommentBatchSummary = { batch_id: string, generation: number, owner: CommentOwner, last_known_location: CommentLocation, draft_count: number, updated_at: string, };
+
+export type CommentBatchList = { attachment: CommentAttachment, batches: Array<CommentBatchSummary>, truncated: boolean, };
+
+export type CommentBatchRequest = { scope: CommentRequestScope,
+/**
+ * None finds this pane's existing batch or returns an unpersisted empty batch.
+ */
+batch_id: string | null, };
+
+export type CommentBatchMutation = { scope: CommentRequestScope, batch_id: string, expected_generation: number, };
+
+export type CommentCapture = { root_id: string, path: string, expected_revision: string,
+/**
+ * Both null means whole-file; otherwise both are inclusive physical line numbers.
+ */
+start_line: number | null, end_line: number | null, };
+
+export type CommentUpsertRequest = { batch: CommentBatchMutation,
+/**
+ * None creates a draft with capture; editing changes text, not captured source.
+ */
+draft_id: string | null, capture: CommentCapture | null, comment_text: string, };
+
+export type CommentRemoveRequest = { batch: CommentBatchMutation, draft_id: string, };
+
+export type CommentPreviewRequest = { batch: CommentBatchMutation, retain_stale_excerpts: boolean, };
+
+export type CommentPreview = { batch_id: string, generation: number, payload: string, payload_bytes: number, framed_bytes: number, limit_bytes: number, sanitized_controls: number, stale_draft_ids: Array<string>, exportable: boolean, reason: string | null, };
+
+export type CommentPasteTarget = { endpoint_identity: string, session_id: string, workspace_id: string, tab_id: string, pane_id: string, terminal_id: string,
+/**
+ * Current agent name from Herdr, for target selection only.
+ */
+agent_label: string,
+/**
+ * Opaque fingerprint built from current terminal and agent identity evidence.
+ */
+agent_fingerprint: string, };
+
+export type CommentPasteState = "pending" | "accepted" | "rejected" | "outcome_unknown";
+
+export type CommentPastePrepareRequest = { batch: CommentBatchMutation, retain_stale_excerpts: boolean, };
+
+export type CommentPastePrepareResponse = { batch_id: string, generation: number, payload_hash: string, payload_bytes: number, framed_bytes: number, limit_bytes: number, targets: Array<CommentPasteTarget>,
+/**
+ * Recent durable receipts for this batch; pending records are recovered as outcome-unknown.
+ */
+receipts: Array<CommentPasteReceipt>, paste_available: boolean, reason: string | null, };
+
+export type CommentPasteSendRequest = { batch: CommentBatchMutation, target: CommentPasteTarget, expected_payload_hash: string, retain_stale_excerpts: boolean,
+/**
+ * Stable across duplicate transport delivery of the same user action.
+ */
+operation_id: string,
+/**
+ * Host/client request correlation. It is recorded but never used as a lease.
+ */
+request_id: string,
+/**
+ * Required only when the user consciously retries an outcome-unknown receipt.
+ */
+acknowledge_duplicate_risk: boolean, };
+
+export type CommentPasteMarkPastedRequest = { batch: CommentBatchMutation, operation_id: string, };
+
+export type CommentPasteReceipt = { operation_id: string, request_id: string, batch_id: string, batch_generation: number, payload_hash: string, target: CommentPasteTarget, state: CommentPasteState, sent_draft_ids: Array<string>, created_at: string, completed_at: string | null, message: string | null,
+/**
+ * The user explicitly resolved this prior outcome after inspection.
+ */
+user_confirmed: boolean, };
+
+export type WorkspaceTeardownAction = "close_space" | "remove_owned_worktree" | "reconcile_remove_outcome" | "remove_orphaned_companion" | "forget_association";
+
+export type WorkspaceTeardownOwnership = "owned_created" | "borrowed_opened" | "foreign" | "unknown";
+
+export type WorkspaceTeardownDirtyState = "clean" | "dirty" | "unknown";
+
+export type WorkspaceTeardownWorkspaceState = "live" | "missing" | "ambiguous";
+
+export type WorkspaceTeardownCompanionState = "owned" | "missing" | "foreign" | "ambiguous";
+
+export type WorkspaceTeardownPreviewRequest = { workspace_id: string, };
+
+export type WorkspaceTeardownExecuteRequest = { operation_id: string, workspace_id: string, expected_endpoint_identity: string, expected_checkout_path: string, action: WorkspaceTeardownAction, confirmation: string, };
+
+export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string, repository_root: string, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, companion_state: WorkspaceTeardownCompanionState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, companion_path: string | null, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
+
+export type WorkspaceTeardownOutcome = "completed" | "outcome_unknown" | "orphaned_companion" | "retained";
+
+export type WorkspaceTeardownResult = { operation_id: string, workspace_id: string, action: WorkspaceTeardownAction, outcome: WorkspaceTeardownOutcome, message: string, };
+
+export type WorkspaceTeardownRecoveryState = "pending" | "outcome_unknown" | "orphaned_companion";
+
+export type WorkspaceTeardownRecovery = { operation_id: string, workspace_id: string, checkout_path: string, state: WorkspaceTeardownRecoveryState, };
+
+export type WorkspaceTeardownRecoveryList = { recoveries: Array<WorkspaceTeardownRecovery>, };
+
+export type ContextSnapshotRequest = { binding_id: string, root_id: string, repository_id: string, mode: ContextSnapshotMode, };
+
+export type ContextSnapshotResponse = { binding_id: string, root_id: string, repository_id: string,
+/**
+ * A path relative to the authorized companion root.
+ */
+snapshot_path: string, generation: string, mode: ContextSnapshotMode, copy_mode: ContextSnapshotCopyMode, files: number, bytes: number, source_head: string | null, dirty: boolean, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ContextSnapshotMode = "working_tree";
+
+export type ContextSnapshotCopyMode = "reflink" | "copy" | "mixed";
+
+export type ContextSearchRequest = { binding_id: string, root_id: string, query: string, request_generation: number, };
+
+export type ContextSearchResult = { path: string, line: number, excerpt: string, revision: string, };
+
+export type ContextSearchResponse = { binding_id: string, root_id: string, query: string, request_generation: number, results: Array<ContextSearchResult>, scanned_files: number, truncated: boolean, };
+
+export type ContextKnownRevision = { path: string, revision: string, };
+
+export type ContextInvalidationState = "changed" | "missing" | "unavailable";
+
+export type ContextInvalidation = { path: string, state: ContextInvalidationState, revision: string | null, };
+
+export type ContextInvalidationRequest = { binding_id: string, root_id: string, request_generation: number, known: Array<ContextKnownRevision>, };
+
+export type ContextInvalidationResponse = { binding_id: string, root_id: string, request_generation: number, invalidations: Array<ContextInvalidation>, truncated: boolean, };

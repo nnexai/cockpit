@@ -9,6 +9,9 @@ use cockpit_core::CockpitService;
 use cockpit_protocol::projects::{
     WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupRequest,
 };
+use cockpit_protocol::project_teardown::{
+    WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreviewRequest,
+};
 use serde::de::DeserializeOwned;
 
 use super::{
@@ -39,6 +42,18 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route(
             "/api/v1/sessions/{session_id}/workspace-operations/reconcile",
             post(reconcile),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-teardown/preview",
+            post(teardown_preview),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-teardown/execute",
+            post(teardown_execute),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/workspace-teardown/recoveries",
+            get(teardown_recoveries),
         )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
@@ -193,6 +208,67 @@ async fn reconcile(
         Err(error) => return inspection_error(error),
     };
     match projects.reconcile(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn teardown_preview(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceTeardownPreviewRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.teardown_preview(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn teardown_execute(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+    body: Result<Json<WorkspaceTeardownExecuteRequest>, JsonRejection>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.teardown_execute(&session_id, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn teardown_recoveries(
+    State(service): State<CockpitService>,
+    Path(session_id): Path<String>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Session ID is invalid");
+    }
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.teardown_recoveries(&session_id) {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
