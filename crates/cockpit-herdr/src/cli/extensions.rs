@@ -436,7 +436,7 @@ impl ExtensionHerdrAdapter {
         let methods = self.schema_methods(session_id, &endpoint_identity).await?;
         let snapshot = self
             .herdr
-            .read_snapshot_with_identity(session_id, Some(&endpoint_identity))
+            .read_structure_with_identity(session_id, Some(&endpoint_identity))
             .await?;
         let pane = snapshot
             .panes

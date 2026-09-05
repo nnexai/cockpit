@@ -5,6 +5,7 @@ pub(super) mod store;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 
 use cockpit_protocol::comments::{
     CommentAnchor, CommentAttachment, CommentBatch, CommentBatchList, CommentBatchMutation,
@@ -27,6 +28,9 @@ use self::store::CommentStore;
 
 const MAX_DRAFTS: usize = 64;
 const MAX_COMMENT_BYTES: usize = 8 * 1024;
+const MAX_REVIEW_STATE_READS_IN_FLIGHT: usize = 4;
+
+type ReviewStateKey = (String, u32, String, bool);
 
 struct CommentEvidence {
     binding_id: String,
@@ -37,6 +41,7 @@ struct CommentEvidence {
     companion_id: String,
     companion_path: String,
     source_kind: ExtensionKind,
+    review: Option<crate::review::ReviewCommentEvidence>,
 }
 
 struct CapturedDocument {
@@ -225,11 +230,34 @@ impl CommentsService {
             }
         }
         self.refresh_states(&mut batch, &evidence).await;
+        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+            .await?;
         let committed = self
             .store
             .commit(batch, request.batch.expected_generation)
             .await?;
         Ok(with_attachment(committed, attachment))
+    }
+
+    /// Explicitly discard a saved batch, including detached recovery batches.
+    /// Fresh pane proof gates access; generation checking protects concurrent edits.
+    pub async fn discard(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &CommentBatchMutation,
+    ) -> Result<CommentBatchList, InspectionError> {
+        let (_, evidence) = self.attachment(session_id, pane_id, &request.scope).await?;
+        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+            .await?;
+        let mut remaining = self.list(session_id, pane_id, &request.scope).await?;
+        self.store
+            .discard(&request.batch_id, request.expected_generation)
+            .await?;
+        remaining
+            .batches
+            .retain(|batch| batch.batch_id != request.batch_id);
+        Ok(remaining)
     }
 
     pub async fn remove(
@@ -266,6 +294,8 @@ impl CommentsService {
             ));
         }
         self.refresh_states(&mut batch, &evidence).await;
+        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+            .await?;
         let committed = self
             .store
             .commit(batch, request.batch.expected_generation)
@@ -301,6 +331,8 @@ impl CommentsService {
         batch.owner = attachment.owner.clone();
         batch.last_known_location = attachment.location.clone();
         self.refresh_states(&mut batch, &evidence).await;
+        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+            .await?;
         let committed = self
             .store
             .commit(batch, request.expected_generation)
@@ -365,23 +397,33 @@ impl CommentsService {
                 "comment scope is incomplete",
             ));
         }
-        let presentation = self.context.inspect_pane(session_id, pane_id).await?;
+        let (presentation, runtime_evidence) = self
+            .context
+            .inspect_pane_with_evidence(session_id, pane_id)
+            .await?;
         let evidence = if presentation.renderer == Some(ExtensionKind::Review) {
             let review = self.reviews.as_ref().ok_or_else(|| {
                 InspectionError::new("review_unavailable", "Review comments are not configured")
             })?;
             let value = review
-                .comment_evidence(session_id, pane_id, &scope.binding_id)
+                .comment_evidence_for_presentation(
+                    session_id,
+                    pane_id,
+                    &scope.binding_id,
+                    &presentation,
+                    &runtime_evidence,
+                )
                 .await?;
             CommentEvidence {
-                binding_id: value.binding_id,
-                terminal_id: value.terminal_id,
-                workspace_id: value.workspace_id,
-                tab_id: value.tab_id,
+                binding_id: value.binding_id.clone(),
+                terminal_id: value.terminal_id.clone(),
+                workspace_id: value.workspace_id.clone(),
+                tab_id: value.tab_id.clone(),
                 root_id: value.source_id.clone(),
-                companion_id: value.source_id,
-                companion_path: value.checkout_path,
+                companion_id: value.source_id.clone(),
+                companion_path: value.checkout_path.clone(),
                 source_kind: ExtensionKind::Review,
+                review: Some(value),
             }
         } else {
             let value = self
@@ -397,6 +439,7 @@ impl CommentsService {
                 companion_id: value.companion_id,
                 companion_path: value.companion_path,
                 source_kind: ExtensionKind::Context,
+                review: None,
             }
         };
         let owner = CommentOwner {
@@ -442,10 +485,13 @@ impl CommentsService {
                 InspectionError::new("review_unavailable", "Review comments are not configured")
             })?;
             let value = review
-                .capture(
-                    session_id,
-                    pane_id,
-                    &evidence.binding_id,
+                .capture_with_evidence(
+                    evidence.review.as_ref().ok_or_else(|| {
+                        InspectionError::new(
+                            "review_unavailable",
+                            "Review evidence is not available for this comment operation",
+                        )
+                    })?,
                     &reference.review_id,
                     reference.generation,
                     &reference.file_id,
@@ -568,10 +614,24 @@ impl CommentsService {
 
     async fn refresh_states(&self, batch: &mut CommentBatch, evidence: &CommentEvidence) {
         if evidence.source_kind == ExtensionKind::Review {
-            let mut states = HashMap::new();
-            for draft in &mut batch.drafts {
-                let Some(reference) = draft.file_ref.review.as_ref() else {
+            let Some(operation) = evidence.review.clone() else {
+                for draft in &mut batch.drafts {
                     draft.source_state = CommentSourceState::Unavailable;
+                }
+                return;
+            };
+            let Some(review) = self.reviews.as_ref().cloned() else {
+                for draft in &mut batch.drafts {
+                    draft.source_state = CommentSourceState::Unavailable;
+                }
+                return;
+            };
+            let mut unique = HashMap::new();
+            for draft in &batch.drafts {
+                if draft.file_ref.root_id != evidence.root_id {
+                    continue;
+                }
+                let Some(reference) = draft.file_ref.review.as_ref() else {
                     continue;
                 };
                 let key = (
@@ -580,34 +640,63 @@ impl CommentsService {
                     reference.file_id.clone(),
                     reference.side == cockpit_protocol::review::ReviewSide::Old,
                 );
-                if !states.contains_key(&key) {
-                    let state = match &self.reviews {
-                        Some(review) => match review
-                            .source_state(
-                                &batch.owner.session_id,
-                                &batch.owner.pane_id,
-                                &evidence.binding_id,
+                unique.entry(key).or_insert_with(|| reference.clone());
+            }
+            let mut states = HashMap::new();
+            let mut pending = unique.into_iter();
+            let mut reads = JoinSet::new();
+            loop {
+                while reads.len() < MAX_REVIEW_STATE_READS_IN_FLIGHT {
+                    let Some((key, reference)) = pending.next() else {
+                        break;
+                    };
+                    let review = review.clone();
+                    let operation = operation.clone();
+                    reads.spawn(async move {
+                        let result = review
+                            .source_state_with_evidence(
+                                &operation,
                                 &reference.review_id,
                                 reference.generation,
                                 &reference.file_id,
                                 reference.side,
                             )
-                            .await
-                        {
-                            Ok(crate::review::ReviewSourceState::Current) => {
-                                CommentSourceState::Current
-                            }
-                            Ok(crate::review::ReviewSourceState::Changed) => {
-                                CommentSourceState::Changed
-                            }
-                            Err(_) => CommentSourceState::Unavailable,
-                        },
-                        None => CommentSourceState::Unavailable,
-                    };
-                    states.insert(key.clone(), state);
+                            .await;
+                        (key, result)
+                    });
                 }
+                let Some(result) = reads.join_next().await else {
+                    break;
+                };
+                if let Ok((key, result)) = result {
+                    let state = match result {
+                        Ok(crate::review::ReviewSourceState::Current) => {
+                            CommentSourceState::Current
+                        }
+                        Ok(crate::review::ReviewSourceState::Changed) => {
+                            CommentSourceState::Changed
+                        }
+                        Err(_) => CommentSourceState::Unavailable,
+                    };
+                    states.insert(key, state);
+                }
+            }
+            for draft in &mut batch.drafts {
+                let Some(reference) = draft.file_ref.review.as_ref() else {
+                    draft.source_state = CommentSourceState::Unavailable;
+                    continue;
+                };
+                let key: ReviewStateKey = (
+                    reference.review_id.clone(),
+                    reference.generation,
+                    reference.file_id.clone(),
+                    reference.side == cockpit_protocol::review::ReviewSide::Old,
+                );
                 draft.source_state = if draft.file_ref.root_id == evidence.root_id {
-                    states[&key]
+                    states
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(CommentSourceState::Unavailable)
                 } else {
                     CommentSourceState::Unavailable
                 };
@@ -658,6 +747,45 @@ impl CommentsService {
             };
         }
     }
+
+    async fn revalidate_review_evidence(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        evidence: &CommentEvidence,
+    ) -> Result<(), InspectionError> {
+        let Some(expected) = evidence.review.as_ref() else {
+            return Ok(());
+        };
+        let review = self.reviews.as_ref().ok_or_else(|| {
+            InspectionError::new("review_unavailable", "Review comments are not configured")
+        })?;
+        let actual = review
+            .comment_evidence(session_id, pane_id, &expected.binding_id)
+            .await?;
+        if !same_review_evidence(expected, &actual) {
+            return Err(InspectionError::new(
+                "comments_detached",
+                "Reviewr pane or checkout changed while saving this comment",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn same_review_evidence(
+    expected: &crate::review::ReviewCommentEvidence,
+    actual: &crate::review::ReviewCommentEvidence,
+) -> bool {
+    expected.binding_id == actual.binding_id
+        && expected.session_id == actual.session_id
+        && expected.pane_id == actual.pane_id
+        && expected.terminal_id == actual.terminal_id
+        && expected.workspace_id == actual.workspace_id
+        && expected.tab_id == actual.tab_id
+        && expected.checkout_path == actual.checkout_path
+        && expected.repository_id == actual.repository_id
+        && expected.source_id == actual.source_id
 }
 
 fn empty_batch(attachment: &CommentAttachment) -> CommentBatch {
@@ -763,6 +891,7 @@ mod tests {
     fn evidence(root_id: &str) -> CommentEvidence {
         CommentEvidence {
             source_kind: ExtensionKind::Context,
+            review: None,
             binding_id: "binding".to_owned(),
             terminal_id: "terminal".to_owned(),
             workspace_id: "workspace".to_owned(),
@@ -804,5 +933,26 @@ mod tests {
         });
         assert!(captured_roots_match(&batch, &evidence("root-a")));
         assert!(!captured_roots_match(&batch, &evidence("root-b")));
+    }
+
+    #[test]
+    fn scoped_review_evidence_rejects_a_changed_checkout_or_pane() {
+        let expected = crate::review::ReviewCommentEvidence {
+            binding_id: "binding".to_owned(),
+            session_id: "session".to_owned(),
+            pane_id: "pane".to_owned(),
+            terminal_id: "terminal".to_owned(),
+            workspace_id: "workspace".to_owned(),
+            tab_id: "tab".to_owned(),
+            checkout_path: "/checkout".to_owned(),
+            repository_id: "repository".to_owned(),
+            source_id: "source-a".to_owned(),
+        };
+        let mut changed = expected.clone();
+        changed.source_id = "source-b".to_owned();
+        assert!(!same_review_evidence(&expected, &changed));
+        let mut changed = expected.clone();
+        changed.terminal_id = "replacement-terminal".to_owned();
+        assert!(!same_review_evidence(&expected, &changed));
     }
 }

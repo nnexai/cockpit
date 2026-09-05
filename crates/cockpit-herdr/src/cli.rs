@@ -1280,16 +1280,9 @@ impl HerdrCliAdapter {
         session_id: &str,
         expected_identity: Option<&str>,
     ) -> Result<SessionSnapshotResponse, InspectionError> {
-        self.selected_session(session_id)?;
-        let (result, _) = self
-            .socket_request_with_identity(
-                session_id,
-                "session.snapshot",
-                json!({}),
-                expected_identity,
-            )
+        let mut snapshot = self
+            .read_structure_with_identity(session_id, expected_identity)
             .await?;
-        let mut snapshot = parse_snapshot(json!({"result": result}), session_id)?;
         let git_summaries = join_all(snapshot.spaces.iter().map(|space| async {
             match self
                 .socket_request_with_identity(
@@ -1313,6 +1306,25 @@ impl HerdrCliAdapter {
             space.git = git?;
         }
         Ok(snapshot)
+    }
+
+    /// Extension validation needs fresh pane structure, not Git decorations
+    /// for every Space in the session. Keep endpoint pinning on this read.
+    async fn read_structure_with_identity(
+        &self,
+        session_id: &str,
+        expected_identity: Option<&str>,
+    ) -> Result<SessionSnapshotResponse, InspectionError> {
+        self.selected_session(session_id)?;
+        let (result, _) = self
+            .socket_request_with_identity(
+                session_id,
+                "session.snapshot",
+                json!({}),
+                expected_identity,
+            )
+            .await?;
+        parse_snapshot(json!({"result": result}), session_id)
     }
     async fn mutate_resource(
         &self,
@@ -2152,7 +2164,7 @@ mod tests {
         let fixture: Value =
             serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
         let server = tokio::spawn(async move {
-            for method in ["session.snapshot", "worktree.list"] {
+            for method in ["session.snapshot", "worktree.list", "session.snapshot"] {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
@@ -2177,11 +2189,16 @@ mod tests {
         let result = adapter
             .read_snapshot_with_identity("default", Some(&identity))
             .await;
+        let structure = adapter
+            .read_structure_with_identity("default", Some(&identity))
+            .await
+            .expect("structure inspection must not request optional worktree metadata");
         server.await.unwrap();
         std::fs::remove_file(&path).unwrap();
         let snapshot = result.expect("a non-Git Space must not prevent pinned pane inspection");
         assert_eq!(snapshot.spaces.len(), 1);
         assert!(snapshot.spaces[0].git.is_none());
+        assert_eq!(structure.panes, snapshot.panes);
     }
 
     fn parsed_title(value: Value) -> Option<String> {

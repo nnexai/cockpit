@@ -236,6 +236,7 @@ export function SourceLines({
   onScroll,
   commentDrafts = [],
   commentActions,
+  inlineEditor,
 }: {
   text: string;
   state: ContextFileViewState;
@@ -243,6 +244,7 @@ export function SourceLines({
   onScroll: (scrollTop: number) => void;
   commentDrafts?: CommentDraft[];
   commentActions?: CommentDraftActions;
+  inlineEditor?: (line: number) => ReactNode;
 }) {
   const lines = useMemo(() => splitSourceLines(text), [text]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -285,6 +287,7 @@ export function SourceLines({
                 <code className="context-line-text">{line.text || " "}</code>
               </button>
               {commentActions ? <InlineCommentDrafts drafts={commentDrafts} line={lineNumber} actions={commentActions} rootId={state.rootId} path={state.path} /> : null}
+              {inlineEditor?.(lineNumber)}
             </span>
           );
         })}
@@ -667,6 +670,32 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const selectedRange = fileState && fileState.selectionStart !== null && fileState.selectionEnd !== null
       ? { start: fileState.selectionStart, end: fileState.selectionEnd }
       : null;
+    const renderDocumentBody = (drafts: CommentDraft[] = [], actions?: CommentDraftActions): ReactNode => {
+      if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
+      if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
+      if (documentState.status === "error" && !document) {
+        return <div className="context-notice context-notice-error"><strong>Unable to read source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Retry</button></div>;
+      }
+      if (!document) return null;
+      const metadata = metadataSummary(document.text ?? "");
+      const selectedLines = selectedRange
+        ? `Lines ${Math.min(selectedRange.start, selectedRange.end)}–${Math.max(selectedRange.start, selectedRange.end)}`
+        : null;
+      return (
+        <>
+          <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
+          {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
+          {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
+          {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && root.kind === "companion" && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage client={client} sessionId={sessionId} paneId={paneId} request={{ binding_id: bindingId, root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
+            <div className="context-mode-switch" role="tablist" aria-label="Document view"><button type="button" role="tab" aria-selected={fileState!.mode === "source"} className={fileState!.mode === "source" ? "is-selected" : ""} onClick={() => updateFile({ mode: "source" })}>Source</button>{isMarkdown(document, selectedPath) ? <button type="button" role="tab" aria-selected={fileState!.mode === "markdown"} className={fileState!.mode === "markdown" ? "is-selected" : ""} onClick={() => updateFile({ mode: "markdown" })}>Markdown</button> : null}</div>
+            <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
+              {fileState!.mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} />}
+            </RenderErrorBoundary>
+          </>}
+        </>
+      );
+    };
+    if (root.kind !== "companion") return renderDocumentBody();
     return (
       <CommentDrafts
         client={client}
@@ -680,31 +709,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         onEditorStateChange={(commentEditor) => onChange({ ...value, commentEditor })}
         invalidationGeneration={invalidationGeneration}
       >
-        {(drafts, actions) => {
-          if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
-          if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
-          if (documentState.status === "error" && !document) {
-            return <div className="context-notice context-notice-error"><strong>Unable to read source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Retry</button></div>;
-          }
-          if (!document) return null;
-          const metadata = metadataSummary(document.text ?? "");
-          const selectedLines = selectedRange
-            ? `Lines ${Math.min(selectedRange.start, selectedRange.end)}–${Math.max(selectedRange.start, selectedRange.end)}`
-            : null;
-          return (
-            <>
-              <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
-              {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
-              {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
-              {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && root.kind === "companion" && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage client={client} sessionId={sessionId} paneId={paneId} request={{ binding_id: bindingId, root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
-                <div className="context-mode-switch" role="tablist" aria-label="Document view"><button type="button" role="tab" aria-selected={fileState!.mode === "source"} className={fileState!.mode === "source" ? "is-selected" : ""} onClick={() => updateFile({ mode: "source" })}>Source</button>{isMarkdown(document, selectedPath) ? <button type="button" role="tab" aria-selected={fileState!.mode === "markdown"} className={fileState!.mode === "markdown" ? "is-selected" : ""} onClick={() => updateFile({ mode: "markdown" })}>Markdown</button> : null}</div>
-                <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
-                  {fileState!.mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text!} state={fileState!} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} />}
-                </RenderErrorBoundary>
-              </>}
-            </>
-          );
-        }}
+        {(drafts, actions) => renderDocumentBody(drafts, actions)}
       </CommentDrafts>
     );
   };

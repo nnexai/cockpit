@@ -3,9 +3,9 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { CommentBatch, ContextDocument, ContextRoot, PanePresentation } from "../../protocol/generated/v1";
+import type { CommentBatch, CommentBatchList, ContextDocument, ContextRoot, PanePresentation } from "../../protocol/generated/v1";
 import { CommentDrafts } from "./CommentDrafts";
-import type { ContextCommentEditorState } from "./ContextViewer";
+import { SourceLines, type ContextCommentEditorState } from "./ContextViewer";
 
 it("retains prose after a remote deletion and requires explicit source capture to recreate it", async () => {
   const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
@@ -60,5 +60,57 @@ it("retains an open Review editor across refresh but requires explicit current-s
     expect(button("Save comment").disabled).toBe(false);
     await act(async () => button("Save comment").click());
     expect(upsert).toHaveBeenCalledWith("session", "pane", expect.objectContaining({ capture: expect.objectContaining({ review: current, expected_revision: "current" }), comment_text: "Retained prose" }));
+  } finally { await act(async () => mounted.unmount()); host.remove(); }
+});
+
+it("opens an inline Review editor from C at the current SourceLines selection", async () => {
+  const root = { root_id: "review-source", kind: "repository", companion_id: null } as ContextRoot;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const batch: CommentBatch = { batch_id: "batch", generation: 1, drafts: [], owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "review", source_id: "review-source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, updated_at: "now" };
+  const client = { commentBatch: vi.fn(async () => batch) } as unknown as CockpitClient;
+  const onEditorDismissed = vi.fn();
+  const host = window.document.createElement("div"); window.document.body.append(host); const mounted = createRoot(host);
+  function Harness() {
+    const [editor, setEditor] = useState<ContextCommentEditorState | null>(null);
+    return <CommentDrafts client={client} presentation={presentation} root={root} sourceKind="review" sourceIdentity="review-source" reviewCapture={{ review_id: "review", generation: 1, file_id: "file", side: "new" }} path="file.ts" document={{ text: "one\ntwo\n", revision: "current" } as ContextDocument} selection={{ start: 2, end: 2 }} mode="source" editorState={editor} onEditorStateChange={setEditor} inlineEditor onEditorDismissed={onEditorDismissed}>
+      {(_drafts, actions, inlineEditor) => <div data-review-surface onKeyDown={(event) => { if (event.key.toLowerCase() === "c") actions.createLines(); }}><SourceLines text={`one\ntwo\n`} state={{ rootId: root.root_id, path: "file.ts", mode: "source", selectionStart: 2, selectionEnd: 2, scrollTop: 0 }} onSelect={() => undefined} onScroll={() => undefined} inlineEditor={inlineEditor} /></div>}
+    </CommentDrafts>;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await act(async () => { const line = host.querySelector<HTMLButtonElement>('[data-line="2"]')!; line.focus(); line.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "c" })); });
+    const editor = host.querySelector<HTMLElement>('.comment-inline-editor [aria-label="New comment"]');
+    expect(editor).not.toBeNull();
+    expect(host.querySelector('[data-line="2"] + .comment-inline-editor textarea')).not.toBeNull();
+    expect(host.querySelector('[data-line="1"] + .comment-inline-editor textarea')).toBeNull();
+    expect(window.document.activeElement).toBe(host.querySelector("textarea"));
+    await act(async () => [...host.querySelectorAll("button")].find((item) => item.textContent === "Cancel")!.click());
+    expect(onEditorDismissed).toHaveBeenCalledOnce();
+  } finally { await act(async () => mounted.unmount()); host.remove(); }
+});
+
+it("confirms saved-batch discard inline and resets the active batch", async () => {
+  const root = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" } as ContextRoot;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const active = { batch_id: "active", generation: 2, owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "1" } as CommentBatch;
+  const list = { attachment: { owner: active.owner, location: active.last_known_location, binding_id: "binding", client_id: "client" }, batches: [{ batch_id: "active", generation: 2, owner: active.owner, last_known_location: active.last_known_location, draft_count: 0, updated_at: "1" }], truncated: false } as CommentBatchList;
+  const batchLoad = vi.fn(async () => active);
+  const discard = vi.fn(async () => ({ ...list, batches: [] }));
+  const client = { commentBatch: batchLoad, commentBatches: vi.fn(async () => list), commentDiscard: discard } as unknown as CockpitClient;
+  const host = window.document.createElement("div"); window.document.body.append(host); const mounted = createRoot(host);
+  const button = (label: string) => [...host.querySelectorAll("button")].find(item => item.textContent === label)!;
+  try {
+    await act(async () => mounted.render(<CommentDrafts client={client} presentation={presentation} root={root} path="file.md" document={{ text: "source", revision: "current" } as ContextDocument} selection={null} mode="source" editorState={null} onEditorStateChange={() => undefined} />));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => button("0 comments").click());
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => button("Discard").click());
+    expect(discard).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Discard this batch?");
+    await act(async () => button("Discard").click());
+    expect(discard).toHaveBeenCalledWith("session", "pane", { scope: expect.objectContaining({ binding_id: "binding" }), batch_id: "active", expected_generation: 2 });
+    await act(async () => { await Promise.resolve(); });
+    expect(batchLoad).toHaveBeenCalledTimes(2);
+    expect(host.querySelector<HTMLButtonElement>(".comment-count")?.disabled).toBe(false);
   } finally { await act(async () => mounted.unmount()); host.remove(); }
 });

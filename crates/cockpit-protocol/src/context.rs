@@ -25,6 +25,7 @@ pub enum DetectionConfidence {
 pub enum ContextRootKind {
     Repository,
     Companion,
+    Folder,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

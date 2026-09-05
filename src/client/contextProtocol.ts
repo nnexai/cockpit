@@ -21,7 +21,7 @@ function relativePath(value: unknown, allowEmpty: boolean): value is string {
 }
 
 function root(value: unknown): value is ContextRoot {
-  return record(value) && identity(value.root_id) && (value.kind === "repository" || value.kind === "companion")
+  return record(value) && identity(value.root_id) && (value.kind === "repository" || value.kind === "companion" || value.kind === "folder")
     && text(value.label) && text(value.path) && identity(value.repository_id)
     && text(value.checkout_path) && nullableText(value.companion_id)
     && (value.kind === "companion" ? identity(value.companion_id) : value.companion_id === null);

@@ -55,6 +55,41 @@ impl CommentStore {
         .map_err(|error| InspectionError::new("comments_task", error.to_string()))?
     }
 
+    pub(super) async fn discard(
+        &self,
+        batch_id: &str,
+        expected_generation: u32,
+    ) -> Result<(), InspectionError> {
+        let state = self.state.clone();
+        let batch_id = batch_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            validate_uuid(&batch_id, "batch")?;
+            let _collection_lock = state.acquire_named_lock(".comments.lock", "comments_lock")?;
+            let _record_lock = state.acquire_record_lock(&batch_id)?;
+            let current = read_batch(&state, &batch_id)?.ok_or_else(|| {
+                InspectionError::new("comments_batch_not_found", "comment batch does not exist")
+            })?;
+            if current.generation != expected_generation {
+                return Err(InspectionError::new(
+                    "stale_generation",
+                    "comment batch changed; refresh before deleting",
+                ));
+            }
+            atomic_write_json(
+                state.state_dir(),
+                &format!("discarded-{batch_id}.json"),
+                &expected_generation,
+            )
+            .map_err(|error| InspectionError::new("comments_write", error.to_string()))?;
+            state
+                .state_dir()
+                .remove_file(record_name(&batch_id))
+                .map_err(|error| InspectionError::new("comments_write", error.to_string()))
+        })
+        .await
+        .map_err(|error| InspectionError::new("comments_task", error.to_string()))?
+    }
+
     pub(super) async fn commit(
         &self,
         batch: CommentBatch,
@@ -78,6 +113,16 @@ fn commit_blocking(
     let _collection_lock = state.acquire_named_lock(".comments.lock", "comments_lock")?;
     let _record_lock = state.acquire_record_lock(&batch.batch_id)?;
     let name = record_name(&batch.batch_id);
+    if state
+        .state_dir()
+        .try_exists(format!("discarded-{}.json", batch.batch_id))
+        .map_err(|error| InspectionError::new("comments_read", error.to_string()))?
+    {
+        return Err(InspectionError::new(
+            "stale_generation",
+            "discarded comment batches cannot be recreated",
+        ));
+    }
     let existing = read_batch(state, &batch.batch_id)?;
 
     let next_generation = match existing.as_ref() {
@@ -153,6 +198,13 @@ fn read_batch(
     state: &ProjectStore,
     batch_id: &str,
 ) -> Result<Option<CommentBatch>, InspectionError> {
+    if state
+        .state_dir()
+        .try_exists(format!("discarded-{batch_id}.json"))
+        .map_err(|error| InspectionError::new("comments_read", error.to_string()))?
+    {
+        return Ok(None);
+    }
     let name = record_name(batch_id);
     match state.state_dir().symlink_metadata(&name) {
         Ok(_) => {
@@ -429,6 +481,48 @@ mod tests {
             .expect("batch");
         assert_eq!(loaded.drafts[0].comment_text, "original");
         assert_eq!(loaded.generation, 1);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn discard_checks_generation_and_does_not_allow_stale_resurrection() {
+        let root = temp_root("discard");
+        let store = CommentStore::new(&root).expect("store");
+        let saved = store
+            .commit(batch("discard", "keep until explicit deletion"), 0)
+            .await
+            .expect("save");
+        assert_eq!(
+            store
+                .discard(&saved.batch_id, 0)
+                .await
+                .expect_err("stale deletion")
+                .code,
+            "stale_generation"
+        );
+        assert!(store.load(&saved.batch_id).await.expect("load").is_some());
+        store
+            .discard(&saved.batch_id, saved.generation)
+            .await
+            .expect("discard");
+        assert!(store.load(&saved.batch_id).await.expect("load").is_none());
+        assert_eq!(
+            store
+                .commit(saved.clone(), saved.generation)
+                .await
+                .expect_err("stale editor cannot recreate deleted batch")
+                .code,
+            "stale_generation"
+        );
+        assert_eq!(
+            store
+                .commit(saved.clone(), 0)
+                .await
+                .expect_err("replayed initial create cannot resurrect deleted batch")
+                .code,
+            "stale_generation"
+        );
+        assert!(store.list().await.expect("list").0.is_empty());
         fs::remove_dir_all(root).expect("cleanup");
     }
 

@@ -81,6 +81,22 @@ pub async fn cockpit_comments_remove(
 }
 
 #[tauri::command]
+pub async fn cockpit_comments_discard(
+    session_id: String,
+    pane_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<CommentBatchList, ErrorResponse> {
+    let request: CommentBatchMutation = decode_request(request, "comments")?;
+    service
+        .comments()
+        .map_err(inspection_error_response)?
+        .discard(&session_id, &pane_id, &request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
 pub async fn cockpit_comments_attach(
     session_id: String,
     pane_id: String,

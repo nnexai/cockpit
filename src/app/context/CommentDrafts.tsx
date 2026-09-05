@@ -28,9 +28,13 @@ const windowClientId = (() => {
 type CommentSelection = { start: number; end: number } | null;
 type NewDraftTarget = { review?: CommentReviewRef; rootId: string; path: string; revision: string; selection: CommentSelection };
 export type CommentDraftActions = {
+  createLines: () => void;
+  createWholeFile: () => void;
+  openOverview: () => void;
   edit: (draft: CommentDraft) => void;
   remove: (draft: CommentDraft) => void;
 };
+export type InlineCommentEditor = (line: number) => ReactNode;
 
 type CommentDraftsProps = {
   client: CockpitClient;
@@ -42,7 +46,11 @@ type CommentDraftsProps = {
   mode: "source" | "markdown";
   editorState: ContextCommentEditorState | null;
   onEditorStateChange: (state: ContextCommentEditorState | null) => void;
-  children?: (drafts: CommentDraft[], actions: CommentDraftActions) => ReactNode;
+  children?: (drafts: CommentDraft[], actions: CommentDraftActions, inlineEditor?: InlineCommentEditor) => ReactNode;
+  inlineEditor?: boolean;
+  showToolbar?: boolean;
+  onCommentStatusChange?: (status: { count: number; canCreateLines: boolean; canCreateWholeFile: boolean }) => void;
+  onEditorDismissed?: () => void;
   onCountChange?: (count: number) => void;
   invalidationGeneration?: number;
   sourceIdentity?: string;
@@ -62,7 +70,17 @@ function draftAnchorLabel(anchor: CommentAnchor): string {
 }
 
 function sourceLabel(draft: CommentDraft): string {
-  return draft.file_ref.absolute_path || draft.file_ref.path;
+  return draft.file_ref.path;
+}
+
+function relativeTime(value: string): string {
+  const time = Number(value);
+  if (!Number.isFinite(time)) return "Saved";
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 60) return "Saved just now";
+  if (seconds < 3600) return `Saved ${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `Saved ${Math.floor(seconds / 3600)}h ago`;
+  return `Saved ${Math.floor(seconds / 86400)}d ago`;
 }
 function stale(draft: CommentDraft): boolean {
   return draft.source_state !== "current";
@@ -78,11 +96,12 @@ export function InlineCommentDrafts({ drafts, line, actions, rootId, path }: { d
   </article>)}</div>;
 }
 
-export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, onCountChange, invalidationGeneration = 0, sourceIdentity, sourceKind = "context", reviewCapture }: CommentDraftsProps) {
+export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, inlineEditor = false, showToolbar = true, onCommentStatusChange, onEditorDismissed, onCountChange, invalidationGeneration = 0, sourceIdentity, sourceKind = "context", reviewCapture }: CommentDraftsProps) {
   const currentSourceId = sourceIdentity ?? root.companion_id;
   const scope = useMemo<CommentRequestScope>(() => ({ binding_id: presentation.binding_id, client_id: windowClientId }), [presentation.binding_id]);
   const [batch, setBatch] = useState<CommentBatch | null>(null);
   const [batchList, setBatchList] = useState<CommentBatchList | null>(null);
+  const [discardConfirmation, setDiscardConfirmation] = useState<string | null>(null);
   const [newDraftTarget, setNewDraftTarget] = useState<NewDraftTarget | null>(null);
   const [loading, setLoading] = useState(true);
   const [overviewOpen, setOverviewOpen] = useState(false);
@@ -105,7 +124,8 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setNewDraftTarget(null);
     setText("");
     onEditorStateChange(null);
-  }, [onEditorStateChange]);
+    onEditorDismissed?.();
+  }, [onEditorDismissed, onEditorStateChange]);
 
   const loadBatch = useCallback(async (batchId: string | null = null) => {
     const generation = ++generationRef.current;
@@ -142,6 +162,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setPreview(null);
     setRetainedStale(false);
     setBatchList(null);
+    setDiscardConfirmation(null);
     setOverviewOpen(false);
     void loadBatch();
     return () => { generationRef.current += 1; };
@@ -188,7 +209,36 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     }
   }, [batch, clearEditor, client, editing?.draft_id, identity, onCountChange, pending, presentation.pane_id, presentation.session_id, scope]);
 
+  const currentDrafts = batch?.drafts ?? [];
+  const selectedRange = selection && document?.text !== null && document?.text !== undefined
+    ? { start: Math.min(selection.start, selection.end), end: Math.max(selection.start, selection.end) }
+    : null;
+
+  function beginNew(kind: "whole_file" | "lines") {
+    if (!batch || loading || pending || !document || document.text === null || !currentSourceId || !path || (kind === "lines" && !selectedRange)) return;
+    const nextEditorState: ContextCommentEditorState = {
+      review: reviewCapture,
+      rootId: root.root_id,
+      path,
+      revision: document.revision,
+      draftId: null,
+      editor: kind,
+      text: "",
+      selection: selectedRange,
+    };
+    setEditing(null);
+    setNewDraftTarget({ review: reviewCapture, rootId: root.root_id, path, revision: document.revision, selection: selectedRange });
+    setText("");
+    setEditor(kind);
+    onEditorStateChange(nextEditorState);
+    setOverviewOpen(false);
+    setError(null);
+  }
+
   const actions = useMemo<CommentDraftActions>(() => ({
+    createLines: () => beginNew("lines"),
+    createWholeFile: () => beginNew("whole_file"),
+    openOverview: () => { void openOverview(); },
     edit: (draft) => {
       const nextEditorState: ContextCommentEditorState = {
         review: draft.file_ref.review,
@@ -209,32 +259,10 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
       setError(null);
     },
     remove: (draft) => { void removeDraft(draft); },
-  }), [onEditorStateChange, removeDraft]);
-
-  const selectedRange = selection && document?.text !== null && document?.text !== undefined
-    ? { start: Math.min(selection.start, selection.end), end: Math.max(selection.start, selection.end) }
-    : null;
-
-  const beginNew = (kind: "whole_file" | "lines") => {
-    if (!document || document.text === null || !currentSourceId || !path || (kind === "lines" && !selectedRange)) return;
-    const nextEditorState: ContextCommentEditorState = {
-      review: reviewCapture,
-      rootId: root.root_id,
-      path,
-      revision: document.revision,
-      draftId: null,
-      editor: kind,
-      text: "",
-      selection: selectedRange,
-    };
-    setEditing(null);
-    setNewDraftTarget({ review: reviewCapture, rootId: root.root_id, path, revision: document.revision, selection: selectedRange });
-    setText("");
-    setEditor(kind);
-    onEditorStateChange(nextEditorState);
-    setOverviewOpen(false);
-    setError(null);
-  };
+  }), [batch, currentSourceId, document, loading, onEditorStateChange, path, pending, removeDraft, selectedRange]);
+  const canCreateLines = Boolean(batch && !loading && !pending && document?.text !== null && document?.text !== undefined && currentSourceId && path && selectedRange);
+  const canCreateWholeFile = Boolean(batch && !loading && !pending && document?.text !== null && document?.text !== undefined && currentSourceId && path);
+  useEffect(() => { onCommentStatusChange?.({ count: currentDrafts.length, canCreateLines, canCreateWholeFile }); }, [canCreateLines, canCreateWholeFile, currentDrafts.length, onCommentStatusChange]);
 
   const staleReviewEditor = Boolean(editorState && editorState.draftId === null && editorState.review && (
     editorState.review.review_id !== reviewCapture?.review_id || editorState.review.generation !== reviewCapture?.generation ||
@@ -281,6 +309,43 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     }
   };
 
+  const refreshBatchList = async () => {
+    try {
+      const list = await client.commentBatches(presentation.session_id, presentation.pane_id, scope);
+      if (identityRef.current === identity) setBatchList(list);
+    } catch {
+      // Keep the original error visible; a list refresh is only recovery for a stale generation.
+    }
+  };
+
+  const discardBatch = async (batchId: string, expectedGeneration: number) => {
+    if (pending) return;
+    const generation = ++generationRef.current;
+    setPending(true);
+    setError(null);
+    try {
+      const list = await client.commentDiscard(presentation.session_id, presentation.pane_id, { scope, batch_id: batchId, expected_generation: expectedGeneration });
+      if (generation !== generationRef.current || identityRef.current !== identity) return;
+      setBatchList(list);
+      setDiscardConfirmation(null);
+      if (batch?.batch_id === batchId) {
+        clearEditor();
+        setBatch(null);
+        setPreview(null);
+        onCountChange?.(0);
+        void loadBatch(null);
+      }
+    } catch (reason) {
+      if (generation !== generationRef.current || identityRef.current !== identity) return;
+      const message = errorText(reason);
+      setError(message);
+      setDiscardConfirmation(null);
+      if (message.includes("stale_generation") || message.includes("generation is no longer current")) void refreshBatchList();
+    } finally {
+      if (identityRef.current === identity) setPending(false);
+    }
+  };
+
   const attach = async () => {
     if (!batch || pending || !currentSourceId) return;
     const generation = ++generationRef.current;
@@ -319,12 +384,10 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     }
   };
 
-  const currentDrafts = batch?.drafts ?? [];
   const fileDrafts = currentDrafts.filter((draft) => draft.file_ref.root_id === root.root_id && draft.file_ref.path === path && (sourceKind !== "review" || (draft.file_ref.review?.file_id === reviewCapture?.file_id && draft.file_ref.review?.side === reviewCapture?.side)));
   const fileBottomDrafts = fileDrafts.filter((draft) => mode === "markdown" || draft.anchor.kind === "whole_file" || stale(draft));
   const detached = batch?.live_attachment === null;
   const sameSource = Boolean(batch && batch.owner.source_kind === sourceKind && batch.owner.source_id === currentSourceId);
-  const content = children ? children(currentDrafts, actions) : null;
   const editorSelection = editing?.anchor.kind === "lines"
     ? { start: editing.anchor.start_line, end: editing.anchor.end_line }
     : newDraftTarget?.selection;
@@ -343,19 +406,35 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
     setError(null);
   };
 
+  const editorContent = editor ? <section className="comment-editor" aria-label={editing ? "Edit comment" : "New comment"}><h3>{editing ? `Edit ${draftAnchorLabel(editing.anchor).toLowerCase()}` : editor === "whole_file" ? "Comment on whole file" : editorSelection ? `Comment on lines ${editorSelection.start}–${editorSelection.end}` : "Comment on selected lines"}{editorPath && editorPath !== path ? ` · ${editorPath}` : ""}</h3>{staleReviewEditor ? <p role="status">The displayed review source changed. Your text is retained. Select the intended source lines again before using the current source.<button type="button" onClick={recaptureEditor} disabled={!document?.text || document.truncated || (editor === "lines" && !selection)}>Use current source</button></p> : null}<textarea value={text} onChange={(event) => { const nextText = event.target.value; setText(nextText); if (editorState) onEditorStateChange({ ...editorState, text: nextText }); }} rows={4} maxLength={8192} autoFocus aria-label="Comment text" placeholder="Describe what should be changed…" /><div className="comment-editor-actions"><button type="button" onClick={clearEditor}>Cancel</button><button type="button" onClick={() => void saveDraft()} disabled={pending || staleReviewEditor || removedEditorDraft || !text.trim()}>{pending ? "Saving…" : "Save comment"}</button></div></section> : null;
+  const inlineEditorLine = inlineEditor && sourceKind === "review" && editor === "lines" && editorPath === path && editorSelection
+    ? Math.max(editorSelection.start, editorSelection.end) : null;
+  const renderInlineEditor: InlineCommentEditor | undefined = inlineEditorLine === null ? undefined : (line) => line === inlineEditorLine
+    ? <div className="comment-inline-editor">{editorContent}</div> : null;
+  const content = children ? children(currentDrafts, actions, renderInlineEditor) : null;
+
   return <>
-    <div className="comment-toolbar" aria-label="Reference comments">
+    {showToolbar ? <div className="comment-toolbar" aria-label="Reference comments">
       <button type="button" className="comment-count" onClick={() => void openOverview()} disabled={pending || loading} aria-label={`${currentDrafts.length} comments, open overview`}>{currentDrafts.length} comments</button>
-      <button type="button" onClick={() => beginNew("whole_file")} disabled={!batch || loading || !currentSourceId || document?.text === null || document?.text === undefined || !path || pending}>Comment whole file</button>
-      <button type="button" onClick={() => beginNew("lines")} disabled={!batch || loading || !selectedRange || !currentSourceId || pending}>Comment selected lines</button>
+      <button type="button" onClick={() => beginNew("whole_file")} disabled={!canCreateWholeFile}>Comment whole file</button>
+      <button type="button" onClick={() => beginNew("lines")} disabled={!canCreateLines}>Comment selected lines</button>
       {detached ? <span className="comment-detached" role="status">Detached recovery</span> : null}
-    </div>
+    </div> : null}
     {error ? <div className="comment-notice comment-notice-error" role="alert"><strong>Comments not saved</strong><span>{error}</span><button type="button" onClick={() => void loadBatch(batch?.batch_id ?? null)}>Reload</button></div> : null}
     {loading ? <div className="comment-notice" role="status">Loading comments…</div> : null}
     {content}
     {removedEditorDraft ? <div className="comment-notice" role="status"><span>This comment was deleted in another window. Your unsaved text is retained. Select a file{editor === "lines" ? " and source lines" : ""} to create a new comment.</span><button type="button" onClick={recreateFromCurrentSource} disabled={!document || document.text === null || !path || (editor === "lines" && !selectedRange)}>Use current source</button></div> : null}
     {fileBottomDrafts.length > 0 ? <section className={`comment-file-drafts${mode === "markdown" ? " comment-markdown-drafts" : ""}`} aria-label={`Comments for ${path}`}><h3>{mode === "markdown" ? "File comments" : "File comments"}</h3>{fileBottomDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{draftAnchorLabel(draft.anchor)}</strong><span>{draft.source_state}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</section> : null}
-    {editor ? <section className="comment-editor" aria-label={editing ? "Edit comment" : "New comment"}><h3>{editing ? `Edit ${draftAnchorLabel(editing.anchor).toLowerCase()}` : editor === "whole_file" ? "Comment on whole file" : editorSelection ? `Comment on lines ${editorSelection.start}–${editorSelection.end}` : "Comment on selected lines"}{editorPath && editorPath !== path ? ` · ${editorPath}` : ""}</h3>{staleReviewEditor ? <p role="status">The displayed review source changed. Your text is retained. Select the intended source lines again before using the current source.<button type="button" onClick={recaptureEditor} disabled={!document?.text || document.truncated || (editor === "lines" && !selection)}>Use current source</button></p> : null}<textarea value={text} onChange={(event) => { const nextText = event.target.value; setText(nextText); if (editorState) onEditorStateChange({ ...editorState, text: nextText }); }} rows={4} maxLength={8192} autoFocus aria-label="Comment text" placeholder="Describe what should be changed…" /><div className="comment-editor-actions"><button type="button" onClick={clearEditor}>Cancel</button><button type="button" onClick={() => void saveDraft()} disabled={pending || staleReviewEditor || removedEditorDraft || !text.trim()}>{pending ? "Saving…" : "Save comment"}</button></div></section> : null}
-    {overviewOpen ? <div className="comment-overview-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setOverviewOpen(false); }}><section className="comment-overview" role="dialog" aria-modal="true" aria-labelledby="comment-overview-title"><header><h2 id="comment-overview-title">Comments</h2><button type="button" aria-label="Close comments overview" onClick={() => setOverviewOpen(false)}>Close</button></header>{batchList?.batches.length ? <div className="comment-recovery-list"><h3>Saved batches</h3>{batchList.batches.map((summary) => <button type="button" className="comment-recovery-row" key={summary.batch_id} onClick={() => { setOverviewOpen(false); switchBatch(summary.batch_id); }}><span>{summary.draft_count} comments</span><code>{summary.batch_id}</code><small>generation {summary.generation} · {summary.updated_at}</small></button>)}</div> : null}{batch && detached ? <div className="comment-recovery"><strong>Detached batch</strong><span>Reattach only after confirming this {sourceKind === "review" ? "Review" : "Context"} source.</span><button type="button" onClick={() => void attach()} disabled={pending || !sameSource}>Reattach to this source</button></div> : null}<div className="comment-overview-list"><h3>Current batch</h3>{currentDrafts.length === 0 ? <p>No comments yet.</p> : currentDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{sourceLabel(draft)}</strong><span>{draftAnchorLabel(draft.anchor)} · {draft.source_state}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</div><div className="comment-preview"><div className="comment-preview-heading"><h3>Preview</h3><div><button type="button" onClick={() => void makePreview(false)} disabled={pending}>Refresh preview</button><button type="button" onClick={() => void makePreview(true)} disabled={pending}>Include stale excerpts</button></div></div>{preview ? <><div className="comment-preview-meta"><span>{preview.payload_bytes} payload bytes</span><span>{preview.framed_bytes} framed bytes</span><span>{preview.sanitized_controls} controls sanitized</span><span>{preview.exportable ? "Exportable" : "Not exportable"}</span></div>{preview.reason ? <span className="comment-preview-reason">{preview.reason}</span> : null}<textarea readOnly value={preview.payload} rows={10} aria-label="Comment preview" />{preview.stale_draft_ids.length > 0 ? <span className="comment-preview-blocked">{preview.stale_draft_ids.length} stale comment{preview.stale_draft_ids.length === 1 ? "" : "s"} marked in the file.</span> : null}{preview.exportable && retainedStale ? <span className="comment-preview-ok">Stale excerpts retained explicitly.</span> : null}</> : <span className="comment-preview-meta">No preview generated.</span>}</div>{batch ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onAccepted={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}</section></div> : null}
+    {editorContent && inlineEditorLine === null ? editorContent : null}
+    {overviewOpen ? <div className="comment-overview-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setOverviewOpen(false); }}>
+      <section className="comment-overview" role="dialog" aria-modal="true" aria-labelledby="comment-overview-title">
+        <header><h2 id="comment-overview-title">Comments</h2><button type="button" aria-label="Close comments overview" onClick={() => setOverviewOpen(false)}>Close</button></header>
+        {batchList?.batches.length ? <details className="comment-recovery-list"><summary>Saved batches <span>{batchList.batches.length}</span></summary>{batchList.batches.map((summary) => <div className="comment-recovery-row" key={summary.batch_id}><button type="button" className="comment-recovery-open" onClick={() => { setOverviewOpen(false); switchBatch(summary.batch_id); }}><strong>{summary.draft_count} comment{summary.draft_count === 1 ? "" : "s"}</strong><small>{relativeTime(summary.updated_at)}</small></button>{discardConfirmation === summary.batch_id ? <span className="comment-recovery-confirm"><span>Discard this batch?</span><button type="button" onClick={() => void discardBatch(summary.batch_id, summary.generation)} disabled={pending}>Discard</button><button type="button" onClick={() => setDiscardConfirmation(null)} disabled={pending}>Keep</button></span> : <button type="button" className="comment-recovery-discard" onClick={() => setDiscardConfirmation(summary.batch_id)} disabled={pending}>Discard</button>}</div>)}</details> : null}
+        {batch && detached ? <div className="comment-recovery"><strong>Detached batch</strong><span>Reattach after confirming this {sourceKind === "review" ? "Review" : "Context"} source.</span><button type="button" onClick={() => void attach()} disabled={pending || !sameSource}>Reattach</button></div> : null}
+        <section className="comment-overview-list"><h3>Current comments</h3>{currentDrafts.length === 0 ? <p>No comments yet.</p> : currentDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{sourceLabel(draft)}</strong><span>{draftAnchorLabel(draft.anchor)}{stale(draft) ? " · source changed" : ""}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</section>
+        <section className="comment-preview"><div className="comment-preview-heading"><h3>Preview</h3><div><button type="button" onClick={() => void makePreview(false)} disabled={pending}>Refresh</button>{currentDrafts.some(stale) ? <button type="button" onClick={() => void makePreview(true)} disabled={pending}>Include stale excerpts</button> : null}</div></div>{preview ? <>{preview.reason ? <span className="comment-preview-reason">{preview.reason}</span> : null}<textarea readOnly value={preview.payload} rows={10} aria-label="Comment preview" />{preview.stale_draft_ids.length > 0 ? <span className="comment-preview-blocked">{preview.stale_draft_ids.length} stale comment{preview.stale_draft_ids.length === 1 ? "" : "s"} need review.</span> : null}{preview.exportable && retainedStale ? <span className="comment-preview-ok">Stale excerpts retained.</span> : null}</> : <span className="comment-preview-empty">No preview generated.</span>}</section>
+        {batch ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onAccepted={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}
+      </section>
+    </div> : null}
   </>;
 }

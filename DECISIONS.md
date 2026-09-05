@@ -284,3 +284,16 @@ Browser proof exercised real plugin splits, repository/companion browsing, sourc
 GUI Review is available for any local Git checkout, including ordinary Herdr workspaces and linked worktrees outside the configured task catalog. The checkout comes from fresh authoritative pane working-directory evidence, with filesystem-bound repository identity and revalidation. Task associations add context; they are not a prerequisite for reviewing staged, unstaged, untracked, or branch changes. This does not add PR/MR operations or broaden companion write authorization.
 
 Following the workflow mock and the user's explicit placement choice, Pane and Commands actions belong on the right of the tab bar, including when a single pane has no label. Task setup uses the plus button in the Spaces heading. Herdr still owns pane creation, focus, and layout; the controls expose those operations without requiring a visible pane header.
+
+## Review interaction and ordinary file viewers, 2026-09-05
+
+Review keeps old/new and expanded-source modes, with visible line-range selection, keyboard file/hunk navigation, and an inline comment editor beside the selected lines. The comments overview remains available. The extra explanatory/TUI-switch header is removed; terminal fallback stays in the Pane menu. Paste preselects the first eligible agent returned for the current tab and retains a valid explicit choice. Saving a comment does not paste or submit it.
+
+Review's bottom status bar shows the active side/range, comment shortcuts, and the comments-overview button. The former top comment toolbar is removed for Review. Mouse selection and keyboard hunk/line movement update one active range; C opens a line comment and Shift+C a whole-file comment. Comment actions are also clickable from the status bar.
+
+Comment capture and source-state checks reuse fresh Review evidence within one request, then revalidate it before saving. Evidence is not cached across requests. Extension inspection reads endpoint-pinned pane structure without requesting optional Git summaries for unrelated Spaces.
+
+Verified `herdr-file-viewer` panes may render any safe browsing folder without task setup. The root follows the viewer's proven browsing cwd and Git-toplevel-or-cwd behavior, never the plugin install directory. Ordinary Folder roots use the existing bounded read and no-symlink protections. Open Context still targets the companion; companion comments, imports, and other companion-specific actions retain their existing authorization.
+
+- Review comments use the bottom status bar for line/file actions and the overview count. The overview keeps its sidebar placement, uses compact sans-serif controls, and puts recoverable batches in a collapsed section with explicit discard. Exported comments follow Reviewr's concise path/range, source excerpt, and message format; capture revisions and IDs remain internal. Discard uses generation checks and durable deleted-ID markers so stale editors cannot recreate removed batches.
+- Changed-file trees compress single-child directory chains, indent branches, fold single-file paths into leaves, and preserve filename endings. Per-file additions/deletions replace repeated scope labels; index/working labels remain where a path has distinct staged and unstaged entries.

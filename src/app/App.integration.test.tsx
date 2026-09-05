@@ -148,6 +148,7 @@ class AppFixture {
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
+    commentDiscard: vi.fn(async () => { throw new Error("Unexpected comment discard in terminal fixture"); }),
     commentRemove: vi.fn(async () => { throw new Error("Unexpected comment remove in terminal fixture"); }),
     commentAttach: vi.fn(async () => { throw new Error("Unexpected comment attach in terminal fixture"); }),
     commentPastePrepare: async () => { throw new Error("unused"); },

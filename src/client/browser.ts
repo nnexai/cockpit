@@ -486,7 +486,19 @@ export function createBrowserClient(
       });
       return matchCommentBatch(response, sessionId, paneId, body.batch.scope, body.batch.batch_id, body.batch.expected_generation, true);
     },
-    async commentAttach(sessionId, paneId, value, signal) {
+    async commentDiscard(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseCommentMutation(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/comments/discard`, "comment discard", parseCommentBatchList, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      matchCommentAttachment(response.attachment, sessionId, paneId, body.scope);
+      return response;
+    },    async commentAttach(sessionId, paneId, value, signal) {
       validateSessionId(sessionId);
       validateResourceId(paneId);
       const body = parseCommentMutation(value);

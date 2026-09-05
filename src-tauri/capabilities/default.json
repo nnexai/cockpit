@@ -34,6 +34,7 @@
     "allow-cockpit-comments-upsert",
     "allow-cockpit-comments-remove",
     "allow-cockpit-comments-attach",
+    "allow-cockpit-comments-discard",
     "allow-cockpit-comments-preview",
     "allow-cockpit-comments-paste-prepare",
     "allow-cockpit-comments-paste-send",

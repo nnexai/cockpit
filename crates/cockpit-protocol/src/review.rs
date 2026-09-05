@@ -63,6 +63,12 @@ pub struct ReviewChangedFile {
     pub old_path: Option<String>,
     pub new_path: Option<String>,
     pub binary: bool,
+    /// Exact parsed line counts, absent when the file diff is incomplete or
+    /// non-textual rather than misleadingly reported as zero.
+    #[serde(default)]
+    pub additions: Option<u32>,
+    #[serde(default)]
+    pub deletions: Option<u32>,
     pub summary: String,
     pub old_revision: Option<String>,
     pub new_revision: Option<String>,

@@ -112,7 +112,7 @@ export type ExtensionKind = "context" | "review";
 
 export type DetectionConfidence = "verified_launch" | "verified_process" | "candidate" | "none" | "unsupported";
 
-export type ContextRootKind = "repository" | "companion";
+export type ContextRootKind = "repository" | "companion" | "folder";
 
 export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, companion_id: string | null, };
 
@@ -323,7 +323,12 @@ export type ReviewChangedFile = { file_id: string,
 /**
  * All-local preserves each staged/unstaged/untracked anchor separately.
  */
-comparison: ReviewComparison, status: ReviewFileStatus, old_path: string | null, new_path: string | null, binary: boolean, summary: string, old_revision: string | null, new_revision: string | null, };
+comparison: ReviewComparison, status: ReviewFileStatus, old_path: string | null, new_path: string | null, binary: boolean,
+/**
+ * Exact parsed line counts, absent when the file diff is incomplete or
+ * non-textual rather than misleadingly reported as zero.
+ */
+additions: number | null, deletions: number | null, summary: string, old_revision: string | null, new_revision: string | null, };
 
 export type ReviewSnapshot = { binding_id: string, session_id: string, pane_id: string, review_id: string, generation: number, repository_id: string, checkout_path: string,
 /**

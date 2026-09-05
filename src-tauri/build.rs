@@ -32,6 +32,7 @@ fn main() {
             "cockpit_comments_upsert",
             "cockpit_comments_remove",
             "cockpit_comments_attach",
+            "cockpit_comments_discard",
             "cockpit_comments_preview",
             "cockpit_comments_paste_prepare",
             "cockpit_comments_paste_send",

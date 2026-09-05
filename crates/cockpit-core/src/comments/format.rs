@@ -49,20 +49,6 @@ pub(super) fn sanitize(value: &str) -> (String, u32) {
     (output, count)
 }
 
-fn quote_value(value: &str) -> (String, u32) {
-    let (sanitized, count) = sanitize(value);
-    let mut quoted = String::with_capacity(sanitized.len().saturating_add(2));
-    quoted.push('"');
-    for character in sanitized.chars() {
-        if matches!(character, '\\' | '"') {
-            quoted.push('\\');
-        }
-        quoted.push(character);
-    }
-    quoted.push('"');
-    (quoted, count)
-}
-
 fn split_line_ending(value: &str) -> (&str, &'static str) {
     if let Some(content) = value.strip_suffix("\r\n") {
         (content, "crlf")
@@ -71,17 +57,6 @@ fn split_line_ending(value: &str) -> (&str, &'static str) {
     } else {
         (value, "none")
     }
-}
-
-fn newline_metadata(lines: &[String]) -> String {
-    let mut metadata = String::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index > 0 {
-            metadata.push(',');
-        }
-        metadata.push_str(split_line_ending(line).1);
-    }
-    metadata
 }
 
 pub(super) struct FormattedPreview {
@@ -121,15 +96,6 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
         if index > 0 {
             payload.push('\n');
         }
-        let (absolute_path, count) = quote_value(&draft.file_ref.absolute_path);
-        sanitized_controls = sanitized_controls.saturating_add(count);
-        let (relative_path, count) = quote_value(&draft.file_ref.path);
-        sanitized_controls = sanitized_controls.saturating_add(count);
-        let (revision, count) = sanitize(&draft.file_ref.revision);
-        sanitized_controls = sanitized_controls.saturating_add(count);
-        let hash = draft.file_ref.content_hash.as_deref().unwrap_or("<none>");
-        let (hash, count) = sanitize(hash);
-        sanitized_controls = sanitized_controls.saturating_add(count);
         let (comment, count) = sanitize(&draft.comment_text);
         sanitized_controls = sanitized_controls.saturating_add(count);
 
@@ -137,73 +103,46 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
             stale_draft_ids.push(draft.draft_id.clone());
         }
 
-        payload.push_str("--- comment ");
-        payload.push_str(&draft.draft_id);
-        payload.push_str(" ---\n");
-        payload.push_str("absolute_path: ");
-        payload.push_str(&absolute_path);
-        payload.push('\n');
-        payload.push_str("relative_path: ");
-        payload.push_str(&relative_path);
-        payload.push('\n');
-        if let Some(review) = &draft.file_ref.review {
-            let (review_id, count) = quote_value(&review.review_id);
-            sanitized_controls = sanitized_controls.saturating_add(count);
-            let (file_id, count) = quote_value(&review.file_id);
-            sanitized_controls = sanitized_controls.saturating_add(count);
-            payload.push_str("review_id: ");
-            payload.push_str(&review_id);
-            payload.push('\n');
-            payload.push_str("review_generation: ");
-            payload.push_str(&review.generation.to_string());
-            payload.push('\n');
-            payload.push_str("review_file_id: ");
-            payload.push_str(&file_id);
-            payload.push('\n');
-            payload.push_str("review_side: ");
-            payload.push_str(match review.side {
-                cockpit_protocol::review::ReviewSide::Old => "old",
-                cockpit_protocol::review::ReviewSide::New => "new",
-            });
-            payload.push('\n');
-        }
-        payload.push_str("revision: ");
-        payload.push_str(&revision);
-        payload.push('\n');
-        payload.push_str("content_hash: ");
-        payload.push_str(&hash);
-        payload.push('\n');
-        payload.push_str("source_state: ");
-        payload.push_str(match draft.source_state {
-            CommentSourceState::Current => "current",
-            CommentSourceState::Changed => "changed",
-            CommentSourceState::Missing => "missing",
-            CommentSourceState::Unavailable => "unavailable",
-        });
-        payload.push('\n');
         match &draft.anchor {
-            CommentAnchor::WholeFile => payload.push_str("anchor: whole_file\n"),
+            CommentAnchor::WholeFile => {
+                let (path, count) = sanitize(&draft.file_ref.path);
+                sanitized_controls = sanitized_controls.saturating_add(count);
+                payload.push_str(&path);
+                payload.push_str(" (whole file)\n");
+            }
             CommentAnchor::Lines {
                 start_line,
                 end_line,
                 selected_lines,
             } => {
-                payload.push_str(&format!("anchor: lines {start_line}-{end_line}\n"));
-                payload.push_str("excerpt_newlines: [");
-                payload.push_str(&newline_metadata(selected_lines));
-                payload.push_str("]\n");
-                payload.push_str("excerpt:\n");
-                for (offset, source_line) in selected_lines.iter().enumerate() {
+                let (path, count) = sanitize(&draft.file_ref.path);
+                sanitized_controls = sanitized_controls.saturating_add(count);
+                payload.push_str(&path);
+                payload.push(':');
+                payload.push_str(&start_line.to_string());
+                if end_line != start_line {
+                    payload.push('-');
+                    payload.push_str(&end_line.to_string());
+                }
+                let marker = match draft.file_ref.review.as_ref().map(|review| review.side) {
+                    Some(cockpit_protocol::review::ReviewSide::Old) => {
+                        payload.push_str(" (removed)");
+                        '-'
+                    }
+                    Some(cockpit_protocol::review::ReviewSide::New) => '+',
+                    None => ' ',
+                };
+                payload.push('\n');
+                for source_line in selected_lines {
                     let (content, _) = split_line_ending(source_line);
                     let (line, count) = sanitize(content);
                     sanitized_controls = sanitized_controls.saturating_add(count);
-                    payload.push_str(&format!("{:>6} | {}", start_line + offset as u32, line));
-                    // This delimiter belongs to the preview record, not the captured source.
+                    payload.push(marker);
+                    payload.push_str(&line);
                     payload.push('\n');
                 }
             }
         }
-        payload.push_str("comment:\n");
         payload.push_str(&comment);
         payload.push('\n');
     }
@@ -233,7 +172,61 @@ pub(super) fn format_batch(batch: &CommentBatch, retain_stale_excerpts: bool) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_lines, quote_value, sanitize, split_line_ending};
+    use super::{capture_lines, format_batch, sanitize, split_line_ending};
+    use cockpit_protocol::comments::{
+        CommentAnchor, CommentBatch, CommentDraft, CommentFileRef, CommentLocation, CommentOwner,
+        CommentReviewRef, CommentSourceState,
+    };
+    use cockpit_protocol::context::ExtensionKind;
+    use cockpit_protocol::review::ReviewSide;
+
+    fn batch(drafts: Vec<CommentDraft>) -> CommentBatch {
+        CommentBatch {
+            batch_id: "batch".to_owned(),
+            generation: 1,
+            owner: CommentOwner {
+                session_id: "session".to_owned(),
+                pane_id: "pane".to_owned(),
+                terminal_id: "terminal".to_owned(),
+                source_kind: ExtensionKind::Review,
+                source_id: "source".to_owned(),
+            },
+            last_known_location: CommentLocation {
+                workspace_id: "workspace".to_owned(),
+                tab_id: "tab".to_owned(),
+            },
+            live_attachment: None,
+            drafts,
+            updated_at: "1".to_owned(),
+        }
+    }
+
+    fn review_draft(side: ReviewSide, start_line: u32, lines: &[&str]) -> CommentDraft {
+        CommentDraft {
+            draft_id: format!("draft-{start_line}"),
+            file_ref: CommentFileRef {
+                review: Some(CommentReviewRef {
+                    review_id: "review".to_owned(),
+                    generation: 1,
+                    file_id: "file".to_owned(),
+                    side,
+                }),
+                root_id: "root".to_owned(),
+                path: "crates/cockpit-core/src/comments/paste.rs".to_owned(),
+                absolute_path: "/checkout/crates/cockpit-core/src/comments/paste.rs".to_owned(),
+                revision: "ignored-by-export".to_owned(),
+                content_hash: Some("ignored-by-export".to_owned()),
+            },
+            anchor: CommentAnchor::Lines {
+                start_line,
+                end_line: start_line + lines.len() as u32 - 1,
+                selected_lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+            },
+            comment_text: "this is a comment".to_owned(),
+            source_state: CommentSourceState::Current,
+            updated_at: "1".to_owned(),
+        }
+    }
 
     #[test]
     fn capture_preserves_physical_newlines_and_missing_final_newline() {
@@ -261,19 +254,56 @@ mod tests {
     }
 
     #[test]
-    fn quoted_paths_escape_delimiters_after_control_sanitizing() {
-        let (quoted, count) = quote_value("review\\\".md\x1b");
-        assert_eq!(quoted, "\"review\\\\\\\".md\\\\x1B\"");
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn preview_line_metadata_distinguishes_crlf_lf_and_missing_newline() {
+    fn preview_line_rendering_distinguishes_crlf_lf_and_missing_newline() {
         assert_eq!(
             split_line_ending("front: true\r\n"),
             ("front: true", "crlf")
         );
         assert_eq!(split_line_ending("body\n"), ("body", "lf"));
         assert_eq!(split_line_ending("last"), ("last", "none"));
+    }
+
+    #[test]
+    fn preview_uses_reviewr_style_locations_markers_and_compact_blocks() {
+        let older = review_draft(
+            ReviewSide::Old,
+            811,
+            &["        if let Err(error) = adapter\n"],
+        );
+        let newer = review_draft(
+            ReviewSide::New,
+            830,
+            &["        self.paste_store\n", "            .save(receipt)\n"],
+        );
+        let formatted = format_batch(&batch(vec![newer, older]), false);
+
+        assert_eq!(
+            formatted.payload,
+            "crates/cockpit-core/src/comments/paste.rs:811 (removed)\n\
+-        if let Err(error) = adapter\n\
+this is a comment\n\
+\n\
+crates/cockpit-core/src/comments/paste.rs:830-831\n\
++        self.paste_store\n\
++            .save(receipt)\n\
+this is a comment\n"
+        );
+        assert!(!formatted.payload.contains("review_id:"));
+        assert!(!formatted.payload.contains("revision:"));
+        assert!(formatted.exportable);
+    }
+
+    #[test]
+    fn stale_drafts_keep_their_compact_preview_but_require_confirmation() {
+        let mut draft = review_draft(ReviewSide::New, 1, &["line\n"]);
+        draft.source_state = CommentSourceState::Changed;
+        let formatted = format_batch(&batch(vec![draft.clone()]), false);
+
+        assert_eq!(formatted.stale_draft_ids, vec!["draft-1"]);
+        assert!(!formatted.exportable);
+        assert!(formatted.payload.starts_with(
+            "crates/cockpit-core/src/comments/paste.rs:1\n+line\nthis is a comment\n"
+        ));
+        assert!(format_batch(&batch(vec![draft]), true).exportable);
     }
 }

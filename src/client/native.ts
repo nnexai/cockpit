@@ -428,7 +428,16 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       signal?.throwIfAborted();
       return matchCommentBatch(response, sessionId, paneId, request.batch.scope, request.batch.batch_id, request.batch.expected_generation, true);
     },
-    async commentAttach(sessionId, paneId, value, signal) {
+    async commentDiscard(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseCommentMutation(value);
+      const response = await invokeAndParse(invoke, "cockpit_comments_discard", { sessionId, paneId, request }, "comment discard", parseCommentBatchList);
+      signal?.throwIfAborted();
+      matchCommentAttachment(response.attachment, sessionId, paneId, request.scope);
+      return response;
+    },    async commentAttach(sessionId, paneId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
       validateResourceId(paneId);

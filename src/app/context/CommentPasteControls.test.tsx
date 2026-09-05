@@ -61,3 +61,35 @@ it("resolves an uncertain receipt only after input inspection without sending ag
     expect(send).not.toHaveBeenCalled(); expect(accepted).toHaveBeenCalledOnce();
   } finally { await act(async () => mounted.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
+
+it("defaults to the first fresh eligible agent and replaces a stale target after refresh", async () => {
+  vi.stubGlobal("crypto", webcrypto);
+  const payload = "Reviewed comments";
+  const hash = `sha256:${Buffer.from(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))).toString("hex")}`;
+  const first = { endpoint_identity: "endpoint-one", session_id: "session", workspace_id: "space", tab_id: "current-tab", pane_id: "agent-one", terminal_id: "terminal-one", agent_fingerprint: "one", agent_label: "First agent" };
+  const second = { endpoint_identity: "endpoint-two", session_id: "session", workspace_id: "space", tab_id: "current-tab", pane_id: "agent-two", terminal_id: "terminal-two", agent_fingerprint: "two", agent_label: "Second agent" };
+  const replacement = { endpoint_identity: "endpoint-three", session_id: "session", workspace_id: "space", tab_id: "current-tab", pane_id: "agent-three", terminal_id: "terminal-three", agent_fingerprint: "three", agent_label: "Replacement agent" };
+  const responses = [
+    { batch_id: "batch", generation: 1, payload_hash: hash, payload_bytes: payload.length, framed_bytes: payload.length, limit_bytes: 8192, targets: [first, second], paste_available: true, reason: null, receipts: [] },
+    { batch_id: "batch", generation: 1, payload_hash: hash, payload_bytes: payload.length, framed_bytes: payload.length, limit_bytes: 8192, targets: [replacement], paste_available: true, reason: null, receipts: [] },
+  ] as CommentPastePrepareResponse[];
+  const send = vi.fn(async () => ({ operation_id: "sent", state: "accepted", message: null }));
+  const client = { commentPastePrepare: vi.fn(async () => responses.shift()!), commentPasteSend: send } as unknown as CockpitClient;
+  const host = document.createElement("div"); document.body.append(host); const mounted = createRoot(host);
+  const batch = { batch_id: "batch", generation: 1 } as CommentBatch;
+  const scope = { binding_id: "binding", client_id: "client" };
+  const button = (label: string) => [...host.querySelectorAll("button")].find(item => item.textContent === label)!;
+  try {
+    await act(async () => mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={{ batch_id: "batch", generation: 1, exportable: true, payload } as CommentPreview} onAccepted={vi.fn()} />));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    const select = host.querySelector<HTMLSelectElement>("select")!;
+    expect(select.value).toBe(first.pane_id);
+    await act(async () => { select.value = second.pane_id; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => button("Refresh targets").click());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(client.commentPastePrepare).toHaveBeenCalledTimes(2);
+    expect(host.querySelector<HTMLSelectElement>("select")!.value).toBe(replacement.pane_id);
+    await act(async () => button("Paste to agent").click());
+    expect(send).toHaveBeenCalledWith("session", "source", expect.objectContaining({ target: replacement, expected_payload_hash: hash }));
+  } finally { await act(async () => mounted.unmount()); host.remove(); vi.unstubAllGlobals(); }
+});

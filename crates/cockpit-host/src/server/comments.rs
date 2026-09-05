@@ -39,6 +39,10 @@ pub(super) fn routes() -> Router<CockpitService> {
             post(remove),
         )
         .route(
+            "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/discard",
+            post(discard),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/comments/attach",
             post(attach),
         )
@@ -158,6 +162,28 @@ async fn remove(
         Err(error) => return inspection_error(error),
     };
     match comments.remove(&session, &pane, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn discard(
+    State(service): State<CockpitService>,
+    Path((session, pane)): Path<(String, String)>,
+    body: Result<Json<CommentBatchMutation>, JsonRejection>,
+) -> Response {
+    if !valid_pane(&session, &pane) {
+        return bad_request("invalid_comments_request", "Session or pane ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let comments = match service.comments() {
+        Ok(comments) => comments,
+        Err(error) => return inspection_error(error),
+    };
+    match comments.discard(&session, &pane, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

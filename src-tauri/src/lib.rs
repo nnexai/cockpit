@@ -883,6 +883,7 @@ pub fn run() {
             comments::cockpit_comments_upsert,
             comments::cockpit_comments_remove,
             comments::cockpit_comments_attach,
+            comments::cockpit_comments_discard,
             comments::cockpit_comments_preview,
             comments::cockpit_comments_paste_prepare,
             comments::cockpit_comments_paste_send,

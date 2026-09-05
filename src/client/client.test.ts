@@ -101,6 +101,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
+    commentDiscard: vi.fn(async () => { throw new Error("Unexpected comment discard in terminal fixture"); }),
     commentRemove: vi.fn(async () => { throw new Error("Unexpected comment remove in terminal fixture"); }),
     commentAttach: vi.fn(async () => { throw new Error("Unexpected comment attach in terminal fixture"); }),
     commentPastePrepare: async () => { throw new Error("unused"); },
@@ -505,4 +506,19 @@ describe("client selector mocks", () => {
     const client = completeClient();
     expect(await client.sessions()).toEqual(sessions);
   });
+});
+
+it("discards saved batches through both transports with generation and attachment checks", async () => {
+  const scope = { binding_id: "binding", client_id: "client" };
+  const mutation = { scope, batch_id: "batch", expected_generation: 3 };
+  const result = { attachment: { owner: { session_id: "session-1", pane_id: "pane-1", terminal_id: "terminal-1", source_kind: "review", source_id: "source" }, location: { workspace_id: "space-1", tab_id: "tab-1" }, ...scope }, batches: [], truncated: false };
+  const request = vi.fn(async () => jsonResponse(result));
+  expect(await createBrowserClient(request).commentDiscard("session-1", "pane-1", mutation)).toEqual(result);
+  expect(request.mock.calls[0]).toEqual([expect.stringContaining("/comments/discard"), expect.objectContaining({ method: "POST", body: JSON.stringify(mutation) })]);
+  const invoke = vi.fn(async () => result);
+  const native = createNativeClient(invoke, <T,>(onmessage: (message: T) => void) => ({ onmessage }));
+  expect(await native.commentDiscard("session-1", "pane-1", mutation)).toEqual(result);
+  expect(invoke).toHaveBeenCalledWith("cockpit_comments_discard", { sessionId: "session-1", paneId: "pane-1", request: mutation });
+  const wrong = createBrowserClient(vi.fn(async () => jsonResponse({ ...result, attachment: { ...result.attachment, binding_id: "other" } })));
+  await expect(wrong.commentDiscard("session-1", "pane-1", mutation)).rejects.toThrow();
 });

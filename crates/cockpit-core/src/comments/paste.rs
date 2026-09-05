@@ -808,27 +808,6 @@ impl CommentsService {
                 ))
                 .await;
         }
-        if let Err(error) = adapter.focus_comment_paste_target(&request.target).await {
-            return self
-                .paste_store
-                .save(rejection(
-                    request,
-                    format!("Herdr did not acknowledge target focus: {}", error.message),
-                ))
-                .await;
-        }
-        if let Err(error) = adapter
-            .confirm_comment_paste_target_focus(&request.target)
-            .await
-        {
-            return self
-                .paste_store
-                .save(rejection(
-                    request,
-                    format!("paste target lost confirmed focus: {}", error.message),
-                ))
-                .await;
-        }
         let mut has_unknown = false;
         for receipt in self
             .paste_store
@@ -934,6 +913,29 @@ impl CommentsService {
                 "paste framing byte accounting disagreed with preview",
             ));
         }
+        if let Err(error) = adapter.focus_comment_paste_target(&request.target).await {
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    format!("Herdr did not acknowledge target focus: {}", error.message),
+                ))
+                .await;
+        }
+        if let Err(error) = adapter
+            .confirm_comment_paste_target_focus(&request.target)
+            .await
+        {
+            return self
+                .paste_store
+                .save(rejection(
+                    request,
+                    format!("paste target lost confirmed focus: {}", error.message),
+                ))
+                .await;
+        }
+        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+            .await?;
         let pending = CommentPasteReceipt {
             operation_id: request.operation_id.clone(),
             request_id: request.request_id.clone(),
@@ -1091,6 +1093,8 @@ impl CommentsService {
                 "only an unknown or reconciliation-required accepted paste can be marked pasted",
             ));
         }
+        self.revalidate_review_evidence(session_id, pane_id, &evidence)
+            .await?;
 
         let outcome = if let Some(frozen_drafts) = stored.sent_drafts.as_ref() {
             let mut frozen_batch = current.clone();

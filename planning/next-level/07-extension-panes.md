@@ -33,7 +33,7 @@ Define a closed renderer registry with two initial adapters:
 
 | Plugin / entrypoint | GUI replacement | Data authority |
 |---|---|---|
-| `herdr-file-viewer` / `file-viewer` | Context/file browser, only at the verified companion browsing root | Cockpit core bounded filesystem view and companion metadata |
+| `herdr-file-viewer` / `file-viewer` | File browser at the verified browsing root; companion actions at verified companions | Cockpit core bounded filesystem view and companion metadata |
 | `persiyanov.reviewr` / `pane` | Local review UI, without a companion-directory restriction | Cockpit core Git review snapshot and comments |
 
 Detection returns `verified_launch`, `verified_process`, `candidate`, `none`, or `unsupported`, with a bounded reason. A pane title is only a cheap candidate filter. It never decides replacement by itself.
@@ -74,7 +74,7 @@ Keep the last GUI with a local error while revalidating source state. If the bac
 
 When its manifest/capability is available, launch “Open Context” through the installed file-viewer plugin pane entrypoint with split placement. Stock Herdr owns protected launch context and plugin process cwd, so this requires a source pane already at its verified companion directory; otherwise the action is unavailable with a reason. Launch “Open Review” through the installed Reviewr pane entrypoint with the primary worktree context. Both operations use the schema-gated Herdr adapter and capture the plugin-open response. Neither requires extension changes. Missing/disabled plugins get a clear capability result and setup instructions; do not silently install plugins or register automatic hooks.
 
-Replace a file-viewer pane only when its proven browsing root is exactly its verified context companion directory. Repository-root viewers, viewers merely sharing a workspace with a companion, and unknown-root viewers stay terminals. Eligible Context viewers may also browse their authorized repository through a root selector. Verified Reviewr panes always select Review, regardless of directory. Do not infer either TUI's private selection by scraping output.
+Replace a verified file-viewer pane at its proven browsing root, including ordinary folders without task setup. Ordinary folders expose only that bounded browsing root; companion-specific actions require an exact verified companion match. Unknown or unsafe browsing roots stay terminals. Eligible Context companions may also browse their authorized repository through a root selector. Verified Reviewr panes select Review for their actual Git checkout, with task associations adding context. Do not infer either TUI's private selection by scraping output.
 
 ### Focus and dimensions
 
@@ -117,7 +117,7 @@ Selectable after REV-01, PANE-02, VIEW-01 source rendering, and REF-01/02. Sourc
 
 Proposed files: `src/app/review/{ReviewPane,ChangedFiles,DiffView,ReviewComments}.tsx`, review reducer/client mappings, and shared comment components. Reuse Context typography, source gutters, selection, queue, and payload preview. Both features use Cockpit-owned durable review/comment state.
 
-Show changed files with status and scope, a unified diff, old/new source gutters, inline unsent comments, and a header comment count opening an on-demand batch overview. Do not reserve a persistent bottom panel for comments. Whole-file and selected-line comments work across files. Add keyboard next/previous file/hunk, source view, expand unchanged lines under limits, and refresh. Side-by-side diff is a separately deferrable renderer inside this story; unified diff must be complete first.
+Show changed files with status and scope, a unified diff, old/new source gutters, inline unsent comments, and a bottom status bar with comment actions, keyboard hints, selection state, and a comment count opening an on-demand batch overview. Do not reserve a persistent bottom panel for comments. Whole-file and selected-line comments work across files. Add keyboard next/previous file/hunk, source view, expand unchanged lines under limits, and refresh. Side-by-side diff is a separately deferrable renderer inside this story; unified diff must be complete first.
 
 The target picker lists Herdr-detected agents in the same actual tab. Sending uses REF-02's acknowledged paste-only operation. No provider comment posting, Git mutation, or automatic agent submission is part of review. A review/MR URL can set the comparison suggestion and attach context, but the GUI requires a verified local repo/revision match before using remote positions as local anchors.
 

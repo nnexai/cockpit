@@ -319,6 +319,18 @@ impl ContextService {
         session_id: &str,
         pane_id: &str,
     ) -> Result<PanePresentation, InspectionError> {
+        let (presentation, _) = self.inspect_pane_with_evidence(session_id, pane_id).await?;
+        Ok(presentation)
+    }
+
+    /// Return a presentation with the exact adapter evidence that produced it.
+    /// Crate-local callers may carry this proof through one operation; callers
+    /// must obtain a fresh pair for every request.
+    pub(crate) async fn inspect_pane_with_evidence(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+    ) -> Result<(PanePresentation, ExtensionPaneEvidence), InspectionError> {
         let evidence = self
             .adapter
             .inspect_extension_pane(session_id, pane_id)
@@ -329,7 +341,8 @@ impl ContextService {
                 "Herdr returned evidence for a different pane",
             ));
         }
-        self.presentation(session_id, &evidence).await
+        let presentation = self.presentation(session_id, &evidence).await?;
+        Ok((presentation, evidence))
     }
 
     pub async fn directory(
@@ -792,15 +805,15 @@ impl ContextService {
         session_id: &str,
         evidence: &ExtensionPaneEvidence,
     ) -> Result<PanePresentation, InspectionError> {
-        let (roots, diagnostics, viewer_companion_id, current_repository_id) =
+        let (roots, diagnostics, viewer_companion_id, viewer_folder_id, current_repository_id) =
             self.authorized_roots(session_id, evidence).await?;
         let mut roots: Vec<_> = roots.into_values().collect();
         roots.sort_by_key(|root| {
             (
-                if root.root.kind == ContextRootKind::Repository {
-                    0u8
-                } else {
-                    1u8
+                match root.root.kind {
+                    ContextRootKind::Repository => 0u8,
+                    ContextRootKind::Companion => 1u8,
+                    ContextRootKind::Folder => 2u8,
                 },
                 root.root.root_id.clone(),
             )
@@ -825,14 +838,15 @@ impl ContextService {
                 Some(ExtensionKind::Review)
             }
             (Some(ExtensionKind::Context), confidence)
-                if verified_confidence(confidence) && viewer_companion_id.is_some() =>
+                if verified_confidence(confidence)
+                    && (viewer_companion_id.is_some() || viewer_folder_id.is_some()) =>
             {
                 Some(ExtensionKind::Context)
             }
             _ => None,
         };
         let default_root_id = if renderer == Some(ExtensionKind::Context) {
-            viewer_companion_id.clone()
+            viewer_companion_id.clone().or(viewer_folder_id)
         } else {
             current_repository_id
                 .as_deref()
@@ -851,7 +865,7 @@ impl ContextService {
         if evidence.extension == Some(ExtensionKind::Context)
             && renderer != Some(ExtensionKind::Context)
         {
-            reason.push_str("; the viewer browsing root is not its verified companion directory");
+            reason.push_str("; the viewer browsing root is unavailable or unsafe");
         }
         if evidence.can_open_context && !can_open_context {
             reason.push_str("; Open Context requires a source pane at its companion directory");
@@ -888,6 +902,7 @@ impl ContextService {
             Vec<ProjectDiagnostic>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
         InspectionError,
     > {
@@ -904,6 +919,7 @@ impl ContextService {
             }
         }
         let mut companion_roots = Vec::new();
+        let mut companion_diagnostic = None;
         if !evidence.workspace_id.is_empty() && !evidence.endpoint_identity.is_empty() {
             match self
                 .projects
@@ -947,20 +963,48 @@ impl ContextService {
                         });
                     }
                 }
-                Err(error) => diagnostics.push(diagnostic(&error.code, &error.message, None)),
+                Err(error) => {
+                    companion_diagnostic = Some(diagnostic(&error.code, &error.message, None))
+                }
             }
         }
-        let viewer_companion =
-            resolve_viewer_companion(&self.configuration, evidence, &companion_roots).await;
+        let verified_viewer = evidence.extension == Some(ExtensionKind::Context)
+            && verified_confidence(evidence.confidence);
+        let viewer_root = resolve_verified_viewer_root(&self.configuration, evidence).await;
+        let viewer_companion = resolve_viewer_companion(viewer_root.as_deref(), &companion_roots);
+        let viewer_folder = viewer_root
+            .as_ref()
+            .filter(|_| viewer_companion.is_none())
+            .cloned();
+        // Ordinary file browsing does not require task/companion discovery.
+        // A non-Git folder is normal, not a failed Context setup.
+        if let Some(folder) = viewer_folder.as_ref() {
+            // Catalog discovery can encounter this ordinary browsing folder too.
+            // Its lack of Git metadata is not a file-browser failure.
+            diagnostics.retain(|item| {
+                !(item.code == "repository_unavailable"
+                    && item
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| Path::new(path) == folder))
+            });
+        } else {
+            diagnostics.extend(companion_diagnostic);
+        }
         let association_cwd = viewer_companion
             .as_ref()
             .map(|(_, path)| path.clone())
-            .or(actual_cwd);
+            .or_else(|| viewer_folder.clone())
+            .or_else(|| if verified_viewer { None } else { actual_cwd });
         let viewer_companion_id = viewer_companion
             .as_ref()
             .map(|(root_id, _)| root_id.clone());
+        let mut viewer_folder_id = None;
         let mut roots = BTreeMap::new();
         for candidate in repositories {
+            if viewer_folder.is_some() {
+                continue;
+            }
             let (checkout, dir, metadata) =
                 match canonical_directory(Path::new(&candidate.checkout_path)) {
                     Ok(opened) => opened,
@@ -1005,14 +1049,48 @@ impl ContextService {
                 },
             );
         }
-        for companion in companion_roots {
-            let root_id = companion.root.root_id.clone();
-            roots.insert(root_id, companion);
+        if let Some(path) = viewer_folder {
+            if let Ok((path, dir, metadata)) = canonical_directory(&path) {
+                let identity = filesystem_identity(&metadata);
+                let root_id = format!("folder:{identity}");
+                let label = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Folder")
+                    .to_owned();
+                let root = ContextRoot {
+                    root_id: root_id.clone(),
+                    kind: ContextRootKind::Folder,
+                    label,
+                    path: path.to_string_lossy().into_owned(),
+                    repository_id: format!("folder:{identity}"),
+                    checkout_path: path.to_string_lossy().into_owned(),
+                    companion_id: None,
+                };
+                roots.insert(
+                    root_id.clone(),
+                    AuthorizedRoot {
+                        root,
+                        canonical: path,
+                        dir,
+                        max_depth: self.configuration.limits.context_tree_depth,
+                    },
+                );
+                viewer_folder_id = Some(root_id);
+            }
+        }
+        if viewer_folder_id.is_none() {
+            for companion in companion_roots {
+                let root_id = companion.root.root_id.clone();
+                roots.insert(root_id, companion);
+            }
         }
         Ok((
             roots,
             diagnostics,
             viewer_companion_id,
+            viewer_folder_id,
             current_repository_id,
         ))
     }
@@ -1489,28 +1567,34 @@ fn evidence_cwd(evidence: &ExtensionPaneEvidence) -> Option<PathBuf> {
     metadata.is_dir().then_some(absolute)
 }
 
-async fn resolve_viewer_companion(
-    configuration: &ProjectConfiguration,
-    evidence: &ExtensionPaneEvidence,
+fn resolve_viewer_companion(
+    viewer_root: Option<&Path>,
     companions: &[AuthorizedRoot],
 ) -> Option<(String, PathBuf)> {
+    let viewer_root = viewer_root?;
+    for companion in companions {
+        if !is_within(viewer_root, &companion.canonical) {
+            continue;
+        }
+        if viewer_root == companion.canonical {
+            return Some((companion.root.root_id.clone(), companion.canonical.clone()));
+        }
+        return None;
+    }
+    None
+}
+
+async fn resolve_verified_viewer_root(
+    configuration: &ProjectConfiguration,
+    evidence: &ExtensionPaneEvidence,
+) -> Option<PathBuf> {
     if evidence.extension != Some(ExtensionKind::Context)
         || !verified_confidence(evidence.confidence)
     {
         return None;
     }
     let viewer_cwd = evidence.viewer_cwd.as_deref().and_then(evidence_path)?;
-    for companion in companions {
-        if !is_within(&viewer_cwd, &companion.canonical) {
-            continue;
-        }
-        let resolved = resolve_viewer_root(configuration, &viewer_cwd).await?;
-        if resolved == companion.canonical {
-            return Some((companion.root.root_id.clone(), companion.canonical.clone()));
-        }
-        return None;
-    }
-    None
+    resolve_viewer_root(configuration, &viewer_cwd).await
 }
 
 async fn resolve_viewer_root(configuration: &ProjectConfiguration, cwd: &Path) -> Option<PathBuf> {
@@ -2168,6 +2252,170 @@ mod review_checkout_tests {
                 .await
                 .is_err()
         );
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn verified_viewer_reads_an_ordinary_folder_from_its_plugin_context() {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-context-folder-{}", Uuid::new_v4()));
+        let catalog = workspace.join("catalog");
+        git_fixture(&catalog);
+        let plugin_install = workspace.join("plugin-install");
+        std::fs::create_dir_all(&plugin_install).expect("plugin install directory");
+        let folder = workspace.join("ordinary-folder");
+        std::fs::create_dir_all(folder.join(".git")).expect("ordinary folder");
+        std::fs::write(folder.join("notes.md"), "ordinary context\n").expect("write context");
+        let adapter = Arc::new(TestAdapter {
+            evidence: ExtensionPaneEvidence {
+                endpoint_identity: String::new(),
+                pane_id: "pane".to_owned(),
+                terminal_id: "terminal".to_owned(),
+                workspace_id: String::new(),
+                tab_id: "tab".to_owned(),
+                cwd: Some(plugin_install.to_string_lossy().into_owned()),
+                foreground_cwd: Some(plugin_install.to_string_lossy().into_owned()),
+                viewer_cwd: Some(folder.to_string_lossy().into_owned()),
+                process_identity: "process".to_owned(),
+                extension: Some(ExtensionKind::Context),
+                confidence: DetectionConfidence::VerifiedProcess,
+                reason: "verified viewer".to_owned(),
+                can_open_context: false,
+                can_open_review: false,
+            },
+            review_launches: Mutex::new(Vec::new()),
+        });
+        let configuration = configuration(&catalog);
+        let projects = Arc::new(
+            ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
+        );
+        let context = ContextService::new(configuration, adapter, projects);
+
+        let presentation = context
+            .inspect_pane("session", "pane")
+            .await
+            .expect("folder presentation");
+        assert_eq!(presentation.renderer, Some(ExtensionKind::Context));
+        let root_id = presentation.default_root_id.clone().expect("folder root");
+        let root = presentation
+            .roots
+            .iter()
+            .find(|root| root.root_id == root_id)
+            .expect("selected root");
+        assert_eq!(root.kind, ContextRootKind::Folder);
+        assert_eq!(
+            presentation.roots.len(),
+            1,
+            "ordinary viewers expose only their browsing folder"
+        );
+        assert_eq!(root.path, folder.to_string_lossy().as_ref());
+        assert_ne!(root.path, plugin_install.to_string_lossy().as_ref());
+
+        let directory = context
+            .directory(
+                "session",
+                "pane",
+                &ContextDirectoryRequest {
+                    binding_id: presentation.binding_id.clone(),
+                    root_id: root.root_id.clone(),
+                    path: String::new(),
+                },
+            )
+            .await
+            .expect("ordinary folder directory");
+        assert_eq!(
+            directory
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes.md"]
+        );
+        let document = context
+            .document(
+                "session",
+                "pane",
+                &ContextDocumentRequest {
+                    binding_id: presentation.binding_id,
+                    root_id: root.root_id.clone(),
+                    path: "notes.md".to_owned(),
+                    expected_revision: None,
+                },
+            )
+            .await
+            .expect("ordinary folder document");
+        assert_eq!(document.text.as_deref(), Some("ordinary context\n"));
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn verified_viewer_refuses_an_unsafe_or_replaced_folder_root() {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-context-folder-{}", Uuid::new_v4()));
+        let plugin_install = workspace.join("plugin-install");
+        let target = workspace.join("target");
+        std::fs::create_dir_all(&plugin_install).expect("plugin install directory");
+        std::fs::create_dir_all(&target).expect("target directory");
+        let linked = workspace.join("linked-folder");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &linked).expect("folder symlink");
+        let adapter = Arc::new(TestAdapter {
+            evidence: ExtensionPaneEvidence {
+                endpoint_identity: String::new(),
+                pane_id: "pane".to_owned(),
+                terminal_id: "terminal".to_owned(),
+                workspace_id: String::new(),
+                tab_id: "tab".to_owned(),
+                cwd: Some(plugin_install.to_string_lossy().into_owned()),
+                foreground_cwd: Some(plugin_install.to_string_lossy().into_owned()),
+                viewer_cwd: Some(linked.to_string_lossy().into_owned()),
+                process_identity: "process".to_owned(),
+                extension: Some(ExtensionKind::Context),
+                confidence: DetectionConfidence::VerifiedProcess,
+                reason: "verified viewer".to_owned(),
+                can_open_context: false,
+                can_open_review: false,
+            },
+            review_launches: Mutex::new(Vec::new()),
+        });
+        let configuration = configuration(&workspace);
+        let projects = Arc::new(
+            ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
+        );
+        let context = ContextService::new(configuration, adapter, projects);
+
+        let presentation = context
+            .inspect_pane("session", "pane")
+            .await
+            .expect("unsafe presentation");
+        assert_ne!(presentation.renderer, Some(ExtensionKind::Context));
+        assert!(
+            presentation
+                .roots
+                .iter()
+                .all(|root| root.path != plugin_install.to_string_lossy())
+        );
+
+        let original = workspace.join("original-folder");
+        std::fs::create_dir(&original).expect("original folder");
+        let (_, _, original_metadata) = canonical_directory(&original).expect("original root");
+        let stale_root = ContextRoot {
+            root_id: format!("folder:{}", filesystem_identity(&original_metadata)),
+            kind: ContextRootKind::Folder,
+            label: "original-folder".to_owned(),
+            path: original.to_string_lossy().into_owned(),
+            repository_id: String::new(),
+            checkout_path: original.to_string_lossy().into_owned(),
+            companion_id: None,
+        };
+        let stale_root_id = stale_root.root_id.clone();
+        std::fs::rename(&original, workspace.join("renamed-folder")).expect("rename folder");
+        std::fs::create_dir(&original).expect("replacement folder");
+        let error = match find_root(&[stale_root], &stale_root_id) {
+            Ok(_) => panic!("replacement root is refused"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "context_stale_root");
         std::fs::remove_dir_all(workspace).expect("cleanup");
     }
 }
