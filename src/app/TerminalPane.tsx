@@ -389,9 +389,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       onPointerDownCapture={(event) => {
         const button = terminalMouseButton(event.button);
         if (!button) return;
+        requestControl();
+        if (!terminalMouseInput) return;
         event.preventDefault();
         event.stopPropagation();
-        requestControl();
         lastMouseMotionAt.current = 0;
         activeMouseButton.current = button;
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -402,7 +403,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         lastMouseMotionAt.current = event.timeStamp;
         const button = activeMouseButton.current;
         sendPointerMouse(button ? "drag" : "moved", button, event);
-        if (button) {
+        if (button && terminalMouseInput) {
           event.preventDefault();
           event.stopPropagation();
         }
@@ -410,16 +411,18 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       onPointerUpCapture={(event) => {
         const button = terminalMouseButton(event.button);
         if (!button) return;
-        event.preventDefault();
-        event.stopPropagation();
-        sendPointerMouse("up", button, event);
+        if (terminalMouseInput) {
+          event.preventDefault();
+          event.stopPropagation();
+          sendPointerMouse("up", button, event);
+        }
         activeMouseButton.current = null;
         lastMouseMotionAt.current = 0;
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}
       onPointerCancel={(event) => {
         const button = activeMouseButton.current;
-        if (button) {
+        if (button && terminalMouseInput) {
           event.preventDefault();
           event.stopPropagation();
           sendPointerMouse("up", button, event);

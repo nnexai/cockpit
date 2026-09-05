@@ -12,6 +12,7 @@ import type {
   TerminalOpenRequest,
   TerminalStreamMessage,
 } from "../protocol/generated/v1";
+import { transitionSessionStream, type StreamOrderCursor } from "./streamOrder";
 import {
   CockpitClientError,
   parseErrorEnvelope,
@@ -56,32 +57,13 @@ async function invokeAndParse<T>(invoke: NativeInvoke, command: string, args: Re
     throw new CockpitClientError("malformed_response", `The native Cockpit ${operation} command returned an invalid response`, { cause: error });
   }
 }
-
-function streamFailure(message: string, cause?: unknown): CockpitClientError {
-  return new CockpitClientError("stream_error", message, { cause });
+function streamFailure(message: string, cause?: unknown, operationCode?: string): CockpitClientError {
+  return new CockpitClientError("stream_error", message, { cause, operationCode });
 }
 function streamId(value: unknown): string {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value === "object" && value !== null && "stream_id" in value && typeof value.stream_id === "string" && value.stream_id.length > 0) return value.stream_id;
   throw new CockpitClientError("malformed_response", "Native stream command returned no stream id");
-}
-function sequenceChecker(sessionId: string) {
-  let generation: number | undefined;
-  let sequence: number | undefined;
-  return (message: SessionStreamMessage): CockpitClientError | undefined => {
-    if (message.session_id !== sessionId) return streamFailure("Session stream message belongs to another session");
-    if (generation === undefined) {
-      if (message.sequence !== 1) return streamFailure("Session stream must begin at sequence 1");
-      generation = message.generation;
-      sequence = message.sequence;
-      return undefined;
-    }
-    if (message.generation < generation || message.generation > generation + 1) return streamFailure("Session stream generation gap detected");
-    if (message.generation === generation && (sequence === 0xffffffff || message.sequence !== sequence! + 1)) return streamFailure("Session stream sequence gap detected");
-    generation = message.generation;
-    sequence = message.sequence;
-    return undefined;
-  };
 }
 
 function sessionSubscription(channelFactory: NativeChannelFactory, invoke: NativeInvoke, sessionId: string, onMessage: (message: SessionStreamMessage) => void, onError: (error: CockpitClientError) => void): Promise<ClosableStream> {
@@ -89,12 +71,12 @@ function sessionSubscription(channelFactory: NativeChannelFactory, invoke: Nativ
   let closed = false;
   let cancelled = false;
   let activeStreamId: string | undefined;
+  let cursor: StreamOrderCursor | null = null;
   const cancel = (id: string) => {
     if (cancelled) return;
     cancelled = true;
     void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined);
   };
-  const checkSequence = sequenceChecker(sessionId);
   const channel = channelFactory<unknown>((raw) => {
     if (closed) return;
     let message: SessionStreamMessage;
@@ -105,13 +87,15 @@ function sessionSubscription(channelFactory: NativeChannelFactory, invoke: Nativ
       if (activeStreamId !== undefined) cancel(activeStreamId);
       return;
     }
-    const sequenceError = checkSequence(message);
-    if (sequenceError) {
+    const result = transitionSessionStream(sessionId, cursor, message);
+    if (result.kind === "ignore") return;
+    if (result.kind === "error") {
       closed = true;
-      onError(sequenceError);
+      onError(streamFailure(result.message, result.classification, result.code));
       if (activeStreamId !== undefined) cancel(activeStreamId);
       return;
     }
+    cursor = result.cursor;
     onMessage(message);
   });
   return invokeAndParse(invoke, "cockpit_session_subscribe", { sessionId, channel }, "session subscription", streamId).then((id) => {

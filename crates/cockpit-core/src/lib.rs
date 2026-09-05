@@ -98,12 +98,57 @@ pub trait HerdrAdapter: Send + Sync {
 pub struct CockpitService {
     mode: CockpitMode,
     adapter: Arc<dyn HerdrAdapter>,
-    /// Compatibility is scoped to a session: a failed or incompatible
-    /// session never poisons another session's cache entry.
-    session_compatibility: Arc<RwLock<HashMap<String, HerdrCompatibility>>>,
-    /// Installation-wide compatibility is retained separately for status and
-    /// the session-list operation, which do not have a session identifier.
-    compatibility: Arc<RwLock<Option<HerdrCompatibility>>>,
+    compatibility: Arc<RwLock<CompatibilityCache>>,
+}
+
+#[derive(Default)]
+struct CompatibilityCache {
+    installation: Option<HerdrCompatibility>,
+    sessions: HashMap<String, HerdrCompatibility>,
+    installation_generation: u64,
+    session_generations: HashMap<String, u64>,
+}
+
+fn invalidates_session(error: &InspectionError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "disconnected"
+            | "connection_failed"
+            | "request_not_dispatched"
+            | "request_outcome_unknown"
+            | "response_timeout"
+            | "subscription_setup_failed"
+            | "subscription_setup_timeout"
+            | "malformed_json"
+            | "malformed_response"
+            | "malformed_event"
+            | "bounded_output"
+            | "session_mismatch"
+            | "session_identity_mismatch"
+            | "terminal_attach_failed"
+            | "terminal_disconnected"
+            | "invalid_session_snapshot"
+            | "invalid_focus_response"
+            | "invalid_mutation_response"
+    )
+}
+
+fn invalidates_installation(error: &InspectionError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "disconnected"
+            | "connection_failed"
+            | "request_not_dispatched"
+            | "request_outcome_unknown"
+            | "response_timeout"
+            | "malformed_json"
+            | "malformed_response"
+            | "bounded_output"
+            | "execution_failed"
+            | "execution_timeout"
+            | "server_not_running"
+            | "endpoint_unavailable"
+    )
 }
 
 impl CockpitService {
@@ -111,8 +156,7 @@ impl CockpitService {
         Self {
             mode,
             adapter,
-            session_compatibility: Arc::new(RwLock::new(HashMap::new())),
-            compatibility: Arc::new(RwLock::new(None)),
+            compatibility: Arc::new(RwLock::new(CompatibilityCache::default())),
         }
     }
 
@@ -123,7 +167,7 @@ impl CockpitService {
                 message: "live Herdr inspection is disabled in test mode".to_owned(),
             }
         } else {
-            match self.adapter.inspect().await {
+            match self.installation_compatibility().await {
                 Ok(status) => status,
                 Err(error) => HerdrCompatibility::Unavailable {
                     code: error.code,
@@ -131,7 +175,9 @@ impl CockpitService {
                 },
             }
         };
-        self.update_compatibility(&herdr).await;
+        if self.mode == CockpitMode::Test {
+            self.update_compatibility(&herdr).await;
+        }
 
         StatusResponse {
             protocol_version: "1".to_owned(),
@@ -151,7 +197,13 @@ impl CockpitService {
     pub async fn sessions(&self) -> Result<SessionListResponse, InspectionError> {
         self.ensure_live()?;
         self.inspect_if_needed().await?;
-        self.adapter.sessions().await
+        let result = self.adapter.sessions().await;
+        if let Err(error) = &result
+            && invalidates_installation(error)
+        {
+            self.clear_compatibility().await;
+        }
+        result
     }
 
     pub async fn session_snapshot(
@@ -161,8 +213,11 @@ impl CockpitService {
         self.ensure_live()?;
         validate_session_id(session_id)?;
         self.inspect_session_if_needed(session_id).await?;
-        let snapshot = self.adapter.session_snapshot(session_id).await?;
-        validate_snapshot_session(session_id, &snapshot)?;
+        let snapshot = self
+            .session_result(session_id, self.adapter.session_snapshot(session_id).await)
+            .await?;
+        self.session_result(session_id, validate_snapshot_session(session_id, &snapshot))
+            .await?;
         Ok(snapshot)
     }
 
@@ -175,18 +230,26 @@ impl CockpitService {
         validate_session_id(session_id)?;
         validate_resource_id(&request.target_id, "target")?;
         self.inspect_session_if_needed(session_id).await?;
-        let response = self.adapter.focus(session_id, request).await?;
+        let response = self
+            .session_result(session_id, self.adapter.focus(session_id, request).await)
+            .await?;
         if response.session_id != session_id
             || response.kind != request.kind
             || response.target_id != request.target_id
         {
-            return Err(InspectionError::new(
-                "invalid_focus_response",
-                "Herdr returned a focus response for a different resource",
-            ));
+            return self
+                .session_result(
+                    session_id,
+                    Err(InspectionError::new(
+                        "invalid_focus_response",
+                        "Herdr returned a focus response for a different resource",
+                    )),
+                )
+                .await;
         }
         Ok(response)
     }
+
     pub async fn mutate(
         &self,
         session_id: &str,
@@ -196,14 +259,25 @@ impl CockpitService {
         validate_session_id(session_id)?;
         validate_mutation(request)?;
         self.inspect_session_if_needed(session_id).await?;
-        let response = self.adapter.mutate(session_id, request).await?;
+        let response = self
+            .session_result(session_id, self.adapter.mutate(session_id, request).await)
+            .await?;
         if response.session_id != session_id {
-            return Err(InspectionError::new(
-                "invalid_mutation_response",
-                "Herdr returned a mutation response for a different session",
-            ));
+            return self
+                .session_result(
+                    session_id,
+                    Err(InspectionError::new(
+                        "invalid_mutation_response",
+                        "Herdr returned a mutation response for a different session",
+                    )),
+                )
+                .await;
         }
-        validate_snapshot_session(session_id, &response.snapshot)?;
+        self.session_result(
+            session_id,
+            validate_snapshot_session(session_id, &response.snapshot),
+        )
+        .await?;
         Ok(response)
     }
 
@@ -216,7 +290,33 @@ impl CockpitService {
         validate_session_id(session_id)?;
         validate_snapshot_session(session_id, snapshot)?;
         self.inspect_session_if_needed(session_id).await?;
-        self.adapter.subscribe_session(session_id, snapshot).await
+        let subscription = self
+            .session_result(
+                session_id,
+                self.adapter.subscribe_session(session_id, snapshot).await,
+            )
+            .await?;
+        let SessionSubscription {
+            messages: mut source,
+        } = subscription;
+        let (sender, receiver) = mpsc::channel(32);
+        let service = self.clone();
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            while let Some(change) = source.recv().await {
+                if matches!(
+                    change,
+                    SessionChange::Stale { .. } | SessionChange::Disconnected { .. }
+                ) {
+                    service.invalidate_session(&session_id).await;
+                }
+                if sender.send(change).await.is_err() {
+                    break;
+                }
+            }
+            service.invalidate_session(&session_id).await;
+        });
+        Ok(SessionSubscription { messages: receiver })
     }
 
     pub async fn open_terminal(
@@ -233,87 +333,179 @@ impl CockpitService {
             ));
         }
         self.inspect_session_if_needed(&request.session_id).await?;
-        let snapshot = self.adapter.session_snapshot(&request.session_id).await?;
-        validate_terminal_pane_visible(&request.session_id, &request.pane_id, &snapshot)?;
-        self.adapter.open_terminal(request).await
+        let snapshot = self
+            .session_result(
+                &request.session_id,
+                self.adapter.session_snapshot(&request.session_id).await,
+            )
+            .await?;
+        self.session_result(
+            &request.session_id,
+            validate_terminal_pane_visible(&request.session_id, &request.pane_id, &snapshot),
+        )
+        .await?;
+        self.session_result(
+            &request.session_id,
+            self.adapter.open_terminal(request).await,
+        )
+        .await
+    }
+
+    async fn installation_compatibility(&self) -> Result<HerdrCompatibility, InspectionError> {
+        for attempt in 0..2 {
+            let (cached, generation) = {
+                let cache = self.compatibility.read().await;
+                (cache.installation.clone(), cache.installation_generation)
+            };
+            if let Some(cached) = cached {
+                return Ok(cached);
+            }
+
+            let result = self.adapter.inspect().await;
+            let mut cache = self.compatibility.write().await;
+            if cache.installation_generation != generation {
+                drop(cache);
+                if attempt == 0 {
+                    continue;
+                }
+                return Err(InspectionError::new(
+                    "compatibility_changed_during_inspection",
+                    "Herdr installation compatibility changed during inspection",
+                ));
+            }
+
+            cache.installation_generation = cache.installation_generation.wrapping_add(1);
+            match &result {
+                Ok(HerdrCompatibility::Compatible { .. }) => {
+                    cache.installation = result.clone().ok();
+                }
+                Ok(HerdrCompatibility::Incompatible { .. })
+                | Ok(HerdrCompatibility::Unavailable { .. })
+                | Err(_) => {
+                    cache.installation = None;
+                    cache.sessions.clear();
+                    for generation in cache.session_generations.values_mut() {
+                        *generation = generation.wrapping_add(1);
+                    }
+                }
+            }
+            return result;
+        }
+        unreachable!("bounded compatibility inspection loop always returns")
     }
 
     async fn inspect_if_needed(&self) -> Result<(), InspectionError> {
-        let compatible = self
-            .compatibility
-            .read()
-            .await
-            .as_ref()
-            .is_some_and(|status| matches!(status, HerdrCompatibility::Compatible { .. }));
-        if compatible {
-            return Ok(());
-        }
-
-        match self.adapter.inspect().await {
-            Ok(status @ HerdrCompatibility::Compatible { .. }) => {
-                self.update_compatibility(&status).await;
-                Ok(())
-            }
-            Ok(HerdrCompatibility::Incompatible { code, message, .. })
-            | Ok(HerdrCompatibility::Unavailable { code, message }) => {
-                self.clear_compatibility().await;
+        match self.installation_compatibility().await? {
+            HerdrCompatibility::Compatible { .. } => Ok(()),
+            HerdrCompatibility::Incompatible { code, message, .. }
+            | HerdrCompatibility::Unavailable { code, message } => {
                 Err(InspectionError::new(code, message))
-            }
-            Err(error) => {
-                self.clear_compatibility().await;
-                Err(error)
             }
         }
     }
 
     async fn inspect_session_if_needed(&self, session_id: &str) -> Result<(), InspectionError> {
-        let compatible = self
-            .session_compatibility
-            .read()
-            .await
-            .get(session_id)
-            .is_some_and(|status| matches!(status, HerdrCompatibility::Compatible { .. }));
-        if compatible {
-            return Ok(());
-        }
+        for attempt in 0..2 {
+            let (compatible, installation_generation, session_generation) = {
+                let cache = self.compatibility.read().await;
+                (
+                    cache.sessions.get(session_id).is_some_and(|status| {
+                        matches!(status, HerdrCompatibility::Compatible { .. })
+                    }),
+                    cache.installation_generation,
+                    cache
+                        .session_generations
+                        .get(session_id)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            };
+            if compatible {
+                return Ok(());
+            }
 
-        match self.adapter.inspect_session(session_id).await {
-            Ok(status @ HerdrCompatibility::Compatible { .. }) => {
-                self.session_compatibility
-                    .write()
-                    .await
-                    .insert(session_id.to_owned(), status);
-                Ok(())
-            }
-            Ok(HerdrCompatibility::Incompatible { code, message, .. })
-            | Ok(HerdrCompatibility::Unavailable { code, message }) => {
-                self.session_compatibility.write().await.remove(session_id);
-                Err(InspectionError::new(code, message))
-            }
-            Err(error) => {
-                self.session_compatibility.write().await.remove(session_id);
-                Err(error)
+            match self.adapter.inspect_session(session_id).await {
+                Ok(status @ HerdrCompatibility::Compatible { .. }) => {
+                    let mut cache = self.compatibility.write().await;
+                    if cache.installation_generation != installation_generation
+                        || cache
+                            .session_generations
+                            .get(session_id)
+                            .copied()
+                            .unwrap_or_default()
+                            != session_generation
+                    {
+                        drop(cache);
+                        if attempt == 0 {
+                            continue;
+                        }
+                        return Err(InspectionError::new(
+                            "compatibility_changed_during_inspection",
+                            "Herdr session compatibility changed during inspection",
+                        ));
+                    }
+                    cache.sessions.insert(session_id.to_owned(), status);
+                    return Ok(());
+                }
+                Ok(HerdrCompatibility::Incompatible { code, message, .. })
+                | Ok(HerdrCompatibility::Unavailable { code, message }) => {
+                    self.invalidate_session(session_id).await;
+                    return Err(InspectionError::new(code, message));
+                }
+                Err(error) => {
+                    self.invalidate_session(session_id).await;
+                    return Err(error);
+                }
             }
         }
+        unreachable!("bounded session compatibility inspection loop always returns")
     }
 
     async fn update_compatibility(&self, status: &HerdrCompatibility) {
-        let session_cache_must_clear = !matches!(status, HerdrCompatibility::Compatible { .. });
-        {
-            let mut cached = self.compatibility.write().await;
-            *cached = if session_cache_must_clear {
-                None
-            } else {
-                Some(status.clone())
-            };
-        }
-        if session_cache_must_clear {
-            self.session_compatibility.write().await.clear();
+        let mut cache = self.compatibility.write().await;
+        cache.installation_generation = cache.installation_generation.wrapping_add(1);
+        if matches!(status, HerdrCompatibility::Compatible { .. }) {
+            cache.installation = Some(status.clone());
+        } else {
+            cache.installation = None;
+            cache.sessions.clear();
+            for generation in cache.session_generations.values_mut() {
+                *generation = generation.wrapping_add(1);
+            }
         }
     }
 
     async fn clear_compatibility(&self) {
-        *self.compatibility.write().await = None;
+        let mut cache = self.compatibility.write().await;
+        cache.installation_generation = cache.installation_generation.wrapping_add(1);
+        cache.installation = None;
+        cache.sessions.clear();
+        for generation in cache.session_generations.values_mut() {
+            *generation = generation.wrapping_add(1);
+        }
+    }
+
+    async fn invalidate_session(&self, session_id: &str) {
+        let mut cache = self.compatibility.write().await;
+        cache.sessions.remove(session_id);
+        let generation = cache
+            .session_generations
+            .entry(session_id.to_owned())
+            .or_default();
+        *generation = generation.wrapping_add(1);
+    }
+
+    async fn session_result<T>(
+        &self,
+        session_id: &str,
+        result: Result<T, InspectionError>,
+    ) -> Result<T, InspectionError> {
+        if let Err(error) = &result
+            && invalidates_session(error)
+        {
+            self.invalidate_session(session_id).await;
+        }
+        result
     }
 
     fn ensure_live(&self) -> Result<(), InspectionError> {

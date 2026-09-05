@@ -303,6 +303,44 @@
       "owner": "run-20260904T214621Z",
       "status": "running",
       "purpose": "finite request mutation recovery browser proof; supported 300s fixture"
+    },
+    {
+      "kind": "herdr_workspace",
+      "resource_id": "wK",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser",
+      "owner": "run-20260904T214621Z",
+      "status": "running",
+      "purpose": "REPAIR01/02 bounded browser before-fix proof"
+    },
+    {
+      "kind": "herdr_workspace",
+      "resource_id": "wM",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser",
+      "owner": "run-20260904T214621Z",
+      "status": "running",
+      "purpose": "REPAIR01/02 bounded browser after-fix proof"
+    },
+    {
+      "kind": "herdr_workspace",
+      "resource_id": "wN",
+      "run_id": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "client": "browser",
+      "owner": "run-20260904T214621Z",
+      "status": "running",
+      "purpose": "Prepared REPAIR01/02 final input and selection proof"
+    },
+    {
+      "kind": "Herdr workspace",
+      "owner": "run-20260904T214621Z",
+      "session": "run-20260904T214621Z-boot",
+      "id": "wP",
+      "purpose": "native current startup event and application mouse red proof",
+      "status": "running"
     }
   ],
   "cleanup_outcomes": [],

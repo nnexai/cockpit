@@ -30,6 +30,7 @@ import type {
   TerminalOpenRequest,
   TerminalStreamMessage,
 } from "../protocol/generated/v1";
+import { transitionSessionStream, type StreamOrderCursor } from "./streamOrder";
 
 export type BrowserFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -96,36 +97,9 @@ function websocketUrl(path: string): string {
   }
   return path;
 }
-
-function streamError(message: string, cause?: unknown): CockpitClientError {
-  return new CockpitClientError("stream_error", message, { cause });
+function streamError(message: string, cause?: unknown, operationCode?: string): CockpitClientError {
+  return new CockpitClientError("stream_error", message, { cause, operationCode });
 }
-
-function sequenceChecker(sessionId: string) {
-  let generation: number | undefined;
-  let sequence: number | undefined;
-  return (message: SessionStreamMessage): CockpitClientError | undefined => {
-    if (message.session_id !== sessionId) return streamError("Session stream message belongs to another session");
-    if (generation === undefined) {
-      if (message.sequence !== 1) return streamError("Session stream must begin at sequence 1");
-      generation = message.generation;
-      sequence = message.sequence;
-      return undefined;
-    }
-    if (message.generation < generation || message.generation > generation + 1) {
-      return streamError("Session stream generation gap detected", { generation, received: message.generation });
-    }
-    if (message.generation === generation) {
-      if (sequence === 0xffffffff || message.sequence !== sequence! + 1) {
-        return streamError("Session stream sequence gap detected", { sequence, received: message.sequence });
-      }
-    }
-    generation = message.generation;
-    sequence = message.sequence;
-    return undefined;
-  };
-}
-
 function openSessionStream(
   webSocketFactory: BrowserWebSocketFactory,
   sessionId: string,
@@ -137,7 +111,7 @@ function openSessionStream(
     let socket: BrowserWebSocket;
     let settled = false;
     let closed = false;
-    const checkSequence = sequenceChecker(sessionId);
+    let cursor: StreamOrderCursor | null = null;
     const fail = (error: CockpitClientError, beforeOpen = false) => {
       if (beforeOpen && !settled) { settled = true; reject(error); }
       else onError(error);
@@ -168,8 +142,13 @@ function openSessionStream(
       try { raw = JSON.parse(event.data); } catch (cause) { fail(new CockpitClientError("malformed_response", "Session stream message is invalid JSON", { cause }), !settled); return; }
       let message: SessionStreamMessage;
       try { message = parseSessionStreamMessage(raw); } catch (error) { fail(error instanceof CockpitClientError ? error : streamError("Session stream message is malformed", error), !settled); return; }
-      const sequenceError = checkSequence(message);
-      if (sequenceError) { fail(sequenceError); return; }
+      const result = transitionSessionStream(sessionId, cursor, message);
+      if (result.kind === "ignore") return;
+      if (result.kind === "error") {
+        fail(streamError(result.message, result.classification, result.code));
+        return;
+      }
+      cursor = result.cursor;
       onMessage(message);
     };
     socket.onerror = (cause) => fail(new CockpitClientError("transport_error", "Session WebSocket failed", { cause }), !settled);

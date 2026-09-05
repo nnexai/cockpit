@@ -95,6 +95,50 @@
     {
       "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/finite-recovery-resync.png",
       "sha256": "ccc83b4540a0c2997241c27ada682519e8e287dbca4c486266ddcf00a47821d5"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-order-green.json",
+      "sha256": "2d13fe54e1040199a9b213792505bc940883ac3e224acb03ee0e3447059c837d"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-input-red-browser.json",
+      "sha256": "860ed3da59d83f9acce4fb180b0bc7e399626043d82492679ed4a7ccd6bc4606"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-input-red-bytes.json",
+      "sha256": "d9389647333cbd1bcdfc9a01e79e9deffe4efc0f7d4ebdcfa451b26dc1351ec0"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-input-green-browser.json",
+      "sha256": "bf9df4ad15c7fafde6c97087232e0d58db0d00752edf534325f8321c5f1d94f5"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-input-green.png",
+      "sha256": "29969fb5983c5ce6901b03c0099b55d0a5b208aade9df2233739191e28bb60bc"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-input-settled-proof.json",
+      "sha256": "99fac7e9e60a408487c85f9d95db98b982ac89eb7470e82f950658e3b6cf0553"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-native-startup.png",
+      "sha256": "da095da26898fdc30f8398e5606dfe812ab4788a042e20aab20c5283a69dab15"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-native-session-event.png",
+      "sha256": "73fe315d9a7a7bb610a14ec2e07c5b542008d4145ac9912f7eb18d5f96b8115d"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-mouse-red-browser.json",
+      "sha256": "63d353c4697901e96ff21640fb93488e2887289d1770ee515b128fd5c758946b"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/repair-mouse-red-bytes.json",
+      "sha256": "9a6634fa7298a908acc7f9b543914194153fe1032c2174c41fc7df1e00d83170"
+    },
+    {
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/Cockpit-recovery-0.1.0-amd64.AppImage",
+      "sha256": "44f46b5a65d55f547950b163265904f6e2dd2eeb28f4e788ddd3a8351b846a01"
     }
   ],
   "limitations": [
@@ -102,5 +146,58 @@
     "A dropped Rust future cannot receive InspectionError; cancellation is observed as JoinError::is_cancelled and peer EOF/process cleanup. No durable request_cancelled/dispatch receipt exists yet.",
     "Cleanup during Tokio runtime shutdown falls back to process-group kill and kill_on_drop; asynchronous reap completion requires a running runtime.",
     "G02 remains open for REPAIR-01/02/03/05 and the cancellation reporting contract. No native failure-UI test is claimed."
+  ],
+  "increments": [
+    {
+      "name": "ordered recovery, GUI input and fresh compatibility",
+      "base_commit": "f16cb21",
+      "status": "verified_pending_commit",
+      "checks": {
+        "frontend_tests": 69,
+        "workspace_tests": 108,
+        "native": "Current AppImage rendered empty workbench, then the newly created owned mouse fixture through the native session channel. Startup and simple compatibility only.",
+        "ordering_browser": "Injected generation transition sequence5 produced visible sequence1 error and subscription count advanced2->3.",
+        "input_browser": "GUI prefix does not reach PTY; settled ordinary key delivered7a once; selected marker copied.",
+        "session_list_race": "Mounted regression failed before token guard and passed after it."
+      },
+      "limitations": [
+        "Full REPAIR-01 adapter corpus still to close with remaining reliability work.",
+        "Application mouse red remains open; source cause is ignored MouseCapture control message.",
+        "Input during reattachment was dropped; REPAIR-03 queue/cancellation contract remains open.",
+        "REPAIR-04 durable cancellation report and REPAIR-05 validation/error/registry scope remain open."
+      ],
+      "commands": [
+        {
+          "command": "bun run typecheck && bun run test && bunx vite build --outDir owned/finite-web-dist --emptyOutDir",
+          "exit_status": 0,
+          "tests": 69,
+          "bundle": "index-fTuv4hBQ.js"
+        },
+        {
+          "command": "cargo test --workspace && bunx tauri build --bundles appimage --config owned/repair-native-config.json",
+          "exit_status": 0,
+          "tests": 108,
+          "output": "artifact://471"
+        }
+      ],
+      "tested_files": {
+        "src/client/streamOrder.ts": "d778f0ae7bb64f0d7321df6ab33bf5195b628eb746fbd69efd28b11272a78c0c",
+        "src/client/browser.ts": "e5791e9442d010def08097f602974677e34dbe789e1650b7a460066a24fac772",
+        "src/client/native.ts": "b716b04347cec56978fc27672e409e24b3b510db9cba640ca5bd84c239ef3132",
+        "src/client/client.test.ts": "6d5f9dda0ad273669564430b06957840eb1b382e49edaac3cefc8a95017856c8",
+        "src/app/sessionReducer.ts": "aa89e3a8be029a4851033ea8993de0d6c321cb8c596f319d36223fccfee0caad",
+        "src/app/sessionReducer.test.ts": "b1ac00b5b89f84d40a25d52911b62527c4935de2699b8bddcabb2009f13ea105",
+        "src/app/App.tsx": "9a007a96d3668499020e68402ea6a64dead456e9f4c9f4208b8643e6915a7a6b",
+        "src/app/App.test.ts": "b36d8e9a248902aae574e8b0854f8117739306201f895e8cbb01ef79a7ab0fa2",
+        "src/app/TerminalPane.tsx": "831c359da6aaaf6f7fc012d118bc96ada4b7aad7cc1de402226ee98fecf759b9",
+        "src/app/App.integration.test.tsx": "29bfda37ba306cd982fa2927e83809e34e33947893681afe7deb287edd8c43d2",
+        "package.json": "51958552c3ced27d338b5d462a0d9e22c78616635f183928739758495900dfd8",
+        "bun.lock": "b553e4b1af37728395f9b32fc396905ec1ba702fa19e66b57956997e4df051d4",
+        "crates/cockpit-core/src/lib.rs": "e1a76d4c08db5dcf9df879f45a92d4f6e570891f5b7c63838f418e930f30121b",
+        "crates/cockpit-core/tests/status.rs": "e868dacaddbf79c1474192a77dc6aa8bc57066426b848c756620922902fa825a",
+        "crates/cockpit-herdr/src/cli.rs": "86f0e56a722eea8019b7cea676049d5ff8e0c447c4fadc0fa789df3659125a6b",
+        "crates/cockpit-herdr/tests/session.rs": "f58e7de2cede30c11f71ce8b11d03420399c4dee174647260206ae3f6e86e228"
+      }
+    }
   ]
 }

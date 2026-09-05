@@ -17,6 +17,11 @@ import {
   type ResourceMutationRequest,
   type TerminalOpenRequest,
 } from "./CockpitClient";
+import {
+  STREAM_SEQUENCE_MAX,
+  transitionSessionStream,
+  type StreamOrderCursor,
+} from "./streamOrder";
 
 const snapshot: CockpitSessionSnapshot = {
   session_id: "session-1",
@@ -140,9 +145,28 @@ describe("client DTO parsers", () => {
     expect(() => parseResourceMutationRequest({ type: "pane_resize", pane_id: "pane-1", direction: "left", amount: Number.NaN })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationRequest({ type: "pane_resize", pane_id: "pane-1", direction: "left", amount: 0 })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationRequest({ type: "pane_split", pane_id: "pane-1", direction: "right", ratio: 1 })).toThrow(CockpitClientError);
+
     expect(() => parseResourceMutationRequest({ type: "pane_move", pane_id: "pane-1", destination: { type: "raw", method: "pane.move" } })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationRequest({ type: "raw", method: "layout.apply", params: {} })).toThrow(CockpitClientError);
     expect(() => parseResourceMutationResponse({ session_id: "session-1", snapshot: { ...snapshot, session_id: "other" } })).toThrow(/another session/);
+  });
+});
+describe("session stream transition policy", () => {
+  it("classifies the complete ordering corpus", () => {
+    const initial = transitionSessionStream("session-1", null, streamSnapshot(1));
+    expect(initial).toMatchObject({ kind: "accept", classification: "initial", cursor: { generation: 1, sequence: 1 } });
+    const cursor = (initial.kind === "accept" ? initial.cursor : null) as StreamOrderCursor;
+    expect(transitionSessionStream("session-1", null, streamSnapshot(2))).toMatchObject({ kind: "error", classification: "missing_first", code: "stream_sequence" });
+    expect(transitionSessionStream("session-1", cursor, streamSnapshot(2))).toMatchObject({ kind: "accept", classification: "same_generation" });
+    expect(transitionSessionStream("session-1", cursor, streamSnapshot(1))).toMatchObject({ kind: "ignore", classification: "duplicate" });
+    expect(transitionSessionStream("session-1", cursor, streamSnapshot(4))).toMatchObject({ kind: "error", classification: "sequence_gap", code: "stream_sequence" });
+    expect(transitionSessionStream("session-1", { ...cursor, generation: 2 }, streamSnapshot(1, 1))).toMatchObject({ kind: "ignore", classification: "stale", code: "stream_generation" });
+    expect(transitionSessionStream("session-1", cursor, streamSnapshot(1, 2))).toMatchObject({ kind: "accept", classification: "generation_transition" });
+    expect(transitionSessionStream("session-1", cursor, streamSnapshot(5, 2))).toMatchObject({ kind: "error", classification: "missing_first", code: "stream_sequence" });
+    expect(transitionSessionStream("session-1", cursor, streamSnapshot(1, 3))).toMatchObject({ kind: "error", classification: "generation_gap", code: "stream_generation" });
+    expect(transitionSessionStream("session-1", { ...cursor, sequence: STREAM_SEQUENCE_MAX }, streamSnapshot(STREAM_SEQUENCE_MAX + 1))).toMatchObject({ kind: "error", classification: "overflow", code: "stream_overflow" });
+    expect(transitionSessionStream("other", cursor, streamSnapshot(2))).toMatchObject({ kind: "error", classification: "identity", code: "stream_identity" });
+    expect(transitionSessionStream("session-1", cursor, streamStale(2))).toMatchObject({ kind: "accept", classification: "same_generation" });
   });
 });
 
@@ -182,9 +206,9 @@ describe("browser CockpitClient", () => {
     const stream = await streamPromise;
     socket.message(JSON.stringify(streamSnapshot(1)));
     socket.message(JSON.stringify(streamStale(2)));
-    socket.message(JSON.stringify(streamStale(4)));
+    socket.message(JSON.stringify(streamSnapshot(5, 2)));
     expect(messages).toHaveLength(2);
-    expect(errors.at(-1)?.message).toMatch(/sequence gap/);
+    expect(errors.at(-1)).toMatchObject({ code: "stream_error", operationCode: "stream_sequence" });
     const errorCount = errors.length;
     socket.message("not json");
     expect(errors).toHaveLength(errorCount);
@@ -339,9 +363,35 @@ describe("native CockpitClient", () => {
     const errors: CockpitClientError[] = [];
     const stream = await createNativeClient(invoke, channelFactory).openTerminal(terminalOpen(), vi.fn(), (error) => errors.push(error));
     channel!.onmessage({ type: "frame", session_id: "session-1", pane_id: "pane-1", stream_id: "term-1", seq: "1", encoding: "ansi", width: 80, height: 24, full: false, bytes: "" });
+
     expect(errors).toHaveLength(1);
     stream.close();
     expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "term-1" });
+  });
+  it("closes native session streams on invalid generation transitions", async () => {
+    let channel: NativeChannel<unknown> | undefined;
+    const calls: string[] = [];
+    const invoke = vi.fn(async (command: string) => {
+      calls.push(command);
+      return command === "cockpit_session_subscribe" ? "sub-1" : undefined;
+    });
+    const channelFactory = <T,>(onMessage: (message: T) => void): NativeChannel<T> => {
+      channel = { onmessage: onMessage } as NativeChannel<unknown>;
+      return channel as NativeChannel<T>;
+    };
+    const errors: CockpitClientError[] = [];
+    const messages: unknown[] = [];
+    const stream = await createNativeClient(invoke, channelFactory).subscribeSession(
+      "session-1",
+      (message) => messages.push(message),
+      (error) => errors.push(error),
+    );
+    channel!.onmessage(streamSnapshot(1));
+    channel!.onmessage(streamSnapshot(5, 2));
+    expect(messages).toHaveLength(1);
+    expect(errors.at(-1)).toMatchObject({ code: "stream_error", operationCode: "stream_sequence" });
+    expect(calls).toContain("cockpit_stream_cancel");
+    stream.close();
   });
 
   it("rejects duplicate and skipped native terminal full frames", async () => {

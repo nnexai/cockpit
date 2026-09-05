@@ -240,3 +240,13 @@ On this Fedora host, linuxdeploy's bundled `strip` cannot parse `.relr.dyn`. The
 Finite socket requests have separate 500ms connect/write limits and a 2s response limit. Commands have a 5s total limit; output overflow stops both capture paths and kills/reaps the owned process group. Live terminal streams retain their separate lifetime.
 
 A mutating request that may have reached Herdr is not safe to retry automatically. The browser offers Resync instead of Retry for `request_outcome_unknown`. Cancellation does not imply rollback. Dropping a Rust future triggers resource cleanup but cannot return an error to that dropped caller; durable cancellation/dispatch reporting remains an explicit open contract.
+
+## Ordered recovery and terminal input
+
+Mutation responses acknowledge the operation; only a newly ordered session stream grants fresh focus/control authority. Session changes, removed-session fallback, and newer list refreshes invalidate older callbacks. Browser and native session adapters share one stream-order policy and fail closed on gaps.
+
+Workbench prefix commands are consumed before xterm input. Normal xterm pointer events remain available when Cockpit's separate structured-mouse capability is disabled, restoring text selection. Input during reattachment is not yet guaranteed; attachment cancellation and queued-input ownership remain REPAIR-03 work.
+
+Installation and per-session compatibility probes commit only within their captured invalidation generations. Event subscriptions retain their initial identity across reconnects and terminate on an identity mismatch so a new subscription must re-inspect it.
+
+The application-mouse investigation found a separate stable `MouseCapture` control message: Herdr's client applies it, while Cockpit currently discards it. The next mouse increment will propagate that message to xterm and retain Herdr's raw, owned terminal-input path rather than substitute full-app coordinates.

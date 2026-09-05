@@ -18,6 +18,7 @@ import {
   scheduleFocusFallback,
   reconcileSessionChoice,
   prefixCommandForKey,
+  routeWorkbenchKeydown,
   spaceDropBeforeId,
   tabDropInsertionIndex,
   projectSpaceTree,
@@ -40,6 +41,21 @@ function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSna
     layouts: [],
     agents: [],
   };
+}
+type RoutingEventOverrides = Partial<{ key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null; isComposing: boolean }>;
+function routingEvent(overrides: RoutingEventOverrides = {}): KeyboardEvent {
+  return {
+    key: "z",
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    target: null,
+    isComposing: false,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    ...overrides,
+  } as unknown as KeyboardEvent;
 }
 
 
@@ -321,6 +337,81 @@ describe("desktop command routing", () => {
     expect(prefixCommandForKey("x", false)).toBe("close-pane");
     expect(prefixCommandForKey("D", false)).toBeNull();
   });
+  it("routes prefix input before terminal handlers without changing ordinary typing or unknown-prefix policy", () => {
+    const runCommand = vi.fn();
+    const setPrefixActive = vi.fn();
+    const setCommandsOpen = vi.fn();
+    const routing = { modalOpen: false, prefixActive: false, runCommand, setPrefixActive, setCommandsOpen };
+
+    const prefix = routingEvent({ key: "b", ctrlKey: true });
+    routeWorkbenchKeydown(prefix, routing);
+    expect(prefix.preventDefault).toHaveBeenCalledOnce();
+    expect(prefix.stopPropagation).toHaveBeenCalledOnce();
+    expect(setPrefixActive).toHaveBeenCalledWith(true);
+
+    const command = routingEvent({ key: "z" });
+    routeWorkbenchKeydown(command, { ...routing, prefixActive: true });
+    expect(command.preventDefault).toHaveBeenCalledOnce();
+    expect(command.stopPropagation).toHaveBeenCalledOnce();
+    expect(setPrefixActive).toHaveBeenCalledWith(false);
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledWith("zoom-pane");
+
+    const ordinary = routingEvent({ key: "z" });
+    routeWorkbenchKeydown(ordinary, routing);
+    expect(ordinary.preventDefault).not.toHaveBeenCalled();
+    expect(ordinary.stopPropagation).not.toHaveBeenCalled();
+    expect(runCommand).toHaveBeenCalledOnce();
+
+    const unknown = routingEvent({ key: "q" });
+    routeWorkbenchKeydown(unknown, { ...routing, prefixActive: true });
+    expect(unknown.preventDefault).toHaveBeenCalledOnce();
+    expect(unknown.stopPropagation).not.toHaveBeenCalled();
+    expect(setPrefixActive).toHaveBeenCalledWith(false);
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
+  it("leaves modal, composition, modified terminal keys, and prefix cancellation on their explicit routes", () => {
+    const runCommand = vi.fn();
+    const setPrefixActive = vi.fn();
+    const setCommandsOpen = vi.fn();
+    const base = { modalOpen: false, prefixActive: false, runCommand, setPrefixActive, setCommandsOpen };
+
+    const modal = routingEvent({ key: "b", ctrlKey: true });
+    routeWorkbenchKeydown(modal, { ...base, modalOpen: true });
+    expect(modal.preventDefault).not.toHaveBeenCalled();
+    expect(modal.stopPropagation).not.toHaveBeenCalled();
+    expect(setPrefixActive).not.toHaveBeenCalled();
+
+    const composing = routingEvent({ key: "b", ctrlKey: true, isComposing: true });
+    routeWorkbenchKeydown(composing, base);
+    expect(composing.preventDefault).not.toHaveBeenCalled();
+    expect(composing.stopPropagation).not.toHaveBeenCalled();
+    expect(setPrefixActive).not.toHaveBeenCalled();
+
+    const modified = routingEvent({ key: "ArrowLeft", ctrlKey: true });
+    routeWorkbenchKeydown(modified, base);
+    expect(modified.preventDefault).not.toHaveBeenCalled();
+    expect(modified.stopPropagation).not.toHaveBeenCalled();
+    const modifiedPrefix = routingEvent({ key: "b", ctrlKey: true, altKey: true });
+    routeWorkbenchKeydown(modifiedPrefix, base);
+    expect(modifiedPrefix.preventDefault).not.toHaveBeenCalled();
+    expect(setPrefixActive).not.toHaveBeenCalled();
+    const modifiedCommand = routingEvent({ key: "z", ctrlKey: true });
+    routeWorkbenchKeydown(modifiedCommand, { ...base, prefixActive: true });
+    expect(modifiedCommand.preventDefault).not.toHaveBeenCalled();
+    expect(modifiedCommand.stopPropagation).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(setPrefixActive).toHaveBeenCalledWith(false);
+
+    const escape = routingEvent({ key: "Escape" });
+    routeWorkbenchKeydown(escape, { ...base, prefixActive: true });
+    expect(escape.preventDefault).toHaveBeenCalledOnce();
+    expect(escape.stopPropagation).toHaveBeenCalledOnce();
+    expect(setPrefixActive).toHaveBeenCalledWith(false);
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
 
   it("replays only idempotent absolute mutations", () => {
     const retryable: ResourceMutationRequest[] = [

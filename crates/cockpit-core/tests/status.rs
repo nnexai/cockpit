@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -15,11 +16,35 @@ use cockpit_protocol::v1::{
     SessionSnapshotResponse, SessionSummary, TabLayout, TabSummary, TerminalCommand, TerminalMode,
     TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+struct ControlledInspection {
+    started: oneshot::Sender<()>,
+    result: oneshot::Receiver<Result<HerdrCompatibility, InspectionError>>,
+}
+
+fn controlled_inspection() -> (
+    oneshot::Receiver<()>,
+    oneshot::Sender<Result<HerdrCompatibility, InspectionError>>,
+    ControlledInspection,
+) {
+    let (started, started_receiver) = oneshot::channel();
+    let (result, result_receiver) = oneshot::channel();
+    (
+        started_receiver,
+        result,
+        ControlledInspection {
+            started,
+            result: result_receiver,
+        },
+    )
+}
 
 struct FakeAdapter {
     inspect_calls: Arc<AtomicUsize>,
+    inspect_controls: Arc<Mutex<VecDeque<ControlledInspection>>>,
     inspect_session_calls: Arc<Mutex<Vec<String>>>,
+    session_inspection_controls: Arc<Mutex<HashMap<String, VecDeque<ControlledInspection>>>>,
     snapshot_calls: Arc<Mutex<Vec<String>>>,
     focus_calls: Arc<Mutex<Vec<(String, FocusRequest)>>>,
     mutation_calls: Arc<Mutex<Vec<(String, ResourceMutationRequest)>>>,
@@ -27,6 +52,7 @@ struct FakeAdapter {
     terminal_calls: Arc<Mutex<Vec<TerminalOpenRequest>>>,
     compatibility: Result<HerdrCompatibility, InspectionError>,
     session_compatibility: Result<HerdrCompatibility, InspectionError>,
+    session_results: Arc<Mutex<HashMap<String, Result<HerdrCompatibility, InspectionError>>>>,
     snapshots: Arc<Mutex<Result<SessionSnapshotResponse, InspectionError>>>,
     sessions_result: Result<SessionListResponse, InspectionError>,
     focus_result: Result<FocusResponse, InspectionError>,
@@ -34,11 +60,15 @@ struct FakeAdapter {
     subscribe_result: Arc<Mutex<Option<Result<SessionSubscription, InspectionError>>>>,
     terminal_result: Arc<Mutex<Option<Result<TerminalSession, InspectionError>>>>,
 }
-
 #[async_trait]
 impl HerdrAdapter for FakeAdapter {
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
         self.inspect_calls.fetch_add(1, Ordering::SeqCst);
+        let control = self.inspect_controls.lock().await.pop_front();
+        if let Some(control) = control {
+            let _ = control.started.send(());
+            return control.result.await.expect("controlled inspection result");
+        }
         self.compatibility.clone()
     }
 
@@ -50,9 +80,26 @@ impl HerdrAdapter for FakeAdapter {
             .lock()
             .await
             .push(session_id.to_owned());
-        self.session_compatibility.clone()
+        let control = self
+            .session_inspection_controls
+            .lock()
+            .await
+            .get_mut(session_id)
+            .and_then(VecDeque::pop_front);
+        if let Some(control) = control {
+            let _ = control.started.send(());
+            return control
+                .result
+                .await
+                .expect("controlled session inspection result");
+        }
+        self.session_results
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| self.session_compatibility.clone())
     }
-
     async fn sessions(&self) -> Result<SessionListResponse, InspectionError> {
         self.sessions_result.clone()
     }
@@ -199,7 +246,9 @@ fn empty_terminal() -> TerminalSession {
 fn fake() -> FakeAdapter {
     FakeAdapter {
         inspect_calls: Arc::new(AtomicUsize::new(0)),
+        inspect_controls: Arc::new(Mutex::new(VecDeque::new())),
         inspect_session_calls: Arc::new(Mutex::new(Vec::new())),
+        session_inspection_controls: Arc::new(Mutex::new(HashMap::new())),
         snapshot_calls: Arc::new(Mutex::new(Vec::new())),
         focus_calls: Arc::new(Mutex::new(Vec::new())),
         mutation_calls: Arc::new(Mutex::new(Vec::new())),
@@ -207,6 +256,7 @@ fn fake() -> FakeAdapter {
         terminal_calls: Arc::new(Mutex::new(Vec::new())),
         compatibility: Ok(compatible()),
         session_compatibility: Ok(compatible()),
+        session_results: Arc::new(Mutex::new(HashMap::new())),
         snapshots: Arc::new(Mutex::new(Ok(snapshot("session-a")))),
         sessions_result: Ok(SessionListResponse {
             sessions: vec![SessionSummary {
@@ -270,15 +320,122 @@ async fn normal_status_and_sessions_use_installation_compatibility_cache() {
         status.herdr,
         HerdrCompatibility::Compatible { .. }
     ));
+    let cached_status = service.status().await;
+    assert!(matches!(
+        cached_status.herdr,
+        HerdrCompatibility::Compatible { .. }
+    ));
     assert!(!status.capabilities.terminal_mouse_input);
     assert!(service.sessions().await.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn late_status_probe_cannot_repopulate_after_installation_clear() {
+    let mut adapter = fake();
+    adapter.sessions_result = Err(InspectionError::new(
+        "server_not_running",
+        "Herdr server stopped",
+    ));
+
+    let (status_started, status_result, status_control) = controlled_inspection();
+    let (sessions_started, sessions_result, sessions_control) = controlled_inspection();
+    let (retry_started, retry_result, retry_control) = controlled_inspection();
+    adapter
+        .inspect_controls
+        .lock()
+        .await
+        .extend([status_control, sessions_control, retry_control]);
+
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+    let status_task = tokio::spawn({
+        let service = service.clone();
+        async move { service.status().await }
+    });
+    status_started.await.unwrap();
+
+    let sessions_task = tokio::spawn({
+        let service = service.clone();
+        async move { service.sessions().await }
+    });
+    sessions_started.await.unwrap();
+    sessions_result.send(Ok(compatible())).unwrap();
+    assert_eq!(
+        sessions_task.await.unwrap().unwrap_err().code,
+        "server_not_running"
+    );
+
+    status_result.send(Ok(compatible())).unwrap();
+    retry_started.await.unwrap();
+    retry_result
+        .send(Ok(HerdrCompatibility::Incompatible {
+            identity: None,
+            code: "herdr_incompatible".into(),
+            message: "compatibility changed".into(),
+        }))
+        .unwrap();
+
+    let status = status_task.await.unwrap();
+    assert!(matches!(
+        status.herdr,
+        HerdrCompatibility::Incompatible { ref code, .. } if code == "herdr_incompatible"
+    ));
+}
+
+#[tokio::test]
+async fn absent_session_probe_cannot_repopulate_after_installation_clear() {
+    let mut adapter = fake();
+    adapter.sessions_result = Err(InspectionError::new(
+        "server_not_running",
+        "Herdr server stopped",
+    ));
+    let session_inspection_controls = adapter.session_inspection_controls.clone();
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+    assert!(matches!(
+        service.status().await.herdr,
+        HerdrCompatibility::Compatible { .. }
+    ));
+
+    let (probe_started, probe_result, probe_control) = controlled_inspection();
+    let (retry_started, retry_result, retry_control) = controlled_inspection();
+    {
+        let mut controls = session_inspection_controls.lock().await;
+        controls
+            .entry("session-a".into())
+            .or_default()
+            .extend([probe_control, retry_control]);
+    }
+
+    let snapshot_task = tokio::spawn({
+        let service = service.clone();
+        async move { service.session_snapshot("session-a").await }
+    });
+    probe_started.await.unwrap();
+    assert_eq!(
+        service.sessions().await.unwrap_err().code,
+        "server_not_running"
+    );
+
+    probe_result.send(Ok(compatible())).unwrap();
+    retry_started.await.unwrap();
+    retry_result
+        .send(Ok(HerdrCompatibility::Incompatible {
+            identity: None,
+            code: "session_identity_mismatch".into(),
+            message: "session identity changed".into(),
+        }))
+        .unwrap();
+
+    assert_eq!(
+        snapshot_task.await.unwrap().unwrap_err().code,
+        "session_identity_mismatch"
+    );
 }
 
 #[tokio::test]
 async fn compatibility_cache_is_separate_per_session() {
     let adapter = fake();
     let session_calls = adapter.inspect_session_calls.clone();
+
     let snapshots = adapter.snapshots.clone();
     let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
 
@@ -290,6 +447,120 @@ async fn compatibility_cache_is_separate_per_session() {
     assert_eq!(
         session_calls.lock().await.as_slice(),
         &[String::from("session-a"), String::from("session-b")]
+    );
+}
+#[tokio::test]
+async fn failing_session_does_not_disable_another_healthy_session() {
+    let adapter = fake();
+    let session_results = adapter.session_results.clone();
+    session_results.lock().await.insert(
+        "session-b".into(),
+        Ok(HerdrCompatibility::Incompatible {
+            identity: None,
+            code: "herdr_incompatible".into(),
+            message: "session b is unavailable".into(),
+        }),
+    );
+    let session_calls = adapter.inspect_session_calls.clone();
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+
+    service.session_snapshot("session-a").await.unwrap();
+    assert_eq!(
+        service
+            .session_snapshot("session-b")
+            .await
+            .unwrap_err()
+            .code,
+        "herdr_incompatible"
+    );
+    service.session_snapshot("session-a").await.unwrap();
+
+    assert_eq!(
+        session_calls.lock().await.as_slice(),
+        &[String::from("session-a"), String::from("session-b"),]
+    );
+}
+
+#[tokio::test]
+async fn malformed_identity_invalidates_only_that_session_cache() {
+    let adapter = fake();
+    let session_results = adapter.session_results.clone();
+    let snapshots = adapter.snapshots.clone();
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+
+    service.session_snapshot("session-a").await.unwrap();
+    *snapshots.lock().await = Err(InspectionError::new(
+        "malformed_response",
+        "snapshot was malformed",
+    ));
+    assert_eq!(
+        service
+            .session_snapshot("session-a")
+            .await
+            .unwrap_err()
+            .code,
+        "malformed_response"
+    );
+
+    session_results.lock().await.insert(
+        "session-a".into(),
+        Err(InspectionError::new(
+            "malformed_response",
+            "ping identity was malformed",
+        )),
+    );
+    assert_eq!(
+        service
+            .session_snapshot("session-a")
+            .await
+            .unwrap_err()
+            .code,
+        "malformed_response"
+    );
+}
+
+#[tokio::test]
+async fn stream_disconnect_invalidates_session_cache_before_next_operation() {
+    let adapter = fake();
+    let session_results = adapter.session_results.clone();
+    let subscribe_result = adapter.subscribe_result.clone();
+    let (sender, receiver) = mpsc::channel(1);
+    *subscribe_result.lock().await = Some(Ok(SessionSubscription { messages: receiver }));
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+    let snapshot = snapshot("session-a");
+
+    service.session_snapshot("session-a").await.unwrap();
+    let mut subscription = service
+        .subscribe_session("session-a", &snapshot)
+        .await
+        .unwrap();
+    sender
+        .send(SessionChange::Disconnected {
+            code: "disconnected".into(),
+            message: "event stream ended".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        subscription.messages.recv().await,
+        Some(SessionChange::Disconnected { .. })
+    ));
+
+    session_results.lock().await.insert(
+        "session-a".into(),
+        Ok(HerdrCompatibility::Incompatible {
+            identity: None,
+            code: "session_identity_mismatch".into(),
+            message: "identity changed".into(),
+        }),
+    );
+    assert_eq!(
+        service
+            .session_snapshot("session-a")
+            .await
+            .unwrap_err()
+            .code,
+        "session_identity_mismatch"
     );
 }
 

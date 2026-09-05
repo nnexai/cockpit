@@ -924,6 +924,33 @@ fn valid_session_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EventIdentity {
+    version: String,
+    protocol: u32,
+}
+
+impl EventIdentity {
+    fn from_snapshot(snapshot: &SessionSnapshotResponse) -> Self {
+        Self {
+            version: snapshot.version.clone(),
+            protocol: snapshot.protocol,
+        }
+    }
+}
+
+fn validate_event_snapshot_identity(
+    snapshot: &SessionSnapshotResponse,
+    expected: &EventIdentity,
+) -> Result<(), InspectionError> {
+    if snapshot.version != expected.version || snapshot.protocol != expected.protocol {
+        return Err(InspectionError::new(
+            "session_identity_mismatch",
+            "session snapshot identity differs from the subscribed snapshot",
+        ));
+    }
+    Ok(())
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventConnectionEnd {
     StreamEnded,
@@ -1724,6 +1751,7 @@ impl HerdrCliAdapter {
                 "snapshot belongs to another session",
             ));
         }
+        let expected_identity = EventIdentity::from_snapshot(&snapshot);
         let (sender, receiver) = mpsc::channel(32);
         let (ready_sender, mut ready_receiver) = mpsc::channel(1);
         let adapter = self.clone();
@@ -1731,14 +1759,19 @@ impl HerdrCliAdapter {
             let mut delay_ms = 100_u64;
             let mut current_snapshot = snapshot;
             let mut initial_ready = Some(ready_sender);
+            let mut identity_checked = false;
             loop {
                 if sender.is_closed() {
                     break;
                 }
+                let identity_checked_for_connection = identity_checked;
+                identity_checked = false;
                 let result = adapter
                     .event_connection(
                         &session_id,
                         &current_snapshot,
+                        &expected_identity,
+                        identity_checked_for_connection,
                         &sender,
                         initial_ready.take(),
                     )
@@ -1751,9 +1784,30 @@ impl HerdrCliAdapter {
                         loop {
                             match adapter.read_snapshot(&session_id).await {
                                 Ok(new_snapshot) => {
+                                    if let Err(error) = validate_event_snapshot_identity(
+                                        &new_snapshot,
+                                        &expected_identity,
+                                    ) {
+                                        let _ = sender
+                                            .send(SessionChange::Disconnected {
+                                                code: error.code,
+                                                message: error.message,
+                                            })
+                                            .await;
+                                        return;
+                                    }
                                     current_snapshot = new_snapshot;
                                     delay_ms = 100;
                                     break;
+                                }
+                                Err(error) if error.code == "session_identity_mismatch" => {
+                                    let _ = sender
+                                        .send(SessionChange::Disconnected {
+                                            code: error.code,
+                                            message: error.message,
+                                        })
+                                        .await;
+                                    return;
                                 }
                                 Err(error) => {
                                     if sender
@@ -1781,6 +1835,7 @@ impl HerdrCliAdapter {
                         true,
                     ),
                     Err(error) => {
+                        let terminal = error.code == "session_identity_mismatch";
                         let change = if error.code == "malformed_json"
                             || error.code == "malformed_event"
                             || error.code == "unknown_event"
@@ -1796,7 +1851,7 @@ impl HerdrCliAdapter {
                                 message: error.message,
                             }
                         };
-                        (change, true)
+                        (change, !terminal)
                     }
                 };
                 if sender.send(change).await.is_err() {
@@ -1809,10 +1864,61 @@ impl HerdrCliAdapter {
                 delay_ms = (delay_ms.saturating_mul(2)).min(2000);
                 match adapter.read_snapshot(&session_id).await {
                     Ok(new_snapshot) => {
+                        if let Err(error) =
+                            validate_event_snapshot_identity(&new_snapshot, &expected_identity)
+                        {
+                            let _ = sender
+                                .send(SessionChange::Disconnected {
+                                    code: error.code,
+                                    message: error.message,
+                                })
+                                .await;
+                            break;
+                        }
+                        if let Err(error) = adapter
+                            .check_event_identity(&session_id, &expected_identity)
+                            .await
+                        {
+                            let terminal = error.code == "session_identity_mismatch";
+                            let change = if error.code == "malformed_json"
+                                || error.code == "malformed_event"
+                                || error.code == "unknown_event"
+                                || error.code == "bounded_output"
+                            {
+                                SessionChange::Stale {
+                                    code: error.code,
+                                    message: error.message,
+                                }
+                            } else {
+                                SessionChange::Disconnected {
+                                    code: error.code,
+                                    message: error.message,
+                                }
+                            };
+                            if sender.send(change).await.is_err() {
+                                break;
+                            }
+                            if terminal {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                            delay_ms = (delay_ms.saturating_mul(2)).min(2000);
+                            continue;
+                        }
                         current_snapshot = new_snapshot;
+                        identity_checked = true;
                         if sender.send(SessionChange::Changed).await.is_err() {
                             break;
                         }
+                    }
+                    Err(error) if error.code == "session_identity_mismatch" => {
+                        let _ = sender
+                            .send(SessionChange::Disconnected {
+                                code: error.code,
+                                message: error.message,
+                            })
+                            .await;
+                        break;
                     }
                     Err(error) => {
                         if sender
@@ -1839,15 +1945,47 @@ impl HerdrCliAdapter {
         }
     }
 
+    async fn check_event_identity(
+        &self,
+        session_id: &str,
+        expected: &EventIdentity,
+    ) -> Result<(), InspectionError> {
+        // A same-version replacement without a server identity remains
+        // undetectable; this bounded ping only rejects changed identities.
+        let ping = self.socket_request(session_id, "ping", json!({})).await?;
+        let ping = object(&ping, "event ping result")?;
+        if required_string(ping, "type", "event ping result")? != "pong" {
+            return Err(malformed("event ping result.type must be pong"));
+        }
+        let version = required_string(ping, "version", "event ping result")?;
+        let protocol = required_u32(ping, "protocol", "event ping result")?;
+        if version != expected.version || protocol != expected.protocol {
+            return Err(InspectionError::new(
+                "session_identity_mismatch",
+                "session ping identity differs from the subscribed snapshot",
+            ));
+        }
+        Ok(())
+    }
+
     async fn event_connection(
         &self,
         session_id: &str,
         snapshot: &SessionSnapshotResponse,
+        expected: &EventIdentity,
+        identity_checked: bool,
         sender: &mpsc::Sender<SessionChange>,
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
     ) -> Result<EventConnectionEnd, InspectionError> {
         let result = self
-            .event_connection_inner(session_id, snapshot, sender, readiness.clone())
+            .event_connection_inner(
+                session_id,
+                snapshot,
+                expected,
+                identity_checked,
+                sender,
+                readiness.clone(),
+            )
             .await;
         if let Some(readiness) = readiness {
             let result = Err(result.as_ref().err().cloned().unwrap_or_else(|| {
@@ -1865,9 +2003,14 @@ impl HerdrCliAdapter {
         &self,
         session_id: &str,
         snapshot: &SessionSnapshotResponse,
+        expected: &EventIdentity,
+        identity_checked: bool,
         sender: &mpsc::Sender<SessionChange>,
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
     ) -> Result<EventConnectionEnd, InspectionError> {
+        if !identity_checked {
+            self.check_event_identity(session_id, expected).await?;
+        }
         let path = self.socket_path(session_id)?;
         let mut stream =
             match tokio::time::timeout(FINITE_CONNECT_TIMEOUT, UnixStream::connect(path)).await {

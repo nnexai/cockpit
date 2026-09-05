@@ -1,8 +1,8 @@
 {
   "run_id": "run-20260904T214621Z",
   "initial_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
-  "current_integration_commit": "62f55e0",
-  "stage": "S03",
+  "current_integration_commit": "f16cb21",
+  "stage": "S03 verified recovery increment; next S02 mouse control-message cutover",
   "selected_stories": [
     "CLEAN-01",
     "BOOT-01",
@@ -88,11 +88,12 @@
       "implementation": "Reusable capture/replay CLI and distinct paired scroll proof passed; G01 remains incomplete. Existing evidence archived; advance product work without expanding matrix."
     },
     "TERM-02": {
-      "status": "not_started",
+      "status": "running",
       "stage": "S02",
       "goals": [
         "G01"
-      ]
+      ],
+      "implementation": "Application mouse diagnosis found discarded upstream MouseCapture message. Baseline owned keyboard arrives while application clicks do not."
     },
     "TERM-03": {
       "status": "not_started",
@@ -102,18 +103,20 @@
       ]
     },
     "REPAIR-01": {
-      "status": "not_started",
+      "status": "running",
       "stage": "S03",
       "goals": [
         "G02"
-      ]
+      ],
+      "implementation": "Shared stream-order and root callback guards verified, including eight mounted orderings and actual browser gap recovery. Full adapter corpus remains open."
     },
     "REPAIR-02": {
-      "status": "not_started",
+      "status": "running",
       "stage": "S03",
       "goals": [
         "G02"
-      ]
+      ],
+      "implementation": "Prefix consumption, modifier routing and text selection verified; native startup/current session event smoke passed. Attachment queue behavior remains REPAIR-03."
     },
     "REPAIR-03": {
       "status": "not_started",
@@ -132,11 +135,12 @@
       "delivery_commit": "62f55e0"
     },
     "REPAIR-05": {
-      "status": "not_started",
+      "status": "running",
       "stage": "S03",
       "goals": [
         "G02"
-      ]
+      ],
+      "implementation": "Fresh compatibility cache/reconnect slice and invalidation race regressions pass. Validation/error/registry scope remains open."
     },
     "CLEAN-05": {
       "status": "not_started",
@@ -714,6 +718,13 @@
       "observation": "Continue toward the full goal; do not pause. Verification must produce useful implementation, automation or maintenance improvements.",
       "classification": "execution priority",
       "decision": "Close verified bounded reliability increment and advance correctness/features. Do not expand terminal capture matrix now; retain G01 limitations."
+    },
+    {
+      "id": "OBS-009",
+      "source": "user",
+      "observation": "Terminal attach likely needs mouse handling enabled, then xterm interactions forwarded. Herdr TUI already forwards working mouse events to panes.",
+      "classification": "application mouse priority",
+      "decision": "Confirmed ignored stable MouseCapture control message; propagate it to xterm and use existing owned raw-input path. No extra temporal matrix."
     }
   ],
   "verification_policy": {
@@ -728,18 +739,8 @@
       "decision": "Read-only inventory complete. BOOT source migration proceeds independently while S00 guards repair; runtime dispatch and G00B acceptance remain blocked until G00A passes."
     }
   ],
-  "latest_observation": {
-    "behavior": "real browser scroll compositor control",
-    "frames": 3601,
-    "duration_ms": 60000,
-    "wheel_samples": 100,
-    "p95_visible_latency_ms": 43,
-    "all_authoritative_offsets_match": true,
-    "all_full_frames_match_verified_references": true,
-    "artifact": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/scroll-record-one-measured.json",
-    "aggregate_goal": "G01 remains INCONCLUSIVE; no paired control or application mouse pass"
-  },
-  "next_action": "Main prepares owned browser/capture driver while TemporalReplayClosure and FiniteHerdrRequests edit exclusively. Integrate once, run CLI capture/replay and finite-request regressions, review, commit.",
+  "latest_observation": "OBS-009",
+  "next_action": "Commit verified recovery increment, then propagate stable MouseCapture end to end and verify xterm application mouse forwarding.",
   "latest_goal_status": {
     "G00A": "PASS",
     "G00B": "PASS; delivery45ff8d03663da5fb4dc0a124b1325c38cea7cce3",

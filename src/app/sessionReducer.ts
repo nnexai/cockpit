@@ -7,6 +7,7 @@ import type {
   TerminalOwnershipState,
   TerminalStreamMessage,
 } from "../protocol/generated/v1";
+import { transitionSessionStream, type StreamOrderCursor } from "../client/streamOrder";
 
 export type SyncState = "idle" | "loading" | "live" | "stale" | "disconnected";
 
@@ -52,7 +53,7 @@ export const initialSessionState: SessionState = {
 export type SessionAction =
   | { type: "switch"; sessionId: string }
   | { type: "snapshot/request"; epoch: number; sessionId: string }
-  | { type: "snapshot/received"; epoch: number; sessionId: string; snapshot: SessionSnapshotResponse; preserveStream?: boolean }
+  | { type: "snapshot/received"; epoch: number; sessionId: string; snapshot: SessionSnapshotResponse }
   | { type: "stream/message"; epoch: number; sessionId: string; message: SessionStreamMessage }
   | { type: "stream/error"; epoch: number; sessionId: string; code: string; message: string }
   | { type: "focus/request"; epoch: number; sessionId: string; request: FocusRequest; token?: number }
@@ -80,14 +81,6 @@ function attachment(state: SessionState, paneId: string): PaneAttachment {
   };
 }
 
-function acceptsStream(state: SessionState, message: SessionStreamMessage): boolean {
-  if (message.session_id !== state.sessionId) return false;
-  if (state.sync === "stale" && (state.generation === null || message.generation <= state.generation)) return false;
-  if (state.generation === null) return message.sequence === 1;
-  if (message.generation < state.generation) return false;
-  if (message.generation > state.generation) return message.sequence === 1;
-  return message.sequence === state.sequence + 1;
-}
 
 export function focusFulfilled(
   snapshot: SessionSnapshotResponse,
@@ -123,54 +116,40 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         : state;
     case "snapshot/received":
       if (!current(state, action.epoch, action.sessionId)) return state;
-      const pending = state.focusPending;
-      const fulfilled = focusFulfilled(action.snapshot, pending);
-      return {
-        ...state,
-        snapshot: action.snapshot,
-        generation: action.preserveStream ? state.generation : null,
-        sequence: action.preserveStream ? state.sequence : 0,
-        sync:
-          action.preserveStream &&
-          (state.sync === "stale" ||
-            state.sync === "disconnected" ||
-            (state.sync === "live" && state.generation !== null))
-            ? state.sync
-            : "loading",
-        focusPending: fulfilled ? null : pending,
-      };
-    case "stream/message": {
-      if (!current(state, action.epoch, action.sessionId)) return state;
-      const message = action.message;
-      if (message.session_id !== state.sessionId) {
-        return { ...state, sync: "stale", syncError: errorOf("stream_session", "Session stream identity mismatch") };
+      if (state.sync === "live") return state;
+      if (action.snapshot.session_id !== state.sessionId) {
+        return { ...state, sync: "stale", syncError: errorOf("stream_identity", "Session snapshot identity mismatch") };
       }
-      if (state.generation === null && message.sequence !== 1) {
-        return { ...state, sync: "stale", syncError: errorOf("stream_sequence", "Session stream did not start at sequence one") };
-      }
-      if (message.type === "snapshot" && message.snapshot.session_id !== state.sessionId) {
-        return { ...state, sync: "stale", syncError: errorOf("stream_snapshot", "Session stream snapshot identity mismatch") };
-      }
-      if (
-        state.generation !== null &&
-        message.generation === state.generation &&
-        message.sequence > state.sequence + 1
-      ) {
+      {
         return {
           ...state,
-          sync: "stale",
-          syncError: errorOf("stream_gap", "Session stream sequence gap; resync required"),
+          snapshot: state.snapshot ?? action.snapshot,
+          generation: null,
+          sequence: 0,
+          sync: "loading",
+          syncError: null,
         };
       }
-      if (!acceptsStream(state, message)) return state;
+    case "stream/message": {
+      if (!current(state, action.epoch, action.sessionId)) return state;
+      if (state.sync === "stale" || (state.sync === "loading" && state.generation !== null)) return state;
+      const message = action.message;
+      const previous: StreamOrderCursor | null = state.generation === null
+        ? null
+        : { sessionId: state.sessionId!, generation: state.generation, sequence: state.sequence };
+      const result = transitionSessionStream(state.sessionId ?? action.sessionId, previous, message);
+      if (result.kind === "ignore") return state;
+      if (result.kind === "error") {
+        return { ...state, sync: "stale", syncError: errorOf(result.code, result.message) };
+      }
       if (message.type === "snapshot") {
         const pending = state.focusPending;
         const fulfilled = focusFulfilled(message.snapshot, pending);
         return {
           ...state,
           snapshot: message.snapshot,
-          generation: message.generation,
-          sequence: message.sequence,
+          generation: result.cursor.generation,
+          sequence: result.cursor.sequence,
           sync: "live",
           syncError: null,
           focusPending: fulfilled ? null : pending,
@@ -180,16 +159,24 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       const sync = message.type === "stale" ? "stale" : "disconnected";
       return {
         ...state,
-        generation: message.generation,
-        sequence: message.sequence,
+        generation: result.cursor.generation,
+        sequence: result.cursor.sequence,
         sync,
         syncError: errorOf(message.code, message.message),
       };
     }
     case "stream/error":
-      return current(state, action.epoch, action.sessionId)
-        ? { ...state, sync: "disconnected", syncError: errorOf(action.code, action.message) }
-        : state;
+      if (!current(state, action.epoch, action.sessionId)) return state;
+      const orderingFailure =
+        action.code === "stream_identity" ||
+        action.code === "stream_sequence" ||
+        action.code === "stream_generation" ||
+        action.code === "stream_overflow";
+      return {
+        ...state,
+        sync: orderingFailure ? "stale" : "disconnected",
+        syncError: errorOf(action.code, action.message),
+      };
     case "focus/request":
       if (!current(state, action.epoch, action.sessionId)) return state;
       return { ...state, focusPending: action.request, focusToken: action.token ?? state.focusToken + 1, focusError: null };

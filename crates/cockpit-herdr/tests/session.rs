@@ -104,8 +104,25 @@ fn script(body: &str) -> Fixture {
         trampoline,
     }
 }
-
 #[cfg(unix)]
+async fn serve_ping(listener: &UnixListener) {
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "ping");
+    let response = json!({
+        "id": request["id"],
+        "result": {"type": "pong", "version": "0.8.2", "protocol": 20}
+    });
+    reader
+        .into_inner()
+        .write_all(format!("{response}\n").as_bytes())
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn maps_redacted_snapshot_and_sanitizes_titles() {
     let socket = std::env::temp_dir().join(format!("cockpit-herdr-snapshot-{}.sock", temp_id()));
@@ -493,6 +510,7 @@ async fn propagates_subscription_setup_error_without_id() {
     let socket = std::env::temp_dir().join(format!("cockpit-herdr-events-{}.sock", temp_id()));
     let listener = UnixListener::bind(&socket).unwrap();
     let server = tokio::spawn(async move {
+        serve_ping(&listener).await;
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
         let mut request_line = String::new();
@@ -531,6 +549,164 @@ async fn propagates_subscription_setup_error_without_id() {
     assert_eq!(error.code, "invalid_request");
     drop(fs::remove_file(socket));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn event_subscription_rejects_identity_mismatch_before_live() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-event-ping-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "ping");
+        let response = json!({
+            "id": request["id"],
+            "result": {"type": "pong", "version": "0.8.1", "protocol": 20}
+        });
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
+    let snapshot = SessionSnapshotResponse {
+        session_id: "default".into(),
+        version: "0.8.2".into(),
+        protocol: 20,
+        focused_space_id: None,
+        focused_tab_id: None,
+        focused_pane_id: None,
+        spaces: Vec::new(),
+        tabs: Vec::new(),
+        panes: Vec::new(),
+        layouts: Vec::new(),
+        agents: Vec::new(),
+    };
+    let error = HerdrCliAdapter::new(config)
+        .subscribe_session("default", &snapshot)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "session_identity_mismatch");
+    server.await.unwrap();
+    drop(fs::remove_file(socket));
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn event_subscription_terminates_on_identity_replacement_without_changed() {
+    let socket =
+        std::env::temp_dir().join(format!("cockpit-herdr-event-replace-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "ping");
+        let response = json!({
+            "id": request["id"],
+            "result": {"type": "pong", "version": "0.8.2", "protocol": 20}
+        });
+        let mut stream = reader.into_inner();
+        stream
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+        drop(stream);
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "events.subscribe");
+        let response = json!({
+            "id": request["id"],
+            "result": {"type": "subscription_started"}
+        });
+        let event = json!({"event": "pane.created", "data": {}});
+        let mut stream = reader.into_inner();
+        stream
+            .write_all(format!("{response}\n{event}\n").as_bytes())
+            .await
+            .unwrap();
+        drop(stream);
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "session.snapshot");
+        let response = json!({
+            "id": request["id"],
+            "result": {
+                "type": "session_snapshot",
+                "snapshot": {
+                    "version": "0.8.1",
+                    "protocol": 21,
+                    "focused_workspace_id": null,
+                    "focused_tab_id": null,
+                    "focused_pane_id": null,
+                    "workspaces": [],
+                    "tabs": [],
+                    "panes": [],
+                    "layouts": [],
+                    "agents": []
+                }
+            }
+        });
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
+    let snapshot = SessionSnapshotResponse {
+        session_id: "default".into(),
+        version: "0.8.2".into(),
+        protocol: 20,
+        focused_space_id: None,
+        focused_tab_id: None,
+        focused_pane_id: None,
+        spaces: Vec::new(),
+        tabs: Vec::new(),
+        panes: Vec::new(),
+        layouts: Vec::new(),
+        agents: Vec::new(),
+    };
+    let mut subscription = HerdrCliAdapter::new(config)
+        .subscribe_session("default", &snapshot)
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
+        .await
+        .unwrap();
+    assert_eq!(first, Some(SessionChange::Changed));
+    let second = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
+        .await
+        .unwrap();
+    match second {
+        Some(SessionChange::Disconnected { code, .. }) => {
+            assert_eq!(code, "session_identity_mismatch");
+        }
+        other => panic!("expected terminal identity mismatch, got {other:?}"),
+    }
+    let end = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
+        .await
+        .unwrap();
+    assert_eq!(end, None);
+    server.await.unwrap();
+    drop(fs::remove_file(socket));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_disconnect() {
@@ -538,8 +714,10 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
     let listener = UnixListener::bind(&socket).unwrap();
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/session-snapshot.json")).unwrap();
-    let refreshed_result = fixture.get("result").cloned().unwrap();
+    let mut refreshed_result = fixture.get("result").cloned().unwrap();
+    refreshed_result["snapshot"]["protocol"] = json!(20);
     let server = tokio::spawn(async move {
+        serve_ping(&listener).await;
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
@@ -594,6 +772,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
             .await
             .unwrap();
 
+        serve_ping(&listener).await;
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
         line.clear();
@@ -738,6 +917,7 @@ async fn subscription_receiver_drop_closes_idle_peer_socket() {
     let socket = std::env::temp_dir().join(format!("cockpit-herdr-events-drop-{}.sock", temp_id()));
     let listener = UnixListener::bind(&socket).unwrap();
     let server = tokio::spawn(async move {
+        serve_ping(&listener).await;
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
         let mut request = String::new();

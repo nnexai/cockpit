@@ -405,8 +405,61 @@ function trapModalTab(event: ReactKeyboardEvent<HTMLElement>, root: HTMLElement 
 }
 
 function editableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+  return target !== null && target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 }
+
+type WorkbenchKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey" | "target" | "isComposing" | "preventDefault" | "stopPropagation">;
+type WorkbenchKeyRouting = {
+  modalOpen: boolean;
+  prefixActive: boolean;
+  runCommand: (command: PrefixCommand) => void;
+  setPrefixActive: (active: boolean) => void;
+  setCommandsOpen: (open: boolean) => void;
+};
+
+export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
+  if (event.isComposing) return;
+  const target = typeof HTMLElement !== "undefined" && event.target instanceof HTMLElement ? event.target : null;
+  const prefixSafe = !editableTarget(target) || Boolean(target?.closest(".terminal-host"));
+  if (event.key === "Escape" && routing.prefixActive) {
+    routing.setPrefixActive(false);
+    if (!routing.modalOpen && prefixSafe) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    return;
+  }
+  if (routing.modalOpen) return;
+  if (!routing.prefixActive) {
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b" && prefixSafe) {
+      event.preventDefault();
+      event.stopPropagation();
+      routing.setPrefixActive(true);
+      return;
+    }
+    if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey && !editableTarget(target)) {
+      event.preventDefault();
+      routing.setCommandsOpen(true);
+    }
+    return;
+  }
+  if (!prefixSafe) return;
+  if (event.ctrlKey || event.altKey || event.metaKey) {
+    routing.setPrefixActive(false);
+    return;
+  }
+  const command = prefixCommandForKey(event.key, event.shiftKey);
+  if (command) {
+    event.preventDefault();
+    event.stopPropagation();
+    routing.setPrefixActive(false);
+    routing.runCommand(command);
+    return;
+  }
+  event.preventDefault();
+  routing.setPrefixActive(false);
+}
+
 
 function InlineRename({ label, ariaLabel, onCommit, onCancel }: { label: string; ariaLabel: string; onCommit: (label: string) => boolean; onCancel: () => void }) {
   const [value, setValue] = useState(label);
@@ -724,19 +777,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   }, [spaces, tabs, panes, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (modalOpen) return;
-      if (event.key === "Escape" && prefixActive) { event.preventDefault(); setPrefixActive(false); return; }
-      if (!prefixActive) {
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        const prefixSafe = !editableTarget(target) || Boolean(target?.closest(".terminal-host"));
-        if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "b" && prefixSafe) { event.preventDefault(); setPrefixActive(true); return; }
-        if (event.key === "?" && !editableTarget(target)) { event.preventDefault(); setCommandsOpen(true); }
-        return;
-      }
-      event.preventDefault();
-      setPrefixActive(false);
-      const command = prefixCommandForKey(event.key, event.shiftKey);
-      if (command) runCommand(command);
+      routeWorkbenchKeydown(event, { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen });
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
@@ -769,7 +810,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => onRequestControl(pane.id)} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />;
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (state.focusError && pane.id === selection.paneId) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />;
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -803,36 +844,79 @@ export function App({ client }: { client: CockpitClient }) {
   const mutationPendingRef = useRef(false);
   const [resyncAttempt, setResyncAttempt] = useState(0);
   const recoveryResyncRef = useRef(false);
+  const sessionObservation = useRef(0);
+  const sessionListRequest = useRef(0);
+  const mutationFocusIntent = useRef<{ epoch: number; token: number; paneId: string } | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const autoResyncTimer = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const resetSessionRuntime = useCallback(() => {
+    sessionObservation.current += 1;
+    sessionStream.current?.close();
+    sessionStream.current = null;
+    focusFallbackCancel.current?.();
+    focusFallbackCancel.current = null;
+    if (autoResyncTimer.current !== null) window.clearTimeout(autoResyncTimer.current);
+    autoResyncTimer.current = null;
+    focusTokenRef.current += 1;
+    focusIntent.current = null;
+    mutationFocusIntent.current = null;
+    mutationTokenRef.current += 1;
+    mutationPendingRef.current = false;
+    recoveryResyncRef.current = false;
+    dispatchMutation({ type: "reset" });
+    setFocusDelayed(false);
+    setSelection({ spaceId: null, tabId: null, paneId: null });
+    setControlPaneId(null);
+    controlInitializedEpoch.current = null;
+  }, []);
+  const switchSession = useCallback((id: string) => {
+    resetSessionRuntime();
+    dispatch({ type: "switch", sessionId: id });
+  }, [resetSessionRuntime]);
+  const refreshSessions = useCallback(async () => {
+    const request = ++sessionListRequest.current;
+    setSessionsError(null);
+    try {
+      const response = await client.sessions();
+      if (!mountedRef.current || sessionListRequest.current !== request) return;
+      setSessions(response.sessions);
+      setSessionsLoaded(true);
+    } catch (error: unknown) {
+      if (!mountedRef.current || sessionListRequest.current !== request) return;
+      setSessionsError(describeError(error, "Could not list Herdr sessions"));
+      setSessionsLoaded(true);
+    }
+  }, [client]);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; focusFallbackCancel.current?.(); }; }, []);
   useEffect(() => { let active = true; setStatus(null); setStatusError(null); void client.status().then((next) => { if (active) setStatus(next); }, (error: unknown) => { if (active) setStatusError(describeError(error, "Could not read Cockpit status")); }); return () => { active = false; }; }, [client, statusAttempt]);
   const compatible = status?.herdr.status === "compatible";
-  useEffect(() => { if (!compatible) return; let active = true; setSessionsError(null); void client.sessions().then((response) => { if (active) { setSessions(response.sessions); setSessionsLoaded(true); } }, (error: unknown) => { if (active) { setSessionsError(describeError(error, "Could not list Herdr sessions")); setSessionsLoaded(true); } }); return () => { active = false; }; }, [client, compatible, statusAttempt, sessionsAttempt]);
+  const sessionAvailable = sessionsLoaded && sessions.some((session) => session.id === state.sessionId);
+  useEffect(() => {
+    if (!compatible) return;
+    void refreshSessions();
+    return () => { sessionListRequest.current += 1; };
+  }, [refreshSessions, compatible, statusAttempt, sessionsAttempt]);
   useEffect(() => {
     if (!compatible || !sessionsLoaded) return;
     if (sessions.length === 0) {
-      sessionStream.current?.close();
-      sessionStream.current = null;
-      setSelection({ spaceId: null, tabId: null, paneId: null });
-      setControlPaneId(null);
-      controlInitializedEpoch.current = null;
+      resetSessionRuntime();
       return;
     }
     if (!state.sessionId || !sessions.some((session) => session.id === state.sessionId)) {
       const preferred = sessions.find((session) => session.is_default) ?? sessions[0];
-      dispatch({ type: "switch", sessionId: preferred.id });
-      setSelection({ spaceId: null, tabId: null, paneId: null });
-      setControlPaneId(null);
-      controlInitializedEpoch.current = null;
+      switchSession(preferred.id);
     }
-  }, [compatible, sessionsLoaded, sessions, state.sessionId]);
+  }, [compatible, sessionsLoaded, sessions, state.sessionId, resetSessionRuntime, switchSession]);
   useEffect(() => {
     const sessionId = state.sessionId;
-    if (!compatible || !sessionId) return;
+    if (!compatible || !sessionId || !sessionAvailable) return;
     const epoch = state.epoch;
+    const observation = ++sessionObservation.current;
+    const recovering = recoveryResyncRef.current;
+    const recoveryFocusToken = focusTokenRef.current;
+    const recoveryMutationToken = mutationTokenRef.current;
     let active = true;
     sessionStream.current?.close();
     sessionStream.current = null;
@@ -840,35 +924,46 @@ export function App({ client }: { client: CockpitClient }) {
     void (async () => {
       try {
         const snapshot = await client.sessionSnapshot(sessionId);
-        if (!active) return;
-        const recovering = recoveryResyncRef.current;
-        const confirmedFocus = recovering && stateRef.current.focusError ? focusRequestForSnapshot(snapshot) : null;
-        if (confirmedFocus) {
-          const clearToken = focusTokenRef.current + 1;
-          focusTokenRef.current = clearToken;
-          dispatch({ type: "focus/request", epoch, sessionId, request: confirmedFocus, token: clearToken });
-          focusIntent.current = null;
-        }
+        if (!active || sessionObservation.current !== observation) return;
         dispatch({ type: "snapshot/received", epoch, sessionId, snapshot });
-        if (controlInitializedEpoch.current !== epoch) {
-          controlInitializedEpoch.current = epoch;
-          setControlPaneId(snapshot.focused_pane_id);
-        }
-        if (recovering) {
-          dispatchMutation({ type: "reset" });
-          mutationPendingRef.current = false;
-          recoveryResyncRef.current = false;
-        }
-        const stream = await client.subscribeSession(sessionId, (message: SessionStreamMessage) => dispatch({ type: "stream/message", epoch, sessionId, message }), (error: unknown) => { if (!active) return; const described = describeError(error, "Session stream disconnected"); dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "stream_disconnected", message: described.message }); });
-        if (active) sessionStream.current = stream; else stream.close();
+        const stream = await client.subscribeSession(sessionId, (message: SessionStreamMessage) => {
+          if (!active || sessionObservation.current !== observation) return;
+          if (recovering && message.type === "snapshot" && message.sequence === 1 && recoveryFocusToken === focusTokenRef.current && stateRef.current.focusError) {
+            const confirmedFocus = focusRequestForSnapshot(message.snapshot);
+            if (confirmedFocus) {
+              const token = ++focusTokenRef.current;
+              focusIntent.current = null;
+              dispatch({ type: "focus/request", epoch, sessionId, request: confirmedFocus, token });
+            }
+          }
+          dispatch({ type: "stream/message", epoch, sessionId, message });
+          if (message.type !== "snapshot" || message.sequence !== 1) return;
+          if (controlInitializedEpoch.current !== epoch) {
+            controlInitializedEpoch.current = epoch;
+            setControlPaneId(message.snapshot.focused_pane_id);
+          }
+          const intent = mutationFocusIntent.current;
+          if (intent?.epoch === epoch && intent.token === mutationTokenRef.current) {
+            if (message.snapshot.focused_pane_id === intent.paneId) setControlPaneId(intent.paneId);
+            mutationFocusIntent.current = null;
+          }
+          if (recovering && recoveryMutationToken === mutationTokenRef.current) {
+            recoveryResyncRef.current = false;
+          }
+        }, (error: unknown) => {
+          if (!active || sessionObservation.current !== observation) return;
+          const described = describeError(error, "Session stream disconnected");
+          dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "stream_disconnected", message: described.message });
+        });
+        if (active && sessionObservation.current === observation) sessionStream.current = stream; else stream.close();
       } catch (error: unknown) {
-        if (!active) return;
+        if (!active || sessionObservation.current !== observation) return;
         const described = describeError(error, "Could not read the session snapshot");
         dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "snapshot_error", message: described.message });
       }
     })();
     return () => { active = false; sessionStream.current?.close(); sessionStream.current = null; };
-  }, [client, compatible, state.sessionId, state.epoch, resyncAttempt]);
+  }, [client, compatible, sessionAvailable, state.sessionId, state.epoch, resyncAttempt]);
   useEffect(() => {
     if (state.sync !== "stale" && state.sync !== "disconnected") return;
     if (autoResyncTimer.current !== null) return;
@@ -880,7 +975,7 @@ export function App({ client }: { client: CockpitClient }) {
     const next = authoritativeSelection(state.snapshot);
     setSelection(next);
     const intent = focusIntent.current;
-    if (intent && intent.epoch === state.epoch && intent.token === state.focusToken && !state.focusPending && !state.focusError) {
+    if (state.sync === "live" && intent && intent.epoch === state.epoch && intent.token === state.focusToken && !state.focusPending && !state.focusError) {
       focusFallbackCancel.current?.();
       focusFallbackCancel.current = null;
       setFocusDelayed(false);
@@ -889,13 +984,13 @@ export function App({ client }: { client: CockpitClient }) {
     } else if (!intent && controlPaneId !== null && next.paneId !== controlPaneId) {
       setControlPaneId(null);
     }
-  }, [state.snapshot, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId]);
+  }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId]);
 
-  const switchSession = (id: string) => { sessionStream.current?.close(); sessionStream.current = null; focusFallbackCancel.current?.(); focusFallbackCancel.current = null; setFocusDelayed(false); focusIntent.current = null; mutationTokenRef.current += 1; mutationPendingRef.current = false; dispatchMutation({ type: "reset" }); setSelection({ spaceId: null, tabId: null, paneId: null }); setControlPaneId(null); controlInitializedEpoch.current = null; dispatch({ type: "switch", sessionId: id }); };
   const focus = (request: FocusRequest, location: Selection) => {
     const sessionId = state.sessionId;
     if (!sessionId) return;
     const epoch = state.epoch;
+    mutationFocusIntent.current = null;
     const token = focusTokenRef.current + 1;
     focusTokenRef.current = token;
     focusFallbackCancel.current?.();
@@ -933,6 +1028,8 @@ export function App({ client }: { client: CockpitClient }) {
     const sessionId = current.sessionId;
     if (!sessionId || mutationPendingRef.current) return false;
     const epoch = current.epoch;
+    const observation = sessionObservation.current;
+    const focusToken = focusTokenRef.current;
     const token = mutationTokenRef.current + 1;
     mutationTokenRef.current = token;
     mutationPendingRef.current = true;
@@ -944,15 +1041,22 @@ export function App({ client }: { client: CockpitClient }) {
       const snapshot = authoritativeMutationSnapshot(sessionId, response);
       mutationPendingRef.current = false;
       dispatchMutation({ type: "succeed", epoch, token });
-      dispatch({ type: "snapshot/received", epoch, sessionId, snapshot, preserveStream: true });
-      if (focusFromSnapshot && snapshot.focused_pane_id) {
-        setSelection(authoritativeSelection(snapshot));
-        setControlPaneId(snapshot.focused_pane_id);
-      }
+      mutationFocusIntent.current = focusFromSnapshot && snapshot.focused_pane_id && observation === sessionObservation.current && focusToken === focusTokenRef.current
+        ? { epoch, token, paneId: snapshot.focused_pane_id }
+        : null;
+      recoveryResyncRef.current = true;
+      dispatch({ type: "snapshot/request", epoch, sessionId });
+      setResyncAttempt((value) => value + 1);
     }).catch((error: unknown) => {
       if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || mutationTokenRef.current !== token) return;
       mutationPendingRef.current = false;
-      dispatchMutation({ type: "fail", epoch, token, error: describeError(error, "Could not update Herdr resource") });
+      const errorState = describeError(error, "Could not update Herdr resource");
+      dispatchMutation({ type: "fail", epoch, token, error: errorState });
+      if (errorState.code === "mutation_applied_snapshot_failed" || errorState.code === "request_outcome_unknown") {
+        mutationFocusIntent.current = null;
+        recoveryResyncRef.current = true;
+        setResyncAttempt((value) => value + 1);
+      }
     });
     return accepted;
   }, [client]);
@@ -961,17 +1065,9 @@ export function App({ client }: { client: CockpitClient }) {
     const intent = focusIntent.current;
     if (intent) focus(intent.request, intent.location);
   };
-  const refreshSessions = useCallback(async () => {
-    const response = await client.sessions();
-    if (mountedRef.current) {
-      setSessions(response.sessions);
-      setSessionsError(null);
-      setSessionsLoaded(true);
-    }
-  }, [client]);
   const explicitResync = () => {
     recoveryResyncRef.current = true;
-    void refreshSessions().catch((error: unknown) => setSessionsError(describeError(error, "Could not list Herdr sessions")));
+    void refreshSessions();
     setResyncAttempt((value) => value + 1);
   };
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;

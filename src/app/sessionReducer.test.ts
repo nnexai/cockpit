@@ -57,7 +57,22 @@ describe("sessionReducer", () => {
     expect(old).toBe(state);
     state = sessionReducer(state, { type: "stream/message", epoch: state.epoch, sessionId: "one", message: stream("one", 1, 3) });
     expect(state.sync).toBe("stale");
-    expect(state.syncError?.code).toBe("stream_gap");
+    expect(state.syncError?.code).toBe("stream_sequence");
+  });
+  it("marks invalid future generation transitions stale instead of staying live", () => {
+    for (const [generation, sequence, code] of [[2, 5, "stream_sequence"], [3, 1, "stream_generation"]] as const) {
+      const state = ready("one");
+      const rejected = sessionReducer(state, {
+        type: "stream/message",
+        epoch: state.epoch,
+        sessionId: "one",
+        message: stream("one", generation, sequence),
+      });
+      expect(rejected.sync).toBe("stale");
+      expect(rejected.syncError?.code).toBe(code);
+      expect(rejected.generation).toBe(1);
+      expect(rejected.sequence).toBe(1);
+    }
   });
 
   it("keeps the recovery error visible while a resync is loading", () => {
@@ -68,92 +83,51 @@ describe("sessionReducer", () => {
     expect(loading.syncError).toEqual(state.syncError);
   });
 
-  it("adopts an authoritative snapshot while preserving a live stream", () => {
+
+  it("does not adopt an unsequenced snapshot over a live stream", () => {
     const state = ready("one");
-    const authoritative = snapshot("one", "pane-2");
-    const adopted = sessionReducer(state, {
+    const late = sessionReducer(state, {
       type: "snapshot/received",
       epoch: state.epoch,
       sessionId: "one",
-      snapshot: authoritative,
-      preserveStream: true,
+      snapshot: snapshot("one", "pane-2"),
     });
-    expect(adopted.snapshot).toBe(authoritative);
-    expect(adopted.generation).toBe(state.generation);
-    expect(adopted.sequence).toBe(state.sequence);
-    expect(adopted.sync).toBe("live");
-    expect(adopted.syncError).toBeNull();
+    expect(late).toBe(state);
+    expect(late.snapshot?.focused_pane_id).toBe("pane-1");
+    expect(late.generation).toBe(1);
+    expect(late.sequence).toBe(1);
+    expect(late.sync).toBe("live");
   });
 
-  it("adopts an authoritative snapshot without clearing stale stream state", () => {
+  it("loads a fresh snapshot and accepts its ordered first stream frame", () => {
     let state = ready("one");
-    state = sessionReducer(state, {
-      type: "stream/message",
-      epoch: state.epoch,
-      sessionId: "one",
-      message: stream("one", 1, 3),
-    });
-    const authoritative = snapshot("one", "pane-2");
-    const syncError = state.syncError;
-    const adopted = sessionReducer(state, {
-      type: "snapshot/received",
-      epoch: state.epoch,
-      sessionId: "one",
-      snapshot: authoritative,
-      preserveStream: true,
-    });
-    expect(adopted.snapshot).toBe(authoritative);
-    expect(adopted.generation).toBe(state.generation);
-    expect(adopted.sequence).toBe(state.sequence);
-    expect(adopted.sync).toBe("stale");
-    expect(adopted.syncError).toBe(syncError);
+    state = sessionReducer(state, { type: "stream/error", epoch: state.epoch, sessionId: "one", code: "stream_sequence", message: "gap" });
+    state = sessionReducer(state, { type: "snapshot/request", epoch: state.epoch, sessionId: "one" });
+    state = sessionReducer(state, { type: "snapshot/received", epoch: state.epoch, sessionId: "one", snapshot: snapshot("one", "pane-2") });
+    expect(state.sync).toBe("loading");
+    state = sessionReducer(state, { type: "stream/message", epoch: state.epoch, sessionId: "one", message: stream("one", 2, 1, snapshot("one", "pane-2")) });
+    expect(state.sync).toBe("live");
+    expect(state.generation).toBe(2);
+    expect(state.sequence).toBe(1);
   });
-
-  it("adopts an authoritative snapshot without clearing disconnected stream state", () => {
-    let state = ready("one");
-    state = sessionReducer(state, {
-      type: "stream/error",
-      epoch: state.epoch,
-      sessionId: "one",
-      code: "closed",
-      message: "closed",
-    });
-    const authoritative = snapshot("one", "pane-2");
-    const syncError = state.syncError;
-    const adopted = sessionReducer(state, {
-      type: "snapshot/received",
-      epoch: state.epoch,
-      sessionId: "one",
-      snapshot: authoritative,
-      preserveStream: true,
-    });
-    expect(adopted.snapshot).toBe(authoritative);
-    expect(adopted.generation).toBe(state.generation);
-    expect(adopted.sequence).toBe(state.sequence);
-    expect(adopted.sync).toBe("disconnected");
-    expect(adopted.syncError).toBe(syncError);
-  });
-
-  it("clears pending focus from an authoritative HTTP snapshot", () => {
+  it("clears pending focus only after an ordered stream snapshot", () => {
     let state = ready("one");
     const request = { kind: "pane", target_id: "pane-2" } as const;
     state = sessionReducer(state, { type: "focus/request", epoch: state.epoch, sessionId: "one", request });
     expect(state.focusPending).toEqual(request);
     state = sessionReducer(state, {
-      type: "snapshot/received",
+      type: "stream/message",
       epoch: state.epoch,
       sessionId: "one",
-      snapshot: snapshot("one", "pane-2"),
-      preserveStream: true,
+      message: stream("one", 1, 2, snapshot("one", "pane-2")),
     });
     expect(state.focusPending).toBeNull();
     state = sessionReducer(state, { type: "focus/request", epoch: state.epoch, sessionId: "one", request });
     state = sessionReducer(state, {
-      type: "snapshot/received",
+      type: "stream/message",
       epoch: state.epoch,
       sessionId: "one",
-      snapshot: snapshot("one", "pane-1"),
-      preserveStream: true,
+      message: stream("one", 1, 3, snapshot("one", "pane-1")),
     });
     expect(state.focusPending).toEqual(request);
   });
