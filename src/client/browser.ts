@@ -1,4 +1,9 @@
 import {
+  matchContextResponse, matchPanePresentation, parseContextDirectory,
+  parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
+  parseContextLaunchRequest, parsePanePresentation,
+} from "./contextProtocol";
+import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
   parseWorkspaceReconcileRequest,
@@ -19,6 +24,7 @@ import {
   parseTerminalStreamMessage,
   parseTerminalCommand,
   validateSessionId,
+  validateResourceId,
   type ClosableStream,
   type CockpitClient,
   type TerminalStream,
@@ -282,6 +288,34 @@ export function createBrowserClient(
       return matchProjectSession(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace-operations/reconcile`, "workspace reconciliation", parseWorkspaceOperation, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       }), sessionId, body.operation_id);
+    },
+    async inspectPane(sessionId, paneId, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/presentation`, "pane presentation", parsePanePresentation, { signal }), sessionId, paneId);
+    },
+    async contextDirectory(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseContextDirectoryRequest(value);
+      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/directory`, "Context directory", parseContextDirectory, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      }), body);
+    },
+    async contextDocument(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseContextDocumentRequest(value);
+      return matchContextResponse(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/document`, "Context document", parseContextDocument, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      }), body);
+    },
+    async openContext(sessionId, value) {
+      validateSessionId(sessionId);
+      const body = parseContextLaunchRequest(value);
+      return matchPanePresentation(await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/context/open`, "Context launch", parsePanePresentation, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }), sessionId);
     },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },

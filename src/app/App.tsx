@@ -19,6 +19,8 @@ import type {
 import { initialSessionState, sessionReducer, type SessionState } from "./sessionReducer";
 import { TerminalPane } from "./TerminalPane";
 import { SetupDialog } from "./projects/SetupDialog";
+import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
+import { isGraphicalContext, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
@@ -591,7 +593,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style }: {
+function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style, renderer, onRendererViewChange, onTerminalView, onRefreshRenderer }: {
   pane: Pane;
   label: string;
   selected: boolean;
@@ -608,13 +610,49 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
   onResync: () => void;
   mutate: Mutate;
   style: { left: string; top: string; width: string; height: string };
+  renderer: PaneRendererState | undefined;
+  onRendererViewChange: (bindingId: string, value: ContextViewState) => void;
+  onTerminalView: () => void;
+  onRefreshRenderer: () => void;
 }) {
   const title = pane.title || label;
   const closePane = () => { if (window.confirm(`Close ${title}?`)) mutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }); };
+  const graphical = isGraphicalContext(renderer);
+  const graphicalRef = useRef<HTMLDivElement>(null);
+  const intendedControl = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!graphical) { intendedControl.current = null; return; }
+    if (controlAllowed) {
+      intendedControl.current?.focus({ preventScroll: true });
+      intendedControl.current = null;
+    } else if (!controlPending) {
+      intendedControl.current = null;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && graphicalRef.current?.contains(active)) active.blur();
+    }
+  }, [graphical, controlAllowed, controlPending]);
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
-    <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} terminalMouseInput={terminalMouseInput} onRequestControl={onRequestControl} onSelect={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>
+    {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
+      onPointerDownCapture={(event) => {
+        if (!controlAllowed) {
+          event.preventDefault();
+          intendedControl.current = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("button,input,select,textarea,[tabindex]") : null;
+        }
+      }}
+      onFocusCapture={(event) => {
+        if (!controlAllowed) {
+          intendedControl.current = event.target;
+          event.target.blur();
+          onRequestControl();
+        }
+      }}>
+      <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
+        onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)}
+        controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} />
+    </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} terminalMouseInput={terminalMouseInput} onRequestControl={onRequestControl} onSelect={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
+    {renderer?.actionError || (graphical && renderer?.inspectionError) ? <div className="pane-presentation-error" role="status"><span>{renderer.actionError ?? renderer.inspectionError}</span><button type="button" onClick={onRefreshRenderer}>Refresh</button>{graphical ? <button type="button" onClick={onTerminalView}>Terminal</button> : null}</div> : null}
   </section>;
 }
 
@@ -644,7 +682,7 @@ const shortcutRows: Array<[string, string]> = [
   ["Ctrl+B r", "focus a resize border"], ["drag border / arrows", "resize"], ["right-click", "resource commands"],
 ];
 
-function CommandOverlay({ run, onSwitchSession, onDismiss }: { run: (command: PrefixCommand) => void; onSwitchSession: () => void; onDismiss: () => void }) {
+function CommandOverlay({ run, onSwitchSession, onDismiss, contextActions }: { run: (command: PrefixCommand) => void; onSwitchSession: () => void; onDismiss: () => void; contextActions: ReactNode }) {
   const ref = useModalFocus<HTMLElement>(onDismiss);
   const clickable: Partial<Record<string, PrefixCommand>> = {
     "new space": "new-space", "rename space": "rename-space", "close space": "close-space", "new tab": "new-tab",
@@ -652,7 +690,7 @@ function CommandOverlay({ run, onSwitchSession, onDismiss }: { run: (command: Pr
     "rename pane": "rename-pane", "split right": "split-right", "split down": "split-down", "toggle zoom": "zoom-pane",
     "close pane": "close-pane", "focus a resize border": "resize", resize: "resize",
   };
-  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={ref} className="command-overlay" role="dialog" aria-modal="true" aria-labelledby="commands-title" onKeyDown={(event) => trapModalTab(event, ref.current)}><header><h2 id="commands-title">commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><button type="button" className="session-command" onClick={onSwitchSession}><span>switch session...</span></button><div className="shortcut-list">{shortcutRows.map(([keys, label]) => clickable[label] ? <button type="button" key={keys} onClick={() => run(clickable[label]!)}><kbd>{keys}</kbd><span>{label}</span></button> : <div key={keys}><kbd>{keys}</kbd><span>{label}</span></div>)}</div></section></div>;
+  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={ref} className="command-overlay" role="dialog" aria-modal="true" aria-labelledby="commands-title" onKeyDown={(event) => trapModalTab(event, ref.current)}><header><h2 id="commands-title">commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><button type="button" className="session-command" onClick={onSwitchSession}><span>switch session...</span></button>{contextActions}<div className="shortcut-list">{shortcutRows.map(([keys, label]) => clickable[label] ? <button type="button" key={keys} onClick={() => run(clickable[label]!)}><kbd>{keys}</kbd><span>{label}</span></button> : <div key={keys}><kbd>{keys}</kbd><span>{label}</span></div>)}</div></section></div>;
 }
 
 export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
@@ -728,6 +766,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const panes = panesForTab(snapshot?.panes ?? [], selectedTab?.id ?? null);
   const visiblePaneIds = projectedPaneIds(panes.map((pane) => pane.id), layout, snapshot?.focused_pane_id ?? selection.paneId);
   const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
+  const renderers = usePaneRenderers(client, state.sessionId, visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editing, setEditing] = useState<ContextTarget | null>(null);
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
@@ -735,7 +774,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [sessionChooserOpen, setSessionChooserOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [prefixActive, setPrefixActive] = useState(false);
-  const mutationBusy = mutations.pending !== null;
+  const mutationBusy = mutations.pending !== null || renderers.busy;
   const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen;
   const streamRegistry = useRef(new Set<TerminalStream>());
   const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
@@ -802,7 +841,20 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     }
     const pane = snapshot?.panes.find((candidate) => candidate.id === menu.target.id);
     if (!pane) return null;
-    return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button><button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}>Swap...</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}>Move...</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}>Close</button></ContextMenu>;
+    const renderer = renderers.panes[pane.id];
+    return <ContextMenu menu={menu} onDismiss={dismissMenu}>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button>
+      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right"); })}>Open Context right</button>
+      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down"); })}>Open Context below</button>
+      <button role="menuitem" type="button" disabled={renderer?.presentation.renderer !== "context"} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, isGraphicalContext(renderer) ? "terminal" : "context"))}>{isGraphicalContext(renderer) ? "Show terminal view" : "Render as Context"}</button>
+      <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}>Refresh renderer detection</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button>
+      <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}>Swap...</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}>Move...</button>
+      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}>Close</button>
+    </ContextMenu>;
   };
   return <div className="workbench">
     <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} mutate={onMutate} /><div className="sidebar-divider"><button type="button" disabled={mutationBusy || modalOpen} onClick={() => onMutate("space:new", { type: "space_create", label: null, cwd: null }, true)}>new</button><button type="button" disabled={modalOpen} onClick={() => setCommandsOpen(true)}>menu</button><button type="button" aria-label="New task Space…" disabled={mutationBusy || modalOpen || state.sync !== "live"} onClick={() => setSetupOpen(true)}>task…</button></div><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
@@ -812,12 +864,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (state.focusError && pane.id === selection.paneId) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} />;
+        const renderer = renderers.panes[pane.id];
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (state.focusError && pane.id === selection.paneId) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
-    {commandsOpen ? <CommandOverlay run={(command) => { setCommandsOpen(false); runCommand(command); }} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} /> : null}
+    {commandsOpen ? <CommandOverlay run={(command) => { setCommandsOpen(false); runCommand(command); }} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} contextActions={<>
+      <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "right"); }}>Open Context right</button>
+      <button type="button" className="session-command" disabled={mutationBusy || !renderers.panes[selection.paneId ?? ""]?.presentation.can_open_context} onClick={() => { setCommandsOpen(false); if (selection.paneId) void renderers.open(selection.paneId, "down"); }}>Open Context below</button>
+      <button type="button" className="session-command" disabled={renderers.panes[selection.paneId ?? ""]?.presentation.renderer !== "context"} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) renderers.choose(selection.paneId, isGraphicalContext(renderers.panes[selection.paneId]) ? "terminal" : "context"); }}>{isGraphicalContext(renderers.panes[selection.paneId ?? ""]) ? "Show terminal view" : "Render as Context"}</button>
+    </>} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}

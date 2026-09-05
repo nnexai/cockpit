@@ -1,4 +1,9 @@
 import {
+  matchContextResponse, matchPanePresentation, parseContextDirectory,
+  parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
+  parseContextLaunchRequest, parsePanePresentation,
+} from "./contextProtocol";
+import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
   parseWorkspaceReconcileRequest,
@@ -34,6 +39,7 @@ import {
   parseTerminalOpenRequest,
   parseTerminalStreamMessage,
   validateSessionId,
+  validateResourceId,
   type ClosableStream,
   type CockpitClient,
   type TerminalStream,
@@ -231,6 +237,37 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       validateSessionId(sessionId);
       const request = parseWorkspaceReconcileRequest(value);
       return matchProjectSession(await invokeAndParse(invoke, "cockpit_workspace_reconcile", { sessionId, request }, "workspace reconciliation", parseWorkspaceOperation), sessionId, request.operation_id);
+    },
+    async inspectPane(sessionId, paneId, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const value = await invokeAndParse(invoke, "cockpit_pane_presentation", { sessionId, paneId }, "pane presentation", parsePanePresentation);
+      signal?.throwIfAborted();
+      return matchPanePresentation(value, sessionId, paneId);
+    },
+    async contextDirectory(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseContextDirectoryRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_directory", { sessionId, paneId, request }, "Context directory", parseContextDirectory);
+      signal?.throwIfAborted();
+      return matchContextResponse(response, request);
+    },
+    async contextDocument(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseContextDocumentRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_document", { sessionId, paneId, request }, "Context document", parseContextDocument);
+      signal?.throwIfAborted();
+      return matchContextResponse(response, request);
+    },
+    async openContext(sessionId, value) {
+      validateSessionId(sessionId);
+      const request = parseContextLaunchRequest(value);
+      return matchPanePresentation(await invokeAndParse(invoke, "cockpit_context_open", { sessionId, request }, "Context launch", parsePanePresentation), sessionId);
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },

@@ -1,9 +1,7 @@
 use axum::{
     Json, Router,
-    body::Body,
     extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
-    http::{Method, Request, header::ORIGIN},
-    middleware::{self, Next},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -13,7 +11,9 @@ use cockpit_protocol::projects::{
 };
 use serde::de::DeserializeOwned;
 
-use super::{MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, valid_session_id};
+use super::{
+    MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, require_origin, valid_session_id,
+};
 
 pub(super) fn routes() -> Router<CockpitService> {
     Router::new()
@@ -42,18 +42,6 @@ pub(super) fn routes() -> Router<CockpitService> {
         )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
-}
-
-// The enclosing router verifies the exact bound Host and Origin. Filesystem
-// mutations additionally refuse the missing-Origin fallback used by read-only CLI calls.
-async fn require_origin(request: Request<Body>, next: Next) -> Response {
-    if request.method() != Method::GET && !request.headers().contains_key(ORIGIN) {
-        return bad_request(
-            "request_origin_required",
-            "Project mutations require the gateway Origin",
-        );
-    }
-    next.run(request).await
 }
 
 fn request<T: DeserializeOwned>(body: Result<Json<T>, JsonRejection>) -> Result<T, Response> {

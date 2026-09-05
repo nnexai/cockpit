@@ -3,6 +3,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+use crate::context::{
+    ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
+    ContextEntry, ContextEntryKind, ContextLaunchRequest, ContextRoot, ContextRootKind,
+    ContextSplitDirection, DetectionConfidence, ExtensionKind, PanePresentation,
+};
 use crate::projects::{
     ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectLimits, ProjectProvider,
     RepositoryCandidate, RepositoryListResponse, WorkspaceOperation, WorkspaceOperationRequest,
@@ -83,6 +88,19 @@ pub fn render_v1() -> String {
         WorkspaceOperationStep::decl(&config),
         WorkspaceOwnedResource::decl(&config),
         WorkspaceOperation::decl(&config),
+        ExtensionKind::decl(&config),
+        DetectionConfidence::decl(&config),
+        ContextRootKind::decl(&config),
+        ContextRoot::decl(&config),
+        PanePresentation::decl(&config),
+        ContextDirectoryRequest::decl(&config),
+        ContextEntryKind::decl(&config),
+        ContextEntry::decl(&config),
+        ContextDirectory::decl(&config),
+        ContextDocumentRequest::decl(&config),
+        ContextDocument::decl(&config),
+        ContextSplitDirection::decl(&config),
+        ContextLaunchRequest::decl(&config),
     ]
     .into_iter()
     .map(|declaration| format!("export {declaration}"))

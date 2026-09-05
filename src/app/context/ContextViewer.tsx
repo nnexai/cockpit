@@ -1,0 +1,613 @@
+import { Component, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { CockpitClient } from "../../client/CockpitClient";
+import type {
+  ContextDirectory,
+  ContextDirectoryRequest,
+  ContextDocument,
+  ContextDocumentRequest,
+  ContextEntry,
+  ContextRoot,
+  PanePresentation,
+} from "../../protocol/generated/v1";
+import "./context.css";
+
+export type ContextViewMode = "source" | "markdown";
+
+export interface ContextFileViewState {
+  rootId: string;
+  path: string;
+  mode: ContextViewMode;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  scrollTop: number;
+}
+
+export interface ContextViewState {
+  rootId: string | null;
+  path: string | null;
+  files: Record<string, ContextFileViewState>;
+}
+
+export function createContextViewState(): ContextViewState {
+  return { rootId: null, path: null, files: {} };
+}
+
+export type ContextViewerProps = {
+  client: CockpitClient;
+  presentation: PanePresentation;
+  value: ContextViewState;
+  onChange: (next: ContextViewState) => void;
+  controlAllowed: boolean;
+  onRequestControl: () => void;
+  onTerminalView: () => void;
+};
+
+type DirectoryState = {
+  status: "idle" | "loading" | "ready" | "error";
+  data?: ContextDirectory;
+  error?: string;
+};
+
+type DocumentState = {
+  status: "loading" | "ready" | "error";
+  document?: ContextDocument;
+  error?: string;
+};
+const MAX_RETAINED_FILE_STATES = 64;
+const MAX_RETAINED_DIRECTORY_STATES = 128;
+const MAX_RETAINED_EXPANDED_DIRECTORIES = 64;
+const MAX_RETAINED_DOCUMENT_BYTES = 8 * 1024 * 1024;
+
+function retainedDocumentBytes(state: DocumentState | undefined): number {
+  const text = state?.document?.text;
+  if (text === null || text === undefined) return 0;
+  return Math.max(text.length, state?.document?.bytes ?? 0);
+}
+function retainDirectoryState(current: Record<string, DirectoryState>, key: string, state: DirectoryState, protectedKeys: Set<string>): Record<string, DirectoryState> {
+  const next = { ...current };
+  delete next[key];
+  next[key] = state;
+  const keys = Object.keys(next);
+  if (keys.length > MAX_RETAINED_DIRECTORY_STATES) {
+    const oldest = keys.find((candidate) => candidate !== key && !protectedKeys.has(candidate)) ?? keys.find((candidate) => candidate !== key) ?? keys[0];
+    if (oldest !== undefined) delete next[oldest];
+  }
+  return next;
+}
+
+function retainDocumentState(current: Record<string, DocumentState>, key: string, state: DocumentState): Record<string, DocumentState> {
+  const next = { ...current };
+  delete next[key];
+  next[key] = state;
+  const keys = Object.keys(next);
+  while (keys.length > MAX_RETAINED_FILE_STATES) {
+    const oldest = keys.shift();
+    if (oldest === undefined) break;
+    delete next[oldest];
+  }
+  let bytes = Object.keys(next).reduce((total, candidate) => total + retainedDocumentBytes(next[candidate]), 0);
+  if (bytes > MAX_RETAINED_DOCUMENT_BYTES) {
+    for (const candidate of Object.keys(next)) {
+      if (candidate === key) continue;
+      bytes -= retainedDocumentBytes(next[candidate]);
+      delete next[candidate];
+      if (bytes <= MAX_RETAINED_DOCUMENT_BYTES) break;
+    }
+  }
+  return next;
+}
+
+
+type SourceLine = { text: string; raw: string };
+type SourceSpan = { start: number; end: number };
+
+type DerivedMarkdown = {
+  text: string;
+  sourceLines: number[];
+  frontmatter: SourceSpan | null;
+};
+
+function keyFor(rootId: string, path: string): string {
+  return `${rootId}\u0000${path}`;
+}
+
+function readableError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string" && message) return message;
+  }
+  return "The Context request could not be completed.";
+}
+
+function splitSource(source: string): SourceLine[] {
+  const result: SourceLine[] = [];
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character !== "\r" && character !== "\n") continue;
+    const end = character === "\r" && source[index + 1] === "\n" ? index + 2 : index + 1;
+    result.push({ text: source.slice(start, index), raw: source.slice(start, end) });
+    start = end;
+    if (end === source.length) break;
+    if (end > index + 1) index += 1;
+  }
+  if (start < source.length || result.length === 0) result.push({ text: source.slice(start), raw: source.slice(start) });
+  return result;
+}
+
+function sourceLinesForMarkdown(source: string): DerivedMarkdown {
+  const lines = splitSource(source);
+  let frontmatter: SourceSpan | null = null;
+  let bodyStart = 0;
+  if (lines[0]?.text.trim() === "---") {
+    for (let index = 1; index < lines.length; index += 1) {
+      if (lines[index].text.trim() === "---" || lines[index].text.trim() === "...") {
+        frontmatter = { start: 1, end: index + 1 };
+        bodyStart = index + 1;
+        break;
+      }
+    }
+  }
+  const body = lines.slice(bodyStart);
+  return {
+    text: body.map((line) => line.text).join("\n"),
+    sourceLines: body.map((_, index) => bodyStart + index + 1),
+    frontmatter,
+  };
+}
+function metadataSummary(source: string): string | null {
+  const lines = splitSource(source);
+  if (lines[0]?.text.trim() !== "---") return null;
+  const fields: Record<string, string> = {};
+  for (const line of lines.slice(1)) {
+    if (line.text.trim() === "---" || line.text.trim() === "...") break;
+    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.text);
+    if (match && (match[1] === "canonical_id" || match[1] === "fetched_at" || match[1] === "provider")) fields[match[1]] = match[2];
+  }
+  const identity = fields.canonical_id ?? fields.provider;
+  const freshness = fields.fetched_at;
+  if (!identity && !freshness) return null;
+  return [identity, freshness ? `fetched ${freshness}` : null].filter((value): value is string => Boolean(value)).join(" · ");
+}
+
+function isMarkdown(document: ContextDocument, path: string): boolean {
+  return /(?:^|\.)md(?:own)?$/i.test(path) || document.media_type.toLowerCase().includes("markdown");
+}
+
+function isSafeHref(href: string | undefined): boolean {
+  if (!href) return false;
+  try {
+    const parsed = new URL(href, "https://context.invalid");
+    if (parsed.origin === "https://context.invalid" && !/^(?:\/|#|\?)/.test(href)) return false;
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+  } catch {
+    return false;
+  }
+}
+
+function nodePosition(node: unknown): { start: number; end: number } | null {
+  if (typeof node !== "object" || node === null || !("position" in node)) return null;
+  const position = node.position;
+  if (typeof position !== "object" || position === null || !("start" in position) || !("end" in position)) return null;
+  const startValue = position.start;
+  const endValue = position.end;
+  if (typeof startValue !== "object" || startValue === null || !("line" in startValue)) return null;
+  if (typeof endValue !== "object" || endValue === null || !("line" in endValue)) return null;
+  const start = startValue.line;
+  const end = endValue.line;
+  return typeof start === "number" && typeof end === "number" ? { start, end } : null;
+}
+
+function blockData(node: unknown, mapping: number[]): { "data-source-start": number; "data-source-end": number } | undefined {
+  const position = nodePosition(node);
+  if (!position || mapping.length === 0) return undefined;
+  const start = mapping[Math.max(0, Math.min(mapping.length - 1, position.start - 1))];
+  const end = mapping[Math.max(0, Math.min(mapping.length - 1, position.end - 1))];
+  return start === undefined || end === undefined ? undefined : { "data-source-start": start, "data-source-end": end };
+}
+
+function spanFromClick(event: ReactMouseEvent<HTMLDivElement>): SourceSpan | null {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return null;
+  const block = target.closest<HTMLElement>("[data-source-start]");
+  if (!block) return null;
+  const start = Number(block.dataset.sourceStart);
+  const end = Number(block.dataset.sourceEnd);
+  return Number.isSafeInteger(start) && Number.isSafeInteger(end) ? { start, end } : null;
+}
+
+function SourceLines({
+  text,
+  state,
+  onSelect,
+  onScroll,
+}: {
+  text: string;
+  state: ContextFileViewState;
+  onSelect: (start: number, end: number, extend: boolean) => void;
+  onScroll: (scrollTop: number) => void;
+}) {
+  const lines = useMemo(() => splitSource(text), [text]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop;
+  }, [state.path, state.scrollTop]);
+  return (
+    <div
+      className="context-source-scroll"
+      ref={scrollRef}
+      onScroll={(event) => onScroll(event.currentTarget.scrollTop)}
+      role="grid"
+      aria-label="Source lines"
+    >
+      <div className="context-source-lines">
+        {lines.map((line, index) => {
+          const lineNumber = index + 1;
+          const selected = state.selectionStart !== null && state.selectionEnd !== null && lineNumber >= Math.min(state.selectionStart, state.selectionEnd) && lineNumber <= Math.max(state.selectionStart, state.selectionEnd);
+          return (
+            <button
+              type="button"
+              role="row"
+              className={`context-source-line${selected ? " is-selected" : ""}`}
+              aria-selected={selected}
+              data-line={lineNumber}
+              key={lineNumber}
+              onClick={(event) => {
+                const anchor = anchorRef.current;
+                const start = event.shiftKey && anchor !== null ? Math.min(anchor, lineNumber) : lineNumber;
+                const end = event.shiftKey && anchor !== null ? Math.max(anchor, lineNumber) : lineNumber;
+                anchorRef.current = lineNumber;
+                onSelect(start, end, event.shiftKey);
+              }}
+            >
+              <span className="context-line-number" aria-hidden="true">{lineNumber}</span>
+              <code className="context-line-text">{line.text || " "}</code>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MarkdownView({
+  text,
+  state,
+  onSelect,
+  onScroll,
+}: {
+  text: string;
+  state: ContextFileViewState;
+  onSelect: (start: number, end: number) => void;
+  onScroll: (scrollTop: number) => void;
+}) {
+  const derived = useMemo(() => sourceLinesForMarkdown(text), [text]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop;
+  }, [state.path, state.scrollTop]);
+  const components: Components = useMemo(() => ({
+    p: ({ node, children, ...props }) => <p {...props} {...blockData(node, derived.sourceLines)}>{children}</p>,
+    h1: ({ node, children, ...props }) => <h1 {...props} {...blockData(node, derived.sourceLines)}>{children}</h1>,
+    h2: ({ node, children, ...props }) => <h2 {...props} {...blockData(node, derived.sourceLines)}>{children}</h2>,
+    h3: ({ node, children, ...props }) => <h3 {...props} {...blockData(node, derived.sourceLines)}>{children}</h3>,
+    h4: ({ node, children, ...props }) => <h4 {...props} {...blockData(node, derived.sourceLines)}>{children}</h4>,
+    h5: ({ node, children, ...props }) => <h5 {...props} {...blockData(node, derived.sourceLines)}>{children}</h5>,
+    h6: ({ node, children, ...props }) => <h6 {...props} {...blockData(node, derived.sourceLines)}>{children}</h6>,
+    blockquote: ({ node, children, ...props }) => <blockquote {...props} {...blockData(node, derived.sourceLines)}>{children}</blockquote>,
+    ul: ({ node, children, ...props }) => <ul {...props} {...blockData(node, derived.sourceLines)}>{children}</ul>,
+    ol: ({ node, children, ...props }) => <ol {...props} {...blockData(node, derived.sourceLines)}>{children}</ol>,
+    pre: ({ node, children, ...props }) => <pre {...props} {...blockData(node, derived.sourceLines)}>{children}</pre>,
+    a: ({ node, href, children, ...props }) => isSafeHref(href)
+      ? <a {...props} href={href}>{children}</a>
+      : <span {...props} {...blockData(node, derived.sourceLines)}>{children}</span>,
+    img: ({ node, alt }) => <span className="context-media-refusal" {...blockData(node, derived.sourceLines)}>[Image unavailable{alt ? `: ${alt}` : ""}]</span>,
+  }), [derived.sourceLines]);
+  return (
+    <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
+      const span = spanFromClick(event);
+      if (span) onSelect(span.start, span.end);
+    }}>
+      {derived.frontmatter ? (
+        <details className="context-frontmatter">
+          <summary>Metadata</summary>
+          <SourceLines text={splitSource(text).slice(derived.frontmatter.start - 1, derived.frontmatter.end).map((line) => line.raw).join("")} state={{ rootId: "", path: "", mode: "source", selectionStart: null, selectionEnd: null, scrollTop: 0 }} onSelect={() => undefined} onScroll={() => undefined} />
+        </details>
+      ) : null}
+      <article className="context-markdown-body">
+        <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={components}>{derived.text}</ReactMarkdown>
+      </article>
+    </div>
+  );
+}
+
+class RenderErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { error: Error | null }> {
+  state = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    return this.state.error ? this.props.fallback : this.props.children;
+  }
+}
+function entryIcon(entry: ContextEntry): string {
+  if (entry.refusal) return "!";
+  if (entry.kind === "directory") return "▸";
+  if (entry.kind === "symlink") return "↗";
+  if (entry.kind === "other") return "?";
+  return "·";
+}
+
+export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView }: ContextViewerProps) {
+  const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
+  const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const protectedDirectoryKeysRef = useRef<Set<string>>(new Set());
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [rootId, setRootId] = useState<string | null>(value.rootId ?? presentation.default_root_id ?? presentation.roots[0]?.root_id ?? null);
+  const directoriesRef = useRef(directories);
+  directoriesRef.current = directories;
+  const directoryRequests = useRef<Record<string, number>>({});
+  const directoryControllers = useRef<Record<string, AbortController>>({});
+  const directoryRequestSequence = useRef(0);
+  const documentRequestSequence = useRef(0);
+  const documentController = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const controller of Object.values(directoryControllers.current)) controller.abort();
+      directoryControllers.current = {};
+      directoryRequests.current = {};
+      documentController.current?.abort();
+      documentController.current = null;
+      documentRequestSequence.current += 1;
+    };
+  }, []);
+  const root = presentation.roots.find((candidate) => candidate.root_id === rootId) ?? presentation.roots[0];
+  const sessionId = presentation.session_id;
+  const paneId = presentation.pane_id;
+  const bindingId = presentation.binding_id;
+  const activeRootId = root?.root_id ?? "";
+  const identityKey = `${sessionId}\u0000${paneId}\u0000${bindingId}\u0000${activeRootId}`;
+  const requestIdentityRef = useRef(identityKey);
+  requestIdentityRef.current = identityKey;
+  const currentBindingRef = useRef(bindingId);
+  currentBindingRef.current = bindingId;
+  const currentRootRef = useRef(activeRootId);
+  currentRootRef.current = activeRootId;
+  const selectedPath = value.rootId === root?.root_id ? value.path : null;
+  const selectedKey = root && selectedPath ? keyFor(root.root_id, selectedPath) : null;
+  const selectedFileState = selectedKey ? value.files[selectedKey] : undefined;
+  const directoryPathForFile = selectedPath?.includes("/") ? selectedPath.slice(0, selectedPath.lastIndexOf("/")) : "";
+  const selectedDirectory = root ? directories[keyFor(root.root_id, directoryPathForFile)] : undefined;
+  const selectedEntry = selectedDirectory?.data?.entries.find((entry) => (entry.path ?? (directoryPathForFile ? `${directoryPathForFile}/${entry.name}` : entry.name)) === selectedPath);
+  const selectedRevision = selectedEntry?.revision ?? null;
+  const documentState = selectedKey ? documents[selectedKey] : undefined;
+  const protectedDirectoryKeys = new Set<string>();
+  if (root) {
+    protectedDirectoryKeys.add(keyFor(root.root_id, ""));
+    protectedDirectoryKeys.add(keyFor(root.root_id, directoryPathForFile));
+    for (const path of expanded) protectedDirectoryKeys.add(keyFor(root.root_id, path));
+  }
+  protectedDirectoryKeysRef.current = protectedDirectoryKeys;
+  const document = documentState?.document;
+
+  const updateFile = useCallback((patch: Partial<ContextFileViewState>) => {
+    if (!root || !selectedPath || !selectedKey) return;
+    const previous = value.files[selectedKey] ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0 };
+    const files = { ...value.files };
+    delete files[selectedKey];
+    files[selectedKey] = { ...previous, ...patch };
+    const keys = Object.keys(files);
+    while (keys.length > MAX_RETAINED_FILE_STATES) {
+      const oldest = keys.shift();
+      if (oldest === undefined) break;
+      delete files[oldest];
+    }
+    onChange({ ...value, rootId: root.root_id, path: selectedPath, files });
+  }, [onChange, root, selectedKey, selectedPath, value]);
+
+  const loadDirectory = useCallback(async (directoryRoot: ContextRoot, path: string, force = false) => {
+    const key = keyFor(directoryRoot.root_id, path);
+    if (!force && directoriesRef.current[key]?.status === "ready") return;
+    directoryControllers.current[key]?.abort();
+    const requestId = ++directoryRequestSequence.current;
+    directoryRequests.current[key] = requestId;
+    setDirectories((current) => retainDirectoryState(current, key, { status: "loading", data: current[key]?.data }, protectedDirectoryKeysRef.current));
+    const controller = new AbortController();
+    directoryControllers.current[key] = controller;
+    const requestIdentity = identityKey;
+    const requestBindingId = bindingId;
+    const requestRootId = directoryRoot.root_id;
+    try {
+      const request: ContextDirectoryRequest = { binding_id: requestBindingId, root_id: requestRootId, path };
+      const data = await client.contextDirectory(sessionId, paneId, request, controller.signal);
+      if (!mountedRef.current || controller.signal.aborted || directoryRequests.current[key] !== requestId
+        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
+      setDirectories((current) => retainDirectoryState(current, key, { status: "ready", data }, protectedDirectoryKeysRef.current));
+    } catch (error) {
+      if (!mountedRef.current || controller.signal.aborted || directoryRequests.current[key] !== requestId
+        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
+      setDirectories((current) => retainDirectoryState(current, key, { status: "error", data: current[key]?.data, error: readableError(error) }, protectedDirectoryKeysRef.current));
+    } finally {
+      if (directoryControllers.current[key] === controller) delete directoryControllers.current[key];
+    }
+  }, [bindingId, client, identityKey, paneId, sessionId]);
+  const identityRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (identityRef.current === identityKey) return;
+    identityRef.current = identityKey;
+    for (const controller of Object.values(directoryControllers.current)) controller.abort();
+    directoryControllers.current = {};
+    directoryRequests.current = {};
+    directoriesRef.current = {};
+    setDirectories({});
+    documentController.current?.abort();
+    documentController.current = null;
+    setDocuments({});
+    setExpanded(new Set());
+    documentRequestSequence.current += 1;
+    if (root && value.rootId !== root.root_id) {
+      onChange({ ...value, rootId: root.root_id, path: null });
+    }
+    if (root) void loadDirectory(root, "", true);
+  }, [identityKey, loadDirectory, onChange, root, value]);
+
+  useEffect(() => {
+    if (!root || !selectedPath || !selectedKey) return;
+    documentController.current?.abort();
+    const requestId = ++documentRequestSequence.current;
+    const controller = new AbortController();
+    documentController.current = controller;
+    const requestIdentity = identityKey;
+    const requestBindingId = bindingId;
+    const requestRootId = root.root_id;
+    setDocuments((current) => retainDocumentState(current, selectedKey, { status: "loading", document: current[selectedKey]?.document }));
+    const request: ContextDocumentRequest = { binding_id: requestBindingId, root_id: requestRootId, path: selectedPath, expected_revision: selectedRevision };
+    void client.contextDocument(sessionId, paneId, request, controller.signal).then((data) => {
+      if (!mountedRef.current || controller.signal.aborted || requestId !== documentRequestSequence.current
+        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
+      setDocuments((current) => retainDocumentState(current, selectedKey, { status: "ready", document: data }));
+    }).catch((error: unknown) => {
+      if (!mountedRef.current || controller.signal.aborted || requestId !== documentRequestSequence.current
+        || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
+      setDocuments((current) => retainDocumentState(current, selectedKey, { status: "error", document: current[selectedKey]?.document, error: readableError(error) }));
+    });
+    return () => {
+      controller.abort();
+      if (documentController.current === controller) documentController.current = null;
+      documentRequestSequence.current += 1;
+    };
+  }, [bindingId, client, identityKey, paneId, refreshGeneration, selectedKey, selectedPath, selectedRevision, sessionId, root?.root_id]);
+
+  const chooseRoot = (nextRoot: ContextRoot) => {
+    setRootId(nextRoot.root_id);
+    setExpanded(new Set());
+    onChange({ ...value, rootId: nextRoot.root_id, path: null });
+  };
+  const chooseEntry = (entry: ContextEntry) => {
+    if (entry.kind !== "file" || entry.refusal || !entry.path || !root) return;
+    const fileKey = keyFor(root.root_id, entry.path);
+    const next = value.files[fileKey] ?? { rootId: root.root_id, path: entry.path, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0 };
+    const files = { ...value.files };
+    delete files[fileKey];
+    files[fileKey] = next;
+    const keys = Object.keys(files);
+    while (keys.length > MAX_RETAINED_FILE_STATES) {
+      const oldest = keys.shift();
+      if (oldest === undefined) break;
+      delete files[oldest];
+    }
+    onChange({ ...value, rootId: root.root_id, path: entry.path, files });
+  };
+  const toggleDirectory = (entry: ContextEntry) => {
+    if (!root || !entry.path || entry.kind !== "directory") return;
+    const next = new Set(expanded);
+    if (next.has(entry.path)) next.delete(entry.path); else {
+      next.add(entry.path);
+      if (next.size > MAX_RETAINED_EXPANDED_DIRECTORIES) {
+        const oldest = next.values().next().value;
+        if (typeof oldest === "string") next.delete(oldest);
+      }
+      void loadDirectory(root, entry.path);
+    }
+    setExpanded(next);
+  };
+  const refresh = () => {
+    if (!root) return;
+    setRefreshGeneration((generation) => generation + 1);
+    const path = selectedPath ? directoryPathForFile : "";
+    void loadDirectory(root, path, true);
+  };
+  const renderDirectory = (path: string, depth: number): ReactNode => {
+    if (!root || depth > 32) return null;
+    const state = directories[keyFor(root.root_id, path)];
+    if (!state || state.status === "loading") return <div className="context-tree-status">Loading…</div>;
+    if (state.status === "error" && !state.data) return <div className="context-tree-error">{state.error}</div>;
+    return (
+      <>
+        {state.status === "error" && state.error ? <div className="context-tree-error" role="status">Stale tree: {state.error}</div> : null}
+        {state.data && state.data.diagnostics.length > 0 ? <div className="context-tree-diagnostics" role="status">{state.data.diagnostics.map((diagnostic) => <div key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</div>)}</div> : null}
+        {state.data?.entries.map((entry) => {
+          const childPath = entry.path ?? (path ? `${path}/${entry.name}` : entry.name);
+          const isOpen = expanded.has(childPath);
+          return (
+            <div className="context-tree-node" key={entry.entry_id}>
+              <button type="button" className={`context-tree-row${selectedPath === childPath ? " is-selected" : ""}`} style={{ paddingLeft: `${8 + depth * 16}px` }} disabled={entry.kind !== "file" && entry.kind !== "directory"} onClick={() => entry.kind === "directory" ? toggleDirectory(entry) : chooseEntry(entry)} aria-label={`${entry.name}${entry.refusal ? `, refused: ${entry.refusal}` : ""}`}>
+                <span className="context-tree-disclosure">{entry.kind === "directory" ? (isOpen ? "⌄" : "›") : " "}</span>
+                <span className="context-tree-icon" aria-hidden="true">{entryIcon(entry)}</span>
+                <span className="context-tree-name">{entry.name}</span>
+                <span className="context-tree-meta">{entry.refusal ?? (entry.bytes === null || entry.bytes === undefined ? "" : `${entry.bytes} B`)}</span>
+              </button>
+              {entry.refusal ? <div className="context-tree-refusal">{entry.refusal}</div> : null}
+              {entry.kind === "directory" && isOpen ? renderDirectory(childPath, depth + 1) : null}
+            </div>
+          );
+        })}
+      </>
+    );
+  };
+  const renderDocument = (): ReactNode => {
+    if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
+    if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
+    if (documentState.status === "error" && !document) {
+      return <div className="context-notice context-notice-error"><strong>Unable to read source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Retry</button></div>;
+    }
+    if (!document) return null;
+    const fileState = selectedFileState ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0 };
+    const metadata = metadataSummary(document.text ?? "");
+    const selectedLines = fileState.selectionStart !== null && fileState.selectionEnd !== null
+      ? `Lines ${Math.min(fileState.selectionStart, fileState.selectionEnd)}–${Math.max(fileState.selectionStart, fileState.selectionEnd)}`
+      : null;
+    return (
+      <>
+        <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
+        {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
+        {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
+        {document.text === null ? <div className="context-notice context-notice-error"><strong>File refused</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
+          <div className="context-mode-switch" role="tablist" aria-label="Document view"><button type="button" role="tab" aria-selected={fileState.mode === "source"} className={fileState.mode === "source" ? "is-selected" : ""} onClick={() => updateFile({ mode: "source" })}>Source</button>{isMarkdown(document, selectedPath) ? <button type="button" role="tab" aria-selected={fileState.mode === "markdown"} className={fileState.mode === "markdown" ? "is-selected" : ""} onClick={() => updateFile({ mode: "markdown" })}>Markdown</button> : null}</div>
+          <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text} state={{ ...fileState, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} /></div>}>
+            {fileState.mode === "markdown" ? <MarkdownView text={document.text} state={fileState} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : <SourceLines text={document.text} state={fileState} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} />}
+          </RenderErrorBoundary>
+        </>}
+      </>
+    );
+  };
+
+  if (!root) {
+    return <div className="context-viewer context-viewer-empty" onPointerDown={() => { if (!controlAllowed) onRequestControl(); }}>
+      <div className="context-notice context-notice-error"><strong>Context unavailable</strong><span>{presentation.reason || "This pane is not connected to an authorized Context root."}</span></div>
+      <button type="button" onClick={onTerminalView}>Show terminal view</button>
+    </div>;
+  }
+
+  return (
+    <section className="context-viewer" aria-label="Context file viewer" onPointerDown={() => { if (!controlAllowed) onRequestControl(); }}>
+      <header className="context-toolbar">
+        <div className="context-breadcrumb" title={root.path}>{root.label}</div>
+        <span className="context-readonly-badge">Read-only</span>
+        {presentation.roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = presentation.roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{presentation.roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
+        <span className="context-toolbar-spacer" />
+        <button type="button" onClick={refresh} aria-label="Refresh Context files">Refresh</button>
+        <button type="button" onClick={onTerminalView}>Show terminal</button>
+      </header>
+      {presentation.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{presentation.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
+      <div className="context-body">
+        <aside className="context-tree" aria-label="Context files">
+          <div className="context-tree-header">FILES <span>{root.label}</span></div>
+          {renderDirectory("", 0)}
+        </aside>
+        <main className="context-document">
+          {renderDocument()}
+        </main>
+      </div>
+    </section>
+  );
+}

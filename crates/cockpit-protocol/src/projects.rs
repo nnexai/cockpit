@@ -13,6 +13,10 @@ pub struct ProjectLimits {
     pub git_timeout_ms: u32,
     pub git_output_bytes: u32,
     pub operation_timeout_ms: u32,
+    pub context_preview_bytes: u32,
+    pub context_preview_lines: u32,
+    pub context_directory_entries: u32,
+    pub context_tree_depth: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -107,6 +111,8 @@ pub struct WorkspaceSetupPlan {
     pub base: Option<String>,
     pub checkout_path: String,
     pub companion_path: String,
+    pub companion_id: String,
+    pub companion_created_by_operation: bool,
     pub label: String,
     pub focus: bool,
     pub trust_repository: bool,

@@ -33,8 +33,8 @@ Define a closed renderer registry with two initial adapters:
 
 | Plugin / entrypoint | GUI replacement | Data authority |
 |---|---|---|
-| `herdr-file-viewer` / `file-viewer` | Context/file browser | Cockpit core bounded filesystem view and companion metadata |
-| `persiyanov.reviewr` / `pane` | Local review UI | Cockpit core Git review snapshot and comments |
+| `herdr-file-viewer` / `file-viewer` | Context/file browser, only at the verified companion browsing root | Cockpit core bounded filesystem view and companion metadata |
+| `persiyanov.reviewr` / `pane` | Local review UI, without a companion-directory restriction | Cockpit core Git review snapshot and comments |
 
 Detection returns `verified_launch`, `verified_process`, `candidate`, `none`, or `unsupported`, with a bounded reason. A pane title is only a cheap candidate filter. It never decides replacement by itself.
 
@@ -44,7 +44,7 @@ Implementation sequence:
 2. For a Cockpit plugin-open response, record its plugin/entrypoint and pane/terminal identity for the current Herdr connection epoch. Verify the returned pane in the next snapshot before rendering.
 3. For a pre-existing pane, call `pane.process_info`. Match a supported current foreground executable/argv against the installed entrypoint signature. Names or basenames alone remain ambiguous. Known supported entrypoint wrappers have explicit adapter signatures. For the installed Reviewr `sh -c` wrapper that ends with `exec "$HERDR_PLUGIN_ROOT/bin/herdr-reviewr"`, compare the resulting foreground executable path to `<plugin_root>/bin/herdr-reviewr`; do not build a general shell parser. Unrecognized wrapper scripts, missing argv, multiple matching foreground processes, or unresolvable paths produce a candidate rather than a guessed match.
 4. Bind detection to endpoint/session epoch, pane ID, terminal ID, and current process evidence. Recheck at attach/reconnect, relevant lifecycle events, and bounded intervals while a replacement is visible. A process replacement or incompatible evidence must not leave a different terminal application hidden behind an old GUI.
-5. Offer a local `Render as → Context / Review / Terminal` override for ambiguous candidates. It binds a presentation choice to the current pane/terminal and approved root, not to every pane with that name. Explicit conversion must not invent plugin provenance.
+5. Offer a local `Render as → Context / Review / Terminal` override bound to the current pane/terminal and approved root, not every pane with that name. Explicit conversion must not invent plugin provenance, and `Render as Context` cannot bypass companion-root verification.
 6. Missing process inspection disables automatic adoption of unknown panes, not the whole app. Known launch receipts and explicit user selection remain available. Do not add a helper handshake as a workaround.
 
 Process details are detection inputs, not authority to read arbitrary paths. Resolve every GUI root through the configured catalog/companion policy. Do not expose raw process argv/cmdline in ordinary UI, logs, or snapshots; arguments can contain secrets. The frontend receives renderer kind, confidence, and a redacted reason.
@@ -72,9 +72,9 @@ terminal -> detecting -> graphical
 
 Keep the last GUI with a local error while revalidating source state. If the backing pane/process identity changed or the user chooses terminal view, obtain a full current client-shell surface before mounting xterm. Never run both input paths at once. A GUI error does not close the pane. If Herdr actually closes it, remove the view and retain unsent GUI drafts in recovery storage.
 
-When its manifest/capability is available, launch “Open Context” through the installed file-viewer plugin pane entrypoint with split placement and companion cwd. Launch “Open Review” through the installed Reviewr pane entrypoint with the primary worktree cwd. Both operations run through the schema-gated Herdr adapter and capture the plugin-open response. GUI availability does not require changing either extension. Missing/disabled plugins get a clear capability result and setup instructions; do not silently install plugins or register automatic hooks.
+When its manifest/capability is available, launch “Open Context” through the installed file-viewer plugin pane entrypoint with split placement. Stock Herdr owns protected launch context and plugin process cwd, so this requires a source pane already at its verified companion directory; otherwise the action is unavailable with a reason. Launch “Open Review” through the installed Reviewr pane entrypoint with the primary worktree context. Both operations use the schema-gated Herdr adapter and capture the plugin-open response. Neither requires extension changes. Missing/disabled plugins get a clear capability result and setup instructions; do not silently install plugins or register automatic hooks.
 
-For ordinary file-viewer panes launched in a repository cwd, the GUI can show that authorized repository root. Add a Context root selector only when the Space has a verified companion. Do not assume every file-viewer pane points at the companion, and do not infer the TUI's currently selected file by scraping output.
+Replace a file-viewer pane only when its proven browsing root is exactly its verified context companion directory. Repository-root viewers, viewers merely sharing a workspace with a companion, and unknown-root viewers stay terminals. Eligible Context viewers may also browse their authorized repository through a root selector. Verified Reviewr panes always select Review, regardless of directory. Do not infer either TUI's private selection by scraping output.
 
 ### Focus and dimensions
 

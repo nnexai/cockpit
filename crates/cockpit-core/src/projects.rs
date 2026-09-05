@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
+use cockpit_protocol::context::{ContextRoot, ContextRootKind};
 use cockpit_protocol::projects::{
     ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse,
     WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationState, WorkspaceOperationStep,
@@ -12,6 +13,7 @@ use cockpit_protocol::projects::{
     WorkspaceSetupPlan, WorkspaceSetupRequest,
 };
 use cockpit_protocol::v1::ErrorResponse;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -93,7 +95,7 @@ impl ProjectService {
             .project_inventory(session, &repository.checkout_path)
             .await?;
         verify_inventory(&inventory, &repository)?;
-        let artifact = match request.artifact_url.as_deref() {
+        let mut artifact = match request.artifact_url.as_deref() {
             Some(url) => {
                 let artifact = repositories::resolve_artifact(&self.configuration, url)?;
                 if artifact.canonical_url.contains('@') {
@@ -185,8 +187,49 @@ impl ProjectService {
                 None => None,
             }
         };
+        let (companion_id, companion_created_by_operation) =
+            if request.mode == WorkspaceSetupMode::Open {
+                let matches = self
+                    .store
+                    .list_companions(&self.configuration.companion_root)?
+                    .into_iter()
+                    .filter(|(_, manifest)| {
+                        manifest.repository_key == repository.common_dir
+                            && manifest.repository_root == repository.root
+                            && manifest.checkout_path == checkout_path
+                    })
+                    .collect::<Vec<_>>();
+                match matches.as_slice() {
+                    [] => (operation_id.clone(), true),
+                    [(id, manifest)]
+                        if manifest.ownership == "cockpit"
+                            && artifact.as_ref().map_or(true, |requested| {
+                                Some(requested) == manifest.artifact.as_ref()
+                            }) =>
+                    {
+                        if artifact.is_none() {
+                            artifact = manifest.artifact.clone();
+                        }
+                        (id.clone(), false)
+                    }
+                    [(_, _)] => {
+                        return Err(InspectionError::new(
+                            "association_conflict",
+                            "existing checkout companion metadata differs from the reviewed plan",
+                        ));
+                    }
+                    _ => {
+                        return Err(InspectionError::new(
+                            "association_conflict",
+                            "multiple companions are associated with the exact checkout",
+                        ));
+                    }
+                }
+            } else {
+                (operation_id.clone(), true)
+            };
         let companion_path = bounded_path(
-            &operation_id,
+            &companion_id,
             Path::new(&self.configuration.companion_root),
             "companion_path",
         )?;
@@ -213,6 +256,12 @@ impl ProjectService {
         if request.mode == WorkspaceSetupMode::Open {
             effects
                 .push("Borrow existing checkout; Cockpit will not claim or delete it".to_owned());
+            if !companion_created_by_operation {
+                effects.push(
+                    "Borrow existing companion; preserve its creation ownership and user files"
+                        .to_owned(),
+                );
+            }
         }
         if artifact.is_some() {
             effects.push("Record the selected artifact in the companion manifest".to_owned());
@@ -228,6 +277,8 @@ impl ProjectService {
             base,
             checkout_path,
             companion_path,
+            companion_id,
+            companion_created_by_operation,
             label,
             focus: request.focus,
             trust_repository: request.trust_repository,
@@ -313,6 +364,113 @@ impl ProjectService {
         }
         Ok(operation)
     }
+    /// Return companions whose durable metadata is still authorized by the
+    /// current Herdr endpoint and a fresh worktree inventory. Paths supplied by
+    /// callers are never used as authorization.
+    pub async fn context_companions(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+        endpoint_identity: &str,
+    ) -> Result<Vec<ContextRoot>, InspectionError> {
+        validate_identity(workspace_id, "workspace_id")?;
+        validate_session(session_id)?;
+        validate_text(endpoint_identity, "endpoint_identity", 4096)?;
+
+        let operations = self.store.list()?;
+        let manifests = self
+            .store
+            .list_companions(&self.configuration.companion_root)?;
+        let mut roots = Vec::new();
+        let mut seen_checkouts = HashSet::new();
+        for (companion_id, manifest) in manifests {
+            if manifest.herdr_session_identity != endpoint_identity
+                || manifest.herdr_workspace_id != workspace_id
+            {
+                continue;
+            }
+            if manifest.ownership != "cockpit" {
+                return Err(InspectionError::new(
+                    "association_conflict",
+                    "matching companion is not Cockpit-owned",
+                ));
+            }
+            let operation = operations
+                .iter()
+                .find(|operation| operation.operation_id == manifest.cockpit_operation_id)
+                .ok_or_else(|| {
+                    InspectionError::new(
+                        "association_conflict",
+                        "companion creator operation is missing",
+                    )
+                })?;
+            if operation.companion_id.as_deref() != Some(companion_id.as_str())
+                || !operation
+                    .owned_resources
+                    .iter()
+                    .any(|resource| resource.kind == "companion" && resource.created_by_operation)
+                || operation.plan.companion_id != companion_id
+                || operation.plan.repository.common_dir != manifest.repository_key
+                || operation.plan.repository.root != manifest.repository_root
+                || operation.plan.checkout_path != manifest.checkout_path
+            {
+                return Err(InspectionError::new(
+                    "association_conflict",
+                    "companion creator provenance differs",
+                ));
+            }
+            if !seen_checkouts.insert(manifest.checkout_path.clone()) {
+                return Err(InspectionError::new(
+                    "association_conflict",
+                    "multiple companions are associated with the exact checkout",
+                ));
+            }
+            let inventory = self
+                .adapter
+                .project_inventory(session_id, &manifest.checkout_path)
+                .await?;
+            if inventory.endpoint_identity != endpoint_identity
+                || inventory.repository_key != manifest.repository_key
+                || inventory.repository_root != manifest.repository_root
+            {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "companion provenance is not confirmed by the current Herdr endpoint",
+                ));
+            }
+            let matches = inventory
+                .worktrees
+                .iter()
+                .filter(|entry| {
+                    entry.checkout_path == manifest.checkout_path
+                        && entry.open_workspace_id.as_deref() == Some(workspace_id)
+                })
+                .count();
+            if matches != 1 {
+                return Err(InspectionError::new(
+                    "association_conflict",
+                    "fresh inventory did not prove exactly one companion worktree",
+                ));
+            }
+            let companion_path = Path::new(&self.configuration.companion_root).join(&companion_id);
+            let root_id =
+                stable_companion_root_id(&companion_path.to_string_lossy(), &companion_id)?;
+            roots.push(ContextRoot {
+                root_id,
+                kind: ContextRootKind::Companion,
+                label: format!("{} context", operation.plan.repository.name),
+                path: Path::new(&self.configuration.companion_root)
+                    .join(&companion_id)
+                    .to_string_lossy()
+                    .into_owned(),
+                repository_id: operation.plan.repository.repository_id.clone(),
+                checkout_path: manifest.checkout_path.clone(),
+                companion_id: Some(companion_id),
+            });
+        }
+        roots.sort_by(|left, right| left.root_id.cmp(&right.root_id));
+        Ok(roots)
+    }
 
     pub async fn resume(
         self: &Arc<Self>,
@@ -397,7 +555,7 @@ impl ProjectService {
     ) -> Result<WorkspaceOperation, InspectionError> {
         validate_session(session)?;
         validate_reconcile_request(session, request)?;
-        let operation = self.store.load(&request.operation_id)?;
+        let mut operation = self.store.load(&request.operation_id)?;
         if operation.session_id != session || operation.generation != request.expected_generation {
             return Err(InspectionError::new(
                 "stale_identity",
@@ -440,28 +598,73 @@ impl ProjectService {
                         "Herdr endpoint identity changed while reconciling",
                     ));
                 }
-                let entry = inventory
+                let entries = inventory
                     .worktrees
                     .iter()
-                    .find(|entry| entry.checkout_path == operation.plan.checkout_path)
-                    .ok_or_else(|| {
-                        InspectionError::new(
-                            "worktree_not_found",
-                            "fresh inventory did not prove the existing checkout",
-                        )
-                    })?;
+                    .filter(|entry| entry.checkout_path == operation.plan.checkout_path)
+                    .collect::<Vec<_>>();
+                if entries.len() != 1 {
+                    return Err(InspectionError::new(
+                        "workspace_conflict",
+                        "fresh inventory did not prove exactly one existing checkout",
+                    ));
+                }
+                let entry = entries[0];
                 if operation.plan.branch.is_some() && entry.branch != operation.plan.branch {
                     return Err(InspectionError::new(
                         "workspace_conflict",
                         "existing checkout branch differs from reviewed plan",
                     ));
                 }
-                let workspace_id = entry.open_workspace_id.clone().ok_or_else(|| {
-                    InspectionError::new(
-                        "needs_review",
-                        "existing checkout has no authoritative workspace identity",
-                    )
-                })?;
+                let workspace_id = if let Some(workspace_id) = entry.open_workspace_id.clone() {
+                    workspace_id
+                } else {
+                    // The checkout is known, but no workspace is open. Recovery
+                    // is an explicit Open dispatch; never redispatch Create.
+                    operation = self.mark_dispatch(
+                        &operation.operation_id,
+                        WorkspaceOperationStep::HerdrRequested,
+                    )?;
+                    if operation.state == WorkspaceOperationState::Cancelled {
+                        return Err(InspectionError::new("cancelled", "operation was cancelled"));
+                    }
+                    let opened = self
+                        .adapter
+                        .project_worktree(
+                            session,
+                            &ProjectWorktreeRequest {
+                                endpoint_identity: operation.plan.endpoint_identity.clone(),
+                                mode: WorkspaceSetupMode::Open,
+                                source_cwd: operation.plan.repository.checkout_path.clone(),
+                                branch: None,
+                                base: None,
+                                checkout_path: operation.plan.checkout_path.clone(),
+                                label: operation.plan.label.clone(),
+                                focus: operation.plan.focus,
+                                trust_repository: operation.plan.trust_repository,
+                            },
+                        )
+                        .await?;
+                    verify_worktree_result(&opened, &operation.plan)?;
+                    let reopened = self
+                        .adapter
+                        .project_inventory(session, &operation.plan.repository.checkout_path)
+                        .await?;
+                    verify_inventory(&reopened, &operation.plan.repository)?;
+                    if reopened.endpoint_identity != operation.plan.endpoint_identity
+                        || !reopened.worktrees.iter().any(|candidate| {
+                            candidate.checkout_path == operation.plan.checkout_path
+                                && candidate.open_workspace_id.as_deref()
+                                    == Some(opened.workspace_id.as_str())
+                        })
+                    {
+                        return Err(InspectionError::new(
+                            "workspace_conflict",
+                            "explicit Open did not prove the recovered workspace",
+                        ));
+                    }
+                    opened.workspace_id
+                };
                 self.store.update(
                     &operation.operation_id,
                     Some(operation.generation),
@@ -733,24 +936,54 @@ impl ProjectService {
                 "authoritative branch differs from reviewed plan",
             ));
         }
+        let companion_id = plan.companion_id.as_str();
         let companion = match self
             .store
-            .read_companion(&self.configuration.companion_root, id)
+            .read_companion(&self.configuration.companion_root, companion_id)
         {
             Ok(existing) => {
+                verify_manifest_identity(&existing, &plan, companion_id)?;
+                let existing = if existing.herdr_session_identity == before.endpoint_identity
+                    && existing.herdr_workspace_id == result.workspace_id
+                {
+                    existing
+                } else if plan.mode == WorkspaceSetupMode::Open
+                    && !plan.companion_created_by_operation
+                {
+                    let reattached = CompanionManifest {
+                        herdr_session_identity: before.endpoint_identity.clone(),
+                        herdr_workspace_id: result.workspace_id.clone(),
+                        updated_at: now(),
+                        ..existing
+                    };
+                    self.store
+                        .reattach_companion(&self.configuration.companion_root, &reattached)?;
+                    reattached
+                } else {
+                    return Err(InspectionError::new(
+                        "association_conflict",
+                        "existing companion is attached to a different Herdr workspace",
+                    ));
+                };
                 verify_manifest(
                     &existing,
                     &plan,
                     &result.workspace_id,
                     &before.endpoint_identity,
-                    id,
+                    companion_id,
                 )?;
-                PathBuf::from(&plan.companion_path)
+                Path::new(&self.configuration.companion_root).join(companion_id)
             }
             Err(error) if error.code == "companion_missing" => {
+                if !plan.companion_created_by_operation {
+                    return Err(InspectionError::new(
+                        "association_conflict",
+                        "borrowed companion disappeared during operation",
+                    ));
+                }
                 let manifest = CompanionManifest {
                     schema_version: 1,
-                    cockpit_operation_id: id.to_owned(),
+                    cockpit_operation_id: companion_id.to_owned(),
                     herdr_session_identity: before.endpoint_identity.clone(),
                     herdr_workspace_id: result.workspace_id.clone(),
                     repository_key: plan.repository.common_dir.clone(),
@@ -767,7 +1000,7 @@ impl ProjectService {
             Err(error) => return Err(error),
         };
         operation = self.store.update(id, None, |operation| {
-            operation.companion_id = Some(id.to_owned());
+            operation.companion_id = Some(companion_id.to_owned());
             if !operation
                 .owned_resources
                 .iter()
@@ -776,7 +1009,7 @@ impl ProjectService {
                 operation.owned_resources.push(WorkspaceOwnedResource {
                     kind: "companion".to_owned(),
                     path: companion.to_string_lossy().into_owned(),
-                    created_by_operation: true,
+                    created_by_operation: plan.companion_created_by_operation,
                 });
             }
             if !step_at_least(operation.step, WorkspaceOperationStep::CompanionReady) {
@@ -1134,17 +1367,13 @@ fn verify_worktree_result(
     }
     Ok(())
 }
-fn verify_manifest(
+fn verify_manifest_identity(
     manifest: &CompanionManifest,
     plan: &WorkspaceSetupPlan,
-    workspace_id: &str,
-    endpoint_identity: &str,
-    operation_id: &str,
+    companion_id: &str,
 ) -> Result<(), InspectionError> {
     if manifest.schema_version != 1
-        || manifest.cockpit_operation_id != operation_id
-        || manifest.herdr_session_identity != endpoint_identity
-        || manifest.herdr_workspace_id != workspace_id
+        || manifest.cockpit_operation_id != companion_id
         || manifest.repository_key != plan.repository.common_dir
         || manifest.repository_root != plan.repository.root
         || manifest.checkout_path != plan.checkout_path
@@ -1157,6 +1386,74 @@ fn verify_manifest(
         ));
     }
     Ok(())
+}
+
+fn verify_manifest(
+    manifest: &CompanionManifest,
+    plan: &WorkspaceSetupPlan,
+    workspace_id: &str,
+    endpoint_identity: &str,
+    companion_id: &str,
+) -> Result<(), InspectionError> {
+    verify_manifest_identity(manifest, plan, companion_id)?;
+    if manifest.herdr_session_identity != endpoint_identity
+        || manifest.herdr_workspace_id != workspace_id
+    {
+        return Err(InspectionError::new(
+            "association_conflict",
+            "existing companion endpoint/workspace differs",
+        ));
+    }
+    Ok(())
+}
+
+fn stable_companion_root_id(
+    root_path: &str,
+    companion_id: &str,
+) -> Result<String, InspectionError> {
+    let path = Path::new(root_path);
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        InspectionError::new(
+            "companion_unavailable",
+            format!("cannot inspect companion: {error}"),
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(InspectionError::new(
+            "unsafe_path",
+            "companion root identity is not a real directory",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(companion_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(root_path.as_bytes());
+    hasher.update([0]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hasher.update(metadata.dev().to_le_bytes());
+        hasher.update(metadata.ino().to_le_bytes());
+    }
+    #[cfg(not(unix))]
+    {
+        hasher.update(metadata.len().to_le_bytes());
+        hasher.update(
+            metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos().to_le_bytes().to_vec())
+                .unwrap_or_default(),
+        );
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    Ok(format!("companion-{encoded}"))
 }
 
 fn validate_setup_request(request: &WorkspaceSetupRequest) -> Result<(), InspectionError> {
@@ -1200,6 +1497,17 @@ fn validate_session(session: &str) -> Result<(), InspectionError> {
         return Err(InspectionError::new(
             "invalid_session",
             "invalid session identity",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_identity(value: &str, field: &str) -> Result<(), InspectionError> {
+    validate_text(value, field, 256)?;
+    if value.contains('/') || value.contains('\\') {
+        return Err(InspectionError::new(
+            "invalid_identity",
+            format!("{field} contains a path separator"),
         ));
     }
     Ok(())

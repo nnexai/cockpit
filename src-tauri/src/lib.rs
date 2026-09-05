@@ -1,4 +1,6 @@
+mod context;
 mod projects;
+mod requests;
 
 use std::{
     collections::HashMap,
@@ -786,14 +788,20 @@ pub fn run() {
     let project_config = cockpit_core::config::load_project_configuration(None, None)
         .expect("failed to load project configuration");
     let project_service =
-        cockpit_core::projects::ProjectService::new(project_config, inspector.clone())
+        cockpit_core::projects::ProjectService::new(project_config.clone(), inspector.clone())
             .expect("failed to initialize project operations");
     let service =
-        CockpitService::new(CockpitMode::Normal, inspector).with_projects(project_service);
+        CockpitService::new(CockpitMode::Normal, inspector.clone()).with_projects(project_service);
     let shutdown_projects = service
         .projects()
         .expect("project operations configured")
         .clone();
+    let contexts = cockpit_core::context::ContextService::new(
+        project_config,
+        inspector.extension_adapter(),
+        shutdown_projects.clone(),
+    );
+    let service = service.with_contexts(contexts);
 
     tauri::Builder::default()
         .manage(service)
@@ -815,6 +823,10 @@ pub fn run() {
             projects::cockpit_workspace_resume,
             projects::cockpit_workspace_cancel,
             projects::cockpit_workspace_reconcile,
+            context::cockpit_pane_presentation,
+            context::cockpit_context_directory,
+            context::cockpit_context_document,
+            context::cockpit_context_open,
             cockpit_status,
             cockpit_sessions,
             cockpit_session_snapshot,

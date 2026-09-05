@@ -1,0 +1,184 @@
+.context-viewer {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  background: var(--terminal-bg);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.context-toolbar {
+  display: flex;
+  height: 36px;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.context-breadcrumb,
+.context-document-header code,
+.context-tree-meta,
+.context-document-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-breadcrumb {
+  max-width: 42%;
+  font-weight: 600;
+}
+
+.context-readonly-badge {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.context-toolbar-spacer { flex: 1; }
+.context-toolbar button,
+.context-mode-switch button,
+.context-notice button {
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.context-toolbar button:hover,
+.context-mode-switch button:hover,
+.context-notice button:hover { background: var(--surface-hover); }
+.context-root-select select {
+  max-width: 180px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+.context-body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+}
+.context-tree {
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+.context-tree-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+.context-tree-header span { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, "IBM Plex Mono", monospace); font-weight: 400; letter-spacing: 0; }
+.context-tree-row {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 4px;
+  padding-top: 4px;
+  padding-right: 8px;
+  padding-bottom: 4px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.context-tree-row:hover { background: var(--surface-hover); }
+.context-tree-row.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
+.context-tree-row:disabled { cursor: default; opacity: 1; }
+.context-tree-disclosure { width: 12px; flex: 0 0 12px; color: var(--text-secondary); text-align: center; }
+.context-tree-icon { width: 14px; flex: 0 0 14px; color: var(--accent); text-align: center; }
+.context-tree-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-tree-meta { max-width: 45%; color: var(--text-muted); font-size: var(--font-size-2xs); }
+.context-tree-refusal { padding: 0 8px 4px 38px; color: var(--blocked); font-size: var(--font-size-2xs); line-height: 1.25; }
+.context-tree-status,
+.context-tree-diagnostics { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--working); font-size: var(--font-size-2xs); line-height: 1.3; }
+.context-tree-error { padding: 8px 12px; color: var(--text-secondary); }
+.context-tree-error { color: var(--blocked); }
+
+.context-document { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
+.context-document-header {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+}
+.context-document-header code { min-width: 0; flex: 1; color: var(--text-primary); font-family: "IBM Plex Mono", "Noto Sans Mono", monospace; }
+.context-state-warning { color: var(--warning, var(--working)); }
+.context-mode-switch { display: flex; gap: 4px; padding: 6px 12px 0; background: var(--terminal-bg); }
+.context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: 4px 4px 0 0; color: var(--text-secondary); }
+.context-mode-switch button.is-selected { border-color: var(--accent); background: var(--surface-selected); color: var(--text-primary); }
+.context-source-scroll,
+.context-markdown-scroll { min-height: 0; flex: 1; overflow: auto; }
+.context-source-lines { min-width: max-content; padding: 8px 0 24px; font-family: "IBM Plex Mono", "Noto Sans Mono", monospace; font-size: 13px; line-height: 19px; }
+.context-source-line { display: grid; width: 100%; min-height: 19px; grid-template-columns: 56px minmax(0, 1fr); padding: 0 16px 0 0; border: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.context-source-line:hover { background: var(--surface-hover); }
+.context-source-line.is-selected { background: var(--surface-selected); }
+.context-line-number { padding-right: 12px; color: var(--text-muted); text-align: right; user-select: none; }
+.context-line-text { white-space: pre; font: inherit; }
+.context-frontmatter { margin: 12px 32px 0; max-width: 88ch; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.context-frontmatter summary { padding: 6px 8px; color: var(--text-secondary); cursor: pointer; }
+.context-frontmatter .context-source-scroll { max-height: 220px; border-top: 1px solid var(--border); }
+.context-frontmatter .context-source-lines { padding-bottom: 8px; }
+.context-markdown-body { max-width: 88ch; padding: 16px 32px 40px; color: var(--text-primary); font-size: 14px; line-height: 22px; }
+.context-markdown-body h1,
+.context-markdown-body h2,
+.context-markdown-body h3,
+.context-markdown-body h4,
+.context-markdown-body h5,
+.context-markdown-body h6 { margin: 18px 0 8px; line-height: 1.25; }
+.context-markdown-body p,
+.context-markdown-body ul,
+.context-markdown-body ol,
+.context-markdown-body blockquote { margin: 8px 0; }
+.context-markdown-body blockquote { padding-left: 12px; border-left: 2px solid var(--border-strong); color: var(--text-secondary); }
+.context-markdown-body a { color: var(--accent); }
+.context-markdown-body pre { overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); font: 13px/19px "IBM Plex Mono", "Noto Sans Mono", monospace; }
+.context-markdown-body code { font-family: "IBM Plex Mono", "Noto Sans Mono", monospace; font-size: .93em; }
+.context-markdown-body :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre)[data-source-start] { cursor: pointer; }
+.context-markdown-body :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre)[data-source-start]:hover { background: color-mix(in srgb, var(--surface-hover) 70%, transparent); }
+.context-media-refusal { display: inline-block; padding: 2px 6px; border: 1px solid var(--border-strong); color: var(--text-secondary); font-family: "IBM Plex Mono", "Noto Sans Mono", monospace; font-size: 12px; }
+.context-empty { display: grid; min-height: 100%; place-items: center; padding: 24px; color: var(--text-secondary); }
+.context-notice { display: flex; min-height: 32px; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--font-size-sm); }
+.context-notice strong { flex: 0 0 auto; }
+.context-notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.context-notice-error { color: var(--blocked); }
+.context-notice-warning { color: var(--working); }
+.context-viewer-empty { align-items: center; justify-content: center; gap: 12px; padding: 24px; }
+.context-viewer-empty .context-notice { max-width: 560px; border: 1px solid var(--border); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }

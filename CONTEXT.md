@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: architecture reference. The current Herdr client is implemented; the next-level setup/context/review features are planned in `planning/next-level/README.md`, not yet implemented.
+Status: architecture reference. The Herdr client, reviewed worktree setup, companion association, and bounded graphical Context source/Markdown browsing are implemented. Media rendering, reference comments/paste, repository snapshots, source ingestion, and graphical review remain planned in `planning/next-level/README.md`. Verified delivery boundaries are recorded in `DECISIONS.md`.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 

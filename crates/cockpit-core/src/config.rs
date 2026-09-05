@@ -35,6 +35,10 @@ struct TomlLimits {
     git_timeout_ms: Option<u32>,
     git_output_bytes: Option<u32>,
     operation_timeout_ms: Option<u32>,
+    context_preview_bytes: Option<u32>,
+    context_preview_lines: Option<u32>,
+    context_directory_entries: Option<u32>,
+    context_tree_depth: Option<u32>,
 }
 
 /// Load the effective project policy. Explicit arguments override environment,
@@ -182,6 +186,22 @@ pub fn load_project_configuration(
             "operation_timeout_ms",
             limits_file.operation_timeout_ms.is_some(),
         ),
+        (
+            "context_preview_bytes",
+            limits_file.context_preview_bytes.is_some(),
+        ),
+        (
+            "context_preview_lines",
+            limits_file.context_preview_lines.is_some(),
+        ),
+        (
+            "context_directory_entries",
+            limits_file.context_directory_entries.is_some(),
+        ),
+        (
+            "context_tree_depth",
+            limits_file.context_tree_depth.is_some(),
+        ),
     ];
     let limits = ProjectLimits {
         catalog_depth: bounded_limit(
@@ -213,6 +233,30 @@ pub fn load_project_configuration(
             1,
             600_000,
             "operation_timeout_ms",
+        )?,
+        context_preview_bytes: bounded_limit(
+            limits_file.context_preview_bytes.unwrap_or(1024 * 1024),
+            1024,
+            8 * 1024 * 1024,
+            "context_preview_bytes",
+        )?,
+        context_preview_lines: bounded_limit(
+            limits_file.context_preview_lines.unwrap_or(5000),
+            1,
+            20_000,
+            "context_preview_lines",
+        )?,
+        context_directory_entries: bounded_limit(
+            limits_file.context_directory_entries.unwrap_or(1000),
+            1,
+            10_000,
+            "context_directory_entries",
+        )?,
+        context_tree_depth: bounded_limit(
+            limits_file.context_tree_depth.unwrap_or(32),
+            1,
+            64,
+            "context_tree_depth",
         )?,
     };
     for (field, from_file) in limits_origins {

@@ -1433,6 +1433,35 @@ summary:focus-visible {
   padding: 0;
 }
 
+.graphical-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-presentation-error {
+  position: absolute;
+  z-index: 5;
+  right: 6px;
+  bottom: 6px;
+  left: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.pane-presentation-error span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
 .terminal-host {
   padding: 5px 7px;
 }

@@ -26,6 +26,7 @@ use cockpit_protocol::v1::{
 };
 use futures_util::future::join_all;
 use serde_json::{Value, json};
+mod extensions;
 mod projects;
 
 use crate::schema::{schema_fields, status_fields};
@@ -281,12 +282,12 @@ fn request_is_mutating(method: &str) -> bool {
             | "workspace.rename"
             | "workspace.move_block"
             | "workspace.close"
-            | "worktree.create"
-            | "worktree.open"
+            | "workspace.focus"
             | "tab.create"
             | "tab.rename"
             | "tab.move"
             | "tab.close"
+            | "tab.focus"
             | "pane.split"
             | "pane.resize"
             | "pane.rename"
@@ -294,10 +295,9 @@ fn request_is_mutating(method: &str) -> bool {
             | "pane.move"
             | "pane.zoom"
             | "pane.close"
-            | "workspace.focus"
-            | "tab.focus"
             | "pane.focus"
             | "agent.focus"
+            | "plugin.pane.open"
     )
 }
 
@@ -961,6 +961,15 @@ impl HerdrCliAdapter {
 
     pub fn config(&self) -> &HerdrCliConfig {
         &self.config
+    }
+
+    /// Construct the extension-pane adapter on the same endpoint configuration.
+    ///
+    /// The returned adapter shares this CLI adapter's endpoint selection and
+    /// bounded request machinery, while keeping extension manifests and launch
+    /// receipts in its own bounded cache.
+    pub fn extension_adapter(&self) -> Arc<dyn cockpit_core::ExtensionHerdrAdapter> {
+        Arc::new(extensions::ExtensionHerdrAdapter::new(self.clone()))
     }
 
     fn command(&self, session: Option<&str>, args: &[&str]) -> Command {

@@ -1,5 +1,3 @@
-use std::io::{self, Write};
-
 use cockpit_core::CockpitService;
 use cockpit_protocol::{
     projects::{
@@ -9,42 +7,10 @@ use cockpit_protocol::{
     },
     v1::ErrorResponse,
 };
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tauri::State;
 
-use super::{MAX_MUTATION_REQUEST_BYTES, inspection_error_response, stream_error};
-
-struct RequestBudget(usize);
-
-impl Write for RequestBudget {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 = self
-            .0
-            .checked_sub(bytes.len())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "request limit exceeded"))?;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn decode_request<T: DeserializeOwned>(value: Value) -> Result<T, ErrorResponse> {
-    serde_json::to_writer(RequestBudget(MAX_MUTATION_REQUEST_BYTES), &value).map_err(|_| {
-        stream_error(
-            "invalid_project_request",
-            "Expected a bounded JSON project request with valid fields",
-        )
-    })?;
-    serde_json::from_value(value).map_err(|_| {
-        stream_error(
-            "invalid_project_request",
-            "Expected a bounded JSON project request with valid fields",
-        )
-    })
-}
+use super::{inspection_error_response, requests::decode_request};
 
 #[tauri::command]
 pub async fn cockpit_project_configuration(
@@ -74,7 +40,7 @@ pub async fn cockpit_workspace_plan(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<WorkspaceSetupPlan, ErrorResponse> {
-    let request: WorkspaceSetupRequest = decode_request(request)?;
+    let request: WorkspaceSetupRequest = decode_request(request, "project")?;
     service
         .projects()
         .map_err(inspection_error_response)?
@@ -89,7 +55,7 @@ pub async fn cockpit_workspace_start(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<WorkspaceOperation, ErrorResponse> {
-    let request: WorkspaceOperationRequest = decode_request(request)?;
+    let request: WorkspaceOperationRequest = decode_request(request, "project")?;
     service
         .projects()
         .map_err(inspection_error_response)?
@@ -118,7 +84,7 @@ pub async fn cockpit_workspace_resume(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<WorkspaceOperation, ErrorResponse> {
-    let request: WorkspaceOperationRequest = decode_request(request)?;
+    let request: WorkspaceOperationRequest = decode_request(request, "project")?;
     service
         .projects()
         .map_err(inspection_error_response)?
@@ -133,7 +99,7 @@ pub async fn cockpit_workspace_cancel(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<WorkspaceOperation, ErrorResponse> {
-    let request: WorkspaceOperationRequest = decode_request(request)?;
+    let request: WorkspaceOperationRequest = decode_request(request, "project")?;
     service
         .projects()
         .map_err(inspection_error_response)?
@@ -148,7 +114,7 @@ pub async fn cockpit_workspace_reconcile(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<WorkspaceOperation, ErrorResponse> {
-    let request: WorkspaceReconcileRequest = decode_request(request)?;
+    let request: WorkspaceReconcileRequest = decode_request(request, "project")?;
     service
         .projects()
         .map_err(inspection_error_response)?

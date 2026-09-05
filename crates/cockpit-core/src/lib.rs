@@ -1,10 +1,13 @@
 pub mod config;
+pub mod context;
+pub mod extension_adapter;
 pub mod process;
 pub mod project_adapter;
 mod project_store;
 pub mod projects;
 pub mod repositories;
 
+pub use extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 pub use project_adapter::ProjectHerdrAdapter;
 
 use std::collections::{HashMap, HashSet};
@@ -109,6 +112,7 @@ pub struct CockpitService {
     adapter: Arc<dyn HerdrAdapter>,
     compatibility: Arc<RwLock<CompatibilityCache>>,
     projects: Option<Arc<projects::ProjectService>>,
+    contexts: Option<Arc<context::ContextService>>,
 }
 
 #[derive(Default)]
@@ -168,6 +172,7 @@ impl CockpitService {
             adapter,
             compatibility: Arc::new(RwLock::new(CompatibilityCache::default())),
             projects: None,
+            contexts: None,
         }
     }
 
@@ -181,6 +186,20 @@ impl CockpitService {
             InspectionError::new(
                 "project_configuration_unavailable",
                 "Project operations are not configured in this host",
+            )
+        })
+    }
+
+    pub fn with_contexts(mut self, contexts: context::ContextService) -> Self {
+        self.contexts = Some(Arc::new(contexts));
+        self
+    }
+
+    pub fn contexts(&self) -> Result<&Arc<context::ContextService>, InspectionError> {
+        self.contexts.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "context_configuration_unavailable",
+                "Context operations are not configured in this host",
             )
         })
     }

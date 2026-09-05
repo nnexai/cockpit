@@ -14,7 +14,7 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
     http::{
-        HeaderMap, Request, StatusCode, Uri,
+        HeaderMap, Method, Request, StatusCode, Uri,
         header::{HOST, ORIGIN},
     },
     middleware::{self, Next},
@@ -36,7 +36,19 @@ use tokio::net::TcpListener;
 use tower_http::services::{ServeDir, ServeFile};
 const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 
+mod context;
 mod projects;
+
+// The enclosing guard verifies the exact bound Host and Origin.
+async fn require_origin(request: Request<Body>, next: Next) -> Response {
+    if request.method() != Method::GET && !request.headers().contains_key(ORIGIN) {
+        return bad_request(
+            "request_origin_required",
+            "Filesystem requests require the gateway Origin",
+        );
+    }
+    next.run(request).await
+}
 
 /// Configuration for the foreground HTTP gateway.
 #[derive(Clone)]
@@ -160,6 +172,7 @@ fn build_router_with_validated_root(
             get(terminal_ws),
         )
         .merge(projects::routes())
+        .merge(context::routes())
         // Keep API resolution ahead of the static service. This prevents a static file
         // named api/... from changing the API's 404 contract.
         .route("/api", any(api_not_found))

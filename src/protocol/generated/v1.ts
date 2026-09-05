@@ -74,7 +74,7 @@ export type TerminalOwnershipState = "pending" | "observing" | "owned" | "confli
 
 export type TerminalStreamMessage = { "type": "ownership", session_id: string, pane_id: string, stream_id: string, state: TerminalOwnershipState, message: string | null, } | { "type": "frame", session_id: string, pane_id: string, stream_id: string, seq: string, encoding: string, width: number, height: number, full: boolean, bytes: string, } | { "type": "closed", session_id: string, pane_id: string, stream_id: string, reason: string, } | { "type": "disconnected", session_id: string, pane_id: string, stream_id: string, code: string, message: string, } | { "type": "error", session_id: string, pane_id: string, stream_id: string, code: string, message: string, };
 
-export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, };
+export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, context_preview_bytes: number, context_preview_lines: number, context_directory_entries: number, context_tree_depth: number, };
 
 export type ProjectProvider = { id: string, base_url: string, executable: string, };
 
@@ -92,7 +92,7 @@ export type WorkspaceSetupRequest = { repository_id: string, mode: WorkspaceSetu
 
 export type ProjectArtifact = { provider_id: string, kind: string, canonical_id: string, original_url: string, canonical_url: string, };
 
-export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate, mode: WorkspaceSetupMode, branch: string | null, base: string | null, checkout_path: string, companion_path: string, label: string, focus: boolean, trust_repository: boolean, artifact: ProjectArtifact | null, effects: Array<string>, warnings: Array<string>, };
+export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate, mode: WorkspaceSetupMode, branch: string | null, base: string | null, checkout_path: string, companion_path: string, companion_id: string, companion_created_by_operation: boolean, label: string, focus: boolean, trust_repository: boolean, artifact: ProjectArtifact | null, effects: Array<string>, warnings: Array<string>, };
 
 export type WorkspaceOperationRequest = { operation_id: string, expected_generation: number, };
 
@@ -107,3 +107,33 @@ export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested"
 export type WorkspaceOwnedResource = { kind: string, path: string, created_by_operation: boolean, };
 
 export type WorkspaceOperation = { operation_id: string, generation: number, sequence: number, session_id: string, plan: WorkspaceSetupPlan, state: WorkspaceOperationState, step: WorkspaceOperationStep, workspace_id: string | null, tab_id: string | null, pane_id: string | null, companion_id: string | null, owned_resources: Array<WorkspaceOwnedResource>, error: ErrorResponse | null, resume_allowed: boolean, cancel_requested: boolean, updated_at: string, };
+
+export type ExtensionKind = "context" | "review";
+
+export type DetectionConfidence = "verified_launch" | "verified_process" | "candidate" | "none" | "unsupported";
+
+export type ContextRootKind = "repository" | "companion";
+
+export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, companion_id: string | null, };
+
+export type PanePresentation = { session_id: string, pane_id: string, terminal_id: string, binding_id: string, extension: ExtensionKind | null, 
+/**
+ * Eligible automatic replacement, distinct from detected extension identity.
+ */
+renderer: ExtensionKind | null, confidence: DetectionConfidence, reason: string, roots: Array<ContextRoot>, default_root_id: string | null, can_open_context: boolean, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, };
+
+export type ContextEntryKind = "directory" | "file" | "symlink" | "other";
+
+export type ContextEntry = { entry_id: string, name: string, path: string | null, kind: ContextEntryKind, bytes: number | null, revision: string, refusal: string | null, };
+
+export type ContextDirectory = { binding_id: string, root_id: string, path: string, entries: Array<ContextEntry>, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ContextDocumentRequest = { binding_id: string, root_id: string, path: string, expected_revision: string | null, };
+
+export type ContextDocument = { binding_id: string, root_id: string, path: string, revision: string, content_hash: string | null, bytes: number, media_type: string, text: string | null, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
+
+export type ContextSplitDirection = "right" | "down";
+
+export type ContextLaunchRequest = { pane_id: string, binding_id: string, root_id: string, direction: ContextSplitDirection, };

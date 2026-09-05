@@ -36,6 +36,8 @@ export function parseProjectConfiguration(value: unknown): ProjectConfiguration 
     || !text(value.branch_template) || !text(value.checkout_template)
     || !record(value.limits) || !u32(value.limits.catalog_depth) || !u32(value.limits.catalog_entries)
     || !u32(value.limits.git_timeout_ms) || !u32(value.limits.git_output_bytes) || !u32(value.limits.operation_timeout_ms)
+    || !u32(value.limits.context_preview_bytes) || !u32(value.limits.context_preview_lines)
+    || !u32(value.limits.context_directory_entries) || !u32(value.limits.context_tree_depth)
     || !record(value.origins) || !Object.values(value.origins).every(text)
     || !Array.isArray(value.providers) || !value.providers.every((provider) => record(provider)
       && text(provider.id) && text(provider.base_url) && text(provider.executable))) {
@@ -82,6 +84,7 @@ export function parseWorkspaceSetupPlan(value: unknown): WorkspaceSetupPlan {
     || !text(value.endpoint_identity) || value.endpoint_identity.length === 0
     || !isRepository(value.repository) || !mode(value.mode) || !nullableText(value.branch) || !nullableText(value.base)
     || !text(value.checkout_path) || !text(value.companion_path) || !text(value.label)
+    || !text(value.companion_id) || value.companion_id.length === 0 || !bool(value.companion_created_by_operation)
     || !bool(value.focus) || !bool(value.trust_repository)
     || !(value.artifact === null || isArtifact(value.artifact)) || !texts(value.effects) || !texts(value.warnings)) {
     malformed("workspace setup plan");
@@ -103,7 +106,8 @@ export function parseWorkspaceOperation(value: unknown): WorkspaceOperation {
     malformed("workspace operation");
   }
   const plan = parseWorkspaceSetupPlan(value.plan);
-  if (plan.operation_id !== value.operation_id || plan.session_id !== value.session_id) {
+  if (plan.operation_id !== value.operation_id || plan.session_id !== value.session_id
+    || (value.companion_id !== null && value.companion_id !== plan.companion_id)) {
     malformed("workspace operation identity");
   }
   return value as unknown as WorkspaceOperation;

@@ -96,9 +96,20 @@ fn make_service(
     let adapter = Arc::new(HerdrCliAdapter::new(config));
     let service = CockpitService::new(mode, adapter.clone());
     match projects {
-        Some(config) => Ok(service.with_projects(
-            ProjectService::new(config, adapter).map_err(|error| error.to_string())?,
-        )),
+        Some(config) => {
+            let projects = ProjectService::new(config.clone(), adapter.clone())
+                .map_err(|error| error.to_string())?;
+            let service = service.with_projects(projects);
+            let contexts = cockpit_core::context::ContextService::new(
+                config,
+                adapter.extension_adapter(),
+                service
+                    .projects()
+                    .map_err(|error| error.to_string())?
+                    .clone(),
+            );
+            Ok(service.with_contexts(contexts))
+        }
         None => Ok(service),
     }
 }

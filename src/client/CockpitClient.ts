@@ -30,6 +30,12 @@ import type {
   WorkspaceOperationRequest,
   WorkspaceReconcileRequest,
   WorkspaceOperation,
+  PanePresentation,
+  ContextDirectoryRequest,
+  ContextDirectory,
+  ContextDocumentRequest,
+  ContextDocument,
+  ContextLaunchRequest,
 } from "../protocol/generated/v1";
 
 export type CockpitStatus = StatusResponse;
@@ -77,6 +83,10 @@ export interface CockpitClient {
   resumeWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
   cancelWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;
   reconcileWorkspace(sessionId: string, request: WorkspaceReconcileRequest): Promise<WorkspaceOperation>;
+  inspectPane(sessionId: string, paneId: string, signal?: AbortSignal): Promise<PanePresentation>;
+  contextDirectory(sessionId: string, paneId: string, request: ContextDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
+  contextDocument(sessionId: string, paneId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
+  openContext(sessionId: string, request: ContextLaunchRequest): Promise<PanePresentation>;
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string): Promise<CockpitSessionSnapshot>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;

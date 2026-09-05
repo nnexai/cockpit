@@ -19,6 +19,8 @@ use crate::InspectionError;
 
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 const MAX_RECORD_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_COMPANION_ENTRIES: usize = 1024;
+const MAX_OPERATION_ENTRIES: usize = 4096;
 
 /// The durable association written next to a Cockpit-owned companion.
 ///
@@ -175,7 +177,15 @@ impl ProjectStore {
     pub fn list(&self) -> Result<Vec<WorkspaceOperation>, InspectionError> {
         let mut result = Vec::new();
         let entries = self.root_dir.entries().map_err(io_error("state_read"))?;
+        let mut entries_seen = 0usize;
         for entry in entries {
+            entries_seen = entries_seen.saturating_add(1);
+            if entries_seen > MAX_OPERATION_ENTRIES {
+                return Err(InspectionError::new(
+                    "state_lookup_bounded",
+                    "operation lookup exceeded its bounded entry limit",
+                ));
+            }
             let entry = entry.map_err(io_error("state_read"))?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
@@ -292,6 +302,120 @@ impl ProjectStore {
             )),
             Err(error) => Err(map_io(error, "companion_read")),
         }
+    }
+    /// Enumerate bounded companion manifests without following any path
+    /// component. Non-companion entries (including staging files) are ignored;
+    /// a malformed manifest is an explicit association failure.
+    pub fn list_companions(
+        &self,
+        companion_root: impl AsRef<Path>,
+    ) -> Result<Vec<(String, CompanionManifest)>, InspectionError> {
+        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
+        let mut companions = Vec::new();
+        let entries = root.entries().map_err(io_error("companion_read"))?;
+        let mut entries_seen = 0usize;
+        for entry in entries {
+            entries_seen = entries_seen.saturating_add(1);
+            if entries_seen > MAX_COMPANION_ENTRIES {
+                return Err(InspectionError::new(
+                    "companion_lookup_bounded",
+                    "companion lookup exceeded its bounded entry limit",
+                ));
+            }
+            let entry = entry.map_err(io_error("companion_read"))?;
+            let file_type = entry.file_type().map_err(io_error("companion_read"))?;
+            if file_type.is_symlink() {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "companion directory is a symlink",
+                ));
+            }
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(id) = name.to_str() else {
+                continue;
+            };
+            if Uuid::parse_str(id).is_err() {
+                continue;
+            }
+            let child = root
+                .open_dir_nofollow(id)
+                .map_err(io_error("companion_read"))?;
+            let Ok(metadata) = child.symlink_metadata("manifest.json") else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "companion manifest is not a regular file",
+                ));
+            }
+            let manifest: CompanionManifest = read_json(&child, "manifest.json")?;
+            if manifest.cockpit_operation_id != id {
+                return Err(InspectionError::new(
+                    "association_conflict",
+                    "companion directory and manifest identities differ",
+                ));
+            }
+            companions.push((id.to_owned(), manifest));
+        }
+        companions.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(companions)
+    }
+
+    /// Replace only the association metadata for an existing companion.
+    /// Generated and user files remain untouched. The creator operation identity
+    /// and repository provenance are immutable; endpoint/workspace changes are
+    /// allowed only through an explicit reattachment flow.
+    pub fn reattach_companion(
+        &self,
+        companion_root: impl AsRef<Path>,
+        manifest: &CompanionManifest,
+    ) -> Result<PathBuf, InspectionError> {
+        validate_operation_id(&manifest.cockpit_operation_id)?;
+        validate_resource_id(&manifest.herdr_workspace_id, "workspace")?;
+        if manifest.ownership != "cockpit" {
+            return Err(InspectionError::new(
+                "invalid_ownership",
+                "companion ownership must be cockpit",
+            ));
+        }
+        let _lock = self.acquire_lock(&manifest.cockpit_operation_id)?;
+        let (_, root) = prepare_root(companion_root.as_ref(), "companion")?;
+        let id = manifest.cockpit_operation_id.as_str();
+        let child = root.open_dir_nofollow(id).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                InspectionError::new("companion_missing", "companion directory does not exist")
+            } else {
+                map_io(error, "companion_read")
+            }
+        })?;
+        let existing: CompanionManifest = read_json(&child, "manifest.json")?;
+        if existing.cockpit_operation_id != manifest.cockpit_operation_id
+            || existing.repository_key != manifest.repository_key
+            || existing.repository_root != manifest.repository_root
+            || existing.checkout_path != manifest.checkout_path
+            || existing.artifact != manifest.artifact
+            || existing.ownership != "cockpit"
+        {
+            return Err(InspectionError::new(
+                "association_conflict",
+                "companion provenance cannot be replaced",
+            ));
+        }
+        atomic_write_json(&child, "manifest.json", manifest).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new(
+                    "unsafe_path",
+                    "companion manifest destination is not a regular file",
+                )
+            } else {
+                map_io(error, "companion_manifest")
+            }
+        })?;
+        Ok(companion_root.as_ref().to_path_buf().join(id))
     }
 
     fn acquire_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
@@ -723,6 +847,8 @@ mod tests {
             base: Some("main".to_owned()),
             checkout_path: "/work/task".to_owned(),
             companion_path: "/companion/id".to_owned(),
+            companion_id: id.to_owned(),
+            companion_created_by_operation: true,
             label: "Task".to_owned(),
             focus: false,
             trust_repository: false,
