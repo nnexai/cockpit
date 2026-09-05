@@ -1,4 +1,4 @@
-# Selected feature implementation complete
+# Continuation closure — 2026-09-05
 
 Integration commits: `a1fb90c` (Context comments/paste/search/snapshots/cleanup) and `559a72d` (Review, sources/hydration, safe media, repair/extraction/quality tooling).
 
@@ -10,4 +10,10 @@ Excluded/blocked: expanded terminal matrix, stock application mouse/dependent ba
 
 No selected unblocked feature is queued. No live installation, default-session automation, manual gateway4173 changes, push, tag or publication occurred in this continuation. All26 owned verification processes stopped; fixtures and146 evidence files remain. Live activation and excluded upstream/metric work are separate scope.
 
-[CONTINUATION.md](CONTINUATION.md) records retained resource locations. Earlier REFERENCE_HANDOFF.md/RETRO.md and goal/resource files retain historical evidence; state.json and this document are the current closure summary.
+Retained fixture: `/tmp/cc-hhnye1fm`. Authoritative ledger: `/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/continuation-20260905/resources.json`. Durable evidence index: same directory, `final-feature-acceptance/evidence-index.json`; cleanup.json records stopped process identities. The fixture used stock Herdr0.8.2, sessionck-cc-hhnye1fm, gateway54831, Chrome54832, provider54833 and Xvfb:196. Create fresh supported resources for later runtime work: this companion pins the stopped Herdr process.
+
+Runtime proof includes exact acknowledged Review paste, source recapture after side changes, edit/delete, real Reviewr TUI switching, unzoomed pane move and detached-batch reattachment, Mermaid physical-line mapping, safe native image/rendering, issue refresh/conflict, PR/wiki imports, bounded linked-source hydration and durable reports. The final build published a new source and cleared its durable intent; a zoomed move returned an actionable refusal.
+
+The agent fixture received4635rawbytes from two acknowledged comment batches, with no Enter or model action. Remaining unsent comments were retained and never resent during cleanup. The fake provider login remains only in the run-owned config.
+
+Pre-existing historical REFERENCE_HANDOFF.md, RETRO.md, goals/G02.json and resources.json were preserved outside the implementation commits. No active implementation lane remains.

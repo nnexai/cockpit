@@ -1,8 +1,8 @@
 {
   "run_id": "run-20260904T214621Z",
   "initial_source_commit": "14416c6bf2d07f8df4aaa1e0a7676a8b80860ea2",
-  "current_integration_commit": "f16cb21",
-  "stage": "S03 verified recovery increment; next S02 mouse control-message cutover",
+  "current_integration_commit": "559a72d",
+  "stage": "Selected unblocked features implemented and verified; terminal and optional metric/provider capability limits remain explicit.",
   "selected_stories": [
     "CLEAN-01",
     "BOOT-01",
@@ -80,255 +80,340 @@
       "delivery_commit": "45ff8d03663da5fb4dc0a124b1325c38cea7cce3"
     },
     "TERM-01": {
-      "status": "running",
+      "status": "blocked",
       "stage": "S02",
       "goals": [
         "G01"
       ],
-      "implementation": "Reusable capture/replay CLI and distinct paired scroll proof passed; G01 remains incomplete. Existing evidence archived; advance product work without expanding matrix."
+      "implementation": "Stock application mouse, excluded expanded terminal matrix, or dependent terminal baseline; not retried in this continuation."
     },
     "TERM-02": {
-      "status": "running",
+      "status": "blocked",
       "stage": "S02",
       "goals": [
         "G01"
       ],
-      "implementation": "Application mouse diagnosis found discarded upstream MouseCapture message. Baseline owned keyboard arrives while application clicks do not."
+      "implementation": "Stock application mouse, excluded expanded terminal matrix, or dependent terminal baseline; not retried in this continuation."
     },
     "TERM-03": {
-      "status": "not_started",
+      "status": "blocked",
       "stage": "S02",
       "goals": [
         "G01"
-      ]
+      ],
+      "implementation": "Stock application mouse, excluded expanded terminal matrix, or dependent terminal baseline; not retried in this continuation."
     },
     "REPAIR-01": {
-      "status": "running",
+      "status": "verified",
       "stage": "S03",
       "goals": [
         "G02"
       ],
-      "implementation": "Shared stream-order and root callback guards verified, including eight mounted orderings and actual browser gap recovery. Full adapter corpus remains open."
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "delivery_commit": "559a72d"
     },
     "REPAIR-02": {
-      "status": "running",
+      "status": "verified",
       "stage": "S03",
       "goals": [
         "G02"
       ],
-      "implementation": "Prefix consumption, modifier routing and text selection verified; native startup/current session event smoke passed. Attachment queue behavior remains REPAIR-03."
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "delivery_commit": "559a72d"
     },
     "REPAIR-03": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S03",
       "goals": [
         "G02"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "REPAIR-04": {
-      "status": "running",
+      "status": "verified",
       "stage": "S03",
       "goals": [
         "G02"
       ],
-      "implementation": "Bounded request/process lifetimes and non-retryable unknown mutation recovery verified; cancellation reporting contract remains open. See G02.",
-      "delivery_commit": "62f55e0"
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "delivery_commit": "559a72d"
     },
     "REPAIR-05": {
-      "status": "running",
+      "status": "verified",
       "stage": "S03",
       "goals": [
         "G02"
       ],
-      "implementation": "Fresh compatibility cache/reconnect slice and invalidation race regressions pass. Validation/error/registry scope remains open."
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "delivery_commit": "559a72d"
     },
     "CLEAN-05": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S04",
       "goals": [
         "G03"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "metric_readiness": "inconclusive: optional coverage, complexity and mutation providers absent; some integration test mappings unresolved; strict exit 2"
     },
     "CLEAN-02": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S04",
       "goals": [
         "G03"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "CLEAN-03": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S04",
       "goals": [
         "G03"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "CLEAN-04": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S04",
       "goals": [
         "G03"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "FND-01": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2c7a8e1",
       "stage": "S05",
       "goals": [
         "G04"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "FND-02": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2c7a8e1",
       "stage": "S05",
       "goals": [
         "G04"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "FND-03": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2c7a8e1",
       "stage": "S05",
       "goals": [
         "G04"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "PANE-01": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2827b40",
+      "verified_increment": "Exact companion-root file-viewer detection and Context replacement verified; complete Review replacement remains outstanding",
       "stage": "S05",
       "goals": [
         "G04"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "LIFE-01": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2c7a8e1",
+      "verified_increment": "Configured catalog and reviewed create/open browser flow",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "LIFE-02": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2c7a8e1",
+      "verified_increment": "Real create, exact-path borrowed reopen, companion failure and explicit resume after gateway restart",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "LIFE-03": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2c7a8e1",
+      "verified_increment": "Separate context terminal receives expected environment; root pane remains unchanged",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "LIFE-04": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "CTX-01": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2827b40",
+      "verified_increment": "Bounded authorized companion discovery and document reads verified in browser and native Context",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "PANE-02": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2827b40",
+      "verified_increment": "Real companion file viewers render graphical Context; graphical Review is not implemented",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "VIEW-01": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation_commit": "2827b40",
+      "verified_increment": "Bounded source and inert Markdown rendering with physical source mapping verified in browser and native Context",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "VIEW-02": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S06",
       "goals": [
         "G05"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "REF-01": {
-      "status": "not_started",
+      "status": "verified",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
       "stage": "S07",
       "goals": [
         "G06"
-      ]
+      ],
+      "delivery_commit": "a1fb90c"
     },
     "REF-02": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S07",
       "goals": [
         "G06"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "VIEW-03": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S07",
       "goals": [
         "G06"
-      ]
+      ],
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "delivery_commit": "a1fb90c"
     },
     "CTX-02": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S08",
       "goals": [
         "G07"
-      ]
+      ],
+      "delivery_commit": "a1fb90c",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "SRC-01": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S08",
       "goals": [
         "G07"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "SRC-02": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S08",
       "goals": [
         "G07"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "SRC-03": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S08",
       "goals": [
         "G07"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "REV-01": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S09",
       "goals": [
         "G08"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "REV-02": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S09",
       "goals": [
         "G08"
-      ]
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits."
     },
     "SRC-04": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S10",
       "goals": [
         "G09"
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "capability_limits": [
+        "Tea 0.15.1 JSON does not expose PR diff or structured changed files",
+        "reply/review-thread subcapabilities unavailable; provider positions explicitly unverified"
       ]
     },
     "SRC-05": {
-      "status": "not_started",
+      "status": "verified",
       "stage": "S10",
       "goals": [
         "G09"
+      ],
+      "delivery_commit": "559a72d",
+      "implementation": "Selected behavior implemented; see WORKFLOW_ACCEPTANCE.md and FEATURE_ACCEPTANCE.md for exact runtime proof, regression checks and capability limits.",
+      "capability_limits": [
+        "Tea JSON exposes shortened current revision SHA"
       ]
     }
   },
@@ -504,7 +589,7 @@
     },
     {
       "id": "SessionOrderRepair",
-      "status": "running",
+      "status": "superseded by completed continuation",
       "goal": "G02",
       "owned_paths": [
         "src/client/streamOrder.ts",
@@ -517,7 +602,7 @@
     },
     {
       "id": "WorkbenchInputRepair",
-      "status": "running",
+      "status": "superseded by completed continuation",
       "goal": "G02",
       "owned_paths": [
         "src/app/App.tsx:Workbench input only",
@@ -594,6 +679,10 @@
         "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/detector-stress-report.json",
         "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/detector-stress-resource-usage.txt"
       ]
+    },
+    {
+      "id": "continuation_final",
+      "path": "/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/continuation-20260905/final-feature-acceptance/evidence-index.json"
     }
   ],
   "failures": [
@@ -658,6 +747,16 @@
       "evidence": "Pinned stable direct-attach only forwards rawInput; InputEvents are full-app globally routed; public pane layout lacks atomic content origin and app mouse mode contract. Stable source review/scout and TerraBootstrapReview agree.",
       "constraint": "No Herdr-server modification; Homebrewstable only. No unsafe global coordinates or unconditionalSGR.",
       "independent_work": "Continue text/scroll/temporal, downstream capability discovery and independent selected implementations; no dependent final acceptance whileG01inconclusive."
+    },
+    {
+      "id": "optional_quality_metrics",
+      "status": "unresolved",
+      "evidence": "All six final execution checks pass; strict quality exit2 for absent optional metrics/unjoinable test maps. No tools installed."
+    },
+    {
+      "id": "tea_review_subcapabilities",
+      "status": "unavailable",
+      "evidence": "Real Tea0.15.1 exposes read review comments/current wiki revision, but not PRdiff/structured files/replies."
     }
   ],
   "protected_user_work": [],
@@ -740,10 +839,37 @@
     }
   ],
   "latest_observation": "OBS-009",
-  "next_action": "Commit verified recovery increment, then propagate stable MouseCapture end to end and verify xterm application mouse forwarding.",
+  "next_action": "No selected unblocked feature remains queued. Review commit559a72d and FEATURE_ACCEPTANCE.md. Live activation and excluded upstream/metric work are separate scope.",
   "latest_goal_status": {
     "G00A": "PASS",
     "G00B": "PASS; delivery45ff8d03663da5fb4dc0a124b1325c38cea7cce3",
-    "G01": "INCONCLUSIVE"
+    "G01": "INCONCLUSIVE",
+    "G02": "PASS selected repairs",
+    "G03": "Implementation/checks PASS; strict metrics INCONCLUSIVE",
+    "G04": "PASS selected foundation/panes",
+    "G05": "PASS selected lifecycle/Context/media",
+    "G06": "PASS comments/paste/search",
+    "G07": "PASS snapshots/source hydration with fixture-provider proof",
+    "G08": "PASS local Review/comments",
+    "G09": "PASS supported Tea read capabilities; unavailable subcapabilities explicit"
+  },
+  "final_verification": {
+    "code_commit": "559a72d",
+    "typescript_tests": 88,
+    "core_library_tests": 81,
+    "herdr_library_tests": 39,
+    "quality_fixture_tests": 5,
+    "checks": [
+      "frontend typecheck/tests",
+      "Rust format/workspace check/tests",
+      "protocol generated-file check",
+      "browser build",
+      "native debug no-bundle build",
+      "browser/native runtime smoke"
+    ],
+    "quality_gate_exit": 2,
+    "all_execution_checks": "pass",
+    "runtime_cleanup": "26 owned processes stopped; fixtures and146 evidence files retained",
+    "provider_proof": "real Tea executable against controlled localhost GET-only fixture"
   }
 }
