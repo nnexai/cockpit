@@ -304,7 +304,8 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     if (event.altKey || event.ctrlKey || event.metaKey || isEditingTarget(event.target)) return;
     const files = fileNavigationOrder();
     if (!files.length) return;
-    const index = files.findIndex(item => item.file_id === selected);
+    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>(".review-file") : null;
+    const index = files.findIndex(item => item.file_id === (target?.dataset.fileId ?? selected));
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); selectFileAt((index < 0 ? 0 : index) + (event.key === "ArrowDown" ? 1 : -1), true); }
     if (event.key === "Home" || event.key === "End") { event.preventDefault(); selectFileAt(event.key === "Home" ? 0 : files.length - 1, true); }
   };

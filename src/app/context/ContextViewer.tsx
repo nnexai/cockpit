@@ -446,6 +446,10 @@ type ContextTreeRow = {
   open: boolean;
 };
 
+function isTreeRowEnabled(row: ContextTreeRow): boolean {
+  return (row.entry.kind === "file" || row.entry.kind === "directory") && !row.entry.refusal;
+}
+
 function contextTreeRows(root: ContextRoot, directories: Record<string, DirectoryState>, expanded: Set<string>): ContextTreeRow[] {
   const rows: ContextTreeRow[] = [];
   const visit = (path: string, depth: number) => {
@@ -496,7 +500,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const viewerRef = useRef<HTMLElement>(null);
   const documentRef = useRef<HTMLElement>(null);
   const treeRef = useRef<HTMLElement>(null);
-  const treeFocusPathRef = useRef<string | null>(null);
+  const treeFocusPathRef = useRef<{ path: string; restoreAfterLoad: boolean } | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -769,14 +773,33 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const path = selectedPath ? directoryPathForFile : "";
     void loadDirectory(root, path, true);
   };
-  const focusTreePath = (path: string) => {
-    treeFocusPathRef.current = path;
+  const focusTreePath = (path: string, restoreAfterLoad = false) => {
+    treeFocusPathRef.current = { path, restoreAfterLoad };
     requestAnimationFrame(() => {
+      const request = treeFocusPathRef.current;
+      if (!request || request.path !== path) return;
       const target = [...(treeRef.current?.querySelectorAll<HTMLButtonElement>("[data-context-path]") ?? [])]
-        .find((button) => button.dataset.contextPath === treeFocusPathRef.current);
+        .find((button) => button.dataset.contextPath === request.path);
       target?.focus();
+      if (!request.restoreAfterLoad) treeFocusPathRef.current = null;
     });
   };
+  useEffect(() => {
+    const request = treeFocusPathRef.current;
+    if (!request?.restoreAfterLoad || !root) return;
+    const state = directories[keyFor(root.root_id, request.path)];
+    if (!state || state.status === "loading") return;
+    const activeElement = globalThis.document.activeElement;
+    if (activeElement !== globalThis.document.body && !treeRef.current?.contains(activeElement)) {
+      treeFocusPathRef.current = null;
+      return;
+    }
+    const buttons = [...(treeRef.current?.querySelectorAll<HTMLButtonElement>("[data-context-path]") ?? [])];
+    const target = buttons.find((button) => button.dataset.contextPath === request.path)
+      ?? buttons.find((button) => button.dataset.contextPath?.startsWith(`${request.path}/`));
+    target?.focus();
+    treeFocusPathRef.current = null;
+  }, [directories, root, treeRows]);
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey || !(event.target instanceof HTMLElement)) return;
     const current = event.target.closest<HTMLButtonElement>("[data-context-path]");
@@ -786,15 +809,17 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     if (!row) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? treeRows.length - 1
-        : Math.max(0, Math.min(treeRows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
-      focusTreePath(treeRows[nextIndex]?.path ?? row.path);
+      const enabledRows = treeRows.filter(isTreeRowEnabled);
+      const currentIndex = enabledRows.findIndex((candidate) => candidate.path === row.path);
+      const next = event.key === "Home" ? enabledRows[0] : event.key === "End" ? enabledRows.at(-1)
+        : enabledRows[Math.max(0, Math.min(enabledRows.length - 1, currentIndex + (event.key === "ArrowDown" ? 1 : -1)))];
+      focusTreePath(next?.path ?? row.path);
       return;
     }
     if (row.entry.kind === "directory" && event.key === "ArrowRight") {
       event.preventDefault();
       if (!row.open) {
-        focusTreePath(row.path);
+        focusTreePath(row.path, true);
         toggleDirectory(row.entry);
       } else if (treeRows[index + 1]?.depth > row.depth) {
         focusTreePath(treeRows[index + 1]!.path);
@@ -996,7 +1021,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}
           {treeRows.map((row) => <div className="context-tree-node" key={row.entry.entry_id}>
-            <button type="button" data-context-path={row.path} className={`context-tree-row${selectedPath === row.path ? " is-selected" : ""}`} style={{ paddingLeft: `${8 + row.depth * 16}px` }} disabled={row.entry.kind !== "file" && row.entry.kind !== "directory"} onClick={() => row.entry.kind === "directory" ? toggleDirectory(row.entry) : chooseEntry(row.entry)} aria-label={`${row.label}${row.entry.refusal ? `, refused: ${row.entry.refusal}` : ""}`}>
+            <button type="button" data-context-path={row.path} className={`context-tree-row${selectedPath === row.path ? " is-selected" : ""}`} style={{ paddingLeft: `${8 + row.depth * 16}px` }} disabled={!isTreeRowEnabled(row)} onClick={() => row.entry.kind === "directory" ? toggleDirectory(row.entry) : chooseEntry(row.entry)} aria-label={`${row.label}${row.entry.refusal ? `, refused: ${row.entry.refusal}` : ""}`}>
               <span className="context-tree-disclosure">{row.entry.kind === "directory" ? (row.open ? "⌄" : "›") : " "}</span>
               <span className="context-tree-icon" aria-hidden="true">{entryIcon(row.entry)}</span>
               <span className="context-tree-name" title={row.path}>{row.label}</span>

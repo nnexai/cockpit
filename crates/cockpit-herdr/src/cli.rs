@@ -698,10 +698,10 @@ fn validate_event_snapshot_identity(
     }
     Ok(())
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum EventConnectionEnd {
     StreamEnded,
-    TopologyChanged,
+    TopologyChanged(SessionSnapshotResponse),
 }
 
 impl HerdrCliAdapter {
@@ -1391,51 +1391,9 @@ impl HerdrCliAdapter {
                     break;
                 }
                 let (change, retry) = match result {
-                    Ok(EventConnectionEnd::TopologyChanged) => {
-                        loop {
-                            match adapter.read_snapshot(&session_id).await {
-                                Ok(new_snapshot) => {
-                                    if let Err(error) = validate_event_snapshot_identity(
-                                        &new_snapshot,
-                                        &expected_identity,
-                                    ) {
-                                        let _ = sender
-                                            .send(SessionChange::Disconnected {
-                                                code: error.code,
-                                                message: error.message,
-                                            })
-                                            .await;
-                                        return;
-                                    }
-                                    current_snapshot = new_snapshot;
-                                    delay_ms = 100;
-                                    break;
-                                }
-                                Err(error) if error.code == "session_identity_mismatch" => {
-                                    let _ = sender
-                                        .send(SessionChange::Disconnected {
-                                            code: error.code,
-                                            message: error.message,
-                                        })
-                                        .await;
-                                    return;
-                                }
-                                Err(error) => {
-                                    if sender
-                                        .send(SessionChange::Stale {
-                                            code: error.code,
-                                            message: error.message,
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        return;
-                                    }
-                                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                                    delay_ms = (delay_ms.saturating_mul(2)).min(2000);
-                                }
-                            }
-                        }
+                    Ok(EventConnectionEnd::TopologyChanged(new_snapshot)) => {
+                        current_snapshot = new_snapshot;
+                        delay_ms = 100;
                         continue;
                     }
                     Ok(EventConnectionEnd::StreamEnded) => (
@@ -1790,11 +1748,18 @@ impl HerdrCliAdapter {
                     ),
                 ));
             }
+            if pane_topology_event(event) {
+                let latest = self.read_snapshot(session_id).await?;
+                validate_event_snapshot_identity(&latest, expected)?;
+                if pane_set_changed(snapshot, &latest) {
+                    if sender.send(SessionChange::Changed).await.is_err() {
+                        return Ok(EventConnectionEnd::StreamEnded);
+                    }
+                    return Ok(EventConnectionEnd::TopologyChanged(latest));
+                }
+            }
             if sender.send(SessionChange::Changed).await.is_err() {
                 return Ok(EventConnectionEnd::StreamEnded);
-            }
-            if pane_topology_event(event) {
-                return Ok(EventConnectionEnd::TopologyChanged);
             }
         }
     }
@@ -1893,11 +1858,18 @@ fn event_subscriptions(snapshot: &SessionSnapshotResponse) -> Vec<Value> {
         "layout.updated",
     ];
     let mut result: Vec<Value> = TYPES.iter().map(|kind| json!({"type":kind})).collect();
+    // Scrollback belongs to terminal attachments; the session snapshot has no
+    // scroll position, so subscribing would turn terminal output into snapshots.
     for pane in &snapshot.panes {
         result.push(json!({"type":"pane.agent_status_changed","pane_id":pane.id}));
-        result.push(json!({"type":"pane.scroll_changed","pane_id":pane.id}));
     }
     result
+}
+
+fn pane_set_changed(previous: &SessionSnapshotResponse, latest: &SessionSnapshotResponse) -> bool {
+    let previous: BTreeSet<_> = previous.panes.iter().map(|pane| &pane.id).collect();
+    let latest: BTreeSet<_> = latest.panes.iter().map(|pane| &pane.id).collect();
+    previous != latest
 }
 
 fn pane_topology_event(event: &str) -> bool {
@@ -2149,6 +2121,168 @@ impl HerdrAdapter for HerdrCliAdapter {
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    fn subscription_snapshot(panes: &[&str]) -> SessionSnapshotResponse {
+        SessionSnapshotResponse {
+            session_id: "default".into(),
+            version: "0.8.2".into(),
+            protocol: 20,
+            focused_space_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            spaces: Vec::new(),
+            tabs: Vec::new(),
+            panes: panes
+                .iter()
+                .map(|id| PaneSummary {
+                    id: (*id).into(),
+                    terminal_id: format!("terminal-{id}"),
+                    space_id: "space".into(),
+                    tab_id: "tab".into(),
+                    title: None,
+                    focused: false,
+                    agent: None,
+                    agent_status: "idle".into(),
+                    revision: 0,
+                })
+                .collect(),
+            layouts: Vec::new(),
+            agents: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn session_subscriptions_keep_state_events_but_exclude_terminal_scrollback() {
+        let subscriptions = event_subscriptions(&subscription_snapshot(&["pane-a", "pane-b"]));
+        let contains = |type_name: &str| subscriptions.contains(&json!({"type": type_name}));
+
+        for type_name in [
+            "workspace.focused",
+            "tab.focused",
+            "pane.created",
+            "pane.closed",
+            "pane.focused",
+            "layout.updated",
+        ] {
+            assert!(contains(type_name), "missing {type_name} subscription");
+        }
+        assert!(
+            subscriptions
+                .contains(&json!({"type": "pane.agent_status_changed", "pane_id": "pane-a"}))
+        );
+        assert!(
+            subscriptions
+                .contains(&json!({"type": "pane.agent_status_changed", "pane_id": "pane-b"}))
+        );
+        assert!(!subscriptions.iter().any(|subscription| {
+            subscription.get("type").and_then(Value::as_str) == Some("pane.scroll_changed")
+        }));
+    }
+
+    #[test]
+    fn replayed_topology_does_not_require_a_subscription_refresh() {
+        let initial = subscription_snapshot(&["pane-a"]);
+        assert!(!pane_set_changed(
+            &initial,
+            &subscription_snapshot(&["pane-a"])
+        ));
+        assert!(pane_set_changed(
+            &initial,
+            &subscription_snapshot(&["pane-a", "pane-b"])
+        ));
+        assert!(pane_set_changed(&initial, &subscription_snapshot(&[])));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replayed_topology_keeps_the_existing_event_transport_open() {
+        let socket = std::env::temp_dir().join(format!(
+            "cockpit-herdr-replay-{}-{}.sock",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        fixture["result"]["snapshot"]["protocol"] = json!(20);
+        let snapshot = fixture["result"].clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "ping");
+            reader
+                .into_inner()
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({"id": request["id"], "result": {"type": "pong", "version": "0.8.2", "protocol": 20}})
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "events.subscribe");
+            let mut events = reader.into_inner();
+            events
+                .write_all(
+                    format!(
+                        "{}\n{}\n",
+                        json!({"id": request["id"], "result": {"type": "subscription_started"}}),
+                        json!({"event": "pane.created", "data": {"pane": {"id": "pane-a"}}}),
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "session.snapshot");
+            reader
+                .into_inner()
+                .write_all(
+                    format!("{}\n", json!({"id": request["id"], "result": snapshot})).as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            events
+                .write_all(
+                    format!("{}\n", json!({"event": "layout.updated", "data": {}})).as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let config =
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone()))
+                .unwrap();
+        let mut subscription = HerdrCliAdapter::new(config)
+            .subscribe_session("default", &subscription_snapshot(&["pane-a"]))
+            .await
+            .unwrap();
+
+        for _ in 0..2 {
+            let change = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
+                .await
+                .unwrap();
+            assert_eq!(change, Some(SessionChange::Changed));
+        }
+        drop(subscription);
+        server.await.unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
 
     #[tokio::test]
     async fn pinned_snapshot_accepts_non_git_spaces() {

@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { ReviewFileDiff, ReviewSnapshot } from "../../protocol/generated/v1";
+import type { ReviewFileDiff, ReviewFileRequest, ReviewSnapshot, ReviewSnapshotRequest } from "../../protocol/generated/v1";
 import { SourceLines } from "../context/ContextViewer";
 import { ReviewPane } from "./ReviewPane";
 
@@ -246,6 +246,51 @@ it("waits for an explicit branch base submission without requesting blank or par
     expect(load).not.toHaveBeenCalled();
     expect(host.querySelector(".review-file")).toBeNull();
 
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps the selected file and arrow navigation across parent updates", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const second = { ...changedFile, file_id: "second", old_path: "docs/second.md", new_path: "docs/second.md" };
+  const third = { ...changedFile, file_id: "third", old_path: "docs/third.md", new_path: "docs/third.md" };
+  const review = { ...snapshot, files: [changedFile, second, third] };
+  const loadSnapshot = vi.fn(async (_request: ReviewSnapshotRequest, _signal: AbortSignal) => structuredClone(review));
+  const loadFile = vi.fn(async (request: ReviewFileRequest, _signal: AbortSignal) => ({ ...diff, file: review.files.find((candidate) => candidate.file_id === request.file_id) ?? changedFile }));
+  const snapshotCallback = (request: ReviewSnapshotRequest, signal: AbortSignal) => loadSnapshot(request, signal);
+  const fileCallback = (request: ReviewFileRequest, signal: AbortSignal) => loadFile(request, signal);
+  const render = async () => {
+    await act(async () => mounted.render(<ReviewPane identity="stable" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      snapshot={snapshotCallback} file={fileCallback} />));
+  };
+  try {
+    await render();
+    await act(async () => { await Promise.resolve(); });
+    const firstVisible = host.querySelector<HTMLButtonElement>(".review-file")!;
+    expect(firstVisible.dataset.fileId).toBe("second");
+    firstVisible.focus();
+    await act(async () => firstVisible.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("third");
+    expect(document.activeElement).toBe(host.querySelector('[data-file-id="third"]'));
+
+    const secondButton = host.querySelector<HTMLButtonElement>('[data-file-id="second"]')!;
+    await act(async () => secondButton.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+
+    await render();
+    await act(async () => { await Promise.resolve(); });
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
+
+    const files = host.querySelector<HTMLElement>(".review-files")!;
+    await act(async () => files.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("third");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

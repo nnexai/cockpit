@@ -1,0 +1,101 @@
+{
+  "baseline_commit": "e99083b",
+  "fixture_session": "daily",
+  "fixture_root": "/tmp/cdu",
+  "gateway": "http://127.0.0.1:4183",
+  "workload": {
+    "duration_seconds": 18,
+    "writes_per_second": 20,
+    "lines_per_write": 3,
+    "line_payload": "counter plus 80 dots",
+    "before_visible_panes": [
+      "terminal",
+      "Files"
+    ],
+    "after_visible_panes": [
+      "terminal",
+      "Files",
+      "Review"
+    ]
+  },
+  "before": {
+    "idle": {
+      "seconds": 6.0320000648498535,
+      "serviceCpuPercent": 13.428381818496565,
+      "chromeCpuPercent": 4.1445622896594365,
+      "rendererTaskSeconds": 0.090025,
+      "layouts": 0,
+      "frames": 0,
+      "snapshots": 36,
+      "inspections": 4,
+      "fileDomMutations": 0
+    },
+    "load": {
+      "seconds": 10.032000064849854,
+      "serviceCpuPercent": 15.94896321428547,
+      "chromeCpuPercent": 24.023125841517516,
+      "rendererTaskSeconds": 0.824878,
+      "layouts": 200,
+      "frames": 200,
+      "snapshots": 53,
+      "inspections": 6,
+      "fileDomMutations": 0
+    },
+    "initialFocus": "focus-file-10.md",
+    "finalFocus": "focus-file-10.md",
+    "kinds": {
+      "1": 124
+    }
+  },
+  "after": {
+    "idle": {
+      "seconds": 6.052000045776367,
+      "serviceCpuPercent": 10.575016443475581,
+      "chromeCpuPercent": 1.6523463192930596,
+      "rendererTaskSeconds": 0.044404,
+      "layouts": 0,
+      "frames": 0,
+      "snapshots": 10,
+      "inspections": 6,
+      "fileDomMutations": 0
+    },
+    "load": {
+      "seconds": 10.036999940872192,
+      "serviceCpuPercent": 11.557238286674757,
+      "chromeCpuPercent": 20.12553563714046,
+      "rendererTaskSeconds": 0.640964,
+      "layouts": 200,
+      "frames": 200,
+      "snapshots": 0,
+      "inspections": 12,
+      "fileDomMutations": 0
+    },
+    "initialFocus": "focus-file-10.md",
+    "finalFocus": "focus-file-10.md",
+    "kinds": {
+      "1": 79
+    }
+  },
+  "output_focus": {
+    "framesDuringInteraction": 236,
+    "filesPickerStable": true,
+    "reviewArrowFocusStable": true,
+    "reviewPickerStable": true
+  },
+  "limitations": [
+    "Short local CPU samples; not a controlled benchmark.",
+    "After run includes an additional Review pane and a longer startup warmup.",
+    "Idle sample still includes finite historical event catch-up; no claim of zero startup snapshots.",
+    "DOM mutation counts do not count React render invocations; unchanged pane-state identity is separately regression-tested."
+  ],
+  "verification": {
+    "frontend_tests": 138,
+    "herdr_tests": 88,
+    "host_tests": 11,
+    "frontend_build": "pass",
+    "tauri_debug_build": "pass",
+    "native_launch": "rendered terminal, Files and Review under XWayland",
+    "browser_navigation": "Files compressed directories, picker identity and highlighting, Review focused-row arrows and picker passed"
+  },
+  "cleanup": "Stopped only the owned native process, gateway, and ledger-owned daily session."
+}

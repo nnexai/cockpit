@@ -14,6 +14,64 @@ describe("file navigation", () => {
     ]).map((match) => match.id)).toEqual(["basename", "spread", "later"]);
   });
 
+  it("keeps the selected result and DOM focus when polling replaces the candidate array", async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const mounted = createRoot(host);
+    const candidates = [{ id: "one", path: "one.ts" }, { id: "two", path: "two.ts" }];
+    const choose = vi.fn();
+    const render = (items = candidates) => mounted.render(createElement(FilePicker, { candidates: items, onChoose: choose, onDismiss: vi.fn() }));
+    try {
+      await act(async () => render());
+      const input = host.querySelector<HTMLInputElement>("input")!;
+      await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" })));
+      const second = host.querySelector<HTMLButtonElement>("[data-file-picker-result-index='1']")!;
+      await act(async () => second.focus());
+      await act(async () => render(candidates.map((candidate) => ({ ...candidate }))));
+      expect(second.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(second);
+      // Indexing may insert earlier results; selection follows file identity.
+      await act(async () => render([{ id: "zero", path: "zero.ts" }, ...candidates]));
+      expect(second.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(second);
+      await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" })));
+      expect(choose).toHaveBeenLastCalledWith(expect.objectContaining({ id: "two" }));
+    } finally {
+      await act(async () => mounted.unmount());
+      host.remove();
+    }
+  });
+
+  it("reports the actual fuzzy match positions, including case and Unicode", () => {
+    for (const [query, path, expected] of [["FF2", "focus-file-02.md", "ff2"], ["😀m", "😀-memo.md", "😀m"], ["i", "İtem.txt", "İ"]]) {
+      const match = rankFileMatches(query, [{ id: "file", path }])[0];
+      expect(match.matchedIndices.map((index) => Array.from(path)[index]).join("")).toBe(expected);
+    }
+    expect(rankFileMatches("", [{ id: "file", path: "file.md" }])[0].matchedIndices).toEqual([]);
+    expect(rankFileMatches("zz", [{ id: "file", path: "file.md" }])).toEqual([]);
+  });
+
+  it("highlights matching path characters and resets selection only for a changed query", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const mounted = createRoot(host);
+    try {
+      await act(async () => mounted.render(createElement(FilePicker, { candidates: [{ id: "one", path: "focus-file-01.md" }, { id: "two", path: "focus-file-02.md" }], onChoose: vi.fn(), onDismiss: vi.fn() })));
+      const input = host.querySelector<HTMLInputElement>("input")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "ff2");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect([...host.querySelectorAll("mark")].map((mark) => mark.textContent).join("")).toBe("ff2");
+      expect(host.querySelector("[aria-selected='true'] code")?.textContent).toBe("focus-file-02.md");
+      expect(document.activeElement).toBe(input);
+    } finally {
+      await act(async () => mounted.unmount());
+      host.remove();
+    }
+  });
+
   it("publishes one stable event name for workbench prefix routing", () => {
     expect(FILE_NAVIGATION_EVENT).toBe("cockpit:file-navigation");
   });

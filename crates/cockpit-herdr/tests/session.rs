@@ -689,11 +689,9 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
     let first = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
         .await
         .unwrap();
-    assert_eq!(first, Some(SessionChange::Changed));
-    let second = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
-        .await
-        .unwrap();
-    match second {
+    // Topology is validated before publishing Changed, so identity replacement
+    // must terminate immediately without exposing state from the wrong session.
+    match first {
         Some(SessionChange::Disconnected { code, .. }) => {
             assert_eq!(code, "session_identity_mismatch");
         }

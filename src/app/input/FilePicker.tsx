@@ -13,17 +13,22 @@ export function FilePicker({ candidates, loading = false, incomplete = false, on
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
+  const [selection, setSelection] = useState<{ query: string; id: string | null }>({ query: "", id: null });
   const matches = useMemo(() => rankFileMatches(query, candidates).slice(0, 100), [candidates, query]);
+  const active = selection.query === query ? Math.max(0, matches.findIndex((candidate) => candidate.id === selection.id)) : 0;
+  const activeId = matches[active]?.id ?? null;
+  const selectIndex = (index: number) => setSelection({ query, id: matches[index]?.id ?? null });
   useEffect(() => {
     restoreFocusRef.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
     inputRef.current?.focus();
     return () => restoreFocusRef.current?.focus();
   }, []);
-  useEffect(() => { setActive(0); }, [query, candidates]);
+  useEffect(() => {
+    setSelection((current) => current.query === query && current.id === activeId ? current : { query, id: activeId });
+  }, [query, activeId]);
   useEffect(() => {
     pickerRef.current?.querySelector<HTMLElement>(`[data-file-picker-result-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
-  }, [active, matches]);
+  }, [active, activeId]);
   const choose = () => {
     const candidate = matches[active];
     if (candidate) onChoose(candidate);
@@ -33,10 +38,10 @@ export function FilePicker({ candidates, loading = false, incomplete = false, on
     if (event.key === "Escape") { event.preventDefault(); onDismiss(); return; }
     if (event.key === "Enter") { event.preventDefault(); choose(); return; }
     if (event.key === "ArrowDown" || (event.ctrlKey && event.key.toLowerCase() === "n")) {
-      event.preventDefault(); setActive((current) => Math.min(Math.max(0, matches.length - 1), current + 1)); return;
+      event.preventDefault(); selectIndex(Math.min(Math.max(0, matches.length - 1), active + 1)); return;
     }
     if (event.key === "ArrowUp" || (event.ctrlKey && event.key.toLowerCase() === "p")) {
-      event.preventDefault(); setActive((current) => Math.max(0, current - 1));
+      event.preventDefault(); selectIndex(Math.max(0, active - 1));
     }
     if (event.key !== "Tab") return;
     const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('input:not([disabled]), button:not([disabled])')];
@@ -54,7 +59,7 @@ export function FilePicker({ candidates, loading = false, incomplete = false, on
     <input ref={inputRef} type="search" aria-label="Find file" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a file" autoComplete="off" />
     <p className="file-picker-status">{loading ? "Indexing files…" : `${candidates.length} files`}{incomplete ? " · index incomplete" : ""}</p>
     <div role="listbox" aria-label="Matching files" className="file-picker-results">
-      {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} onFocus={() => setActive(index)} onMouseMove={() => setActive(index)} onClick={() => onChoose(candidate)}><code>{candidate.path}</code>{candidate.detail ? <span>{candidate.detail}</span> : null}</button>)}
+      {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => onChoose(candidate)}><code>{Array.from(candidate.path, (character, characterIndex) => candidate.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</code>{candidate.detail ? <span>{candidate.detail}</span> : null}</button>)}
       {!loading && matches.length === 0 ? <p>No matching files.</p> : null}
     </div>
     <p className="file-picker-help">↑↓ or Ctrl+N/P to choose · Enter to open · Esc to close</p>

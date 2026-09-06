@@ -10,6 +10,10 @@ async function settle(): Promise<void> {
   await act(async () => { await Promise.resolve(); });
 }
 
+async function settleFrame(): Promise<void> {
+  await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+}
+
 it("anchors an initial Shift+Arrow range at the focused source line without bubbling", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const host = document.createElement("div");
@@ -43,13 +47,17 @@ it("opens only requested directories, compresses loaded single-child paths, and 
   const host = document.createElement("div");
   document.body.append(host);
   const mounted = createRoot(host);
-  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
-    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: request.path === ""
-      ? [{ entry_id: "src", name: "src", path: "src", kind: "directory", bytes: null, revision: "r1", refusal: null }]
-      : request.path === "src"
-        ? [{ entry_id: "deep", name: "deep", path: "src/deep", kind: "directory", bytes: null, revision: "r2", refusal: null }]
-        : [{ entry_id: "file", name: "example.html", path: "src/deep/example.html", kind: "file", bytes: 12, revision: "r3", refusal: null }],
-  }));
+  let resolveSrc: ((directory: ContextDirectory) => void) | undefined;
+  const directory = vi.fn((_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => {
+    const response = (entries: ContextDirectory["entries"]): ContextDirectory => ({ binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries });
+    if (request.path === "") return Promise.resolve(response([
+      { entry_id: "src", name: "src", path: "src", kind: "directory", bytes: null, revision: "r1", refusal: null },
+      { entry_id: "refused", name: "unsafe.bin", path: "unsafe.bin", kind: "file", bytes: 12, revision: "r1", refusal: "Unsafe file" },
+      { entry_id: "after", name: "after.html", path: "after.html", kind: "file", bytes: 12, revision: "r1", refusal: null },
+    ]));
+    if (request.path === "src") return new Promise((resolve) => { resolveSrc = resolve; });
+    return Promise.resolve(response([{ entry_id: "file", name: "example.html", path: "src/deep/example.html", kind: "file", bytes: 12, revision: "r3", refusal: null }]));
+  });
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r3", content_hash: null, bytes: 12, media_type: "text/html", text: "<p>ok</p>", truncated: false, diagnostics: [] }));
   const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
   const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
@@ -65,7 +73,17 @@ it("opens only requested directories, compresses loaded single-child paths, and 
     await act(async () => mounted.render(<Harness />));
     await settle();
     const row = (path: string) => host.querySelector<HTMLButtonElement>(`[data-context-path="${path}"]`)!;
+    row("src").focus();
     await press(row("src"), "ArrowRight");
+    await act(async () => resolveSrc?.({
+      binding_id: "binding", root_id: "folder", path: "src", truncated: false, diagnostics: [],
+      entries: [{ entry_id: "deep", name: "deep", path: "src/deep", kind: "directory", bytes: null, revision: "r2", refusal: null }],
+    }));
+    await settle();
+    expect(document.activeElement).toBe(row("src/deep"));
+    await press(document.activeElement as HTMLButtonElement, "ArrowDown");
+    await settleFrame();
+    expect(document.activeElement).toBe(row("after.html"));
     await press(row("src/deep"), "ArrowRight");
     expect(directory).toHaveBeenCalledTimes(3);
     expect(host.querySelector('[data-context-path="src/deep"]')?.textContent).toContain("src/deep");
@@ -74,6 +92,44 @@ it("opens only requested directories, compresses loaded single-child paths, and 
     await settle();
     expect(host.querySelector("iframe[title='src/deep/example.html preview']")).not.toBeNull();
     expect(host.textContent).not.toContain("Read-only");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("does not reclaim tree focus after async expansion when the user focuses content", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  let resolveSrc: ((directory: ContextDirectory) => void) | undefined;
+  const directory = vi.fn((_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => {
+    if (request.path === "") return Promise.resolve({
+      binding_id: "binding", root_id: "folder", path: "", truncated: false, diagnostics: [],
+      entries: [{ entry_id: "src", name: "src", path: "src", kind: "directory", bytes: null, revision: "r1", refusal: null }],
+    });
+    return new Promise((resolve) => { resolveSrc = resolve; });
+  });
+  const client = { contextDirectory: directory } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    const src = host.querySelector<HTMLButtonElement>('[data-context-path="src"]')!;
+    src.focus();
+    await act(async () => src.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" })));
+    const content = host.querySelector<HTMLElement>(".context-document")!;
+    content.focus();
+    await act(async () => resolveSrc?.({
+      binding_id: "binding", root_id: "folder", path: "src", truncated: false, diagnostics: [],
+      entries: [{ entry_id: "deep", name: "deep", path: "src/deep", kind: "directory", bytes: null, revision: "r2", refusal: null }],
+    }));
+    await settle();
+    expect(document.activeElement).toBe(content);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

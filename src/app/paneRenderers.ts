@@ -20,6 +20,9 @@ export function isGraphicalReview(state: PaneRendererState | undefined): boolean
   return state?.presentation.renderer === "review" && state.choice !== "terminal";
 }
 
+function samePresentation(left: PanePresentation, right: PanePresentation): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export function usePaneRenderers(
   client: CockpitClient,
@@ -41,7 +44,7 @@ export function usePaneRenderers(
   const visibleKey = visiblePaneIds.join("\0");
   const allKey = allPaneIds.join("\0");
 
-  useEffect(() => { setPanes({}); }, [sessionId]);
+  useEffect(() => { setPanes((current) => Object.keys(current).length === 0 ? current : {}); }, [sessionId]);
   useEffect(() => {
     if (!live) return;
     const existing = new Set(allPaneIds);
@@ -60,8 +63,10 @@ export function usePaneRenderers(
       if (signal.aborted || presentation.session_id !== currentSession.current) return current;
       const previous = current[presentation.pane_id];
       const retained = previous?.presentation.binding_id === presentation.binding_id;
+      const unchanged = retained && samePresentation(previous.presentation, presentation);
+      if (unchanged && previous.inspectionError === null) return current;
       return { ...current, [presentation.pane_id]: {
-        presentation,
+        presentation: unchanged ? previous.presentation : presentation,
         choice: retained ? previous.choice : null,
         view: retained ? previous.view : createContextViewState(),
         inspectionError: null,
@@ -86,7 +91,8 @@ export function usePaneRenderers(
             setPanes((current) => {
               if (abort.signal.aborted || currentSession.current !== sessionId) return current;
               const previous = current[paneId];
-              return previous ? { ...current, [paneId]: { ...previous, inspectionError: error instanceof Error ? error.message : "Context could not be loaded" } } : current;
+              const inspectionError = error instanceof Error ? error.message : "Context could not be loaded";
+              return !previous || previous.inspectionError === inspectionError ? current : { ...current, [paneId]: { ...previous, inspectionError } };
             });
           }
         }));

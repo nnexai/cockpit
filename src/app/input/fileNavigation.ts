@@ -6,7 +6,7 @@ export type FileNavigationEventDetail = { action: FileNavigationAction };
 
 export type FileNavigationCandidate = { id: string; path: string; detail?: string };
 
-export type FileNavigationMatch = FileNavigationCandidate & { score: number };
+export type FileNavigationMatch = FileNavigationCandidate & { score: number; matchedIndices: number[] };
 
 /**
  * The workbench prefix router dispatches this event after it has established
@@ -23,29 +23,34 @@ export function fileNavigationAction(event: Event): FileNavigationAction | null 
   return action === "open-picker" || action === "focus-tree" || action === "focus-content" ? action : null;
 }
 
-function subsequenceScore(query: string, path: string): number | null {
-  const candidate = path.toLocaleLowerCase();
+function subsequenceMatch(query: string, path: string): { score: number; matchedIndices: number[] } | null {
+  // Keep original code-point positions when case folding expands a character.
+  const candidate = Array.from(path).flatMap((character, sourceIndex) =>
+    Array.from(character.toLocaleLowerCase(), (folded) => ({ folded, sourceIndex })));
   let cursor = 0;
   let score = 0;
   let previous = -2;
+  const matchedIndices = new Set<number>();
   for (const character of query.toLocaleLowerCase()) {
-    const index = candidate.indexOf(character, cursor);
-    if (index < 0) return null;
+    let index = cursor;
+    while (index < candidate.length && candidate[index].folded !== character) index += 1;
+    if (index === candidate.length) return null;
     score += index - cursor;
     if (index !== previous + 1) score += 3;
-    if (index === 0 || candidate[index - 1] === "/" || candidate[index - 1] === "-" || candidate[index - 1] === "_") score -= 4;
+    if (index === 0 || ["/", "-", "_"].includes(candidate[index - 1].folded)) score -= 4;
+    matchedIndices.add(candidate[index].sourceIndex);
     previous = index;
     cursor = index + 1;
   }
-  const basenameStart = candidate.lastIndexOf("/") + 1;
+  const basenameStart = candidate.map((part) => part.folded).lastIndexOf("/") + 1;
   if (previous >= basenameStart) score -= 8;
-  return score + Math.max(0, candidate.length - query.length) / 1000;
+  return { score: score + Math.max(0, candidate.length - Array.from(query).length) / 1000, matchedIndices: [...matchedIndices] };
 }
 
 export function rankFileMatches(query: string, candidates: readonly FileNavigationCandidate[]): FileNavigationMatch[] {
   const normalized = query.trim();
   return candidates.flatMap((candidate, index) => {
-    const score = normalized ? subsequenceScore(normalized, candidate.path) : index;
-    return score === null ? [] : [{ ...candidate, score }];
+    const match = normalized ? subsequenceMatch(normalized, candidate.path) : { score: index, matchedIndices: [] };
+    return match === null ? [] : [{ ...candidate, ...match }];
   }).sort((left, right) => left.score - right.score || left.path.localeCompare(right.path));
 }
