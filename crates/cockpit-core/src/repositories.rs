@@ -33,7 +33,7 @@ impl RepositoryCatalog {
         let mut repositories = Vec::new();
         let mut diagnostics = Vec::new();
         let mut roots = BTreeSet::new();
-        for configured in &self.config.repository_roots {
+        'roots: for configured in &self.config.repository_roots {
             if Instant::now() >= deadline {
                 diagnostics.push(diagnostic(
                     "catalog_timeout",
@@ -69,15 +69,15 @@ impl RepositoryCatalog {
                         "repository discovery time limit reached",
                         Some(configured),
                     ));
-                    break;
+                    break 'roots;
                 }
                 if entries_seen >= self.config.limits.catalog_entries {
                     diagnostics.push(diagnostic(
                         "catalog_entries_bounded",
-                        "repository discovery entry limit reached",
+                        &format!("Repository discovery reached its {}-entry scan limit; configure limits.catalog_entries in cockpit/config.toml and restart Cockpit", self.config.limits.catalog_entries),
                         Some(configured),
                     ));
-                    break;
+                    break 'roots;
                 }
                 entries_seen += 1;
                 if has_git_metadata(&directory) {
@@ -142,13 +142,15 @@ impl RepositoryCatalog {
                         "repository discovery time limit reached",
                         Some(configured),
                     ));
+                    break 'roots;
                 }
                 if entry_limit {
                     diagnostics.push(diagnostic(
                         "catalog_entries_bounded",
-                        "repository discovery entry limit reached",
+                        &format!("Repository discovery reached its {}-entry scan limit; configure limits.catalog_entries in cockpit/config.toml and restart Cockpit", self.config.limits.catalog_entries),
                         Some(configured),
                     ));
+                    break 'roots;
                 }
                 children.sort_by(|left, right| right.cmp(left));
                 pending.extend(children.into_iter().map(|child| (child, depth + 1)));
@@ -695,6 +697,42 @@ mod tests {
             },
             origins: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn catalog_budget_reports_once_across_roots_and_explains_configuration() {
+        let root = std::env::temp_dir().join(format!("cockpit-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("a/child")).unwrap();
+        std::fs::create_dir_all(root.join("b/child")).unwrap();
+        let mut configuration = config();
+        configuration.repository_roots = vec![
+            root.join("a").display().to_string(),
+            root.join("b").display().to_string(),
+        ];
+        configuration.limits.catalog_entries = 2;
+        let result = super::RepositoryCatalog::new(configuration.clone())
+            .list()
+            .await
+            .unwrap();
+        let warnings: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|item| item.code == "catalog_entries_bounded")
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "one shared scan budget must produce one warning"
+        );
+        assert!(warnings[0].message.contains("2"));
+        assert!(warnings[0].message.contains("limits.catalog_entries"));
+        configuration.limits.catalog_entries = 100;
+        let expanded = super::RepositoryCatalog::new(configuration)
+            .list()
+            .await
+            .unwrap();
+        assert!(expanded.diagnostics.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
