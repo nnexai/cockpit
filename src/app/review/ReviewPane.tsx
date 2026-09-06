@@ -6,6 +6,8 @@ import type {
   ReviewSnapshot,
   ReviewSnapshotRequest,
 } from "../../protocol/generated/v1";
+import { FilePicker } from "../input/FilePicker";
+import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
 import "./review.css";
 
 export type ReviewLineSelection = { fileId: string; side: "old" | "new"; start: number; end: number } | null;
@@ -128,6 +130,8 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const [hunkIndex, setHunkIndex] = useState(-1);
   const diffRef = useRef<HTMLElement | null>(null);
   const filesRef = useRef<HTMLElement | null>(null);
+  const paneRef = useRef<HTMLElement | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -221,6 +225,15 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     }
     if (focus) button?.focus();
   };
+  const focusTree = useCallback(() => requestAnimationFrame(() => {
+    const rows = [...(filesRef.current?.querySelectorAll<HTMLButtonElement>(".review-file") ?? [])];
+    const button = rows.find((row) => row.dataset.fileId === selected) ?? rows[0];
+    for (let parent = button?.parentElement; parent && parent !== filesRef.current; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+    (button ?? filesRef.current)?.focus();
+  }), [selected]);
+  const focusContent = useCallback(() => requestAnimationFrame(() => diffRef.current?.focus()), []);
   const moveFile = (delta: number) => {
     const files = fileNavigationOrder();
     if (!files.length) return;
@@ -295,6 +308,17 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); selectFileAt((index < 0 ? 0 : index) + (event.key === "ArrowDown" ? 1 : -1), true); }
     if (event.key === "Home" || event.key === "End") { event.preventDefault(); selectFileAt(event.key === "Home" ? 0 : files.length - 1, true); }
   };
+  useEffect(() => {
+    const onNavigation = (event: Event) => {
+      if (!paneRef.current?.contains(document.activeElement)) return;
+      const action = fileNavigationAction(event);
+      if (action === "open-picker") setPickerOpen(true);
+      else if (action === "focus-tree") focusTree();
+      else if (action === "focus-content") focusContent();
+    };
+    window.addEventListener(FILE_NAVIGATION_EVENT, onNavigation);
+    return () => window.removeEventListener(FILE_NAVIGATION_EVENT, onNavigation);
+  }, [focusContent, focusTree]);
   const displayedSelection = selectedLines?.fileId === selected ? selectedLines : null;
   const isSelectedLine = (side: "old" | "new", lineNumber: number | null) => {
     const selection = selectedLines?.fileId === diff?.file.file_id ? selectedLines : null;
@@ -320,7 +344,12 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         {!review && !pending ? <p className="review-empty">{comparison === "branch" ? "Enter a base ref, then press Enter or Refresh to compare branches." : "Choose a verified Review pane to load a local Git snapshot."}</p> : null}
   </>;
 
-  return <section className="review-pane" aria-label="Local review">
+  return <section className="review-pane" aria-label="Local review" ref={paneRef} onKeyDownCapture={(event) => {
+    if (isEditingTarget(event.target)) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") { event.preventDefault(); event.stopPropagation(); setPickerOpen(true); }
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "1") { event.preventDefault(); focusTree(); }
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "2") { event.preventDefault(); focusContent(); }
+  }}>
     <header className="review-toolbar">
       <label htmlFor={`${baseId}-mode`} className="sr-only">Comparison</label>
       <select id={`${baseId}-mode`} value={comparison} disabled={pending} onChange={(event) => setComparison(event.target.value as ReviewComparison)}>
@@ -350,5 +379,6 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       </main>
     </div>
     <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : "Select a line"}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount} comments</button><span><kbd>Alt+↑↓</kbd> hunk</span></span></footer>
+    {pickerOpen ? <FilePicker candidates={(review?.files ?? []).map((item) => ({ id: item.file_id, path: filePath(item), detail: `${fileStatus(item)} · ${item.comparison.replaceAll("_", " ")}` } satisfies FileNavigationCandidate))} onChoose={(candidate) => { setSelected(candidate.id); setHunkIndex(-1); setPickerOpen(false); focusContent(); }} onDismiss={() => { setPickerOpen(false); focusContent(); }} /> : null}
   </section>;
 }

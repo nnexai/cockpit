@@ -21,6 +21,7 @@ import { focusRequestForSnapshot, useFocusCoordinator } from "./session/focusCoo
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
 import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
+import { dispatchFileNavigation } from "./input/fileNavigation";
 import { TerminalPane } from "./TerminalPane";
 import { SetupDialog } from "./projects/SetupDialog";
 import { TeardownDialog } from "./projects/TeardownDialog";
@@ -204,6 +205,36 @@ export function canSwitchSessions(sessionCount: number): boolean {
 export function tabLabelIsRedundant(label: string, displayedNumber: number): boolean {
   const trimmed = label.trim();
   return trimmed === String(displayedNumber) || /^\d+$/.test(trimmed);
+}
+
+export type PaneFocusDirection = "left" | "right" | "up" | "down";
+
+const LAYOUT_EPSILON = 0.000001;
+
+function overlapLength(firstStart: number, firstLength: number, secondStart: number, secondLength: number): number {
+  return Math.min(firstStart + firstLength, secondStart + secondLength) - Math.max(firstStart, secondStart);
+}
+
+export function paneIdInDirection(layout: TabLayout | undefined, paneId: string | null, direction: PaneFocusDirection): string | null {
+  if (!layout || layout.zoomed || !paneId) return null;
+  const current = layout.panes.find((candidate) => candidate.pane_id === paneId);
+  if (!current) return null;
+  const candidates = layout.panes.flatMap((candidate, index) => {
+    if (candidate.pane_id === paneId) return [];
+    const horizontal = overlapLength(current.rect.x, current.rect.width, candidate.rect.x, candidate.rect.width);
+    const vertical = overlapLength(current.rect.y, current.rect.height, candidate.rect.y, candidate.rect.height);
+    const overlaps = direction === "left" || direction === "right" ? vertical : horizontal;
+    const touches = direction === "left"
+      ? Math.abs(candidate.rect.x + candidate.rect.width - current.rect.x) <= LAYOUT_EPSILON
+      : direction === "right"
+        ? Math.abs(current.rect.x + current.rect.width - candidate.rect.x) <= LAYOUT_EPSILON
+        : direction === "up"
+          ? Math.abs(candidate.rect.y + candidate.rect.height - current.rect.y) <= LAYOUT_EPSILON
+          : Math.abs(current.rect.y + current.rect.height - candidate.rect.y) <= LAYOUT_EPSILON;
+    return touches && overlaps > LAYOUT_EPSILON ? [{ paneId: candidate.pane_id, overlap: overlaps, index }] : [];
+  });
+  candidates.sort((left, right) => right.overlap - left.overlap || left.index - right.index);
+  return candidates[0]?.paneId ?? null;
 }
 
 export function contextMenuPosition(
@@ -477,8 +508,9 @@ function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; muta
 
 const shortcutRows: Array<[string, string]> = [
   ["Ctrl+B ?", "commands"], ["Ctrl+B Shift+N", "new space"], ["Ctrl+B Shift+W", "rename space"], ["Ctrl+B Shift+D", "close space"],
-  ["Ctrl+B c", "new tab"], ["Ctrl+B Shift+T", "rename tab"], ["Ctrl+B p", "previous tab"], ["Ctrl+B n", "next tab"], ["Ctrl+B Shift+X", "close tab"],
+  ["Ctrl+B c", "new tab"], ["Ctrl+B Shift+T", "rename tab"], ["Ctrl+B p", "previous tab"], ["Ctrl+B n", "next tab"], ["Ctrl+B 1…9", "select tab"], ["Ctrl+B Shift+X", "close tab"],
   ["Ctrl+B Shift+P", "rename pane"], ["Ctrl+B v", "split right"], ["Ctrl+B -", "split down"], ["Ctrl+B z", "toggle zoom"], ["Ctrl+B x", "close pane"],
+  ["Ctrl+B o / Shift+O", "next / previous pane"], ["Ctrl+B h j k l", "focus pane left down up right"], ["Ctrl+B f / Ctrl+P", "open file picker"], ["Ctrl+B [ / ] or Alt+1 / 2", "focus file tree / content"],
   ["Ctrl+B r", "focus a resize border"], ["drag border / arrows", "resize"], ["right-click", "resource commands"],
 ];
 
@@ -602,7 +634,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const tab = byId(tabs, selection.tabId);
     const pane = byId(panes, selection.paneId);
     if (command === "help") { setCommandsOpen(true); return; }
-    if (mutationBusy && !["previous-tab", "next-tab", "resize"].includes(command)) return;
+    if (mutationBusy && !["previous-tab", "next-tab", "previous-pane", "next-pane", "focus-left", "focus-right", "focus-up", "focus-down", "resize"].includes(command)) return;
     if (command === "new-space") onMutate("space:new", { type: "space_create", label: null, cwd: null }, true);
     if (command === "rename-space" && space) beginRename({ kind: "space", id: space.id });
     if (command === "close-space") closeSpace(space);
@@ -616,8 +648,19 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (command === "zoom-pane" && pane) onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" });
     if (command === "previous-tab" && tab) { const index = tabs.indexOf(tab); if (index > 0) focusTab(tabs[index - 1]); }
     if (command === "next-tab" && tab) { const index = tabs.indexOf(tab); if (index >= 0 && index < tabs.length - 1) focusTab(tabs[index + 1]); }
+    if (command.startsWith("select-tab-")) { const target = tabs[Number(command.slice("select-tab-".length)) - 1]; if (target) focusTab(target); }
+    if (command === "previous-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index - 1 + panes.length) % panes.length]); }
+    if (command === "next-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index + 1) % panes.length]); }
+    if (["focus-left", "focus-right", "focus-up", "focus-down"].includes(command)) {
+      const direction = command.slice("focus-".length) as PaneFocusDirection;
+      const target = byId(panes, paneIdInDirection(layout, selection.paneId, direction));
+      if (target) focusPane(target);
+    }
+    if (command === "open-file-picker") dispatchFileNavigation("open-picker");
+    if (command === "focus-file-tree") dispatchFileNavigation("focus-tree");
+    if (command === "focus-file-content") dispatchFileNavigation("focus-content");
     if (command === "resize" && !mutationBusy) document.querySelector<HTMLElement>(".resize-handle")?.focus();
-  }, [spaces, tabs, panes, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen]);
+  }, [spaces, tabs, panes, layout, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       routeWorkbenchKeydown(event, { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen });

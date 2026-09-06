@@ -1,7 +1,10 @@
 export type PrefixCommand =
   | "help" | "new-space" | "rename-space" | "close-space"
   | "new-tab" | "rename-tab" | "previous-tab" | "next-tab" | "close-tab"
-  | "rename-pane" | "split-right" | "split-down" | "close-pane" | "zoom-pane" | "resize";
+  | "rename-pane" | "split-right" | "split-down" | "close-pane" | "zoom-pane" | "resize"
+  | "previous-pane" | "next-pane" | "focus-left" | "focus-right" | "focus-up" | "focus-down"
+  | "open-file-picker" | "focus-file-tree" | "focus-file-content"
+  | `select-tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export function prefixCommandForKey(key: string, shiftKey: boolean): PrefixCommand | null {
   if (key === "?") return "help";
@@ -19,6 +22,16 @@ export function prefixCommandForKey(key: string, shiftKey: boolean): PrefixComma
   if (!shiftKey && key === "x") return "close-pane";
   if (!shiftKey && key === "z") return "zoom-pane";
   if (!shiftKey && key === "r") return "resize";
+  if (!shiftKey && key === "o") return "next-pane";
+  if (shiftKey && key.toLowerCase() === "o") return "previous-pane";
+  if (!shiftKey && key === "h") return "focus-left";
+  if (!shiftKey && key === "j") return "focus-down";
+  if (!shiftKey && key === "k") return "focus-up";
+  if (!shiftKey && key === "l") return "focus-right";
+  if (!shiftKey && key === "f") return "open-file-picker";
+  if (!shiftKey && key === "[") return "focus-file-tree";
+  if (!shiftKey && key === "]") return "focus-file-content";
+  if (!shiftKey && /^[1-9]$/.test(key)) return `select-tab-${key}` as PrefixCommand;
   return null;
 }
 
@@ -34,6 +47,10 @@ export type WorkbenchKeyRouting = {
   setPrefixActive: (active: boolean) => void;
   setCommandsOpen: (open: boolean) => void;
 };
+
+function modifierOnlyKey(key: string): boolean {
+  return key === "Shift" || key === "Control" || key === "Alt" || key === "Meta";
+}
 
 export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
   if (event.isComposing) return;
@@ -62,6 +79,7 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
     return;
   }
   if (!prefixSafe) return;
+  if (modifierOnlyKey(event.key)) return;
   if (event.ctrlKey || event.altKey || event.metaKey) {
     routing.setPrefixActive(false);
     return;

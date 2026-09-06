@@ -16,7 +16,7 @@ export function scheduleFocusFallback(isCurrent: () => boolean, onDelayed: () =>
 
 export type FocusLocation = { spaceId: string | null; tabId: string | null; paneId: string | null };
 type StatusError = { message: string; code?: string };
-type FocusIntent = { epoch: number; token: number; request: FocusRequest; location: FocusLocation };
+type FocusIntent = { epoch: number; sessionId: string; token: number; request: FocusRequest; location: FocusLocation };
 
 export type FocusCoordinatorOptions = {
   client: CockpitClient;
@@ -30,16 +30,62 @@ export type FocusCoordinatorOptions = {
 export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, describeError, onTimeout }: FocusCoordinatorOptions) {
   const tokenRef = useRef(0);
   const intentRef = useRef<FocusIntent | null>(null);
+  const inFlightRef = useRef(new Map<string, FocusIntent>());
+  const queuedIntentRef = useRef<FocusIntent | null>(null);
   const fallbackCancelRef = useRef<(() => void) | null>(null);
   const [focusDelayed, setFocusDelayed] = useState(false);
 
   const reset = useCallback(() => {
     tokenRef.current += 1;
     intentRef.current = null;
+    queuedIntentRef.current = null;
     fallbackCancelRef.current?.();
     fallbackCancelRef.current = null;
     setFocusDelayed(false);
   }, []);
+
+  const isCurrent = (intent: FocusIntent): boolean =>
+    mountedRef.current &&
+    stateRef.current.epoch === intent.epoch &&
+    stateRef.current.sessionId === intent.sessionId &&
+    tokenRef.current === intent.token;
+
+  const sendFocus = (intent: FocusIntent): void => {
+    inFlightRef.current.set(intent.sessionId, intent);
+    void client.focus(intent.sessionId, intent.request).then((response) => {
+      if (!isCurrent(intent)) return;
+      if (!response.accepted) {
+        dispatch({ type: "focus/error", epoch: intent.epoch, sessionId: intent.sessionId, token: intent.token, code: "focus_rejected", message: "Herdr did not accept this focus request" });
+        return;
+      }
+      if (!stateRef.current.focusPending) return;
+      fallbackCancelRef.current = scheduleFocusFallback(
+        () => isCurrent(intent) && stateRef.current.focusPending !== null,
+        () => setFocusDelayed(true),
+        () => {
+          fallbackCancelRef.current = null;
+          setFocusDelayed(false);
+          dispatch({ type: "focus/error", epoch: intent.epoch, sessionId: intent.sessionId, token: intent.token, code: "focus_timeout", message: "Herdr did not confirm this focus request" });
+          onTimeout();
+        },
+      );
+    }, (error: unknown) => {
+      if (!isCurrent(intent)) return;
+      const described = describeError(error, "Could not focus resource");
+      intentRef.current = intent;
+      fallbackCancelRef.current?.();
+      fallbackCancelRef.current = null;
+      setFocusDelayed(false);
+      dispatch({ type: "focus/error", epoch: intent.epoch, sessionId: intent.sessionId, token: intent.token, code: described.code ?? "focus_error", message: described.message });
+    }).finally(() => {
+      if (inFlightRef.current.get(intent.sessionId) !== intent) return;
+      inFlightRef.current.delete(intent.sessionId);
+      const queued = queuedIntentRef.current;
+      if (!queued || queued.sessionId !== intent.sessionId) return;
+      queuedIntentRef.current = null;
+      if (isCurrent(queued)) sendFocus(queued);
+    });
+  };
 
   const focus = useCallback((request: FocusRequest, location: FocusLocation) => {
     const current = stateRef.current;
@@ -51,34 +97,14 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
     fallbackCancelRef.current?.();
     fallbackCancelRef.current = null;
     setFocusDelayed(false);
-    intentRef.current = { epoch, token, request, location };
+    const intent = { epoch, sessionId, token, request, location };
+    intentRef.current = intent;
     dispatch({ type: "focus/request", epoch, sessionId, request, token });
-    void client.focus(sessionId, request).then((response) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || tokenRef.current !== token) return;
-      if (!response.accepted) {
-        dispatch({ type: "focus/error", epoch, sessionId, token, code: "focus_rejected", message: "Herdr did not accept this focus request" });
-        return;
-      }
-      if (!stateRef.current.focusPending) return;
-      fallbackCancelRef.current = scheduleFocusFallback(
-        () => mountedRef.current && stateRef.current.epoch === epoch && stateRef.current.sessionId === sessionId && tokenRef.current === token && stateRef.current.focusPending !== null,
-        () => setFocusDelayed(true),
-        () => {
-          fallbackCancelRef.current = null;
-          setFocusDelayed(false);
-          dispatch({ type: "focus/error", epoch, sessionId, token, code: "focus_timeout", message: "Herdr did not confirm this focus request" });
-          onTimeout();
-        },
-      );
-    }, (error: unknown) => {
-      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId || tokenRef.current !== token) return;
-      const described = describeError(error, "Could not focus resource");
-      intentRef.current = { epoch, token, request, location };
-      fallbackCancelRef.current?.();
-      fallbackCancelRef.current = null;
-      setFocusDelayed(false);
-      dispatch({ type: "focus/error", epoch, sessionId, token, code: described.code ?? "focus_error", message: described.message });
-    });
+    if (inFlightRef.current.has(sessionId)) {
+      queuedIntentRef.current = intent;
+      return;
+    }
+    sendFocus(intent);
   }, [client, describeError, dispatch, mountedRef, onTimeout, stateRef]);
 
   const retryFocus = useCallback(() => {

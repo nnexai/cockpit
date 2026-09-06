@@ -294,7 +294,9 @@ describe("mounted App mutation and session ordering", () => {
     const overlay = container.querySelector<HTMLElement>(".command-overlay");
     const shortcuts = overlay?.querySelector<HTMLElement>(".shortcut-list");
     expect(overlay?.querySelectorAll(".command-actions .session-command")).toHaveLength(9);
-    expect(shortcuts?.querySelectorAll(":scope > .shortcut-row")).toHaveLength(2);
+    expect([...shortcuts!.querySelectorAll(":scope > .shortcut-row span")].map((row) => row.textContent)).toEqual([
+      "commands", "select tab", "next / previous pane", "focus pane left down up right", "open file picker", "focus file tree / content", "resource commands",
+    ]);
     expect(button("Open Review right").disabled).toBe(true);
     expect(button("Open Review right").title).toBe("Review requires a configured repository");
   });

@@ -305,3 +305,16 @@ Verified `herdr-file-viewer` panes may render any safe browsing folder without t
 - Pane and Commands menus expose Open files right/below beside Review. Files launch the installed file viewer at the selected pane's verified Git root or working directory without task setup. Open Context retains its companion-only launch meaning; both actions use Herdr's existing plugin pane operation and Cockpit's bounded root checks.
 
 - The native window disables toolkit decorations. Cockpit starts at its existing application UI; the compositor manages moving, resizing, and closing the window. This removes the redundant GTK title bar requested by the user on niri.
+
+
+## 2026-09-06: daily-use input, file navigation, and native installation
+
+Ctrl+B stays armed across modifier-only keydowns. This fixes Shift cancelling the prefix before a shifted command; there is no prefix timeout. Desktop additions include numbered tabs, pane cycling/directional focus, and local file navigation. Pane destinations derive from the latest Herdr layout; selection still requires Herdr confirmation.
+
+Focus requests are serialized per session and coalesce to the latest queued click. A delayed older request must finish before a newer request for the same session is sent. Different sessions have independent in-flight requests. Reset invalidates queued intent while preserving ordering for an outstanding request to that session.
+
+Files and Review own their document/tree focus and fuzzy picker. Files indexes bounded directory listings within its authorized root and cancels on dismissal or root change; Review searches the current comparison. New renderable files open in preview with one source toggle. Existing unsent line comments remain visible in Markdown preview. Repository-discovery warnings have one location in Files and name the numeric configurable budget.
+
+The native installer builds a standalone Tauri binary and writes a stable user desktop launcher. Updates atomically replace the executable without stopping running processes. Installation ownership is recorded for scoped update/uninstall. This workflow is verified in a disposable prefix; the user's running installation and Herdr default session were not changed.
+
+Verification and limits are recorded in `planning/daily-use-2026-09-06.md`.

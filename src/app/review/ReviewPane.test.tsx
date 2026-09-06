@@ -68,6 +68,29 @@ it("groups file paths while retaining separate staged and unstaged entries", asy
   }
 });
 
+it("opens the fzf-style picker from a focused review and selects with Ctrl+N then Enter", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const second = { ...changedFile, file_id: "second", old_path: "docs/target.md", new_path: "docs/target.md" };
+  const loadFile = vi.fn(async () => diff);
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="picker" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files: [changedFile, second] })} file={loadFile} />));
+    const surface = host.querySelector<HTMLElement>(".review-diff")!;
+    surface.focus();
+    await act(async () => surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    const input = host.querySelector<HTMLInputElement>(".file-picker input")!;
+    expect(input).not.toBeNull();
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "n", ctrlKey: true })));
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" })));
+    await act(async () => { await Promise.resolve(); });
+    expect(loadFile).toHaveBeenLastCalledWith(expect.objectContaining({ file_id: "second" }), expect.any(AbortSignal));
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
 it("continues hunk navigation and comments from the hunk selected by the mouse", async () => {
   const host = window.document.createElement("div");
   window.document.body.append(host);

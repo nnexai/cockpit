@@ -10,6 +10,7 @@ import {
   orderAgentsByHerdrPriority,
   nextModalFocusIndex,
   reconcileSessionChoice,
+  paneIdInDirection,
   spaceDropBeforeId,
   projectSpaceTree,
   spaceStatus,
@@ -329,7 +330,57 @@ describe("desktop command routing", () => {
     expect(prefixCommandForKey("r", false)).toBe("resize");
     expect(prefixCommandForKey("-", false)).toBe("split-down");
     expect(prefixCommandForKey("x", false)).toBe("close-pane");
+    expect(prefixCommandForKey("o", false)).toBe("next-pane");
+    expect(prefixCommandForKey("O", true)).toBe("previous-pane");
+    expect(prefixCommandForKey("h", false)).toBe("focus-left");
+    expect(prefixCommandForKey("j", false)).toBe("focus-down");
+    expect(prefixCommandForKey("k", false)).toBe("focus-up");
+    expect(prefixCommandForKey("l", false)).toBe("focus-right");
+    expect(prefixCommandForKey("f", false)).toBe("open-file-picker");
+    expect(prefixCommandForKey("[", false)).toBe("focus-file-tree");
+    expect(prefixCommandForKey("]", false)).toBe("focus-file-content");
+    expect(prefixCommandForKey("4", false)).toBe("select-tab-4");
     expect(prefixCommandForKey("D", false)).toBeNull();
+  });
+  it("keeps the prefix armed across modifier-only keydowns until the shifted command arrives", () => {
+    const runCommand = vi.fn();
+    const setCommandsOpen = vi.fn();
+    let prefixActive = false;
+    const setPrefixActive = vi.fn((active: boolean) => { prefixActive = active; });
+    const route = (event: KeyboardEvent) => routeWorkbenchKeydown(event, { modalOpen: false, prefixActive, runCommand, setPrefixActive, setCommandsOpen });
+
+    route(routingEvent({ key: "b", ctrlKey: true }));
+    expect(prefixActive).toBe(true);
+
+    for (const event of [
+      routingEvent({ key: "Shift", shiftKey: true }),
+      routingEvent({ key: "Control", ctrlKey: true }),
+      routingEvent({ key: "Alt", altKey: true }),
+      routingEvent({ key: "Meta", metaKey: true }),
+    ]) route(event);
+    expect(prefixActive).toBe(true);
+    expect(runCommand).not.toHaveBeenCalled();
+
+    route(routingEvent({ key: "N", shiftKey: true }));
+    expect(prefixActive).toBe(false);
+    expect(runCommand).toHaveBeenCalledExactlyOnceWith("new-space");
+  });
+  it("uses authoritative layout geometry only to choose the next pane focus target", () => {
+    const layout: TabLayout = {
+      space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 40, height: 40 }, focused_pane_id: "center", zoomed: false,
+      panes: [
+        { pane_id: "center", focused: true, rect: { x: 10, y: 10, width: 20, height: 20 } },
+        { pane_id: "left", focused: false, rect: { x: 0, y: 10, width: 10, height: 20 } },
+        { pane_id: "right", focused: false, rect: { x: 30, y: 10, width: 10, height: 20 } },
+        { pane_id: "up", focused: false, rect: { x: 10, y: 0, width: 20, height: 10 } },
+        { pane_id: "down", focused: false, rect: { x: 10, y: 30, width: 20, height: 10 } },
+      ],
+    };
+    expect(paneIdInDirection(layout, "center", "left")).toBe("left");
+    expect(paneIdInDirection(layout, "center", "right")).toBe("right");
+    expect(paneIdInDirection(layout, "center", "up")).toBe("up");
+    expect(paneIdInDirection(layout, "center", "down")).toBe("down");
+    expect(paneIdInDirection(layout, "left", "left")).toBeNull();
   });
   it("routes prefix input before terminal handlers without changing ordinary typing or unknown-prefix policy", () => {
     const runCommand = vi.fn();

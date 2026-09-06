@@ -71,6 +71,108 @@ it("opens only requested directories, compresses loaded single-child paths, and 
     expect(host.querySelector('[data-context-path="src/deep"]')?.textContent).toContain("src/deep");
     await press(row("src/deep/example.html"), "Enter");
     expect(documentRead).toHaveBeenCalledWith("session", "pane", expect.objectContaining({ path: "src/deep/example.html" }), expect.any(AbortSignal));
+    await settle();
+    expect(host.querySelector("iframe[title='src/deep/example.html preview']")).not.toBeNull();
+    expect(host.textContent).not.toContain("Read-only");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("indexes unopened nested files for the picker and opens the selected result", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
+    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: request.path === ""
+      ? [{ entry_id: "nested", name: "nested", path: "nested", kind: "directory", bytes: null, revision: "r1", refusal: null }]
+      : [{ entry_id: "target", name: "target.md", path: "nested/target.md", kind: "file", bytes: 12, revision: "r2", refusal: null }],
+  }));
+  const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r2", content_hash: null, bytes: 12, media_type: "text/markdown", text: "# Target", truncated: false, diagnostics: [] }));
+  const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    const treeFile = host.querySelector<HTMLButtonElement>("[data-context-path='nested']")!;
+    treeFile.focus();
+    await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await settle(); await settle(); await settle();
+    expect(directory.mock.calls.map((call) => call[2].path)).toContain("nested");
+    const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.textContent?.includes("nested/target.md"));
+    expect(result).toBeDefined();
+    await act(async () => result?.click());
+    await settle();
+    expect(documentRead).toHaveBeenCalledWith("session", "pane", expect.objectContaining({ path: "nested/target.md" }), expect.any(AbortSignal));
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(document.activeElement).toBe(host.querySelector(".context-document"));
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("cancels recursive picker indexing when the picker is dismissed", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  let requestCount = 0;
+  let pickerSignal: AbortSignal | undefined;
+  const directory = vi.fn((_session: string, _pane: string, request: { path: string }, signal?: AbortSignal): Promise<ContextDirectory> => {
+    requestCount += 1;
+    if (requestCount === 1) return Promise.resolve({ binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: [{ entry_id: "first", name: "first.ts", path: "first.ts", kind: "file", bytes: 1, revision: "r1", refusal: null }] });
+    pickerSignal = signal;
+    return new Promise(() => undefined);
+  });
+  const client = { contextDirectory: directory } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    const treeFile = host.querySelector<HTMLButtonElement>("[data-context-path='first.ts']")!;
+    treeFile.focus();
+    await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await settle();
+    expect(pickerSignal).toBeDefined();
+    const input = host.querySelector<HTMLInputElement>(".file-picker input")!;
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })));
+    expect(pickerSignal?.aborted).toBe(true);
+    expect(host.querySelector(".file-picker")).toBeNull();
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("caps picker results when one directory exceeds the picker file limit", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  let requestCount = 0;
+  const entries = Array.from({ length: 10_001 }, (_, index) => ({ entry_id: `entry-${index}`, name: `file-${index}.ts`, path: `file-${index}.ts`, kind: "file" as const, bytes: 1, revision: "r1", refusal: null }));
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: requestCount++ === 0 ? [] : entries }));
+  const client = { contextDirectory: directory } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    const viewer = host.querySelector<HTMLElement>(".context-viewer")!;
+    await act(async () => viewer.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await settle(); await settle(); await settle();
+    expect(host.querySelector(".file-picker-status")?.textContent).toBe("10000 files · index incomplete");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
