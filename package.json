@@ -12,7 +12,8 @@
     "quality:report": "python3 scripts/quality/gate.py report",
     "quality:gate": "python3 scripts/quality/gate.py gate",
     "tauri:dev": "bunx tauri dev",
-    "tauri:build": "NO_STRIP=1 bunx tauri build"
+    "tauri:build": "NO_STRIP=1 bunx tauri build",
+    "native:install": "python3 scripts/install-native.py"
   },
   "engines": {
     "bun": ">=1.3.14 <1.4",
