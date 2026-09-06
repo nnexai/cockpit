@@ -563,6 +563,18 @@ fn append_bounded(body: &mut String, value: &str, limit: usize) -> Result<(), In
     }
     Ok(())
 }
+fn parse_comments(value: &[u8]) -> Result<Vec<Comment>, InspectionError> {
+    if value.trim_ascii() == b"No comments found" {
+        return Ok(Vec::new());
+    }
+    serde_json::from_slice(value).map_err(|_| {
+        InspectionError::new(
+            "source_provider_contract",
+            "Tea comment JSON did not match the verified contract",
+        )
+    })
+}
+
 #[async_trait]
 impl SourceProvider for TeaSourceProvider {
     fn provider_id(&self) -> &str {
@@ -616,7 +628,7 @@ impl SourceProvider for TeaSourceProvider {
         }
         let mut comments = Vec::new();
         for page in 1..=MAX_COMMENT_PAGES {
-            let page_comments: Vec<Comment> = serde_json::from_slice(
+            let page_comments = parse_comments(
                 &self
                     .command(&vec![
                         "comments".into(),
@@ -634,13 +646,7 @@ impl SourceProvider for TeaSourceProvider {
                         self.login.clone(),
                     ])
                     .await?,
-            )
-            .map_err(|_| {
-                InspectionError::new(
-                    "source_provider_contract",
-                    "Tea comment JSON did not match the verified contract",
-                )
-            })?;
+            )?;
             let full = page_comments.len() == COMMENTS_PER_PAGE as usize;
             comments.extend(page_comments);
             if !full {
@@ -687,7 +693,7 @@ impl SourceProvider for TeaSourceProvider {
 mod tests {
     use super::{
         Duration, SourceFetchRequest, SourceProvider, TeaSourceProvider, Url, base_path,
-        provider_instance,
+        parse_comments, provider_instance,
     };
     use cockpit_core::sources::SourceAuthority;
     use std::io::{Read, Write};
@@ -704,6 +710,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum FixtureMode {
         WrongIssueIndex,
+        EmptyComments,
         SecondCommentPage,
         ExhaustCommentBudget,
         Review,
@@ -876,6 +883,7 @@ mod tests {
                 .unwrap_or(1);
             return match mode {
                 FixtureMode::WrongIssueIndex => comments_json(1, "comment"),
+                FixtureMode::EmptyComments => "[]".into(),
                 FixtureMode::SecondCommentPage if page == 1 => {
                     comments_json(100, "page-one-comment")
                 }
@@ -1035,6 +1043,23 @@ mod tests {
         assert!(seen.iter().any(|line| line.contains("issues/1")));
         assert!(seen.iter().any(|line| line.contains("comments")));
     }
+    #[test]
+    fn localhost_tea_treats_no_comments_as_empty() {
+        let Some(fixture) = TeaFixture::new(FixtureMode::EmptyComments) else {
+            return;
+        };
+        let assets = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fixture.provider().fetch(&fixture.request(1)))
+            .unwrap();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].body, "body");
+    }
+    #[test]
+    fn tea_no_comments_message_is_treated_as_empty() {
+        assert!(parse_comments(b"No comments found\n").unwrap().is_empty());
+    }
+
     #[test]
     fn artifact_authority_rejects_userinfo_port_and_prefix_mismatches_before_process() {
         let provider = TeaSourceProvider {
