@@ -20,9 +20,13 @@ The user selects the WebUI for tight-loop behavioral checks. Native AppImage sta
 
 Protocol 20 uses one `TerminalAnsi` / `TerminalAttach` stream per visible pane. First-full and consecutive-frame rules apply across all adapters. Full repaint bytes do not reset xterm. A sole bounded socket reader survives concurrent input/resize/scroll; known auxiliary and graphics traffic is consumed without disconnecting text. Protocol-22/client-shell code and the image addon leave the active path; history stays reachable.
 
-## DEC-006: Required mouse capability remains blocked
+## DEC-006: Historical direct-attach application-mouse limitation
 
-The pinned stable direct-attach API does not expose safe pane-targeted application mouse state/coordinates. Its raw Input path and globally routed InputEvents do not justify unconditional SGR or guessed global coordinates. Advertise terminal_mouse_input=false, preserve click/focus and direct scrolling, and keep G01 incomplete. This is not a scope waiver; independent selected work continues.
+At the 2026-09-04 run checkpoint, the pinned stable direct-attach API did not expose safe pane-targeted application-mouse state/coordinates. Its raw Input path and globally routed InputEvents did not justify unconditional SGR or guessed global coordinates. The checkpoint therefore recorded `terminal_mouse_input=false`, preserved click/focus and direct scrolling, and kept G01 incomplete. This remains the historical decision for that path, not a current claim that Herdr 0.8.2 cannot carry SGR through other APIs.
+
+## POST-006: 2026-09-06 mouse-input correction
+
+The later live check verified a press/release SGR pair delivered by `herdr pane send-keys` to the fixture; the user also reports wheel/scroll delivery through ordinary xterm.js panes attached to Herdr. The active decision now separates physical direct-attach filtering, explicit CLI emulation, normal xterm.js scrolling, and structured app-mode pointer routing. Native pointer forwarding remains to trace; if unavailable, an explicit ownership-gated emulator is permitted. No unconditional shell-prompt injection or guessed global coordinates are permitted.
 
 ## DEC-007: Native packaging tool compatibility
 

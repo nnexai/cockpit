@@ -92,8 +92,8 @@ This records the decisions made during the architecture refinement interview. It
 - The JSON API remains authoritative for hierarchy, focus, and layout. One bounded reader owns each framed terminal socket without cancellation between its header and payload.
 - xterm.js renderers are mounted only for panes visible in the selected tab. Hidden tabs detach renderers/subscriptions while Herdr processes continue running.
 - Cockpit fits each pane before attachment and sends character dimensions and measured cell pixels.
-- Text/binary input uses stable raw `Input`; wheel/page scrolling uses `AttachScroll`, gated by local control intent and attachment state.
-- Click-to-focus remains available. Safe application-mouse routing is not exposed by the selected direct-attach contract; G01 remains blocked rather than substituting global coordinates or unconditional SGR.
+- Text/binary input uses stable raw `Input`; wheel/page scrolling uses `AttachScroll`, gated by local control intent and attachment state. Normal xterm.js panes attached to Herdr are also observed to receive wheel/scroll events.
+- Click-to-focus remains available. The earlier physical X11 direct-attach result does not establish that Herdr 0.8.2 cannot deliver SGR. Herdr's one-shot `pane.send-keys`/`pane.send-text` surfaces can inject SGR bytes into a pane PTY; keep structured application-mouse capability separate until app-mode coordinates, ownership, and physical pointer routing are proven.
 - Terminal graphics are parked and the image addon is removed. Known auxiliary/graphics traffic is bounded and consumed without disconnecting text terminals. Enhanced keyboard reporting is a separate capability to revalidate.
 - Control and observe requests use stable attach modes. Semantic focus, local control intent, attachment state, and process closure remain independent.
 - Attach/reconnect failure leaves the resource visible with stale/disconnected status, retry, and resync; the Herdr process is not silently closed.
@@ -173,7 +173,7 @@ This records the decisions made during the architecture refinement interview. It
 ## Known risks
 
 1. **Stable compatibility is a hard runtime boundary.** The active adapter targets protocol 20/schema 1 with Herdr 0.8.2 fixtures; incompatible protocols are rejected before attachment. Protocol-22 history remains reachable.
-2. **Required application mouse and temporal acceptance remain incomplete.** Successful text/input bootstrap does not establish safe app-mode mouse routing or G01 scrolling/temporal passage.
+2. **Application-mouse and temporal acceptance are split, not categorically blocked.** Explicit CLI SGR injection and normal xterm.js wheel delivery are verified/observed. Native/browser physical click forwarding, safe app-mode coordinates, drag/release, ownership, and full G01 temporal acceptance remain incomplete; the old direct-attach negative is not a blanket Herdr limitation.
 3. **Accessibility is intentionally best effort for this personal proof of concept, not a gate for broader distribution.**
 4. **No index/scratchpad means context membership is derived from the companion tree and frontmatter; human-created files are displayed but not managed by Cockpit.**
 5. **Herdr “Space” UI labels map to Herdr API “workspace” resources.** The adapter must keep this translation explicit.
@@ -219,7 +219,7 @@ Scrolling is included in that first stability gate: viewport continuity, scroll 
 
 ## Selected stable Herdr target, 2026-09-04
 
-The user chose to give up the custom protocol-22 path for now, preserving it in committed history, and explicitly requires retaining mouse click handling. Stable Herdr is the default target for the next implementation. Commit `7e8fe25546ce5fa9364cab100522af6d63343e4a` preserves protocol-22/TGP work; `34459ab` and `582792e` contain pre-22 input/mouse work to evaluate and retain. Verify stable capabilities instead of assuming a historical protocol version. Required migration gates include native/browser pane clicks/focus, application mouse events, and scrolling. Terminal TGP may remain parked; Context GUI Markdown/Mermaid/images remain in scope. No current installation or running server is changed during planning.
+The user chose to give up the custom protocol-22 path for now, preserving it in committed history, and explicitly requires retaining mouse click handling. Stable Herdr is the default target. Commit `7e8fe25546ce5fa9364cab100522af6d63343e4a` preserves protocol-22/TGP work; `34459ab` and `582792e` contain pre-22 input/mouse work to evaluate and retain. Verify stable capabilities instead of assuming a historical protocol version. Required migration gates distinguish CLI-injected SGR and normal xterm.js wheel delivery from native/browser pane clicks/focus, application-mode mouse events, and scrolling quality. Terminal TGP may remain parked; Context GUI Markdown/Mermaid/images remain in scope. No current installation or running server is changed during planning.
 
 ## Orchestrator startup constraint
 
@@ -231,7 +231,7 @@ The implementation run `run-20260904T214621Z` pins the installed Homebrew Herdr 
 
 Browser and native AppImage smokes rendered the stable ANSI fixture and delivered byte-exact input to their recorded disposable panes. Source review corrected partial-read cancellation, repaint resets, nonconsecutive full-frame acceptance, and auxiliary-message disconnects. These checks establish bootstrap behavior, not full migration or release acceptance.
 
-The user selected WebUI-first behavioral verification and native AppImage startup/simple compatibility checks for this run. Required browser temporal, scrolling, focus, and application-mouse assertions remain in scope. A missing stable mouse API is a blocker, not a waiver.
+The user selected WebUI-first behavioral verification and native AppImage startup/simple compatibility checks for this run. Required browser temporal, scrolling, focus, and application-mouse assertions remain in scope. The old “missing stable mouse API” wording is superseded: the direct-attach physical-pointer path is still unproven, but stable Herdr 0.8.2 SGR delivery is demonstrated through `pane.send-keys`, and normal xterm.js wheel delivery is observed. A remaining app-mode or native pointer gap is an acceptance gap, not proof that SGR input is impossible.
 
 On this Fedora host, linuxdeploy's bundled `strip` cannot parse `.relr.dyn`. The supported `NO_STRIP=1` packaging option preserves the ELF data instead of applying the incompatible rewrite; it does not bypass compilation or runtime smoke. The resulting AppImage is stored only with run-owned artifacts, not installed.
 
@@ -245,13 +245,19 @@ A mutating request that may have reached Herdr is not safe to retry automaticall
 
 Mutation responses acknowledge the operation; only a newly ordered session stream grants fresh focus/control authority. Session changes, removed-session fallback, and newer list refreshes invalidate older callbacks. Browser and native session adapters share one stream-order policy and fail closed on gaps.
 
-Workbench prefix commands are consumed before xterm input. Normal xterm pointer events remain available when Cockpit's separate structured-mouse capability is disabled, restoring text selection. Input during reattachment is not yet guaranteed; attachment cancellation and queued-input ownership remain REPAIR-03 work.
+Workbench prefix commands are consumed before xterm input. Normal xterm pointer events remain available when Cockpit's separate structured-mouse capability is disabled, restoring text selection; wheel/scroll events are observed through the normal xterm.js pane path. Input during reattachment is not yet guaranteed; attachment cancellation and queued-input ownership remain REPAIR-03 work.
 
 Installation and per-session compatibility probes commit only within their captured invalidation generations. Event subscriptions retain their initial identity across reconnects and terminate on an identity mismatch so a new subscription must re-inspect it.
 
-Stock Herdr 0.8.2 sends `MouseCapture` only to full-app clients, never direct terminal attachments. Its direct-attach client captures host mouse input for scrolling but discards non-wheel reports. Neither the public schema nor the attach handshake exposes per-terminal mouse modes. Full-app coordinates cannot safely substitute for pane-targeted input because dispatch uses mutable global layout.
+The stock Herdr 0.8.2 source review says that the physical host-mouse path used by `herdr terminal attach` captures wheel for `AttachScroll` but drops non-wheel reports. This remains a scoped explanation of the Ghostty/X11 experiment. It does not cover `pane.send-keys`, `pane.send-text`, or the normal xterm.js wheel path, and it does not prove a blanket Herdr/PTy inability to carry SGR bytes.
 
-The user explicitly chose to retain the stock Homebrew binary, record application mouse as blocked, and continue product features. Do not patch Herdr, force application mouse capture in shells, or expand the terminal investigation. The unshippable forwarding experiment is archived outside the repository; production source retains the verified recovery/selection implementation from `fe53b86`.
+On 2026-09-06, `scripts/verify/send_mouse_sgr.py` invoked `herdr pane send-keys` against the running `MOUSE-FEEDBACK-READY` pane with `ESC[<0;30;9M` and `ESC[<0;30;9m`; the pane reported `mouse 2: release button=0 x=30 y=9 wheel=False`. The user also reports working wheel/scroll delivery through ordinary xterm.js panes attached to Herdr.
+
+The application-mouse decision is therefore revised: remove the categorical upstream block. First investigate Cockpit/native pointer interception, focus, ownership, and coordinate routing. If physical forwarding remains unavailable, an explicit ownership-gated emulator using `pane.send-keys`/`pane.send-text` is a demonstrated fallback. Neither workaround marks structured app-mode coordinates, drag/release, native/browser parity, or G01 complete.
+
+## Mouse-input correction, 2026-09-06
+
+The stable input matrix now records separate paths: physical host mouse through direct attach (historical non-wheel negative), one-shot CLI SGR injection (verified), normal xterm.js wheel/scroll delivery (user-observed), and Cockpit structured app-mode pointer routing (still to trace). Future plans must name the path under test instead of collapsing all of them into “mouse unsupported.”
 
 Prioritize repository/worktree setup and graphical Context, then the remaining selected reference, source, and review workflows. Outstanding terminal/repair gates remain recorded; they do not authorize calling the release complete, but they no longer hold independent feature implementation behind additional terminal experiments.
 

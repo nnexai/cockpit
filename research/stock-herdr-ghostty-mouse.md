@@ -1,8 +1,23 @@
 # Stock Herdr + Ghostty mouse experiment
 
-**Verdict: FAIL for button delivery through `herdr terminal attach`; PASS for ordinary input.**
+**Original scoped verdict: FAIL for button delivery from physical X11 clicks through `herdr terminal attach`; PASS for ordinary input.**
 
-A real X11 click in an independent Ghostty window running stock Herdr terminal attach did not reach the fixture's PTY. The same fixture in a standalone Ghostty received the same kind of click (press and release), proving the GUI/X path and fixture mode were working.
+A real X11 click in an independent Ghostty window running stock Herdr terminal attach did not reach the fixture's PTY. The same fixture in a standalone Ghostty received the same kind of click (press and release), proving the GUI/X path and fixture mode were working. This result covers the physical host-mouse path exercised by that experiment; it does not cover Herdr's one-shot pane input APIs or every xterm.js attachment path.
+
+## 2026-09-06 correction: explicit SGR injection works
+
+The earlier experiment was overgeneralized into a claim that Herdr 0.8.2 direct attachment cannot deliver SGR mouse reports. A separate test used the installed Herdr 0.8.2 CLI and the running `MOUSE-FEEDBACK-READY` pane:
+
+```text
+python3 scripts/verify/send_mouse_sgr.py \
+  --session default --pane w1A:pJ --x 30 --y 9
+```
+
+The helper invokes `herdr pane send-keys` twice, splitting each report into `esc` plus one printable key token per character. The first report is `ESC[<0;30;9M`; the second is `ESC[<0;30;9m`. Herdr completed both commands, and `herdr pane read` showed `mouse 2: release button=0 x=30 y=9 wheel=False`; the count of 2 is the press/release pair.
+
+The user also reports that wheel/scroll events arrive through ordinary xterm.js panes attached to Herdr. This is positive evidence for the normal xterm.js scroll path, while the complete temporal/viewport acceptance remains a separate measurement.
+
+**Corrected conclusion:** Herdr 0.8.2 does not categorically eat SGR mouse bytes. The practical `pane.send-keys` workaround is verified, and `pane.send-text` is an available literal-input surface. The old Ghostty result remains valid only for physical non-wheel host reports through that direct-attach frontend path. Its failure now points to an interception or filtering point in that pointer/attach route, not a blanket Herdr/PTy inability. Treat native click routing as a repair target. If native delivery remains unavailable, an explicit ownership-gated emulator can convert a click into the same SGR report through `pane.send-keys` or `pane.send-text`; neither path justifies unconditional injection at shell prompts. Browser/native physical pointer forwarding, safe app-mode coordinate mapping, drag/release, and ownership behavior remain separate acceptance questions.
 
 ## Owned scenario and versions
 
@@ -69,7 +84,7 @@ xdotool windowfocus <window> mousemove --window <window> 500 300 mousedown 1 sle
 
 **Attached: PASS** ordinary-input positive control; **FAIL** click delivery.
 
-## Why this is an attach filtering result
+## Why the original physical-input result is path-specific
 
 Primary source is the pinned stock Herdr 0.8.2 source archive at `/home/nnex/.local/state/cockpit-execution/run-20260904T214621Z/herdr-0.8.2`:
 
@@ -78,7 +93,7 @@ Primary source is the pinned stock Herdr 0.8.2 source archive at `/home/nnex/.lo
 - `src/client/mod.rs:1523-1557` forwards only `AttachInputAction::Forward`; button events therefore do not become PTY bytes.
 - `src/app/mod.rs:1816-1822` routes captured mouse through Herdr when `state.mouse_capture` is true; `src/app/state.rs:1637-1655` shows that this is an independent capture condition.
 
-Thus app mode, GUI injection, attach readiness/ownership, and key input are all positively exercised; the missing button receipt is consistent with stock attach's non-wheel mouse filtering, not a Ghostty or fixture failure. No pre-encoded SGR bytes were injected and no source or production code was changed.
+These source findings explain the missing button receipt in this physical X11 attach run, not every Herdr input API or every xterm.js path. App mode, GUI injection, attach readiness/ownership, and key input were positively exercised; the missing button receipt is consistent with stock attach's non-wheel mouse filtering, not a Ghostty or fixture failure. No pre-encoded SGR bytes were injected in the original experiment and no source or production code was changed.
 
 ## Evidence and cleanup
 

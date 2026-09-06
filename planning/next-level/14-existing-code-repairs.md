@@ -211,8 +211,10 @@ the terminal.
    requests focus still waits for Herdr confirmation.
 4. Preserve application mouse behavior. A terminal click may select/focus the
    pane and request control; terminal mouse reporting may then send the
-   structured mouse command. The fix must not swallow pointer events or turn a
-   click into text input.
+   structured mouse command. Explicit `pane.send-keys`/`pane.send-text` SGR
+   injection is a verified diagnostic fallback, but it must not bypass focus or
+   ownership. The fix must not swallow pointer events or turn a click into text
+   input.
 
 ### Resize ownership investigation
 
@@ -244,9 +246,11 @@ inconclusive for that path, not a pass.
 
 Failure handling: a consumed shortcut is reported once to the coordinator;
 duplicate DOM listeners do not execute it twice. A terminal that is observing
-rejects text/mouse/scroll commands through its existing ownership rule. Input
-after ownership loss is queued or dropped according to the current bounded
-queue policy and never sent to a replacement stream.
+rejects text/mouse/scroll commands through its existing ownership rule. That
+stream rule does not contradict explicit one-shot Herdr pane APIs, which are
+separate and must remain explicit ownership-gated actions. Input after
+ownership loss is queued or dropped according to the current bounded queue
+policy and never sent to a replacement stream.
 
 Parallel safety: REPAIR-02 can run beside REPAIR-01 and REPAIR-04 after
 TERM-02. Do not extract `keymap.ts` as part of this repair. CLEAN-02 owns the
@@ -340,9 +344,11 @@ The mounted terminal fixture covers at least 6 state transitions: observing,
 pending control, owned, ownership conflict, ownership lost, and released. It
 checks that text/mouse/scroll are sent only in owned, resize follows the
 documented observer rule, and queued input is flushed once after ownership.
-Mouse click/focus, application mouse, and scrolling are mandatory gates on
-the selected stable Herdr path. The stream lifecycle fixture must pass with
-the stable path even if the parked protocol-22 actor is deleted.
+The verified CLI SGR injection path and the user-observed xterm.js wheel path
+are positive controls. Physical click/focus, application-mode mouse,
+coordinates/buttons/modifiers, and scrolling quality remain distinct gates on
+the selected stable Herdr path, even though a blanket Herdr mouse block is no
+longer valid.
 
 Failure handling: a retired token is a no-op with a diagnostic counter, not a
 command sent to the current subscriber. A malformed command produces the
@@ -511,9 +517,11 @@ an unrelated session/surface.
    compatibility rule until the single-surface coordinator investigation has
    evidence. Serialize all `terminal_wire.rs` edits with the terminal owner.
 8. Publish capabilities per operation. `terminal_mouse_input` is true only
-   when the selected stable pair proves it. Click/focus, application mouse,
-   scroll, resize, and graphics are separate observations; a parked or absent
-   graphics path must not be advertised as available. An unsupported operation
+   when the selected stable pair proves the actual structured application
+   mouse path. Click/focus, application mouse, scroll, resize, and graphics
+   are separate observations. A one-shot CLI SGR emulation route must not be
+   silently mapped to structured-pointer capability. A parked or absent
+   graphics path must not be advertised as available; an unsupported operation
    returns a stable capability error and leaves ordinary text terminals usable.
 
 ### Verification
@@ -537,7 +545,8 @@ pre-dispatch timeout, post-dispatch unknown outcome, malformed response,
 server unavailable, and disconnect. Each asserts stable operation code and
 message plus the host status where applicable.
 
-Capability tests cover at least 5 states: mouse available, mouse absent,
+Capability tests cover at least 5 states: structured mouse available,
+structured mouse absent or unverified, explicit SGR injection available,
 graphics parked, unsupported operation, and malformed capability payload. Both
 clients preserve the state and operation code without turning absence into a
 successful no-op.

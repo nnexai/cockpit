@@ -13,9 +13,26 @@ This document plans the migration. No installed binary, running server, dependen
 
 ## Failure to reproduce and measure
 
-The user reports repeated whole-view dark frames during redraw, several times per second during active agent code output or Codex `/pets`. Kitty images make it prominent, but text-only updates may trigger it too. Scrolling is also very poor; its mix of flicker, viewport jumps, and latency remains to be classified.
+The user initially reported repeated whole-view dark frames during redraw, several times per second during active agent code output or Codex `/pets`. Kitty images make it prominent, but text-only updates may trigger it too. Scrolling was also reported as poor; the current user observation is that wheel/scroll events arrive through normal xterm.js panes attached to Herdr. Viewport continuity, tail-follow behavior, and latency still require measurement.
 
 Current code behavior is known: `send_pane_patch` emits a full text frame, `TerminalPane` resets xterm for full frames, and graphics encoding deletes and retransmits the image scene. The frontend also schedules canvas invalidation. These observations identify paths for tracing; this planning review has not reproduced the user's visual failure or established its sole cause. The existing one-image smoke script cannot prove redraw/scroll stability.
+
+## Mouse-input evidence correction, 2026-09-06
+
+The earlier Ghostty experiment was a valid negative result for physical X11 button reports through `herdr terminal attach`, but it was overgeneralized into a stable-Herdr impossibility claim. A separate live check used `scripts/verify/send_mouse_sgr.py` and `herdr pane send-keys` to emit `ESC[<0;30;9M` and `ESC[<0;30;9m` to the `MOUSE-FEEDBACK-READY` pane. The pane reported `mouse 2: release button=0 x=30 y=9 wheel=False`, confirming the press/release pair reached the fixture.
+
+The current evidence matrix is:
+
+| Input path | Status | Consequence |
+|---|---|---|
+| Physical non-wheel host reports through direct `terminal attach` | Historical negative | Investigate interception/filtering in that path; do not generalize it to all input |
+| Explicit `pane.send-keys` SGR injection | Verified | Usable diagnostic/emulation fallback |
+| Explicit `pane.send-text` literal input | Available API surface | Can support the same fallback when literal bytes are required |
+| Normal xterm.js wheel/scroll path | User-observed positive | Treat scroll transport as working; measure viewport quality separately |
+| Cockpit structured app-mode pointer routing | Unresolved | Trace focus, ownership, event suppression, and coordinate translation |
+
+Native pointer delivery may work in the current setup once the preventing route is found. If it does not, explicit ownership-gated SGR emulation is an accepted fallback for the affected action; neither path should be silently conflated with the other.
+
 
 ## BOOT-01: restore stable protocol compatibility before runtime smoke
 
@@ -50,16 +67,16 @@ Exit: exact available build identities, a reproducible workload, a working tempo
 
 Owner: one Terra implementation lane across the terminal adapter/presenter; Luna may supply fixtures in exclusive files. Serialize REPAIR-03 attachment/registry edits with this work.
 
-1. Freeze a compatibility matrix for the selected stable server: session snapshots/events, focus/layout, terminal attach/input/resize/scroll, mouse capture/events, pane process inspection, plugin launch, worktree lifecycle, and byte-paste APIs. Classify each as verified, absent, or unknown. Keep required terminal/input capabilities blocking.
+1. Freeze a compatibility matrix for the selected stable server: session snapshots/events, focus/layout, terminal attach/input/resize/scroll, physical host mouse, CLI SGR injection, xterm.js wheel delivery, structured app-mode mouse, pane process inspection, plugin launch, worktree lifecycle, and byte-paste APIs. Classify each path as verified, absent, or unknown. Keep required terminal/input capabilities blocking only at the correct path.
 2. Recover the stable-compatible transport from reviewed pre-22 code where appropriate. Keep explicit protocol/schema validation and exact target identity. Reconcile newer error/validation/input fixes into the recovered code instead of copying whole files without review.
 3. Remove the custom protocol-22 requirement from the active default. Park unsupported terminal graphics explicitly. Retain Kitty keyboard support if verified independently; graphics and keyboard are separate capabilities. Do not build permanent dual-protocol infrastructure solely to keep the parked experiment loaded.
-4. Preserve mouse click-to-focus and input routing. Test a click on an inactive pane, the Herdr-confirmed focus result, application-mode pointer coordinates/button/modifiers, drag/release where supported by the existing contract, and wheel/page scrolling. No event may land in the previously focused pane or execute twice. Native/browser capability parity must be honest; disabling mouse and calling migration complete is not acceptable.
+4. Preserve mouse click-to-focus and input routing. Use the verified CLI SGR injection and user-observed xterm.js wheel path as positive controls, then separately test physical browser/native pointer delivery, Herdr-confirmed focus, app-mode coordinates/buttons/modifiers, drag/release where supported, and scroll position. No event may land in the previously focused pane or execute twice. Native/browser capability parity must be honest; disabling mouse and calling migration complete is not acceptable.
 5. Preserve ordinary keyboard input and the established modified-Enter behavior, and fix workbench-prefix consumption through REPAIR-02. Terminal text updates must not require clearing unrelated panes or discarding the user-selected scroll position. Honor the stable server's scroll authority rather than creating a competing local buffer model.
 6. Restore the appropriate verified renderer/addon configuration for this path. Do not assume turning off the image addon fixes the new transport's full redraw behavior. Remove unused graphics-reset/compositor workarounds from the default path only after confirming their responsibilities are no longer needed.
 7. Ensure image-producing applications still leave a usable stable text terminal when TGP is unavailable. Report terminal graphics unavailable through capability/UI behavior where relevant; do not display raw binary payloads or silently submit terminal responses as user commands.
 8. Build a launchable stable candidate with an explicit server executable/configuration path. Keep the user's current installation/session untouched. Document how to select the candidate and how to recover the archived protocol-22 work from Git later.
 
-Exit: G01 passes for the selected stable build in native and browser, including mouse/focus and scrolling. Protocol-22/TGP is explicitly parked, and the migration diff preserves unrelated application/planning work. A stable API limitation is a blocker to the affected promised behavior, not permission to fake it through undocumented server changes.
+Exit: G01 passes for the selected stable build in native and browser, including mouse/focus and scrolling. Protocol-22/TGP is explicitly parked, and the migration diff preserves unrelated application/planning work. Do not call application mouse impossible from the historical direct-attach negative: if physical pointer routing remains unavailable, record the preventing interception or ownership boundary and use only an explicit, ownership-gated emulator. CLI-injected SGR and xterm.js wheel evidence do not by themselves establish native/browser structured-pointer acceptance.
 
 ## TERM-03: revalidate downstream feature contracts
 
@@ -77,6 +94,6 @@ Exit at S02: record stable capability/schema probe results and update affected f
 
 No unintended intermediate dark/blank view during continuous text-only updates. Maintain stable text when an application attempts unsupported image output. When graphics are explicitly parked, the gate does not require TGP image display, but does require usable text/input/scroll behavior.
 
-Scrolling is core terminal behavior. Deliberate follow-tail and a user who scrolled back must be distinct. Incoming frames, adjacent-pane activity, focus changes, and image-producing output must not move the scrolled-back viewport unexpectedly. Measure input-to-visible-scroll delay and verify final viewport position, with both short wheel steps and sustained gestures. Pass criteria and artifact contracts are specified in G01.
+Scrolling is core terminal behavior. The current xterm.js wheel path is user-observed to deliver events; deliberate follow-tail and a user who scrolled back must still be distinguished. Incoming frames, adjacent-pane activity, focus changes, and image-producing output must not move the scrolled-back viewport unexpectedly. Measure input-to-visible-scroll delay and verify final viewport position, with both short wheel steps and sustained gestures. Pass criteria and artifact contracts are specified in G01.
 
 The earlier request for a human visual checkpoint is replaced by automated temporal/native/browser evidence for this autonomous run. If a human-only condition remains, record it as incomplete instead of inventing approval. The required selected scope can finish only when its actual gates pass.

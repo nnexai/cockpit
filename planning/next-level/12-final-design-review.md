@@ -4,7 +4,7 @@ Current selection: the user subsequently chose stable Herdr as the default and p
 
 Reviewed 2026-09-04 against `8fac660`. Planning only. This review records recommendations, distinguishes existing decisions from proposed refinements, and does not authorize application changes.
 
-My recommendation is a focused restructuring before the new features, followed by an early real-task trial. Keep the Rust/React/Tauri stack and Herdr authority. The reported whole-view redraw flicker and poor scrolling reopen the current terminal renderer and custom protocol-22 dependency decision; neither is an accepted stability baseline. The strongest opportunities are concentrated command/state ownership and shared document/comment behavior. Rewriting the application would put the most expensive existing compatibility work at risk without resolving those problems by itself.
+My recommendation is a focused restructuring before the new features, followed by an early real-task trial. Keep the Rust/React/Tauri stack and Herdr authority. The reported whole-view redraw flicker and poor scrolling reopen the current terminal renderer and custom protocol-22 dependency decision; current user evidence says normal xterm.js wheel events arrive, so measure viewport quality rather than treating scroll transport as absent. The strongest opportunities are concentrated command/state ownership and shared document/comment behavior. Rewriting the application would put the most expensive existing behavior at risk.
 
 The [existing-code review](../../research/next-level-existing-code-review.md) records concrete failures and verification limits. Repair those in separately reviewed changes before treating the current behavior as the cleanup baseline.
 

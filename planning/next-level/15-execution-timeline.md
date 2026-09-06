@@ -54,9 +54,9 @@ The user selected stable Herdr and parked protocol 22. Implement that decision w
 
 1. Preserve the reachable protocol-22 commit and protect the orchestrator’s `default` session.
 2. Verify the installed stable protocol/schema, implement BOOT-01, and smoke only a disposable named session. Then reproduce/record the redraw workload; use archived replay or detector negative controls when old live comparison is unavailable.
-3. Recover/adapt the stable-compatible terminal path, retaining the existing mouse click/focus, application mouse, scroll, and keyboard behavior.
+3. Recover/adapt the stable-compatible terminal path, retaining existing mouse click/focus, CLI-emulated SGR input, normal xterm.js wheel/scroll, and keyboard behavior. Keep physical pointer delivery and structured app-mode coordinates as separately traced paths.
 4. Park unsupported terminal TGP explicitly. Do not silently restore protocol 22 to make image tests pass or disable mouse to make migration pass.
-5. Complete G01 and re-probe downstream capabilities. If stable APIs cannot support a required behavior, Astra investigates compatible existing APIs and records the blocker; it does not modify Herdr-server or claim the requirement complete.
+5. Complete G01 and re-probe downstream capabilities. If physical pointer routing remains unavailable, record the exact interception, ownership, or coordinate boundary and use only an explicit fallback; do not infer a blanket Herdr limitation from the historical direct-attach result.
 
 A useful bounded investigation budget is two competing minimal hypotheses per experiment round, each with a falsifiable result. After two unsuccessful repair rounds, Astra reviews the trace and revises the approach before another worker is dispatched. This is an escalation to the orchestrator, not permission to lower the gate or abandon the feature.
 
