@@ -325,7 +325,7 @@ async fn normal_status_and_sessions_use_installation_compatibility_cache() {
         cached_status.herdr,
         HerdrCompatibility::Compatible { .. }
     ));
-    assert!(!status.capabilities.terminal_mouse_input);
+    assert!(status.capabilities.terminal_mouse_input);
     assert!(service.sessions().await.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

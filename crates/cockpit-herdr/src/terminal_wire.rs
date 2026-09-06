@@ -5,8 +5,8 @@ use std::time::Duration;
 use base64::Engine;
 use cockpit_core::{InspectionError, TerminalSession};
 use cockpit_protocol::v1::{
-    TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState,
-    TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
+    TerminalCommand, TerminalMode, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest,
+    TerminalOwnershipState, TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -384,10 +384,6 @@ async fn run_terminal<R, W>(
                 }
                 let message = match command_to_message(command) {
                     Ok(message) => message,
-                    Err("terminal mouse events need raw application bytes") => {
-                        send_error(&sender, &session_id, &pane_id, &stream_id, "terminal_mouse_unsupported", "stable direct attach accepts only raw application mouse bytes").await;
-                        continue;
-                    }
                     Err(message) => {
                         send_error(&sender, &session_id, &pane_id, &stream_id, "invalid_terminal_command", message).await;
                         continue;
@@ -422,6 +418,68 @@ where
             return;
         }
     }
+}
+
+fn sgr_mouse_button_code(button: TerminalMouseButton) -> u8 {
+    match button {
+        TerminalMouseButton::Left => 0,
+        TerminalMouseButton::Middle => 1,
+        TerminalMouseButton::Right => 2,
+    }
+}
+
+fn sgr_mouse_modifier_bits(modifiers: u8) -> u8 {
+    let mut bits = 0;
+    if modifiers & 1 != 0 {
+        bits |= 4;
+    }
+    if modifiers & 2 != 0 {
+        bits |= 16;
+    }
+    if modifiers & 0b1100 != 0 {
+        bits |= 8;
+    }
+    bits
+}
+
+fn encode_sgr_mouse(
+    kind: TerminalMouseKind,
+    button: Option<TerminalMouseButton>,
+    column: u16,
+    row: u16,
+    modifiers: u8,
+) -> Result<Vec<u8>, &'static str> {
+    let (code, suffix) = match kind {
+        TerminalMouseKind::Moved => {
+            if button.is_some() {
+                return Err("terminal moved mouse events cannot have a button");
+            }
+            (35, b'M')
+        }
+        TerminalMouseKind::Down => (
+            sgr_mouse_button_code(button.ok_or("terminal mouse down events require a button")?),
+            b'M',
+        ),
+        TerminalMouseKind::Up => (
+            sgr_mouse_button_code(button.ok_or("terminal mouse up events require a button")?),
+            b'm',
+        ),
+        TerminalMouseKind::Drag => (
+            sgr_mouse_button_code(button.ok_or("terminal mouse drag events require a button")?)
+                | 32,
+            b'M',
+        ),
+    };
+    let code = code | sgr_mouse_modifier_bits(modifiers);
+    let mut report = format!(
+        "\x1b[<{};{};{}",
+        code,
+        u32::from(column) + 1,
+        u32::from(row) + 1,
+    )
+    .into_bytes();
+    report.push(suffix);
+    Ok(report)
 }
 
 fn command_to_message(command: TerminalCommand) -> Result<ClientMessage, &'static str> {
@@ -475,7 +533,15 @@ fn command_to_message(command: TerminalCommand) -> Result<ClientMessage, &'stati
             row,
             modifiers,
         }),
-        TerminalCommand::Mouse { .. } => Err("terminal mouse events need raw application bytes"),
+        TerminalCommand::Mouse {
+            kind,
+            button,
+            column,
+            row,
+            modifiers,
+        } => Ok(ClientMessage::Input {
+            data: encode_sgr_mouse(kind, button, column, row, modifiers)?,
+        }),
         TerminalCommand::Release => Ok(ClientMessage::Detach),
     }
 }
@@ -817,17 +883,63 @@ mod tests {
     }
 
     #[test]
-    fn semantic_mouse_is_not_misrouted_as_full_app_input() {
-        assert!(matches!(
-            command_to_message(TerminalCommand::Mouse {
-                kind: cockpit_protocol::v1::TerminalMouseKind::Moved,
-                button: None,
-                column: 4,
-                row: 2,
-                modifiers: 0,
-            }),
-            Err("terminal mouse events need raw application bytes")
-        ));
+    fn semantic_mouse_is_encoded_as_raw_application_input() {
+        let cases = [
+            (
+                TerminalMouseKind::Down,
+                Some(TerminalMouseButton::Left),
+                4,
+                2,
+                0,
+                b"\x1b[<0;5;3M".as_slice(),
+            ),
+            (
+                TerminalMouseKind::Down,
+                Some(TerminalMouseButton::Left),
+                4,
+                2,
+                8,
+                b"\x1b[<8;5;3M".as_slice(),
+            ),
+            (
+                TerminalMouseKind::Up,
+                Some(TerminalMouseButton::Right),
+                4,
+                2,
+                0,
+                b"\x1b[<2;5;3m".as_slice(),
+            ),
+            (
+                TerminalMouseKind::Drag,
+                Some(TerminalMouseButton::Middle),
+                4,
+                2,
+                7,
+                b"\x1b[<61;5;3M".as_slice(),
+            ),
+            (
+                TerminalMouseKind::Moved,
+                None,
+                4,
+                2,
+                7,
+                b"\x1b[<63;5;3M".as_slice(),
+            ),
+        ];
+
+        for (kind, button, column, row, modifiers, expected) in cases {
+            let ClientMessage::Input { data } = command_to_message(TerminalCommand::Mouse {
+                kind,
+                button,
+                column,
+                row,
+                modifiers,
+            })
+            .expect("semantic mouse should become raw input") else {
+                panic!("expected raw input");
+            };
+            assert_eq!(data, expected);
+        }
     }
 
     #[tokio::test]

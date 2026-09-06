@@ -269,10 +269,9 @@ impl CockpitService {
             cockpit_version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: self.mode,
             capabilities: CockpitCapabilities {
-                // Protocol 20 exposes structured mouse input only in full-app
-                // coordinates. Direct terminal attach lacks a race-free pane
-                // content-origin translation, so Cockpit must not emit it.
-                terminal_mouse_input: false,
+                // Cockpit translates semantic mouse commands to raw SGR bytes
+                // over the existing stable terminal input channel.
+                terminal_mouse_input: self.mode == CockpitMode::Normal,
             },
             herdr,
         }

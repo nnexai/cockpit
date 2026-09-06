@@ -432,7 +432,7 @@ def _check_browser_host(host_url: str | None, session: str, executable: Any, soc
         elif server.get("cockpit_version") != expected_version:
             mismatches.append("host.cockpit_version")
         capabilities = server.get("capabilities")
-        if not isinstance(capabilities, Mapping) or capabilities.get("terminal_mouse_input") is not False:
+        if not isinstance(capabilities, Mapping) or capabilities.get("terminal_mouse_input") is not True:
             mismatches.append("host.capabilities.terminal_mouse_input")
         for key, value in {"version": executable.version, "protocol": executable.protocol, "schema_version": executable.schema_version}.items():
             if value is not None and identity.get(key) != value:
