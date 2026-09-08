@@ -218,25 +218,24 @@ impl BrowserService {
     pub async fn reconcile(&self) -> Result<(), InspectionError> {
         let _operation = self.operation_lock.lock().await;
         let receipts = self.load_all()?;
+        let mut first_error = None;
         for mut receipt in receipts {
             let snapshot = match self.adapter.browser_snapshot(&receipt.session_id).await {
                 Ok(snapshot) => snapshot,
                 Err(_) => continue,
             };
-            if snapshot.endpoint_identity != receipt.endpoint_identity
+            let result = if snapshot.endpoint_identity != receipt.endpoint_identity
                 || snapshot.endpoint_path != receipt.endpoint_path
             {
                 receipt.state = ReceiptState::Disconnected;
-                self.store(&receipt)?;
-                continue;
-            }
-            if !snapshot
+                Ok(())
+            } else if !snapshot
                 .snapshot
                 .spaces
                 .iter()
                 .any(|space| space.id == receipt.space_id)
             {
-                let _ = self.close(&mut receipt).await?;
+                self.close(&mut receipt).await.map(|_| ())
             } else {
                 receipt.space_label = snapshot
                     .snapshot
@@ -245,11 +244,16 @@ impl BrowserService {
                     .find(|space| space.id == receipt.space_id)
                     .map(|space| space.label.clone())
                     .unwrap_or_else(|| receipt.space_label.clone());
-                let _ = self.status(&mut receipt).await?;
+                self.status(&mut receipt).await.map(|_| ())
+            };
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
             }
-            self.store(&receipt)?;
+            if let Err(error) = self.store(&receipt) {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Close only sessions whose daemon receipt and current socket peer still
@@ -690,22 +694,30 @@ impl BrowserService {
         ))
     }
 
-    async fn run_cli(
+    async fn run_cli_output(
         &self,
         receipt: &BrowserReceipt,
         args: &[String],
-    ) -> Result<String, InspectionError> {
+    ) -> Result<std::process::Output, InspectionError> {
         let executable = resolve_executable(&self.configuration.playwright_cli, "Playwright CLI")?;
         let mut command = tokio::process::Command::new(executable);
         command.current_dir(&receipt.working_directory).args(args);
-        let output = run_bounded_command(
+        run_bounded_command(
             command,
             CLI_OUTPUT_LIMIT,
             CLI_OUTPUT_LIMIT,
             CLI_TIMEOUT,
             "Playwright CLI",
         )
-        .await?;
+        .await
+    }
+
+    async fn run_cli(
+        &self,
+        receipt: &BrowserReceipt,
+        args: &[String],
+    ) -> Result<String, InspectionError> {
+        let output = self.run_cli_output(receipt, args).await?;
         if !output.status.success() {
             if args.get(1).is_some_and(|action| action == "open")
                 && String::from_utf8_lossy(&output.stderr)
@@ -729,10 +741,23 @@ impl BrowserService {
         })?;
         // CLI 0.1.5 reports tool failures in stdout while exiting successfully.
         if text.lines().any(|line| line == "### Error") {
-            return Err(InspectionError::new(
-                "browser_action_failed",
-                "Playwright reported a browser operation failure; inspect the browser before another URL action",
-            ));
+            let detail = cli_error_detail(&text).filter(|line| {
+                line.starts_with("Annotation extension ")
+                    || line.starts_with("Unexpected annotation extension")
+                    || line.starts_with("annotation extension ")
+            });
+            let message = detail.map_or_else(
+                || {
+                    "Playwright reported a browser operation failure; inspect the browser before another URL action"
+                        .to_owned()
+                },
+                |detail| {
+                    format!(
+                        "Playwright reported a browser operation failure: {detail}"
+                    )
+                },
+            );
+            return Err(InspectionError::new("browser_action_failed", message));
         }
         Ok(text)
     }
@@ -817,6 +842,43 @@ impl BrowserService {
             return Err(InspectionError::new(
                 "browser_receipt_replaced",
                 "Playwright daemon receipt or process generation changed",
+            ));
+        }
+
+        let probe = self
+            .run_cli_output(
+                receipt,
+                &[
+                    format!("-s={}", receipt.playwright_session),
+                    "cookie-get".into(),
+                    "__cockpit_liveness_probe__".into(),
+                ],
+            )
+            .await?;
+        let stdout = String::from_utf8_lossy(&probe.stdout);
+        let stderr = String::from_utf8_lossy(&probe.stderr);
+        if !probe.status.success() {
+            if cli_reports_browser_closed(&stdout) || cli_reports_browser_closed(&stderr) {
+                return Err(InspectionError::new(
+                    "browser_daemon_closed",
+                    "Playwright browser session reports that Chromium is closed",
+                ));
+            }
+            return Err(InspectionError::new(
+                "browser_cli_failed",
+                format!("Playwright CLI exited with status {}", probe.status),
+            ));
+        }
+        if let Some(detail) = cli_error_detail(&stdout) {
+            if cli_reports_browser_closed(&detail) {
+                return Err(InspectionError::new(
+                    "browser_daemon_closed",
+                    "Playwright browser session reports that Chromium is closed",
+                ));
+            }
+            return Err(InspectionError::new(
+                "browser_action_failed",
+                format!("Playwright reported a browser operation failure: {detail}"),
             ));
         }
         Ok(incarnation)
@@ -1139,6 +1201,28 @@ fn association_key(endpoint_identity: &str, session_id: &str, space_id: &str) ->
 
 fn may_launch_after_inspection_failure(error: &InspectionError) -> bool {
     error.code == "browser_daemon_closed"
+}
+
+fn cli_error_detail(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    lines
+        .position(|line| line == "### Error")
+        .and_then(|_| lines.map(str::trim).find(|line| !line.is_empty()))
+        .map(|line| {
+            line.strip_prefix("Error: ")
+                .unwrap_or(line)
+                .chars()
+                .take(512)
+                .collect()
+        })
+}
+
+fn cli_reports_browser_closed(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("target page, context or browser has been closed")
+        || text.contains("browser context was closed")
+        || text.contains("browser has been closed")
+        || (text.contains("browser '") && text.contains(" is not open"))
 }
 
 #[cfg(unix)]

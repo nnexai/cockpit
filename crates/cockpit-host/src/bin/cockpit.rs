@@ -295,6 +295,8 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
                 .as_ref()
                 .and_then(|path| inherited_session_from_socket(path))
         });
+    let effective_socket = args.herdr.herdr_socket.clone().or(inherited_socket);
+    let effective_session = args.herdr.herdr_session.clone().or(inherited_session);
     let target = if args.current {
         if std::env::var("HERDR_ENV").ok().as_deref() != Some("1") {
             return Err(
@@ -302,7 +304,16 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
                     .to_owned(),
             );
         }
-        let output = tokio::process::Command::new(&herdr_executable)
+        let mut command = tokio::process::Command::new(&herdr_executable);
+        command
+            .env_remove("HERDR_SESSION")
+            .env_remove("HERDR_SOCKET_PATH");
+        if let Some(socket) = effective_socket.as_ref() {
+            command.env("HERDR_SOCKET_PATH", socket);
+        } else if let Some(session) = effective_session.as_deref() {
+            command.arg("--session").arg(session);
+        }
+        let output = command
             .args(["pane", "current", "--current"])
             .output()
             .await
@@ -316,7 +327,7 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             .get("result")
             .and_then(|result| result.get("pane"))
             .ok_or_else(|| "Herdr current-pane response has no pane evidence".to_owned())?;
-        let session_id = inherited_session.clone().ok_or_else(|| "current Herdr pane has no resolvable session identity; use explicit --herdr-session --herdr-socket --space".to_owned())?;
+        let session_id = effective_session.clone().ok_or_else(|| "current Herdr pane has no resolvable session identity; use explicit --herdr-session --herdr-socket --space".to_owned())?;
         let pane_id = pane
             .get("pane_id")
             .and_then(|v| v.as_str())
@@ -325,7 +336,7 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             session_id,
             space_id: None,
             pane_id: Some(pane_id.to_owned()),
-            endpoint_path: inherited_socket
+            endpoint_path: effective_socket
                 .as_ref()
                 .and_then(|path| path.to_str())
                 .map(str::to_owned),
@@ -335,15 +346,10 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             "explicit browser targets require --herdr-session, --herdr-socket, and --space"
                 .to_owned()
         })?;
-        let _socket = args
-            .herdr
-            .herdr_socket
-            .clone()
-            .or(inherited_socket)
-            .ok_or_else(|| {
-                "explicit browser targets require --herdr-session, --herdr-socket, and --space"
-                    .to_owned()
-            })?;
+        let _socket = effective_socket.clone().ok_or_else(|| {
+            "explicit browser targets require --herdr-session, --herdr-socket, and --space"
+                .to_owned()
+        })?;
         let space_id = args.space.clone().ok_or_else(|| {
             "explicit browser targets require --herdr-session, --herdr-socket, and --space"
                 .to_owned()
@@ -355,15 +361,9 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             endpoint_path: None,
         }
     };
-    let herdr_config = HerdrCliConfig::from_options(
-        Some(herdr_executable),
-        args.herdr.herdr_session.clone().or(inherited_session),
-        args.herdr
-            .herdr_socket
-            .clone()
-            .or_else(|| std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from)),
-    )
-    .map_err(|error| error.to_string())?;
+    let herdr_config =
+        HerdrCliConfig::from_options(Some(herdr_executable), effective_session, effective_socket)
+            .map_err(|error| error.to_string())?;
     let adapter = Arc::new(HerdrCliAdapter::new(herdr_config));
     let paste_adapter = adapter.paste_adapter();
     let browser_config =

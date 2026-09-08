@@ -77,3 +77,13 @@ python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 ```
 
 Uninstall reads the install receipt and removes only the launcher, desktop entry, icon, installed binary, and receipt that it owns. It leaves configuration and changed replacement paths in place. An update also stops before replacing a changed installed file, so resolve that change or uninstall it before continuing.
+
+## Space browser annotations
+
+Open the selected Space's browser from Commands or its context menu. Cockpit uses the installed Playwright CLI and its default Chrome with a dedicated profile. The extension loads through Chrome's CDP extension API, without deprecated browser extension flags.
+
+Extension updates use a distinct worker script URL and retain Chrome's local storage. Cockpit publishes new pairing credentials only after the bundle loads successfully. Restart Cockpit after installing an update so the running owner uses the new embedded assets; existing processes keep their previous binary.
+
+On the page, draw or select an element, then add optional text beside the mark. Capture saves the visible page and annotations. Unrelated page updates do not require position review. After layout movement, use **Review positions**, or choose **Capture anyway (as shown)** to save the marks at their displayed positions. The override does not bypass navigation, wrong-tab, offscreen, or viewport changes during capture.
+
+The extension popup retains unfinished drafts and exposes older documents under **Stale draft recovery**. Those marks are not attached to a replacement page. Failed submissions retain captured pixels for retry. Cockpit's feedback view sends selected annotations to the active tab's eligible agent; acknowledgement marks them handled without sending.

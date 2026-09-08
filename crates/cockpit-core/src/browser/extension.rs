@@ -52,6 +52,21 @@ const ASSETS: &[(&str, &[u8])] = &[
     ),
 ];
 
+fn annotation_extension_version() -> String {
+    let mut digest = Sha256::new();
+    for (name, bytes) in ASSETS {
+        digest.update(name.as_bytes());
+        digest.update(bytes);
+    }
+    let digest = digest.finalize();
+    format!(
+        "1.{}.{}.{}",
+        u16::from_be_bytes([digest[0], digest[1]]),
+        u16::from_be_bytes([digest[2], digest[3]]),
+        u16::from_be_bytes([digest[4], digest[5]])
+    )
+}
+
 impl BrowserService {
     pub fn browser_state_directory(&self) -> &Path {
         self.root.as_path()
@@ -95,21 +110,16 @@ impl BrowserService {
             crate::project_store::open_dir_nofollow_absolute(&bundle).map_err(|_| {
                 InspectionError::new("unsafe_path", "Cannot open annotation extension directory")
             })?;
-        // Chromium can reuse a cached worker when an unpacked bundle changes without a version change.
-        let mut digest = Sha256::new();
+        // Give each incarnation a distinct worker URL so Chromium cannot reuse prior script code.
+        let version = annotation_extension_version();
+        let worker_name = format!("background-{instance}.js");
         for (name, bytes) in ASSETS {
-            digest.update(name.as_bytes());
-            digest.update(bytes);
-        }
-        let digest = digest.finalize();
-        let version = format!(
-            "1.{}.{}.{}",
-            u16::from_be_bytes([digest[0], digest[1]]),
-            u16::from_be_bytes([digest[2], digest[3]]),
-            u16::from_be_bytes([digest[4], digest[5]])
-        );
-        for (name, bytes) in ASSETS {
-            let mut file = directory.create(name).map_err(|_| {
+            let asset_name = if *name == "background.js" {
+                worker_name.as_str()
+            } else {
+                name
+            };
+            let mut file = directory.create(asset_name).map_err(|_| {
                 InspectionError::new(
                     "browser_extension_write",
                     "Cannot create annotation extension asset",
@@ -123,6 +133,7 @@ impl BrowserService {
                     )
                 })?;
                 manifest["version"] = Value::String(version.clone());
+                manifest["background"]["service_worker"] = Value::String(worker_name.clone());
                 serde_json::to_writer(&mut file, &manifest).map_err(|_| {
                     InspectionError::new(
                         "browser_extension_write",
@@ -156,7 +167,7 @@ impl BrowserService {
             &self
                 .root
                 .join("pairings")
-                .join(format!("{}.json", receipt.association_key)),
+                .join(format!("{}.pending.json", receipt.association_key)),
             &pairing,
         )?;
         let mut config = launch_configuration(&self.configuration)?;
@@ -177,38 +188,171 @@ impl BrowserService {
         &self,
         receipt: &BrowserReceipt,
     ) -> Result<(), InspectionError> {
-        let pairing: Pairing = read_json(
-            &self
+        let authoritative_path = self
+            .root
+            .join("pairings")
+            .join(format!("{}.json", receipt.association_key));
+        let pending_path = self
+            .root
+            .join("pairings")
+            .join(format!("{}.pending.json", receipt.association_key));
+        let expected_version = annotation_extension_version();
+        let validate_pairing = |pairing: &Pairing| {
+            if Uuid::parse_str(&pairing.browser_instance).is_err()
+                || pairing.association_key != receipt.association_key
+            {
+                return Err(InspectionError::new(
+                    "browser_annotation_unavailable",
+                    "Annotation pairing is invalid",
+                ));
+            }
+            Ok(())
+        };
+        let manifest_version = |pairing: &Pairing| {
+            let path = self
                 .root
-                .join("pairings")
-                .join(format!("{}.json", receipt.association_key)),
-        )?
-        .ok_or_else(|| {
+                .join("extensions")
+                .join(&receipt.association_key)
+                .join(&pairing.browser_instance)
+                .join("manifest.json");
+            match read_json::<Value>(&path) {
+                Ok(Some(manifest)) => manifest
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                _ => None,
+            }
+        };
+
+        let mut pending_pairing: Option<Pairing> = read_json(&pending_path)?;
+        if let Some(pairing) = pending_pairing.as_ref() {
+            validate_pairing(pairing)?;
+            if manifest_version(pairing).as_deref() != Some(expected_version.as_str()) {
+                self.prepare_annotation_extension(receipt)?;
+                pending_pairing = read_json(&pending_path)?;
+            }
+        }
+        let mut authoritative_pairing = None;
+        if pending_pairing.is_none() {
+            authoritative_pairing = read_json(&authoritative_path)?;
+            match authoritative_pairing.as_ref() {
+                Some(pairing) => {
+                    validate_pairing(pairing)?;
+                    if manifest_version(pairing).as_deref() != Some(expected_version.as_str()) {
+                        self.prepare_annotation_extension(receipt)?;
+                        pending_pairing = read_json(&pending_path)?;
+                    }
+                }
+                None => {
+                    self.prepare_annotation_extension(receipt)?;
+                    pending_pairing = read_json(&pending_path)?;
+                }
+            }
+        }
+        if let Some(pairing) = pending_pairing.as_ref() {
+            validate_pairing(pairing)?;
+        }
+        let using_pending = pending_pairing.is_some();
+        let pairing = pending_pairing.or(authoritative_pairing).ok_or_else(|| {
             InspectionError::new(
                 "browser_annotation_unavailable",
                 "Close and reopen this Space browser to enable annotations",
             )
         })?;
-        if Uuid::parse_str(&pairing.browser_instance).is_err()
-            || pairing.association_key != receipt.association_key
-        {
-            return Err(InspectionError::new(
-                "browser_annotation_unavailable",
-                "Annotation pairing is invalid",
-            ));
-        }
-        let bundle = self
-            .root
-            .join("extensions")
-            .join(&receipt.association_key)
-            .join(&pairing.browser_instance);
+        validate_pairing(&pairing)?;
+        let extension_root = self.root.join("extensions").join(&receipt.association_key);
+        let bundle = extension_root.join(&pairing.browser_instance);
         let path = serde_json::to_string(&path_string(&bundle)?).map_err(|error| {
             InspectionError::new("browser_annotation_unavailable", error.to_string())
         })?;
+        let extension_root =
+            serde_json::to_string(&path_string(&extension_root)?).map_err(|error| {
+                InspectionError::new("browser_annotation_unavailable", error.to_string())
+            })?;
         let id =
             serde_json::to_string(ANNOTATION_EXTENSION_ID).expect("fixed extension ID serializes");
+        let version = serde_json::to_string(&expected_version)
+            .expect("generated extension version serializes");
         let code = format!(
-            "async page => {{ const client = await page.context().browser().newBrowserCDPSession(); try {{ const current = await client.send('Extensions.getExtensions'); if (current.extensions.some(extension => extension.id === {id} && extension.path === {path} && extension.enabled)) return; const loaded = await client.send('Extensions.loadUnpacked', {{ path: {path} }}); if (loaded.id !== {id}) throw new Error('Unexpected annotation extension identity'); }} finally {{ await client.detach(); }} }}"
+            r#"async page => {{
+                const client = await page.context().browser().newBrowserCDPSession();
+                try {{
+                    const expectedId = {id};
+                    const expectedPath = {path};
+                    const expectedRoot = {extension_root};
+                    const expectedVersion = {version};
+                    const expectedRootPrefix =
+                        expectedRoot.endsWith('/') ? expectedRoot : expectedRoot + '/';
+                    let current;
+                    try {{
+                        current = await client.send('Extensions.getExtensions');
+                    }} catch (error) {{
+                        throw new Error('Annotation extension inventory failed');
+                    }}
+                    if (!current || !Array.isArray(current.extensions)) {{
+                        throw new Error('Annotation extension inventory is invalid');
+                    }}
+                    const installed = current.extensions.find(
+                        extension => extension && extension.id === expectedId,
+                    );
+                    if (
+                        installed &&
+                        (typeof installed.path !== 'string' ||
+                            !installed.path.startsWith(expectedRootPrefix))
+                    ) {{
+                        throw new Error(
+                            'Annotation extension installed path is outside association root',
+                        );
+                    }}
+                    if (
+                        installed &&
+                        installed.path === expectedPath &&
+                        installed.version === expectedVersion &&
+                        installed.enabled === true
+                    ) return;
+
+                    let loaded;
+                    try {{
+                        loaded = await client.send('Extensions.loadUnpacked', {{
+                            path: expectedPath,
+                        }});
+                    }} catch (error) {{
+                        throw new Error('Annotation extension load failed');
+                    }}
+                    if (!loaded || loaded.id !== expectedId) {{
+                        throw new Error('Unexpected annotation extension identity');
+                    }}
+
+                    let refreshed;
+                    try {{
+                        refreshed = await client.send('Extensions.getExtensions');
+                    }} catch (error) {{
+                        throw new Error('Annotation extension validation failed');
+                    }}
+                    if (!refreshed || !Array.isArray(refreshed.extensions)) {{
+                        throw new Error('Annotation extension validation failed');
+                    }}
+                    const active = refreshed.extensions.find(
+                        extension => extension && extension.id === expectedId,
+                    );
+                    if (
+                        !active ||
+                        active.path !== expectedPath ||
+                        active.version !== expectedVersion ||
+                        active.enabled !== true
+                    ) {{
+                        throw new Error(
+                            'Annotation extension metadata mismatch after load',
+                        );
+                    }}
+                }} finally {{
+                    await client.detach();
+                }}
+            }}"#,
+            id = id,
+            path = path,
+            extension_root = extension_root,
+            version = version,
         );
         self.run_cli(
             receipt,
@@ -219,7 +363,6 @@ impl BrowserService {
             ],
         )
         .await
-        .map(|_| ())
         .map_err(|error| {
             InspectionError::new(
                 "browser_annotation_unavailable",
@@ -228,7 +371,12 @@ impl BrowserService {
                     error.message
                 ),
             )
-        })
+        })?;
+        if using_pending {
+            atomic_write_json(&authoritative_path, &pairing)?;
+            let _ = fs::remove_file(&pending_path);
+        }
+        Ok(())
     }
 
     fn authenticate_annotation(

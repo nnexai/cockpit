@@ -1,5 +1,25 @@
 # Space browser integration handoff
 
+## Continuation delivery
+
+The continuation fixes extension sender authentication, stale worker loading, local draft recovery, bounded startup, durable saved-ID filtering, capture tab-switch detection, pending-capture capacity, destination revalidation, owner readiness, and explicit current-endpoint selection.
+
+Extension bundles now use a unique worker script URL. Loading the new bundle preserves extension storage without uninstalling it. Pairing candidates become authoritative only after successful loading. The user's actual browser was repaired without closing its tabs: its popup reported Connected and Saved 1 annotation, and all 13 pre-existing annotations survived.
+
+Geometry validation now compares bounded annotation anchors instead of rejecting every page mutation. The disposable heartbeat fixture failed before the repair and captured successfully afterward. A genuinely moved element exposed **Capture anyway (as shown)**, which saved two annotations. Wrong-tab, navigation, viewport, and offscreen protections remain.
+
+Verification recorded during the continuation:
+
+- Popup closure and browser reopen retained drafts; stale documents appeared in recovery.
+- Eight concurrent draft writes survived; a ninth distinct draft failed explicitly.
+- Injected pixel failure retained drafts; injected submission failure retained pixels and retried without recapture.
+- Frontend build and 40 App/client integration tests passed.
+- Six browser/feedback Rust tests passed, including pending capacity and unknown receipt retention; host/Herdr suites passed.
+- The broad core run passed 101 tests and failed the unrelated execution-lease exclusivity test. That test passed in isolation.
+- Both native and CLI binaries built; the installed native launcher was updated.
+
+The detailed historical matrix below is not an assertion that every cross-platform and failure-injection scenario was exercised. Native image/send permutations, modal top-layer behavior, every ownership/crash combination, and the complete retention/failure matrix still require explicit evidence before claiming exhaustive plan acceptance. Preserve the user-edited integration plan.
+
 ## Checkpoint
 
 Implementation checkpoint: `be68fc8` — `feat: checkpoint Space browser capture and inline feedback`.

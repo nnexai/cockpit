@@ -174,6 +174,15 @@ impl BrowserFeedbackStore {
                 ));
             }
         }
+        // Reject before writing either artifact so the bounded store never evicts evidence.
+        if !submission.annotations.is_empty() && pending_captures >= MAX_PENDING_CAPTURES {
+            return Err(InspectionError::new(
+                "browser_feedback_pending_limit",
+                format!(
+                    "association already has the maximum of {MAX_PENDING_CAPTURES} pending captures"
+                ),
+            ));
+        }
         let now = unix_now()?;
         let pending_ids = submission
             .annotations
@@ -441,12 +450,12 @@ impl BrowserFeedbackStore {
         let now = unix_now()?;
         for stored in self.load_all_captures(&feedback)? {
             if stored.expires_at.is_some_and(|expires| expires <= now) {
-                remove_regular_file(&artifacts, &stored.image_name, "browser_feedback_prune")?;
                 remove_regular_file(
                     &feedback,
                     &record_name(&stored.id),
                     "browser_feedback_prune",
                 )?;
+                remove_regular_file(&artifacts, &stored.image_name, "browser_feedback_prune")?;
             }
         }
         self.prune_delivery_locked(&feedback, now)?;
@@ -1295,5 +1304,145 @@ mod tests {
             retained.map(|receipt| receipt.state),
             Some(CommentPasteState::OutcomeUnknown)
         );
+    }
+
+    #[test]
+    fn pending_capture_capacity_preserves_existing_evidence() {
+        use base64::Engine as _;
+
+        let root =
+            std::env::temp_dir().join(format!("cockpit-feedback-capacity-{}", Uuid::new_v4()));
+        let store =
+            BrowserFeedbackStore::new(root.clone(), BrowserFeedbackOptions::default()).unwrap();
+        let association_key = "0123456789abcdef01234567";
+        let browser_instance = Uuid::new_v4().to_string();
+        let png_base64 = BASE64.encode([
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0,
+            0, 1,
+        ]);
+
+        for _ in 0..MAX_PENDING_CAPTURES {
+            let capture_id = Uuid::new_v4().to_string();
+            let annotation_id = Uuid::new_v4().to_string();
+            store
+                .save(
+                    BrowserCaptureContext {
+                        association_key: association_key.into(),
+                        session_id: "session".into(),
+                        space_id: "space".into(),
+                        space_label: "Space".into(),
+                        playwright_session: "cockpit-test".into(),
+                        working_directory: "/tmp".into(),
+                        invocation: "playwright-cli".into(),
+                        browser_instance: browser_instance.clone(),
+                    },
+                    BrowserCaptureSubmission {
+                        association_key: association_key.into(),
+                        browser_instance: browser_instance.clone(),
+                        capture_id,
+                        page: BrowserPageEvidence {
+                            url: "http://localhost/".into(),
+                            title: "Test".into(),
+                            tab_id: 1,
+                            document_id: "document".into(),
+                            captured_at: "2026-09-09T00:00:00Z".into(),
+                            viewport: BrowserViewport {
+                                width: 1.0,
+                                height: 1.0,
+                                scroll_x: 0.0,
+                                scroll_y: 0.0,
+                                device_pixel_ratio: 1.0,
+                                visual_scale: 1.0,
+                            },
+                            image_width: 1,
+                            image_height: 1,
+                        },
+                        annotations: vec![BrowserAnnotation {
+                            id: annotation_id,
+                            kind:
+                                cockpit_protocol::browser_feedback::BrowserAnnotationKind::Freehand,
+                            comment: "comment".into(),
+                            color: "red".into(),
+                            points: Vec::new(),
+                            bounds: None,
+                            element: None,
+                        }],
+                        png_base64: png_base64.clone(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let rejected_capture_id = Uuid::new_v4().to_string();
+        let rejected = store
+            .save(
+                BrowserCaptureContext {
+                    association_key: association_key.into(),
+                    session_id: "session".into(),
+                    space_id: "space".into(),
+                    space_label: "Space".into(),
+                    playwright_session: "cockpit-test".into(),
+                    working_directory: "/tmp".into(),
+                    invocation: "playwright-cli".into(),
+                    browser_instance: browser_instance.clone(),
+                },
+                BrowserCaptureSubmission {
+                    association_key: association_key.into(),
+                    browser_instance,
+                    capture_id: rejected_capture_id.clone(),
+                    page: BrowserPageEvidence {
+                        url: "http://localhost/".into(),
+                        title: "Test".into(),
+                        tab_id: 1,
+                        document_id: "document".into(),
+                        captured_at: "2026-09-09T00:00:00Z".into(),
+                        viewport: BrowserViewport {
+                            width: 1.0,
+                            height: 1.0,
+                            scroll_x: 0.0,
+                            scroll_y: 0.0,
+                            device_pixel_ratio: 1.0,
+                            visual_scale: 1.0,
+                        },
+                        image_width: 1,
+                        image_height: 1,
+                    },
+                    annotations: vec![BrowserAnnotation {
+                        id: Uuid::new_v4().to_string(),
+                        kind: cockpit_protocol::browser_feedback::BrowserAnnotationKind::Freehand,
+                        comment: "comment".into(),
+                        color: "red".into(),
+                        points: Vec::new(),
+                        bounds: None,
+                        element: None,
+                    }],
+                    png_base64,
+                },
+            )
+            .expect_err("the 65th pending capture must be rejected");
+        assert_eq!(rejected.code, "browser_feedback_pending_limit");
+
+        let response = store.list(association_key).unwrap();
+        assert_eq!(response.captures.len(), MAX_PENDING_CAPTURES);
+        assert_eq!(response.pending_count, MAX_PENDING_CAPTURES);
+        assert_eq!(
+            store
+                .read_image(association_key, &rejected_capture_id)
+                .expect_err("rejected capture must not leave an artifact")
+                .code,
+            "browser_feedback_not_found"
+        );
+        let retained_image = store
+            .read_image(association_key, &response.captures[0].id)
+            .unwrap();
+        assert_eq!(
+            retained_image.as_slice(),
+            &[
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 1,
+                0, 0, 0, 1,
+            ]
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

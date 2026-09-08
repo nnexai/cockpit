@@ -3,7 +3,7 @@ use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::browser_annotations::AnnotationServer;
@@ -27,6 +27,9 @@ use tokio::{
 const MAX_REQUEST_FRAME: usize = 256 * 1024;
 const MAX_RESPONSE_FRAME: usize = 129 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+const OWNER_READY_TIMEOUT: Duration = Duration::from_secs(2);
+const OWNER_READY_POLL: Duration = Duration::from_millis(25);
+const OWNER_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PEERS: usize = 32;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -82,21 +85,14 @@ impl BrowserRuntime {
         let state_root = state_root.join("browser");
         let lock_path = state_root.join("owner.lock");
         let socket = state_root.join("owner.sock");
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(&lock_path)
-            .map_err(|error| io_error("browser_owner_unavailable", error))?;
+        let deadline = Instant::now() + OWNER_READY_TIMEOUT;
+        let lock = open_owner_lock(&lock_path, deadline).await?;
         verify_lock(&lock)?;
-        verify_descriptor(&socket, &lock)?;
-        verify_live_peer(
-            &socket,
-            lock.metadata()
-                .map_err(|error| io_error("browser_owner_unavailable", error))?
-                .uid(),
-        )
-        .await?;
+        let expected_uid = lock
+            .metadata()
+            .map_err(|error| io_error("browser_owner_unavailable", error))?
+            .uid();
+        wait_for_owner(&socket, &lock, expected_uid, deadline, false).await?;
         Ok(Self {
             role: Mutex::new(RuntimeRole::Observer { socket }),
             service,
@@ -187,14 +183,12 @@ impl BrowserRuntime {
                 })
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                verify_descriptor(&socket, &lock)?;
-                verify_live_peer(
-                    &socket,
-                    lock.metadata()
-                        .map_err(|error| io_error("browser_owner_unavailable", error))?
-                        .uid(),
-                )
-                .await?;
+                let expected_uid = lock
+                    .metadata()
+                    .map_err(|error| io_error("browser_owner_unavailable", error))?
+                    .uid();
+                let deadline = Instant::now() + OWNER_READY_TIMEOUT;
+                wait_for_owner(&socket, &lock, expected_uid, deadline, true).await?;
                 Ok(Self {
                     role: Mutex::new(RuntimeRole::Observer { socket }),
                     service,
@@ -483,49 +477,180 @@ fn verify_lock(lock: &File) -> Result<(), InspectionError> {
     Ok(())
 }
 
-fn verify_descriptor(socket: &Path, lock: &File) -> Result<(), InspectionError> {
-    let metadata = fs::symlink_metadata(socket)
-        .map_err(|error| io_error("browser_owner_unavailable", error))?;
-    if !metadata.file_type().is_socket() || metadata.mode() & 0o077 != 0 {
-        return Err(InspectionError::new(
+enum DescriptorReadiness {
+    Ready,
+    Retry,
+    Reject(InspectionError),
+}
+
+fn probe_descriptor(socket: &Path, lock: &File) -> DescriptorReadiness {
+    let metadata = match fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return DescriptorReadiness::Retry;
+        }
+        Err(error) => {
+            return DescriptorReadiness::Reject(io_error("browser_owner_unavailable", error));
+        }
+    };
+    if !metadata.file_type().is_socket() {
+        return DescriptorReadiness::Reject(InspectionError::new(
             "browser_owner_unavailable",
             "Browser owner socket is not private",
         ));
     }
-    let lock_uid = lock
-        .metadata()
-        .map_err(|error| io_error("browser_owner_unavailable", error))?
-        .uid();
+    let lock_uid = match lock.metadata() {
+        Ok(metadata) => metadata.uid(),
+        Err(error) => {
+            return DescriptorReadiness::Reject(io_error("browser_owner_unavailable", error));
+        }
+    };
     if metadata.uid() != lock_uid || lock_uid != Uid::current().as_raw() {
-        return Err(InspectionError::new(
+        return DescriptorReadiness::Reject(InspectionError::new(
             "browser_owner_unavailable",
             "Browser owner belongs to another user",
         ));
     }
-    Ok(())
+    if metadata.mode() & 0o077 != 0 {
+        return DescriptorReadiness::Retry;
+    }
+    DescriptorReadiness::Ready
 }
 
-async fn verify_live_peer(socket: &Path, expected_uid: u32) -> Result<(), InspectionError> {
-    let stream = timeout(IO_TIMEOUT, UnixStream::connect(socket))
-        .await
-        .map_err(|_| {
-            InspectionError::new(
-                "browser_owner_timeout",
-                "Browser owner connection timed out",
-            )
-        })?
-        .map_err(|error| io_error("browser_owner_unavailable", error))?;
-    let uid = stream
-        .peer_cred()
-        .map_err(|error| io_error("browser_owner_unavailable", error))?
-        .uid();
+fn owner_lock_held(lock: &File) -> Result<bool, InspectionError> {
+    match lock.try_lock_exclusive() {
+        Ok(()) => {
+            lock.unlock()
+                .map_err(|error| io_error("browser_owner_unavailable", error))?;
+            Ok(false)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(io_error("browser_owner_unavailable", error)),
+    }
+}
+
+enum PeerReadiness {
+    Ready,
+    Retry,
+    Reject(InspectionError),
+}
+
+async fn probe_live_peer(
+    socket: &Path,
+    expected_uid: u32,
+    timeout_duration: Duration,
+) -> PeerReadiness {
+    let stream = match timeout(timeout_duration, UnixStream::connect(socket)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(error)) if retryable_peer_error(&error) => return PeerReadiness::Retry,
+        Ok(Err(error)) => {
+            return PeerReadiness::Reject(io_error("browser_owner_unavailable", error));
+        }
+        Err(_) => return PeerReadiness::Retry,
+    };
+    let uid = match stream.peer_cred() {
+        Ok(cred) => cred.uid(),
+        Err(error) => {
+            return PeerReadiness::Reject(io_error("browser_owner_unavailable", error));
+        }
+    };
     if uid != expected_uid {
-        return Err(InspectionError::new(
+        return PeerReadiness::Reject(InspectionError::new(
             "browser_owner_unavailable",
             "Browser owner belongs to another user",
         ));
     }
-    Ok(())
+    PeerReadiness::Ready
+}
+
+fn retryable_peer_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::WouldBlock
+    )
+}
+
+async fn open_owner_lock(path: &Path, deadline: Instant) -> Result<File, InspectionError> {
+    loop {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+            .open(path)
+        {
+            Ok(lock) => return Ok(lock),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error("browser_owner_unavailable", error)),
+        }
+        if Instant::now() >= deadline {
+            return Err(owner_ready_timeout());
+        }
+        tokio::time::sleep(OWNER_READY_POLL).await;
+    }
+}
+
+async fn wait_for_owner(
+    socket: &Path,
+    lock: &File,
+    expected_uid: u32,
+    deadline: Instant,
+    require_lock_before_probe: bool,
+) -> Result<(), InspectionError> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err(owner_ready_timeout());
+        }
+        if require_lock_before_probe && !owner_lock_held(lock)? {
+            return Err(owner_exited_before_ready());
+        }
+        match probe_descriptor(socket, lock) {
+            DescriptorReadiness::Ready => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(owner_ready_timeout());
+                }
+                match probe_live_peer(socket, expected_uid, OWNER_PROBE_TIMEOUT.min(remaining))
+                    .await
+                {
+                    PeerReadiness::Ready => {
+                        if owner_lock_held(lock)? {
+                            return Ok(());
+                        }
+                        return Err(owner_exited_before_ready());
+                    }
+                    PeerReadiness::Retry => {}
+                    PeerReadiness::Reject(error) => return Err(error),
+                }
+            }
+            DescriptorReadiness::Retry => {}
+            DescriptorReadiness::Reject(error) => return Err(error),
+        }
+        if Instant::now() >= deadline {
+            return Err(owner_ready_timeout());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        tokio::time::sleep(OWNER_READY_POLL.min(remaining)).await;
+    }
+}
+
+fn owner_exited_before_ready() -> InspectionError {
+    InspectionError::new(
+        "browser_owner_unavailable",
+        "Browser owner exited before its private socket became ready; start Cockpit or `cockpit serve` with the same configuration",
+    )
+}
+
+fn owner_ready_timeout() -> InspectionError {
+    InspectionError::new(
+        "browser_owner_timeout",
+        "Browser owner did not become ready before the bounded startup wait elapsed; start Cockpit or `cockpit serve` with the same configuration",
+    )
 }
 
 fn io_error(code: &'static str, error: impl std::fmt::Display) -> InspectionError {

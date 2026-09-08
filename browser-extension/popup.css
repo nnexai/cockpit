@@ -25,4 +25,21 @@ button.capture { width: 100%; margin-top: 9px; background: #1f6d46; }
 button.capture:hover { background: #175536; }
 button.full { width: 100%; margin-top: 9px; }
 button.danger { color: #9b2f2f; border-color: #d2a7a7; }
+.drafts { margin-top: 16px; padding-top: 12px; border-top: 1px solid #d7dee5; }
+.draft-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.draft-heading h2, .draft-heading h3 { margin: 0; font-size: 14px; line-height: 1.25; }
+.draft-heading h3 { font-size: 13px; }
+.draft-list { display: grid; gap: 8px; margin-top: 8px; }
+.draft-card { padding: 9px 10px; border: 1px solid #d7dee5; border-radius: 5px; background: white; }
+.draft-card.stale { border-color: #d2a7a7; background: #fffafa; }
+.draft-card .draft-heading { align-items: start; }
+.draft-card .draft-heading strong { min-width: 0; overflow-wrap: anywhere; }
+.draft-card .danger { flex: 0 0 auto; padding: 5px 7px; font-size: 11px; }
+.draft-meta { margin: 4px 0 0; color: #657483; font-size: 11px; overflow-wrap: anywhere; }
+.draft-annotations { margin: 7px 0 0; padding-left: 17px; color: #344250; font-size: 12px; }
+.draft-annotations li { margin: 3px 0; overflow-wrap: anywhere; }
+.draft-annotations strong { color: #526170; font-size: 11px; text-transform: capitalize; }
+.recovery { margin-top: 14px; padding-top: 11px; border-top: 1px solid #e2c5c5; }
+.recovery > .note { margin-top: 7px; }
+.muted { color: #657483; }
 @media (min-width: 600px) { body { min-width: 520px; } main { max-width: 680px; margin: 0 auto; padding: 28px; } }

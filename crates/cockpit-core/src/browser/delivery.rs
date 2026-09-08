@@ -166,6 +166,21 @@ impl BrowserService {
             )?;
             return self.delivery_response(&association, receipt);
         }
+        // Revalidate authoritative Space, tab, and agent identity immediately before dispatch.
+        if let Err(error) = self
+            .revalidate_paste_target(&target, &paste_target, adapter.as_ref())
+            .await
+        {
+            let receipt = self.persist_outcome(
+                &request.operation_id,
+                &association,
+                &ids,
+                Some(paste_target),
+                CommentPasteState::Rejected,
+                &format!("paste target changed before dispatch: {}", error.message),
+            )?;
+            return self.delivery_response(&association, receipt);
+        }
 
         match adapter.send_comment_paste(&paste_target, &framed).await {
             Ok(()) => {
@@ -284,6 +299,80 @@ impl BrowserService {
         });
         Ok(candidates.into_iter().next())
     }
+    async fn revalidate_paste_target(
+        &self,
+        target: &super::ResolvedTarget,
+        paste_target: &CommentPasteTarget,
+        adapter: &dyn crate::paste_adapter::CommentPasteAdapter,
+    ) -> Result<(), InspectionError> {
+        let snapshot = self.adapter.browser_snapshot(&target.session_id).await?;
+        if snapshot.endpoint_identity != target.endpoint_identity
+            || snapshot.endpoint_path != target.endpoint_path
+        {
+            return Err(InspectionError::new(
+                "stale_identity",
+                "Herdr endpoint changed before paste dispatch",
+            ));
+        }
+        if snapshot.snapshot.session_id != target.session_id {
+            return Err(InspectionError::new(
+                "stale_identity",
+                "Herdr session changed before paste dispatch",
+            ));
+        }
+        if paste_target.session_id != target.session_id
+            || paste_target.workspace_id != target.space_id
+            || snapshot.snapshot.focused_space_id.as_deref() != Some(target.space_id.as_str())
+        {
+            return Err(InspectionError::new(
+                "browser_feedback_space_inactive",
+                "browser feedback Space changed before paste dispatch",
+            ));
+        }
+        if snapshot.snapshot.focused_tab_id.as_deref() != Some(paste_target.tab_id.as_str()) {
+            return Err(InspectionError::new(
+                "browser_feedback_target_changed",
+                "browser feedback tab changed before paste dispatch",
+            ));
+        }
+        if snapshot.snapshot.focused_pane_id.as_deref() != Some(paste_target.pane_id.as_str()) {
+            return Err(InspectionError::new(
+                "browser_feedback_target_changed",
+                "browser feedback agent pane changed before paste dispatch",
+            ));
+        }
+        let pane = snapshot
+            .snapshot
+            .panes
+            .iter()
+            .find(|pane| pane.id == paste_target.pane_id)
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "browser_feedback_target_changed",
+                    "browser feedback agent pane disappeared before paste dispatch",
+                )
+            })?;
+        if pane.space_id != target.space_id
+            || pane.tab_id != paste_target.tab_id
+            || pane.terminal_id != paste_target.terminal_id
+        {
+            return Err(InspectionError::new(
+                "browser_feedback_target_changed",
+                "browser feedback agent destination changed before paste dispatch",
+            ));
+        }
+        let targets = adapter.comment_paste_targets(&target.session_id).await?;
+        if !targets
+            .iter()
+            .any(|candidate| same_paste_target(candidate, paste_target))
+        {
+            return Err(InspectionError::new(
+                "browser_feedback_target_changed",
+                "browser feedback agent identity changed before paste dispatch",
+            ));
+        }
+        Ok(())
+    }
 
     async fn recover_delivery(
         &self,
@@ -368,7 +457,17 @@ fn normalized_ids(ids: &[String]) -> Result<Vec<String>, InspectionError> {
             "feedback send IDs must be unique",
         ));
     }
+
     Ok(normalized)
+}
+fn same_paste_target(left: &CommentPasteTarget, right: &CommentPasteTarget) -> bool {
+    left.endpoint_identity == right.endpoint_identity
+        && left.session_id == right.session_id
+        && left.workspace_id == right.workspace_id
+        && left.tab_id == right.tab_id
+        && left.pane_id == right.pane_id
+        && left.terminal_id == right.terminal_id
+        && left.agent_fingerprint == right.agent_fingerprint
 }
 
 fn validate_operation_id(value: &str) -> Result<(), InspectionError> {
