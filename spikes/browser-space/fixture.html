@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'nonce-fixture-checkout-2026'; connect-src 'none';">
+  <title>Northstar · Secure checkout</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0f1217; color: #e8edf3; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 20% -10%, #263447 0, transparent 42%), #0f1217; }
+    .page { width: min(1080px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 72px; }
+    header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #2c3542; padding-bottom: 22px; }
+    .logo { letter-spacing: .18em; font-size: 13px; font-weight: 800; color: #9bd7ff; }
+    .secure { display: flex; align-items: center; gap: 8px; color: #94a2b2; font-size: 12px; }
+    .secure::before { content: '◆'; color: #73d6a5; font-size: 9px; }
+    .crumbs { margin: 28px 0 10px; color: #8e9aaa; font-size: 12px; }
+    h1 { margin: 0; font-size: clamp(26px, 4vw, 42px); letter-spacing: -.04em; }
+    .intro { margin: 9px 0 28px; color: #aab5c1; font-size: 15px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; align-items: start; }
+    .card { border: 1px solid #303b4b; border-radius: 12px; background: #171d26; box-shadow: 0 18px 55px #07090c88; }
+    .checkout { padding: 25px; }
+    .summary { padding: 23px; position: sticky; top: 20px; }
+    h2 { margin: 0 0 20px; font-size: 17px; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    .field { display: grid; gap: 7px; margin-bottom: 16px; }
+    .field.full { grid-column: 1 / -1; }
+    label { font-size: 12px; color: #bcc7d4; font-weight: 650; }
+    input { border: 1px solid #3a4758; border-radius: 6px; background: #10151d; color: #eef3f9; padding: 12px 11px; font: inherit; font-size: 14px; outline: none; }
+    input:focus { border-color: #76c7ff; box-shadow: 0 0 0 2px #76c7ff2b; }
+    .hint { margin: -3px 0 19px; color: #7f8c9c; font-size: 11px; }
+    .order-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #2b3542; font-size: 13px; }
+    .order-row span:last-child { color: #d7e0eb; font-weight: 650; }
+    .total { display: flex; justify-content: space-between; padding-top: 18px; font-size: 16px; font-weight: 750; }
+    .total strong { color: #9bd7ff; }
+    .confirm { width: 100%; margin-top: 24px; border: 0; border-radius: 6px; background: #a7ddff; color: #11202e; padding: 13px 16px; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }
+    .confirm:hover { background: #c5eaff; }
+    .confirm:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+    .confirm:disabled { cursor: wait; opacity: .65; }
+    .status { min-height: 22px; margin: 15px 0 0; color: #9eacbb; font-size: 12px; text-align: center; }
+    .status[data-state="success"] { color: #78dda9; }
+    .microcopy { margin: 18px 0 0; color: #768496; font-size: 11px; line-height: 1.5; }
+    dialog { width: min(360px, calc(100% - 32px)); border: 1px solid #456b5c; border-radius: 10px; background: #18251f; color: #e8f4ed; padding: 23px; box-shadow: 0 24px 80px #000b; }
+    dialog::backdrop { background: #05070aa8; }
+    dialog h2 { margin: 0 0 8px; color: #83e0ae; }
+    dialog p { color: #b6cabb; font-size: 13px; line-height: 1.5; }
+    .dialog-close { border: 1px solid #4b7d63; border-radius: 5px; background: transparent; color: #a9e7bf; padding: 8px 13px; cursor: pointer; }
+    @media (max-width: 760px) { .page { width: min(100% - 24px, 560px); padding-top: 22px; } .layout { grid-template-columns: 1fr; } .summary { position: static; } }
+  </style>
+</head>
+<body>
+  <main class="page" data-testid="checkout-page">
+    <header><div class="logo">NORTHSTAR / MERCHANT</div><div class="secure">Secure checkout mock</div></header>
+    <p class="crumbs">Cart / Delivery / <strong>Payment</strong></p>
+    <h1>Complete your order</h1>
+    <p class="intro">A realistic local fixture for browser-space inspection and agent interaction.</p>
+    <div class="layout">
+      <form class="card checkout" id="checkout-form" data-testid="checkout-form">
+        <h2>Payment details</h2>
+        <div class="field-grid">
+          <div class="field full"><label for="billing-name">Name on card</label><input id="billing-name" data-testid="billing-name" name="billingName" autocomplete="cc-name" placeholder="Jordan Lee" required></div>
+          <div class="field full"><label for="card-number">Card number</label><input id="card-number" data-testid="card-number" name="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" required></div>
+          <div class="field"><label for="card-expiry">Expiry date</label><input id="card-expiry" data-testid="card-expiry" name="cardExpiry" inputmode="numeric" autocomplete="cc-exp" placeholder="MM / YY" required></div>
+          <div class="field"><label for="card-cvc">Security code</label><input id="card-cvc" data-testid="card-cvc" name="cardCvc" inputmode="numeric" autocomplete="cc-csc" placeholder="CVC" required></div>
+        </div>
+        <p class="hint">Use the fixture values above for local testing. No payment network is contacted.</p>
+        <button class="confirm" id="confirm-payment" data-testid="confirm-payment" type="submit">Confirm payment · $128.00</button>
+        <p class="status" id="payment-status" data-testid="payment-status" role="status" aria-live="polite">Ready for payment details.</p>
+        <p class="microcopy">This page is an isolated checkout fixture. It has no access to Cockpit sessionStorage or bearer tokens.</p>
+      </form>
+        <dialog id="payment-dialog" data-testid="payment-dialog" aria-labelledby="receipt-title">
+          <h2 id="receipt-title">Payment received</h2>
+          <p data-testid="receipt-status">Receipt NS-2048 is ready for download.</p>
+          <form method="dialog"><button class="dialog-close" data-testid="close-dialog" type="submit">Close</button></form>
+      </dialog>
+      <aside class="card summary" data-testid="order-summary">
+        <h2>Order summary</h2>
+        <div class="order-row"><span>Field Notes bundle</span><span>$96.00</span></div>
+        <div class="order-row"><span>Priority delivery</span><span>$20.00</span></div>
+        <div class="order-row"><span>Tax</span><span>$12.00</span></div>
+        <div class="total"><span>Total</span><strong data-testid="order-total">$128.00</strong></div>
+      </aside>
+    </div>
+  </main>
+  <script nonce="fixture-checkout-2026">
+    (() => {
+      const form = document.getElementById('checkout-form');
+      const status = document.getElementById('payment-status');
+      const button = document.getElementById('confirm-payment');
+      const dialog = document.getElementById('payment-dialog');
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        button.disabled = true;
+        status.dataset.state = 'success';
+        status.textContent = 'Payment confirmed · receipt NS-2048 is ready.';
+        button.textContent = 'Payment confirmed';
+        dialog.showModal();
+      });
+    })();
+  </script>
+</body>
+</html>

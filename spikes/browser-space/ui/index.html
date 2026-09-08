@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none';">
+  <title>Cockpit · Browser Space spike</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="shell" data-testid="browser-space-ui">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">C</div>
+      <div class="brand-copy">
+        <p class="eyebrow">COCKPIT / ISOLATED SPIKE</p>
+        <h1>Browser Space</h1>
+      </div>
+      <div class="connection" id="connection-status" data-testid="connection-status" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span><span id="connection-text">Connecting…</span>
+      </div>
+    </header>
+
+    <section class="notice" aria-label="Spike scope">
+      <strong>Standalone concept — not integrated production.</strong>
+      <span>This screen proves a real Space ↔ dedicated browser association. Proposed placement: a Space context-menu browser action, with control and feedback actions in the Commands menu.</span>
+    </section>
+
+    <div class="workspace">
+      <aside class="rail">
+        <section class="space-summary" aria-labelledby="space-heading">
+          <div class="section-kicker"><span>SPACE</span><span class="live-badge" id="space-state">PENDING</span></div>
+          <h2 id="space-heading" data-testid="space-label">Loading Space…</h2>
+          <p class="space-id" id="space-id">Waiting for authoritative state</p>
+          <dl class="facts">
+            <div><dt>Session</dt><dd id="session-name">—</dd></div>
+            <div><dt>Browser</dt><dd id="browser-instance">—</dd></div>
+            <div><dt>Control</dt><dd id="control-owner">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="controls" aria-labelledby="controls-heading">
+          <div class="section-kicker"><span id="controls-heading">COMMANDS</span><span class="command-hint">SPACE</span></div>
+          <button class="button button-primary" id="open-preview" data-testid="open-preview" type="button">Open preview <span aria-hidden="true">↗</span></button>
+          <button class="button" id="show-browser" data-testid="show-browser" type="button">Show browser <span aria-hidden="true">⌘</span></button>
+          <div class="control-pair">
+            <button class="button button-agent" id="grant-control" data-testid="grant-control" type="button">Grant agent control</button>
+            <button class="button button-human" id="take-control" data-testid="take-control" type="button">Take back control</button>
+          </div>
+          <p class="control-note" id="control-note">Control changes are sent to the browser-space server and confirmed by state.</p>
+        </section>
+
+        <section class="descriptor" aria-labelledby="descriptor-heading">
+          <div class="section-kicker"><span id="descriptor-heading">AGENT DISCOVERY</span><span class="lock-label">TOKEN-SAFE</span></div>
+          <p>Use the descriptor emitted for this Space. It is capability-scoped; it does not discover a personal browser.</p>
+          <pre id="env-export" data-testid="env-export"><code>Waiting for connection descriptor…</code></pre>
+          <button class="text-button" id="copy-export" type="button" disabled>Copy export</button>
+          <pre id="cli-example" data-testid="cli-example"><code>bun run agent.ts status</code></pre>
+        </section>
+      </aside>
+
+      <section class="main-column">
+        <section class="panel browser-panel" aria-labelledby="browser-heading">
+          <div class="panel-head">
+            <div><p class="eyebrow">LIVE ASSOCIATION</p><h2 id="browser-heading">Dedicated browser</h2></div>
+            <span class="panel-count" id="tab-count">0 tabs</span>
+          </div>
+          <div class="tab-list" id="tab-list" data-testid="browser-tabs" aria-live="polite">
+            <div class="empty-state">Waiting for browser state…</div>
+          </div>
+          <div class="inspect-output" id="inspect-output" hidden>
+            <div class="inspect-head"><span>INSPECT RESULT</span><button class="icon-button" id="close-inspect" type="button" aria-label="Close inspect result">×</button></div>
+            <dl class="inspect-facts"><div><dt>URL</dt><dd id="inspect-url">—</dd></div><div><dt>Title</dt><dd id="inspect-title">—</dd></div></dl>
+            <div class="element-list" id="element-list"></div>
+          </div>
+        </section>
+
+        <section class="panel feedback-panel" aria-labelledby="feedback-heading">
+          <div class="panel-head">
+            <div><p class="eyebrow">EXTENSION ANNOTATIONS</p><h2 id="feedback-heading">Browser feedback</h2></div>
+            <span class="panel-count" id="feedback-count" data-testid="feedback-count">0 items</span>
+          </div>
+          <div id="feedback-list" data-testid="feedback-list" class="feedback-list" aria-live="polite">
+            <div class="empty-state">No saved feedback yet. Use the extension to select an element or draw on a page.</div>
+          </div>
+        </section>
+
+        <p class="footer-note"><span class="footer-key">AUTH</span> UI token is read from the URL fragment once, kept only in sessionStorage, and removed from the address bar. No token is sent to the fixture.</p>
+      </section>
+    </div>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

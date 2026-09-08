@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Draw feedback — Cockpit Space</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">Cockpit Space</p>
+        <h1>Draw feedback</h1>
+      </div>
+      <p id="target" class="target">Loading screenshot…</p>
+    </header>
+    <p id="status" class="status" role="status">Loading screenshot…</p>
+    <section class="canvas-wrap" aria-label="Screenshot drawing area">
+      <canvas id="canvas"></canvas>
+    </section>
+    <div class="tools">
+      <label>Color <input id="color" type="color" value="#e12d39"></label>
+      <label>Width <input id="width" type="range" min="1" max="24" value="4"> <output id="width-value">4px</output></label>
+      <button id="clear" class="secondary" type="button">Clear strokes</button>
+    </div>
+    <label for="comment">Comment</label>
+    <textarea id="comment" maxlength="4000" rows="4" placeholder="What should change?"></textarea>
+    <div class="actions">
+      <button id="save" type="button">Save feedback</button>
+    </div>
+    <p class="note">Your draft stays here if saving fails. The saved feedback includes the page URL and viewport.</p>
+  </main>
+  <script src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cockpit Space</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">Cockpit Space</p>
+        <h1 id="space-label">Loading Space…</h1>
+      </div>
+      <span id="control-badge" class="badge">—</span>
+    </header>
+    <p id="status" class="status" role="status">Connecting to Space…</p>
+    <label for="tab-select">Page</label>
+    <select id="tab-select" aria-describedby="tab-help"></select>
+    <p id="tab-help" class="help">Choose an HTTP or HTTPS page. Internal browser pages are unavailable.</p>
+    <label for="comment">Comment</label>
+    <textarea id="comment" rows="4" maxlength="4000" placeholder="What should change?"></textarea>
+    <div class="actions">
+      <button id="select-element" type="button">Select element</button>
+      <button id="capture" type="button">Capture and draw</button>
+    </div>
+    <button id="open-full" class="secondary" type="button">Open full-tab popup</button>
+    <p class="note">Dedicated profile only. This spike requests all-site access for capture from its full-tab UI. It acts only on explicitly selected HTTP/HTTPS tabs. Restricted sites and frames are unsupported. Capture limit: 4 MB.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

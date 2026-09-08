@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Cockpit Space feedback",
+  "version": "0.1.0",
+  "description": "Capture feedback for the Cockpit browser Space spike.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Cockpit Space",
+    "default_popup": "popup.html"
+  },
+  "icons": {},
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "cockpit-browser-space-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun server.ts",
+    "agent": "bun agent.ts"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
