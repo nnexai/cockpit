@@ -303,7 +303,6 @@ summary:focus-visible {
   min-height: 176px;
   max-height: 320px;
 }
-
 .sidebar-section-heading {
   display: flex;
   height: 28px;
@@ -1754,6 +1753,264 @@ kbd {
   border-radius: 3px;
   background: transparent;
   cursor: pointer;
+}
+.feedback-panel {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 56;
+  display: grid;
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(760px, calc(100vh - 24px));
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+}
+
+.feedback-panel > header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.feedback-panel h2 {
+  margin: 1px 0 0;
+  font-size: var(--font-size-base);
+  font-weight: 500;
+}
+
+.feedback-panel-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.feedback-panel-actions button,
+.feedback-footer button,
+.feedback-state button,
+.feedback-risk button {
+  min-height: 27px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.feedback-panel-actions button:hover,
+.feedback-footer button:hover,
+.feedback-state button:hover,
+.feedback-risk button:hover {
+  background: var(--surface-selected);
+}
+
+.feedback-browser-state,
+.feedback-state {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.feedback-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.feedback-state-error {
+  color: var(--blocked);
+}
+
+.feedback-captures {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  overflow: auto;
+}
+
+.feedback-capture {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.feedback-capture > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.feedback-capture-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.feedback-capture-heading strong,
+.feedback-capture time {
+  font-size: var(--font-size-sm);
+}
+
+.feedback-capture-heading a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedback-capture time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  font-size: var(--font-size-xs);
+}
+
+.feedback-image,
+.feedback-image-placeholder {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  min-height: 64px;
+  object-fit: contain;
+  background: var(--terminal-bg);
+}
+
+.feedback-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.feedback-annotations {
+  display: grid;
+  gap: 1px;
+  padding: 6px;
+}
+
+.feedback-annotation {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 6px;
+  border-left: 2px solid var(--accent);
+  background: var(--surface-raised);
+  font-size: var(--font-size-xs);
+}
+
+.feedback-annotation code {
+  color: var(--text-primary);
+  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+}
+
+.feedback-annotation-kind {
+  color: var(--text-muted);
+}
+
+.feedback-annotation p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.feedback-annotation details {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+}
+
+.feedback-annotation details > span,
+.feedback-annotation details > p,
+.feedback-annotation details > code {
+  display: block;
+  margin-top: 3px;
+}
+
+.feedback-annotation details code {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.feedback-capture > footer {
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.feedback-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.feedback-footer > span {
+  margin-right: auto;
+}
+
+.feedback-result,
+.feedback-risk {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.feedback-result strong {
+  color: var(--idle);
+  text-transform: capitalize;
+}
+
+.feedback-result-rejected strong,
+.feedback-result-outcome_unknown strong,
+.feedback-risk strong {
+  color: var(--blocked);
+}
+
+.feedback-result-pending strong {
+  color: var(--working);
+}
+
+.feedback-result span,
+.feedback-risk span {
+  min-width: 0;
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+
+.feedback-result code {
+  color: var(--text-muted);
+}
+
+.feedback-risk {
+  border-color: var(--working);
+  color: var(--text-primary);
 }
 
 @media (max-width: 760px) {

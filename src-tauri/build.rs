@@ -2,6 +2,11 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
+            "cockpit_browser_action",
+            "cockpit_browser_feedback",
+            "cockpit_browser_feedback_ack",
+            "cockpit_browser_feedback_image",
+            "cockpit_browser_feedback_send",
             "cockpit_project_configuration",
             "cockpit_repositories",
             "cockpit_workspace_plan",

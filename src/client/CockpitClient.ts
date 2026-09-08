@@ -5,6 +5,30 @@ import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protoco
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
   AgentSummary,
+  BrowserAction,
+  BrowserAssociation,
+  BrowserConnectionState,
+  BrowserRequest,
+  BrowserResponse,
+  BrowserTarget,
+  BrowserFeedbackRequest,
+  BrowserFeedbackAckRequest,
+  BrowserFeedbackLookup,
+  BrowserFeedbackImageRequest,
+  BrowserFeedbackImage,
+  BrowserFeedbackSendRequest,
+  BrowserFeedbackSendResponse,
+  BrowserFeedbackAck,
+  BrowserFeedbackCapture,
+  BrowserFeedbackResponse,
+  BrowserAnnotation,
+  BrowserElementEvidence,
+  BrowserPageEvidence,
+  BrowserCaptureContext,
+  BrowserPoint,
+  BrowserRect,
+  CommentPasteState,
+  CommentPasteTarget,
   CockpitCapabilities,
   ErrorResponse,
   FocusRequest,
@@ -33,8 +57,8 @@ import type {
   WorkspaceSetupRequest,
   WorkspaceSetupPlan,
   WorkspaceOperationRequest,
-  WorkspaceReconcileRequest,
   WorkspaceOperation,
+  WorkspaceReconcileRequest,
   WorkspaceTeardownExecuteRequest,
   WorkspaceTeardownPreview,
   WorkspaceTeardownPreviewRequest,
@@ -78,9 +102,6 @@ export type {
   SessionSnapshotResponse,
   SessionStreamMessage,
   SessionSummary,
-  SpaceSummary,
-  SpaceGitSummary,
-  TabLayout,
   TabSummary,
   TerminalCommand,
   TerminalOpenRequest,
@@ -95,9 +116,13 @@ export interface TerminalStream extends ClosableStream {
   send(command: TerminalCommand): void;
 }
 
-/** The transport-neutral surface exposed to the presentation layer. */
 export interface CockpitClient {
-  status(): Promise<CockpitStatus>;
+  status(): Promise<StatusResponse>;
+  browserAction(request: BrowserRequest): Promise<BrowserResponse>;
+  browserFeedback(request: BrowserFeedbackRequest): Promise<BrowserFeedbackLookup>;
+  acknowledgeBrowserFeedback(request: BrowserFeedbackAckRequest): Promise<BrowserFeedbackAck>;
+  browserFeedbackImage(request: BrowserFeedbackImageRequest): Promise<BrowserFeedbackImage>;
+  sendBrowserFeedback(request: BrowserFeedbackSendRequest): Promise<BrowserFeedbackSendResponse>;
   projectConfiguration(): Promise<ProjectConfiguration>;
   repositories(): Promise<RepositoryListResponse>;
   planWorkspace(sessionId: string, request: WorkspaceSetupRequest): Promise<WorkspaceSetupPlan>;
@@ -360,6 +385,191 @@ export function parseStatusResponse(value: unknown): StatusResponse {
     capabilities,
     herdr,
   };
+}
+const browserConnections: readonly BrowserConnectionState[] = ["absent", "open", "closed", "disconnected", "outcome_unknown"];
+function isBrowserConnection(value: unknown): value is BrowserConnectionState {
+  return isString(value) && browserConnections.includes(value as BrowserConnectionState);
+}
+function parseBrowserTarget(value: unknown): BrowserTarget {
+  if (!isRecord(value) || !isString(value.session_id) || value.session_id.length === 0
+    || !(value.space_id === null || isString(value.space_id))
+    || !(value.pane_id === null || isString(value.pane_id))
+    || !(value.endpoint_path === null || isString(value.endpoint_path))
+    || (value.space_id === null) === (value.pane_id === null)) {
+    return malformed("Browser target is malformed");
+  }
+  return value as BrowserTarget;
+}
+function parseBrowserAction(value: unknown): BrowserAction {
+  if (!isRecord(value) || !isString(value.kind)) return malformed("Browser action is malformed");
+  if (value.kind === "open") {
+    if (!(value.url === null || isString(value.url))) return malformed("Browser open URL is malformed");
+    return value as BrowserAction;
+  }
+  if (value.kind === "status" || value.kind === "show" || value.kind === "close") return value as BrowserAction;
+  return malformed("Unknown browser action");
+}
+function parseBrowserAssociation(value: unknown): BrowserAssociation {
+  if (!isRecord(value) || !isString(value.association_key) || !isString(value.owner_id)
+    || !isString(value.session_id) || !isString(value.space_id) || !isString(value.space_label)
+    || !isString(value.playwright_session) || !isString(value.working_directory)
+    || !isString(value.profile_path) || !isString(value.invocation) || !isBrowserConnection(value.connection)
+    || !(value.incarnation === null || isString(value.incarnation))
+    || !(value.opened_tab === null || isString(value.opened_tab))) {
+    return malformed("Browser association is malformed");
+  }
+  return value as BrowserAssociation;
+}
+export function parseBrowserRequest(value: unknown): BrowserRequest {
+  if (!isRecord(value)) return malformed("Browser request is malformed");
+  return { target: parseBrowserTarget(value.target), action: parseBrowserAction(value.action) };
+}
+export function parseBrowserResponse(value: unknown): BrowserResponse {
+  if (!isRecord(value) || !(value.association === null || isRecord(value.association))
+    || !isBrowserConnection(value.connection) || !isString(value.message)) return malformed("Browser response is malformed");
+  return { association: value.association === null ? null : parseBrowserAssociation(value.association), connection: value.connection, message: value.message };
+}
+function parseFeedbackPoint(value: unknown): BrowserPoint {
+  if (!isRecord(value) || typeof value.x !== "number" || !Number.isFinite(value.x) || typeof value.y !== "number" || !Number.isFinite(value.y)) {
+    return malformed("Browser feedback point is malformed");
+  }
+  return { x: value.x, y: value.y };
+}
+function parseFeedbackRect(value: unknown): BrowserRect {
+  if (!isRecord(value) || typeof value.x !== "number" || !Number.isFinite(value.x) || typeof value.y !== "number" || !Number.isFinite(value.y)
+    || typeof value.width !== "number" || !Number.isFinite(value.width) || value.width < 0
+    || typeof value.height !== "number" || !Number.isFinite(value.height) || value.height < 0) {
+    return malformed("Browser feedback bounds are malformed");
+  }
+  return { x: value.x, y: value.y, width: value.width, height: value.height };
+}
+function parseFeedbackElement(value: unknown): BrowserElementEvidence {
+  if (!isRecord(value) || !isString(value.tag) || !isString(value.text)
+    || !(value.role === null || isString(value.role)) || !(value.name === null || isString(value.name))
+    || !Array.isArray(value.locators) || value.locators.length > 256 || !value.locators.every(isString)
+    || !isString(value.excerpt)) return malformed("Browser element evidence is malformed");
+  return value as BrowserElementEvidence;
+}
+function parseFeedbackPage(value: unknown): BrowserPageEvidence {
+  if (!isRecord(value) || !isString(value.url) || !isString(value.title)
+    || !isU64(value.tab_id) || !isString(value.document_id) || !isString(value.captured_at)
+    || !isRecord(value.viewport) || typeof value.viewport.width !== "number" || !Number.isFinite(value.viewport.width)
+    || typeof value.viewport.height !== "number" || !Number.isFinite(value.viewport.height)
+    || typeof value.viewport.scroll_x !== "number" || !Number.isFinite(value.viewport.scroll_x)
+    || typeof value.viewport.scroll_y !== "number" || !Number.isFinite(value.viewport.scroll_y)
+    || typeof value.viewport.device_pixel_ratio !== "number" || !Number.isFinite(value.viewport.device_pixel_ratio)
+    || typeof value.viewport.visual_scale !== "number" || !Number.isFinite(value.viewport.visual_scale)
+    || !isU32(value.image_width) || !isU32(value.image_height)) return malformed("Browser page evidence is malformed");
+  return {
+    url: value.url, title: value.title, tab_id: value.tab_id as BrowserPageEvidence["tab_id"], document_id: value.document_id, captured_at: value.captured_at,
+    viewport: value.viewport as BrowserPageEvidence["viewport"], image_width: value.image_width, image_height: value.image_height,
+  };
+}
+function parseFeedbackAnnotation(value: unknown): BrowserAnnotation {
+  if (!isRecord(value) || !isString(value.id) || !isString(value.kind) || !["freehand", "element", "region"].includes(value.kind)
+    || !isString(value.comment) || !isString(value.color) || !Array.isArray(value.points) || value.points.length > 10000
+    || !(value.bounds === null || isRecord(value.bounds)) || !(value.element === null || isRecord(value.element))) {
+    return malformed("Browser annotation is malformed");
+  }
+  return {
+    id: value.id,
+    kind: value.kind as BrowserAnnotation["kind"],
+    comment: value.comment,
+    color: value.color,
+    points: value.points.map(parseFeedbackPoint),
+    bounds: value.bounds === null ? null : parseFeedbackRect(value.bounds),
+    element: value.element === null ? null : parseFeedbackElement(value.element),
+  };
+}
+function parseFeedbackContext(value: unknown): BrowserCaptureContext {
+  if (!isRecord(value) || !isString(value.association_key) || !isString(value.session_id)
+    || !isString(value.space_id) || !isString(value.space_label) || !isString(value.playwright_session)
+    || !isString(value.working_directory) || !isString(value.invocation) || !isString(value.browser_instance)) {
+    return malformed("Browser capture context is malformed");
+  }
+  return value as BrowserCaptureContext;
+}
+function parseFeedbackCapture(value: unknown): BrowserFeedbackCapture {
+  if (!isRecord(value) || !isString(value.id) || !isRecord(value.context) || !isRecord(value.page)
+    || !Array.isArray(value.annotations) || value.annotations.length > 10000 || !Array.isArray(value.pending_ids)
+    || value.pending_ids.length > 10000 || !value.pending_ids.every(isString) || !isString(value.image_path)) {
+    return malformed("Browser feedback capture is malformed");
+  }
+  return {
+    id: value.id,
+    context: parseFeedbackContext(value.context),
+    page: parseFeedbackPage(value.page),
+    annotations: value.annotations.map(parseFeedbackAnnotation),
+    pending_ids: value.pending_ids,
+    image_path: value.image_path,
+  };
+}
+function parseBrowserFeedbackResponse(value: unknown): BrowserFeedbackResponse {
+  if (!isRecord(value) || !Array.isArray(value.captures) || value.captures.length > 256
+    || !isU32(value.pending_count) || !isU64(value.retention_seconds)) return malformed("Browser feedback response is malformed");
+  return { captures: value.captures.map(parseFeedbackCapture), pending_count: value.pending_count, retention_seconds: value.retention_seconds as BrowserFeedbackResponse["retention_seconds"] };
+}
+export function parseBrowserFeedbackRequest(value: unknown): BrowserFeedbackRequest {
+  if (!isRecord(value)) return malformed("Browser feedback request is malformed");
+  return { target: parseBrowserTarget(value.target) };
+}
+export function parseBrowserFeedbackAckRequest(value: unknown): BrowserFeedbackAckRequest {
+  if (!isRecord(value) || !Array.isArray(value.ids) || value.ids.length > 10000 || !value.ids.every((id) => isString(id) && id.length > 0)) {
+    return malformed("Browser feedback acknowledgement request is malformed");
+  }
+  return { target: parseBrowserTarget(value.target), ids: value.ids };
+}
+export function parseBrowserFeedbackImageRequest(value: unknown): BrowserFeedbackImageRequest {
+  if (!isRecord(value) || !isString(value.capture_id) || value.capture_id.length === 0) {
+    return malformed("Browser feedback image request is malformed");
+  }
+  return { target: parseBrowserTarget(value.target), capture_id: value.capture_id };
+}
+export function parseBrowserFeedbackSendRequest(value: unknown): BrowserFeedbackSendRequest {
+  if (!isRecord(value) || !Array.isArray(value.ids) || value.ids.length > 10000
+    || !value.ids.every((id) => isString(id) && id.length > 0) || !isString(value.operation_id)
+    || value.operation_id.length === 0 || !isBoolean(value.acknowledge_duplicate_risk)) {
+    return malformed("Browser feedback send request is malformed");
+  }
+  return { target: parseBrowserTarget(value.target), ids: value.ids, operation_id: value.operation_id, acknowledge_duplicate_risk: value.acknowledge_duplicate_risk };
+}
+export function parseBrowserFeedbackLookup(value: unknown): BrowserFeedbackLookup {
+  if (!isRecord(value)) return malformed("Browser feedback lookup is malformed");
+  return { browser: parseBrowserResponse(value.browser), feedback: parseBrowserFeedbackResponse(value.feedback) };
+}
+export function parseBrowserFeedbackImage(value: unknown): BrowserFeedbackImage {
+  if (!isRecord(value) || !isString(value.mime_type) || value.mime_type.length === 0 || !isString(value.data_base64) || !isBase64(value.data_base64)) {
+    return malformed("Browser feedback image is malformed");
+  }
+  return { mime_type: value.mime_type, data_base64: value.data_base64 };
+}
+function parseCommentPasteTargetForFeedback(value: unknown): CommentPasteTarget {
+  if (!isRecord(value) || !isString(value.endpoint_identity) || !isString(value.session_id) || !isString(value.workspace_id)
+    || !isString(value.tab_id) || !isString(value.pane_id) || !isString(value.terminal_id)
+    || !isString(value.agent_fingerprint) || !isString(value.agent_label)) return malformed("Browser feedback target is malformed");
+  return value as CommentPasteTarget;
+}
+export function parseBrowserFeedbackSendResponse(value: unknown): BrowserFeedbackSendResponse {
+  if (!isRecord(value) || !isString(value.operation_id) || !isString(value.state)
+    || !(["pending", "accepted", "rejected", "outcome_unknown"] as readonly string[]).includes(value.state)
+    || !(value.target === null || isRecord(value.target)) || !Array.isArray(value.acknowledged_ids)
+    || !value.acknowledged_ids.every((id) => isString(id)) || !isU32(value.pending_count) || !isString(value.message)) {
+    return malformed("Browser feedback send response is malformed");
+  }
+  return {
+    operation_id: value.operation_id,
+    state: value.state as CommentPasteState,
+    target: value.target === null ? null : parseCommentPasteTargetForFeedback(value.target),
+    acknowledged_ids: value.acknowledged_ids,
+    pending_count: value.pending_count,
+    message: value.message,
+  };
+}
+export function parseBrowserFeedbackAck(value: unknown): BrowserFeedbackAck {
+  if (!isRecord(value) || !Array.isArray(value.acknowledged_ids) || !value.acknowledged_ids.every((id) => isString(id)) || !isU32(value.remaining)) {
+    return malformed("Browser feedback acknowledgement response is malformed");
+  }
+  return { acknowledged_ids: value.acknowledged_ids, remaining: value.remaining };
 }
 
 export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotResponse {

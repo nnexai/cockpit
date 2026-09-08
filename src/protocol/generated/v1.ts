@@ -12,6 +12,58 @@ export type StatusResponse = { protocol_version: string, cockpit_version: string
 
 export type ErrorResponse = { code: string, message: string, };
 
+export type BrowserTarget = { session_id: string, space_id: string | null, pane_id: string | null, endpoint_path: string | null, };
+
+export type BrowserAction = { "kind": "open", url: string | null, } | { "kind": "status" } | { "kind": "close" } | { "kind": "show" };
+
+export type BrowserRequest = { target: BrowserTarget, action: BrowserAction, };
+
+export type BrowserConnectionState = "absent" | "open" | "closed" | "disconnected" | "outcome_unknown";
+
+export type BrowserAssociation = { association_key: string, owner_id: string, session_id: string, space_id: string, space_label: string, playwright_session: string, working_directory: string, profile_path: string, invocation: string, connection: BrowserConnectionState, incarnation: string | null, opened_tab: string | null, };
+
+export type BrowserResponse = { association: BrowserAssociation | null, connection: BrowserConnectionState, message: string, };
+
+export type BrowserFeedbackRequest = { target: BrowserTarget, };
+
+export type BrowserFeedbackAckRequest = { target: BrowserTarget, ids: Array<string>, };
+
+export type BrowserFeedbackLookup = { browser: BrowserResponse, feedback: BrowserFeedbackResponse, };
+
+export type BrowserFeedbackImageRequest = { target: BrowserTarget, capture_id: string, };
+
+export type BrowserFeedbackImage = { mime_type: string, data_base64: string, };
+
+export type BrowserFeedbackSendRequest = { target: BrowserTarget, ids: Array<string>, operation_id: string, acknowledge_duplicate_risk: boolean, };
+
+export type BrowserFeedbackSendResponse = { operation_id: string, state: CommentPasteState, target: CommentPasteTarget | null, acknowledged_ids: Array<string>, pending_count: number, message: string, };
+
+export type BrowserPoint = { x: number, y: number, };
+
+export type BrowserRect = { x: number, y: number, width: number, height: number, };
+
+export type BrowserViewport = { width: number, height: number, scroll_x: number, scroll_y: number, device_pixel_ratio: number, visual_scale: number, };
+
+export type BrowserElementEvidence = { tag: string, text: string, role: string | null, name: string | null, locators: Array<string>, excerpt: string, };
+
+export type BrowserAnnotationKind = "freehand" | "element" | "region";
+
+export type BrowserAnnotation = { id: string, kind: BrowserAnnotationKind, comment: string, color: string, points: Array<BrowserPoint>, bounds: BrowserRect | null, element: BrowserElementEvidence | null, };
+
+export type BrowserPageEvidence = { url: string, title: string, tab_id: number, document_id: string, captured_at: string, viewport: BrowserViewport, image_width: number, image_height: number, };
+
+export type BrowserCaptureSubmission = { association_key: string, browser_instance: string, capture_id: string, page: BrowserPageEvidence, annotations: Array<BrowserAnnotation>, png_base64: string, };
+
+export type BrowserCaptureContext = { association_key: string, session_id: string, space_id: string, space_label: string, playwright_session: string, working_directory: string, invocation: string, browser_instance: string, };
+
+export type BrowserFeedbackCapture = { id: string, context: BrowserCaptureContext, page: BrowserPageEvidence, annotations: Array<BrowserAnnotation>, pending_ids: Array<string>, image_path: string, };
+
+export type BrowserCaptureSaved = { capture_id: string, annotation_ids: Array<string>, image_path: string, pending_count: number, };
+
+export type BrowserFeedbackResponse = { captures: Array<BrowserFeedbackCapture>, pending_count: number, retention_seconds: number, };
+
+export type BrowserFeedbackAck = { acknowledged_ids: Array<string>, remaining: number, };
+
 export type SpaceGitSummary = { repository_key: string, repository: string, branch: string | null, checkout_path: string, is_linked_worktree: boolean, };
 
 export type SpaceSummary = { id: string, label: string, number: number, tab_count: number, pane_count: number, focused: boolean, agent_status: string, git: SpaceGitSummary | null, };

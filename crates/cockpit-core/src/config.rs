@@ -21,6 +21,20 @@ pub struct WindowConfiguration {
     pub decorations: bool,
 }
 
+/// Paths for the installed browser tooling that Cockpit is allowed to invoke.
+///
+/// The CLI is resolved from the owner's environment. Its normal browser selection
+/// is preserved unless an executable override is configured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserConfiguration {
+    pub playwright_cli: PathBuf,
+    pub chromium_executable: Option<PathBuf>,
+    pub feedback_retention_seconds: u64,
+    pub feedback_max_store_bytes: u64,
+}
+
+const DEFAULT_PLAYWRIGHT_CLI: &str = "playwright-cli";
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TomlConfiguration {
@@ -34,6 +48,7 @@ struct TomlConfiguration {
     providers: Option<Vec<ProjectProvider>>,
     limits: Option<TomlLimits>,
     window: Option<TomlWindow>,
+    browser: Option<TomlBrowser>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -41,6 +56,15 @@ struct TomlConfiguration {
 struct TomlWindow {
     scale_factor: Option<f64>,
     decorations: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TomlBrowser {
+    playwright_cli: Option<String>,
+    chromium_executable: Option<String>,
+    feedback_retention_seconds: Option<u64>,
+    feedback_max_store_bytes: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -328,6 +352,46 @@ pub fn load_project_configuration(
         providers,
         limits,
         origins,
+    })
+}
+
+/// Load browser executable paths from the shared Cockpit TOML.
+///
+/// Environment values override `[browser]`, while command-name defaults remain
+/// explicit so missing installed prerequisites can be reported at use time.
+pub fn load_browser_configuration(
+    config_path: Option<&Path>,
+) -> Result<BrowserConfiguration, InspectionError> {
+    let (file, _) = load_file_configuration(config_path)?;
+    let browser = file.browser.unwrap_or_default();
+    let (playwright_cli, _) = choose_path(
+        "COCKPIT_PLAYWRIGHT_CLI",
+        browser.playwright_cli,
+        DEFAULT_PLAYWRIGHT_CLI,
+    )?;
+    let (chromium_executable, chromium_source) = choose_path(
+        "COCKPIT_CHROMIUM_EXECUTABLE",
+        browser.chromium_executable,
+        "",
+    )?;
+    let feedback_retention_seconds = browser.feedback_retention_seconds.unwrap_or(3600);
+    let feedback_max_store_bytes = browser
+        .feedback_max_store_bytes
+        .unwrap_or(256 * 1024 * 1024);
+    if !(1..=7 * 24 * 3600).contains(&feedback_retention_seconds)
+        || !(4 * 1024 * 1024..=4 * 1024 * 1024 * 1024).contains(&feedback_max_store_bytes)
+    {
+        return Err(InspectionError::new(
+            "invalid_browser_configuration",
+            "Browser feedback retention must be 1–604800 seconds and storage must be 4 MiB–4 GiB",
+        ));
+    }
+    Ok(BrowserConfiguration {
+        playwright_cli: PathBuf::from(playwright_cli),
+        chromium_executable: (chromium_source != "default")
+            .then(|| PathBuf::from(chromium_executable)),
+        feedback_retention_seconds,
+        feedback_max_store_bytes,
     })
 }
 

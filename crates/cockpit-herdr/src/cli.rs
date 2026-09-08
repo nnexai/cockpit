@@ -17,7 +17,8 @@ use tokio::sync::{Mutex, mpsc};
 
 use async_trait::async_trait;
 use cockpit_core::{
-    HerdrAdapter, InspectionError, SessionChange, SessionSubscription, TerminalSession,
+    BrowserHerdrAdapter, BrowserHerdrSnapshot, HerdrAdapter, InspectionError, SessionChange,
+    SessionSubscription, TerminalSession,
     process::{OwnedChild, run_bounded_command},
 };
 use cockpit_protocol::v1::{
@@ -2116,6 +2117,31 @@ impl HerdrAdapter for HerdrCliAdapter {
         request: &TerminalOpenRequest,
     ) -> Result<TerminalSession, InspectionError> {
         self.open_terminal_inner(request).await
+    }
+}
+
+#[async_trait]
+impl BrowserHerdrAdapter for HerdrCliAdapter {
+    async fn browser_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<BrowserHerdrSnapshot, InspectionError> {
+        self.selected_session(session_id)?;
+        let endpoint_path = self.socket_path(session_id)?;
+        let endpoint_path = endpoint_path.to_str().map(str::to_owned).ok_or_else(|| {
+            InspectionError::new(
+                "endpoint_unavailable",
+                "Herdr endpoint path is not valid UTF-8",
+            )
+        })?;
+        let (result, endpoint_identity) = self
+            .socket_request_with_identity(session_id, "session.snapshot", json!({}), None)
+            .await?;
+        Ok(BrowserHerdrSnapshot {
+            endpoint_identity,
+            endpoint_path,
+            snapshot: parse_snapshot(json!({"result": result}), session_id)?,
+        })
     }
 }
 

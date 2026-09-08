@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cockpit feedback</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">Cockpit Space</p><h1 id="space-label">Connecting…</h1></div><span id="connection" class="badge">—</span></header>
+    <p id="status" class="status" role="status">Loading pairing…</p>
+    <section class="summary"><span id="pending">No pending capture</span><button id="reconnect" class="link" type="button">Reconnect</button></section>
+    <label for="tab-select">Page</label>
+    <select id="tab-select"></select>
+    <p class="help">Only the selected visible HTTP(S) page is available. Annotations stay attached to its document.</p>
+    <div class="actions"><button id="annotate" type="button">Annotate page</button><button id="browse" class="secondary" type="button">Browse mode</button></div>
+    <button id="capture" class="capture" type="button">Capture and save</button>
+    <button id="retry" class="secondary full" type="button">Retry pending capture</button>
+    <button id="discard" class="danger full" type="button">Discard pending capture</button>
+    <p id="details" class="note">Capture is taken from the visible tab. The live page remains editable until you capture.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

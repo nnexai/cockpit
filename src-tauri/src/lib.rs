@@ -21,11 +21,19 @@ use cockpit_core::{
     TerminalSession,
 };
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
-use cockpit_protocol::v1::{
-    CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
-    ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse, SessionStreamMessage,
-    StatusResponse, TerminalCommand, TerminalOpenRequest, TerminalOwnershipState,
-    TerminalStreamMessage,
+use cockpit_host::BrowserRuntime;
+use cockpit_protocol::{
+    browser::{
+        BrowserFeedbackAckRequest, BrowserFeedbackImage, BrowserFeedbackImageRequest,
+        BrowserFeedbackLookup, BrowserFeedbackRequest, BrowserFeedbackSendRequest,
+        BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse,
+    },
+    v1::{
+        CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
+        ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
+        SessionStreamMessage, StatusResponse, TerminalCommand, TerminalOpenRequest,
+        TerminalOwnershipState, TerminalStreamMessage,
+    },
 };
 use tauri::{Manager, State, ipc::Channel};
 use tokio::sync::mpsc;
@@ -212,6 +220,59 @@ async fn cockpit_status(
     Ok(service.status().await)
 }
 
+#[tauri::command]
+async fn cockpit_browser_action(
+    request: BrowserRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserResponse, ErrorResponse> {
+    runtime
+        .execute(request)
+        .await
+        .map_err(inspection_error_response)
+}
+#[tauri::command]
+async fn cockpit_browser_feedback(
+    request: BrowserFeedbackRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserFeedbackLookup, ErrorResponse> {
+    runtime
+        .feedback(request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_feedback_ack(
+    request: BrowserFeedbackAckRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<cockpit_protocol::browser_feedback::BrowserFeedbackAck, ErrorResponse> {
+    runtime
+        .acknowledge_feedback(request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_feedback_image(
+    request: BrowserFeedbackImageRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserFeedbackImage, ErrorResponse> {
+    runtime
+        .feedback_image(request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_feedback_send(
+    request: BrowserFeedbackSendRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserFeedbackSendResponse, ErrorResponse> {
+    runtime
+        .send_feedback(request)
+        .await
+        .map_err(inspection_error_response)
+}
 #[tauri::command]
 async fn cockpit_sessions(
     service: State<'_, CockpitService>,
@@ -814,6 +875,25 @@ pub fn run() {
     let project_service =
         cockpit_core::projects::ProjectService::new(project_config.clone(), inspector.clone())
             .expect("failed to initialize project operations");
+    let browser_config = cockpit_core::config::load_browser_configuration(None)
+        .expect("failed to load browser configuration");
+    let paste_adapter = inspector.paste_adapter();
+    let browser_service = Arc::new(
+        cockpit_core::browser::BrowserService::new(
+            browser_config,
+            std::path::PathBuf::from(&project_config.state_root),
+            inspector.clone(),
+        )
+        .expect("failed to initialize browser service")
+        .with_paste_adapter(paste_adapter),
+    );
+    let browser_runtime = Arc::new(
+        tauri::async_runtime::block_on(BrowserRuntime::start(
+            std::path::PathBuf::from(&project_config.state_root),
+            browser_service,
+        ))
+        .expect("failed to initialize browser runtime"),
+    );
     let service =
         CockpitService::new(CockpitMode::Normal, inspector.clone()).with_projects(project_service);
     let shutdown_projects = service
@@ -861,6 +941,7 @@ pub fn run() {
     let service = service.with_comments(comments);
     tauri::Builder::default()
         .manage(service)
+        .manage(browser_runtime.clone())
         .manage(StreamRegistry::new())
         .setup(move |app| {
             let main_window = app
@@ -914,11 +995,16 @@ pub fn run() {
             comments::cockpit_comments_remove,
             comments::cockpit_comments_attach,
             comments::cockpit_comments_discard,
+            cockpit_status,
+            cockpit_browser_action,
             comments::cockpit_comments_preview,
             comments::cockpit_comments_paste_prepare,
             comments::cockpit_comments_paste_send,
             comments::cockpit_comments_paste_mark_pasted,
-            cockpit_status,
+            cockpit_browser_feedback,
+            cockpit_browser_feedback_ack,
+            cockpit_browser_feedback_image,
+            cockpit_browser_feedback_send,
             cockpit_sessions,
             cockpit_session_snapshot,
             cockpit_focus,
@@ -937,9 +1023,11 @@ pub fn run() {
             {
                 api.prevent_exit();
                 let projects = shutdown_projects.clone();
+                let browser_runtime = browser_runtime.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     projects.shutdown().await;
+                    let _ = browser_runtime.shutdown().await;
                     app.exit(0);
                 });
             }

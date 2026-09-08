@@ -706,7 +706,7 @@ fn absolute_root(path: &Path) -> io::Result<PathBuf> {
     }
     Ok(normalized)
 }
-fn prepare_root(path: &Path, kind: &str) -> Result<(PathBuf, Dir), InspectionError> {
+pub(crate) fn prepare_root(path: &Path, kind: &str) -> Result<(PathBuf, Dir), InspectionError> {
     let absolute = absolute_root(path).map_err(|error| {
         if error.kind() == io::ErrorKind::InvalidInput {
             InspectionError::new("unsafe_path", format!("unsafe {kind} root path"))
@@ -797,7 +797,7 @@ pub(crate) fn validate_project_root(path: &Path) -> Result<(), InspectionError> 
     Ok(())
 }
 
-fn open_dir_nofollow_absolute(path: &Path) -> io::Result<Dir> {
+pub(crate) fn open_dir_nofollow_absolute(path: &Path) -> io::Result<Dir> {
     let absolute = absolute_root(path)?;
     let mut dir = Dir::open_ambient_dir(Path::new("/"), cap_std::ambient_authority())?;
     for component in absolute.components() {

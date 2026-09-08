@@ -49,6 +49,11 @@
     "allow-cockpit-source-import",
     "allow-cockpit-source-refresh",
     "allow-cockpit-source-list",
-    "allow-cockpit-context-media"
+    "allow-cockpit-context-media",
+    "allow-cockpit-browser-action",
+    "allow-cockpit-browser-feedback",
+    "allow-cockpit-browser-feedback-ack",
+    "allow-cockpit-browser-feedback-image",
+    "allow-cockpit-browser-feedback-send"
   ]
 }

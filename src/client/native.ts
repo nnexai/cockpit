@@ -48,6 +48,16 @@ import type {
 import { transitionSessionStream, type StreamOrderCursor } from "./streamOrder";
 import {
   CockpitClientError,
+  parseBrowserFeedbackAck,
+  parseBrowserFeedbackAckRequest,
+  parseBrowserFeedbackImage,
+  parseBrowserFeedbackImageRequest,
+  parseBrowserFeedbackLookup,
+  parseBrowserFeedbackRequest,
+  parseBrowserFeedbackSendRequest,
+  parseBrowserFeedbackSendResponse,
+  parseBrowserRequest,
+  parseBrowserResponse,
   parseErrorEnvelope,
   parseFocusRequest,
   parseFocusResponse,
@@ -474,6 +484,26 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_comments_preview", { sessionId, paneId, request }, "comment preview", parseCommentPreview);
       signal?.throwIfAborted();
       return matchCommentPreview(response, request.batch);
+    },
+    browserAction(value) {
+      const request = parseBrowserRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_action", { request }, "browser action", parseBrowserResponse);
+    },
+    async browserFeedback(value) {
+      const request = parseBrowserFeedbackRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_feedback", { request }, "browser feedback", parseBrowserFeedbackLookup);
+    },
+    async acknowledgeBrowserFeedback(value) {
+      const request = parseBrowserFeedbackAckRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_feedback_ack", { request }, "browser feedback acknowledgement", parseBrowserFeedbackAck);
+    },
+    async browserFeedbackImage(value) {
+      const request = parseBrowserFeedbackImageRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_feedback_image", { request }, "browser feedback image", parseBrowserFeedbackImage);
+    },
+    async sendBrowserFeedback(value) {
+      const request = parseBrowserFeedbackSendRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_feedback_send", { request }, "browser feedback send", parseBrowserFeedbackSendResponse);
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },

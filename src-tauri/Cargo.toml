@@ -13,6 +13,7 @@ tauri-build.workspace = true
 cockpit-providers = { path = "../crates/cockpit-providers" }
 cockpit-core = { path = "../crates/cockpit-core" }
 cockpit-herdr = { path = "../crates/cockpit-herdr" }
+cockpit-host = { path = "../crates/cockpit-host" }
 cockpit-protocol = { path = "../crates/cockpit-protocol" }
 uuid.workspace = true
 tauri.workspace = true

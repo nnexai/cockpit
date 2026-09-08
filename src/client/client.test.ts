@@ -78,6 +78,11 @@ function streamStale(sequence: number, generation = 1) {
 function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
   return {
     status: vi.fn(async () => status),
+    browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this Space" })),
+    browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in terminal fixture"); }),
+    acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in terminal fixture"); }),
+    browserFeedbackImage: vi.fn(async () => { throw new Error("Unexpected browser feedback image in terminal fixture"); }),
+    sendBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback send in terminal fixture"); }),
     projectConfiguration: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),

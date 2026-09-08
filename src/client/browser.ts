@@ -33,6 +33,16 @@ import {
 } from "./projectTeardownProtocol";
 import {
   CockpitClientError,
+  parseBrowserFeedbackAck,
+  parseBrowserFeedbackAckRequest,
+  parseBrowserFeedbackImage,
+  parseBrowserFeedbackImageRequest,
+  parseBrowserFeedbackLookup,
+  parseBrowserFeedbackRequest,
+  parseBrowserFeedbackSendRequest,
+  parseBrowserFeedbackSendResponse,
+  parseBrowserRequest,
+  parseBrowserResponse,
   parseErrorEnvelope,
   parseFocusRequest,
   parseFocusResponse,
@@ -541,6 +551,36 @@ export function createBrowserClient(
         signal,
       });
       return matchCommentPreview(response, body.batch);
+    },
+    async browserAction(value) {
+      const body = parseBrowserRequest(value);
+      return getJson(request, "/api/v1/browser/action", "browser action", parseBrowserResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+    async browserFeedback(value) {
+      const body = parseBrowserFeedbackRequest(value);
+      return getJson(request, "/api/v1/browser/feedback", "browser feedback", parseBrowserFeedbackLookup, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+    async acknowledgeBrowserFeedback(value) {
+      const body = parseBrowserFeedbackAckRequest(value);
+      return getJson(request, "/api/v1/browser/feedback/ack", "browser feedback acknowledgement", parseBrowserFeedbackAck, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+    async browserFeedbackImage(value) {
+      const body = parseBrowserFeedbackImageRequest(value);
+      return getJson(request, "/api/v1/browser/feedback/image", "browser feedback image", parseBrowserFeedbackImage, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+    async sendBrowserFeedback(value) {
+      const body = parseBrowserFeedbackSendRequest(value);
+      return getJson(request, "/api/v1/browser/feedback/send", "browser feedback send", parseBrowserFeedbackSendResponse, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
     },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },

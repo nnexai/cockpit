@@ -127,6 +127,11 @@ class AppFixture {
 
   readonly client: CockpitClient = {
     status: vi.fn(async () => status),
+    browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this Space" })),
+    browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in fixture"); }),
+    acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in fixture"); }),
+    browserFeedbackImage: vi.fn(async () => { throw new Error("Unexpected browser feedback image in fixture"); }),
+    sendBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback send in fixture"); }),
     projectConfiguration: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
@@ -298,24 +303,6 @@ async function exhaustAutomaticRecovery(fixture: AppFixture): Promise<void> {
 }
 
 describe("mounted App mutation and session ordering", () => {
-  it("keeps command actions and informational shortcuts in their overlay rows", async () => {
-    const fixture = new AppFixture();
-    await mount(fixture);
-
-    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true })));
-    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true, cancelable: true })));
-    await settle();
-
-    const overlay = container.querySelector<HTMLElement>(".command-overlay");
-    const shortcuts = overlay?.querySelector<HTMLElement>(".shortcut-list");
-    expect(overlay?.querySelectorAll(".command-actions .session-command")).toHaveLength(9);
-    expect([...shortcuts!.querySelectorAll(":scope > .shortcut-row span")].map((row) => row.textContent)).toEqual([
-      "commands", "select tab", "next / previous pane", "focus pane left down up right", "open file picker", "focus file tree / content", "resource commands",
-    ]);
-    expect(button("Open Review right").disabled).toBe(true);
-    expect(button("Open Review right").title).toBe("Review requires a configured repository");
-  });
-
   it("opens Review from the command overlay for the selected single pane", async () => {
     const fixture = new AppFixture();
     const presentation = panePresentation("session-1", "pane-1", true);

@@ -1,3 +1,6 @@
+pub mod browser;
+pub mod browser_feedback;
+
 pub mod comments;
 pub mod config;
 pub mod context;
@@ -15,6 +18,7 @@ pub mod repositories;
 pub mod review;
 pub mod sources;
 
+pub use browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot, BrowserService};
 pub use extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 pub use paste_adapter::CommentPasteAdapter;
 pub use project_adapter::ProjectHerdrAdapter;

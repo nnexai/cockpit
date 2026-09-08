@@ -1,3 +1,6 @@
+pub mod browser;
+pub mod browser_feedback;
+
 pub mod comment_paste;
 pub mod comments;
 pub mod context;

@@ -3,11 +3,13 @@ use std::{
     io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
+use crate::browser_runtime::BrowserRuntime;
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::Body,
     extract::{
         DefaultBodyLimit, Path as AxumPath, Query, State,
@@ -25,10 +27,16 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use cockpit_core::{
     CockpitService, InspectionError, SessionChange, SessionSubscription, TerminalSession,
 };
-use cockpit_protocol::v1::{
-    ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
-    SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalMode,
-    TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+use cockpit_protocol::{
+    browser::{
+        BrowserFeedbackAckRequest, BrowserFeedbackImageRequest, BrowserFeedbackRequest,
+        BrowserFeedbackSendRequest, BrowserRequest,
+    },
+    v1::{
+        ErrorResponse, FocusRequest, ResourceMutationRequest, ResourceMutationResponse,
+        SessionSnapshotResponse, SessionStreamMessage, TerminalCommand, TerminalMode,
+        TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
+    },
 };
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
@@ -60,6 +68,7 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     pub static_dir: PathBuf,
     pub service: CockpitService,
+    pub browser_runtime: Option<Arc<BrowserRuntime>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,9 +135,6 @@ pub fn validate_static_root(root: impl AsRef<Path>) -> Result<PathBuf, ServerErr
 }
 
 /// Build the reusable Axum router for the bounded Cockpit API.
-///
-/// `expected_authority` is the listener's actual loopback address, including
-/// its port. Requests must carry that exact numeric authority in `Host`.
 pub fn build_router(
     service: CockpitService,
     static_dir: impl AsRef<Path>,
@@ -140,6 +146,7 @@ pub fn build_router(
         service,
         static_dir,
         expected_authority,
+        None,
     ))
 }
 
@@ -147,6 +154,7 @@ fn build_router_with_validated_root(
     service: CockpitService,
     static_dir: PathBuf,
     expected_authority: SocketAddr,
+    browser_runtime: Option<Arc<BrowserRuntime>>,
 ) -> Router {
     let expected_authority = expected_authority.to_string();
     let expected_origin = format!("http://{expected_authority}");
@@ -160,6 +168,26 @@ fn build_router_with_validated_root(
 
     Router::new()
         .route("/api/v1/status", get(status))
+        .route(
+            "/api/v1/browser/action",
+            post(browser_action).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/v1/browser/feedback",
+            post(browser_feedback).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/v1/browser/feedback/ack",
+            post(browser_feedback_ack).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/v1/browser/feedback/image",
+            post(browser_feedback_image).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
+        .route(
+            "/api/v1/browser/feedback/send",
+            post(browser_feedback_send).layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES)),
+        )
         .route("/api/v1/sessions", get(sessions))
         .route(
             "/api/v1/sessions/{session_id}/snapshot",
@@ -181,12 +209,11 @@ fn build_router_with_validated_root(
         .merge(context_media::routes())
         .merge(projects::routes())
         .merge(context::routes())
-        // Keep API resolution ahead of the static service. This prevents a static file
-        // named api/... from changing the API's 404 contract.
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(static_service)
         .with_state(service)
+        .layer(Extension(browser_runtime))
         .layer(middleware::from_fn(
             move |request: Request<Body>, next: Next| {
                 let allowed = authority_headers_match(
@@ -247,9 +274,87 @@ fn authority_headers_match(
         }
     }
 }
-
 async fn status(State(service): State<CockpitService>) -> impl IntoResponse {
     Json(service.status().await)
+}
+
+async fn browser_action(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request(
+            "browser_runtime_unavailable",
+            "Browser runtime is not configured",
+        );
+    };
+    match runtime.execute(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+async fn browser_feedback(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserFeedbackRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request(
+            "browser_runtime_unavailable",
+            "Browser runtime is not configured",
+        );
+    };
+    match runtime.feedback(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_feedback_ack(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserFeedbackAckRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request(
+            "browser_runtime_unavailable",
+            "Browser runtime is not configured",
+        );
+    };
+    match runtime.acknowledge_feedback(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_feedback_image(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserFeedbackImageRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request(
+            "browser_runtime_unavailable",
+            "Browser runtime is not configured",
+        );
+    };
+    match runtime.feedback_image(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn browser_feedback_send(
+    Extension(runtime): Extension<Option<Arc<BrowserRuntime>>>,
+    Json(request): Json<BrowserFeedbackSendRequest>,
+) -> Response {
+    let Some(runtime) = runtime else {
+        return bad_request(
+            "browser_runtime_unavailable",
+            "Browser runtime is not configured",
+        );
+    };
+    match runtime.send_feedback(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => inspection_error(error),
+    }
 }
 
 async fn sessions(State(service): State<CockpitService>) -> Response {
@@ -895,7 +1000,6 @@ async fn send_terminal_error(
 }
 
 /// Bind and run the gateway in the foreground. The listening line is emitted only
-/// after the OS has accepted the bind and uses the actual ephemeral port.
 pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
     validate_bind(config.bind)?;
     let static_dir = validate_static_root(&config.static_dir)?;
@@ -904,18 +1008,40 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
         .map_err(ServerError::Serve)?;
     let actual = listener.local_addr().map_err(ServerError::Serve)?;
     let projects = config.service.projects().ok().cloned();
-    let router = build_router_with_validated_root(config.service, static_dir, actual);
+    let browser_runtime = config.browser_runtime.clone();
+    let router = build_router_with_validated_root(
+        config.service,
+        static_dir,
+        actual,
+        browser_runtime.clone(),
+    );
     println!("listening http://{actual}");
     std::io::stdout().flush().map_err(ServerError::Serve)?;
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            shutdown_signal().await;
             if let Some(projects) = projects {
                 projects.shutdown().await;
+            }
+            if let Some(runtime) = browser_runtime {
+                let _ = runtime.shutdown().await;
             }
         })
         .await
         .map_err(ServerError::Serve)
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 #[cfg(test)]
