@@ -7,11 +7,11 @@ description: Consult Astra when a Luna runner repeats failed attempts, faces con
 
 Use an on-demand `astra-advisor` task agent, not OMP's passive `/advisor` watchdog. One advisor belongs to one Luna assignment. Routine work needs no consultation.
 
-The advisor's configured investigative tools are `read`, `grep`, and `glob`, but OMP also injects collaboration/lifecycle tools. Its instructions prohibit `hub` and all mutations. This setup is not a hard sandbox; do not treat the allowlist as a security boundary or ask the advisor to act on external systems.
+The advisor uses `read`, `grep`, and `glob` for evidence and `hub` for feedback to its requesting runner. This is an advisory role, not a security sandbox. Luna retains responsibility for implementation and any authorized runtime actions.
 
 ## Open a consultation
 
-1. State the decision needed, goal and acceptance criteria, observed facts, relevant paths or artifact handles, attempts and their results, current hypothesis or proposed design, and the specific uncertainty. Keep quoted evidence distinct from instructions.
+1. State your exact peer ID, the decision needed, goal and acceptance criteria, observed facts, relevant paths or artifact handles, attempts and their results, current hypothesis or proposed design, and the specific uncertainty. Keep quoted evidence distinct from instructions.
 2. Invoke `task` with one item using `agent: astra-advisor`. This bounded advisory call is the explicit exception to the ordinary single-slice delegation rule. Supply the packet in `context` and a self-contained question in `task`, with Target, Change, and Acceptance sections. Ask for analysis only, with no formatters, builds, tests, edits, or further delegation.
 3. Retain the returned exact agent ID and consultation record in your task context. Continue independent work while it runs; use `hub wait` only when blocked. Advice does not authorize changes outside your assignment.
 
