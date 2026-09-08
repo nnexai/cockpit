@@ -152,23 +152,6 @@ async fn maps_redacted_snapshot_and_sanitizes_titles() {
             .write_all(format!("{response}\n").as_bytes())
             .await
             .unwrap();
-
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut reader = BufReader::new(stream);
-        request_line.clear();
-        reader.read_line(&mut request_line).await.unwrap();
-        let request: serde_json::Value = serde_json::from_str(&request_line).unwrap();
-        assert_eq!(request["method"], "worktree.list");
-        assert_eq!(request["params"], json!({"workspace_id": "space-a"}));
-        let response = json!({
-            "id": request["id"],
-            "error": {"code": "not_git_worktree", "message": "not a repository"}
-        });
-        reader
-            .into_inner()
-            .write_all(format!("{response}\n").as_bytes())
-            .await
-            .unwrap();
     });
     let config =
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
@@ -181,7 +164,15 @@ async fn maps_redacted_snapshot_and_sanitizes_titles() {
     assert_eq!(snapshot.version, "0.8.2");
     assert_eq!(snapshot.spaces[0].id, "space-a");
     assert_eq!(snapshot.spaces[0].agent_status, "unknown");
-    assert_eq!(snapshot.spaces[0].git, None);
+    let git = snapshot.spaces[0]
+        .git
+        .as_ref()
+        .expect("snapshot provenance");
+    assert_eq!(git.repository_key, "repo-opaque");
+    assert_eq!(git.repository, "cockpit");
+    assert_eq!(git.branch, None);
+    assert_eq!(git.checkout_path, "/work/cockpit");
+    assert!(!git.is_linked_worktree);
     assert_eq!(
         snapshot.panes[0].title.as_deref(),
         Some("Fallback terminal")
@@ -191,6 +182,111 @@ async fn maps_redacted_snapshot_and_sanitizes_titles() {
     assert_eq!(snapshot.layouts[0].panes[0].rect.width, 120);
     drop(fs::remove_file(socket));
 }
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_provenance_is_optional_per_space_without_inventory_requests() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-mixed-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/session-snapshot.json")).unwrap();
+    let workspaces = fixture["result"]["snapshot"]["workspaces"]
+        .as_array_mut()
+        .unwrap();
+    workspaces.push(json!({
+        "workspace_id": "space-b",
+        "label": "Home",
+        "number": 2,
+        "tab_count": 0,
+        "pane_count": 0,
+        "focused": false
+    }));
+    workspaces.push(json!({
+        "workspace_id": "space-c",
+        "label": "Null",
+        "number": 3,
+        "tab_count": 0,
+        "pane_count": 0,
+        "focused": false,
+        "worktree": null
+    }));
+    workspaces.push(json!({
+        "workspace_id": "space-d",
+        "label": "Malformed",
+        "number": 4,
+        "tab_count": 0,
+        "pane_count": 0,
+        "focused": false,
+        "worktree": {"repo_key": 7}
+    }));
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "session.snapshot");
+        let response = json!({"id": request["id"], "result": fixture["result"]});
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("mixed".into()), Some(socket.clone())).unwrap();
+    let snapshot = HerdrCliAdapter::new(config)
+        .session_snapshot("mixed")
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(snapshot.spaces.len(), 4);
+    assert_eq!(
+        snapshot.spaces[0]
+            .git
+            .as_ref()
+            .and_then(|git| git.branch.as_deref()),
+        None
+    );
+    assert!(snapshot.spaces[1].git.is_none());
+    assert!(snapshot.spaces[2].git.is_none());
+    assert!(snapshot.spaces[3].git.is_none());
+    drop(fs::remove_file(socket));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn structural_snapshot_failures_remain_rejected() {
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-structural-{}.sock", temp_id()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/session-snapshot.json")).unwrap();
+    fixture["result"]["snapshot"]["workspaces"] = json!({"not": "an array"});
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "session.snapshot");
+        let response = json!({"id": request["id"], "result": fixture["result"]});
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    let config =
+        HerdrCliConfig::from_options(None, Some("structural".into()), Some(socket.clone()))
+            .unwrap();
+    let error = HerdrCliAdapter::new(config)
+        .session_snapshot("structural")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "malformed_json");
+    server.await.unwrap();
+    drop(fs::remove_file(socket));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn custom_socket_uses_named_identity_and_rejects_other_route_sessions() {
@@ -212,41 +308,6 @@ async fn custom_socket_uses_named_identity_and_rejects_other_route_sessions() {
             .write_all(format!("{response}\n").as_bytes())
             .await
             .unwrap();
-
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut reader = BufReader::new(stream);
-        request_line.clear();
-        reader.read_line(&mut request_line).await.unwrap();
-        let request: serde_json::Value = serde_json::from_str(&request_line).unwrap();
-        assert_eq!(request["method"], "worktree.list");
-        assert_eq!(request["params"], json!({"workspace_id": "space-a"}));
-        let response = json!({
-            "id": request["id"],
-            "result": {
-                "type": "worktree_list",
-                "source": {
-                    "repo_key": "repo-opaque",
-                    "repo_name": "cockpit",
-                    "repo_root": "/work/cockpit",
-                    "source_checkout_path": "/work/cockpit"
-                },
-                "worktrees": [{
-                    "path": "/work/cockpit",
-                    "branch": "main",
-                    "is_bare": false,
-                    "is_detached": false,
-                    "is_prunable": false,
-                    "is_linked_worktree": false,
-                    "label": "cockpit",
-                    "open_workspace_id": "space-a"
-                }]
-            }
-        });
-        reader
-            .into_inner()
-            .write_all(format!("{response}\n").as_bytes())
-            .await
-            .unwrap();
     });
     let config =
         HerdrCliConfig::from_options(None, Some("named".into()), Some(socket.clone())).unwrap();
@@ -256,7 +317,7 @@ async fn custom_socket_uses_named_identity_and_rejects_other_route_sessions() {
     let git = snapshot.spaces[0].git.as_ref().unwrap();
     assert_eq!(git.repository_key, "repo-opaque");
     assert_eq!(git.repository, "cockpit");
-    assert_eq!(git.branch.as_deref(), Some("main"));
+    assert_eq!(git.branch, None);
     assert_eq!(git.checkout_path, "/work/cockpit");
     assert!(!git.is_linked_worktree);
     let error = adapter.session_snapshot("other").await.unwrap_err();
@@ -748,22 +809,6 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(request["method"], "session.snapshot");
         let response = json!({"id": request["id"], "result": refreshed_result});
-        reader
-            .into_inner()
-            .write_all(format!("{response}\n").as_bytes())
-            .await
-            .unwrap();
-
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut reader = BufReader::new(stream);
-        line.clear();
-        reader.read_line(&mut line).await.unwrap();
-        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["method"], "worktree.list");
-        let response = json!({
-            "id": request["id"],
-            "result": {"type": "worktree_list", "source": {}, "worktrees": "malformed"}
-        });
         reader
             .into_inner()
             .write_all(format!("{response}\n").as_bytes())

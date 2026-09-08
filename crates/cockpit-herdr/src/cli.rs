@@ -23,7 +23,6 @@ use cockpit_protocol::v1::{
     SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary,
     TabLayout, TabSummary, TerminalOpenRequest,
 };
-use futures_util::future::join_all;
 use serde_json::{Value, json};
 mod capabilities;
 mod config;
@@ -175,6 +174,28 @@ fn layout_rect(value: &Value, context: &str) -> Result<LayoutRect, InspectionErr
     })
 }
 
+fn parse_snapshot_worktree(workspace: &serde_json::Map<String, Value>) -> Option<SpaceGitSummary> {
+    let worktree = workspace.get("worktree")?.as_object()?;
+    let repository_key = worktree.get("repo_key")?.as_str()?;
+    let repository = worktree.get("repo_name")?.as_str()?;
+    // `repo_root` is part of Herdr's provenance contract even though the
+    // transport-neutral SpaceGitSummary currently exposes only the checkout.
+    worktree.get("repo_root")?.as_str()?;
+    let checkout_path = worktree.get("checkout_path")?.as_str()?;
+    let is_linked_worktree = worktree.get("is_linked_worktree")?.as_bool()?;
+    let branch = match worktree.get("branch") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_str()?),
+    };
+    Some(SpaceGitSummary {
+        repository_key: repository_key.to_owned(),
+        repository: repository.to_owned(),
+        branch: branch.map(str::to_owned),
+        checkout_path: checkout_path.to_owned(),
+        is_linked_worktree,
+    })
+}
+
 fn parse_snapshot(
     value: Value,
     session_id: &str,
@@ -215,7 +236,7 @@ fn parse_snapshot(
                     None => "unknown".to_owned(),
                     Some(_) => required_string(object, "agent_status", &context)?,
                 },
-                git: None,
+                git: parse_snapshot_worktree(object),
             })
         })
         .collect::<Result<Vec<_>, InspectionError>>()?;
@@ -349,45 +370,6 @@ fn parse_snapshot(
     };
     validate_snapshot(&response)?;
     Ok(response)
-}
-fn parse_space_git_summary(
-    value: &Value,
-    workspace_id: &str,
-) -> Result<Option<SpaceGitSummary>, InspectionError> {
-    let result = object(value, "worktree.list result")?;
-    if required_string(result, "type", "worktree.list result")? != "worktree_list" {
-        return Err(malformed("worktree.list result.type must be worktree_list"));
-    }
-    let source = result
-        .get("source")
-        .ok_or_else(|| malformed("worktree.list result.source is required"))?;
-    let source = object(source, "worktree.list result.source")?;
-    let repository_key = required_string(source, "repo_key", "worktree.list result.source")?;
-    let repository = required_string(source, "repo_name", "worktree.list result.source")?;
-    let worktrees = required_array(result, "worktrees", "worktree.list result")?;
-
-    for (index, value) in worktrees.iter().enumerate() {
-        let context = format!("worktree.list result.worktrees[{index}]");
-        let worktree = object(value, &context)?;
-        if optional_string(worktree, "open_workspace_id", &context)?.as_deref()
-            != Some(workspace_id)
-        {
-            continue;
-        }
-        let detached = required_bool(worktree, "is_detached", &context)?;
-        return Ok(Some(SpaceGitSummary {
-            repository_key,
-            repository,
-            branch: if detached {
-                None
-            } else {
-                optional_string(worktree, "branch", &context)?
-            },
-            checkout_path: required_string(worktree, "path", &context)?,
-            is_linked_worktree: required_bool(worktree, "is_linked_worktree", &context)?,
-        }));
-    }
-    Ok(None)
 }
 
 fn validate_snapshot(snapshot: &SessionSnapshotResponse) -> Result<(), InspectionError> {
@@ -1280,36 +1262,13 @@ impl HerdrCliAdapter {
         session_id: &str,
         expected_identity: Option<&str>,
     ) -> Result<SessionSnapshotResponse, InspectionError> {
-        let mut snapshot = self
-            .read_structure_with_identity(session_id, expected_identity)
-            .await?;
-        let git_summaries = join_all(snapshot.spaces.iter().map(|space| async {
-            match self
-                .socket_request_with_identity(
-                    session_id,
-                    "worktree.list",
-                    json!({"workspace_id": space.id}),
-                    expected_identity,
-                )
-                .await
-            {
-                Ok((result, _)) => Ok(parse_space_git_summary(&result, &space.id).ok().flatten()),
-                // Git metadata is optional for ordinary Spaces. A pinned
-                // endpoint still needs to accept a home-directory Space.
-                Err(error) if error.code == "not_git_worktree" => Ok(None),
-                Err(error) if expected_identity.is_some() => Err(error),
-                Err(_) => Ok(None),
-            }
-        }))
-        .await;
-        for (space, git) in snapshot.spaces.iter_mut().zip(git_summaries) {
-            space.git = git?;
-        }
-        Ok(snapshot)
+        self.read_structure_with_identity(session_id, expected_identity)
+            .await
     }
 
-    /// Extension validation needs fresh pane structure, not Git decorations
-    /// for every Space in the session. Keep endpoint pinning on this read.
+    /// Extension validation uses the authoritative structure snapshot without
+    /// issuing extra worktree metadata requests. Optional snapshot provenance
+    /// is decoration and cannot invalidate that structural read.
     async fn read_structure_with_identity(
         &self,
         session_id: &str,
@@ -2285,7 +2244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pinned_snapshot_accepts_non_git_spaces() {
+    async fn pinned_snapshot_ignores_malformed_optional_provenance() {
         let path = std::env::temp_dir().join(format!(
             "cockpit-pinned-snapshot-{}.sock",
             std::process::id()
@@ -2295,21 +2254,18 @@ mod tests {
         let identity = HerdrCliAdapter::socket_peer_identity(&path, &probe).unwrap();
         drop(probe);
         drop(listener.accept().await.unwrap());
-        let fixture: Value =
+        let mut fixture: Value =
             serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        fixture["result"]["snapshot"]["workspaces"][0]["worktree"] = json!({"repo_key": 4});
         let server = tokio::spawn(async move {
-            for method in ["session.snapshot", "worktree.list", "session.snapshot"] {
+            for _ in 0..2 {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
                 reader.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
-                assert_eq!(request["method"], method);
-                let response = if method == "session.snapshot" {
-                    json!({"id":request["id"],"result":fixture["result"]})
-                } else {
-                    json!({"id":request["id"],"error":{"code":"not_git_worktree","message":"not a repository"}})
-                };
+                assert_eq!(request["method"], "session.snapshot");
+                let response = json!({"id": request["id"], "result": fixture["result"]});
                 reader
                     .into_inner()
                     .write_all(format!("{response}\n").as_bytes())
@@ -2329,7 +2285,7 @@ mod tests {
             .expect("structure inspection must not request optional worktree metadata");
         server.await.unwrap();
         std::fs::remove_file(&path).unwrap();
-        let snapshot = result.expect("a non-Git Space must not prevent pinned pane inspection");
+        let snapshot = result.expect("malformed optional provenance must not reject snapshot");
         assert_eq!(snapshot.spaces.len(), 1);
         assert!(snapshot.spaces[0].git.is_none());
         assert_eq!(structure.panes, snapshot.panes);
@@ -2637,84 +2593,20 @@ mod tests {
     }
 
     #[test]
-    fn worktree_list_projects_matching_repository_context() {
-        let result = json!({
-            "type": "worktree_list",
-            "source": {
+    fn snapshot_worktree_accepts_optional_branch() {
+        let workspace = json!({
+            "worktree": {
                 "repo_key": "repo-opaque",
                 "repo_name": "cockpit",
                 "repo_root": "/work/cockpit",
-                "source_checkout_path": "/work/cockpit"
-            },
-            "worktrees": [
-                {
-                    "path": "/work/cockpit",
-                    "branch": "main",
-                    "is_bare": false,
-                    "is_detached": false,
-                    "is_prunable": false,
-                    "is_linked_worktree": false,
-                    "label": "cockpit",
-                    "open_workspace_id": "w18"
-                },
-                {
-                    "path": "/work/cockpit-brave",
-                    "branch": "worktree/brave-forest-7518",
-                    "is_bare": false,
-                    "is_detached": false,
-                    "is_prunable": false,
-                    "is_linked_worktree": true,
-                    "label": "brave-forest-7518",
-                    "open_workspace_id": "w1C"
-                }
-            ]
-        });
-
-        let main = parse_space_git_summary(&result, "w18").unwrap().unwrap();
-        let linked = parse_space_git_summary(&result, "w1C").unwrap().unwrap();
-        assert_eq!(main.repository_key, "repo-opaque");
-        assert_eq!(linked.repository_key, main.repository_key);
-        assert_eq!(main.repository, "cockpit");
-        assert_eq!(main.branch.as_deref(), Some("main"));
-        assert_eq!(main.checkout_path, "/work/cockpit");
-        assert!(!main.is_linked_worktree);
-        assert_eq!(linked.branch.as_deref(), Some("worktree/brave-forest-7518"));
-        assert!(linked.is_linked_worktree);
-    }
-
-    #[test]
-    fn worktree_list_ignores_other_workspaces_and_detached_branches() {
-        let result = json!({
-            "type": "worktree_list",
-            "source": {"repo_key": "repo-opaque", "repo_name": "cockpit"},
-            "worktrees": [{
-                "path": "/work/detached",
-                "branch": "stale-name",
-                "is_detached": true,
+                "checkout_path": "/work/cockpit",
                 "is_linked_worktree": true,
-                "open_workspace_id": "other"
-            }]
+                "branch": "feature/demo"
+            }
         });
-
-        assert_eq!(parse_space_git_summary(&result, "w18").unwrap(), None);
-        let detached = parse_space_git_summary(&result, "other").unwrap().unwrap();
-        assert_eq!(detached.branch, None);
-    }
-
-    #[test]
-    fn malformed_worktree_list_is_rejected_for_fail_soft_enrichment() {
-        assert!(parse_space_git_summary(&json!({"type": "other"}), "w18").is_err());
-        assert!(
-            parse_space_git_summary(
-                &json!({
-                    "type": "worktree_list",
-                    "source": {"repo_key": "repo-opaque", "repo_name": "cockpit"},
-                    "worktrees": [{"open_workspace_id": "w18", "path": 7}]
-                }),
-                "w18"
-            )
-            .is_err()
-        );
+        let git = parse_snapshot_worktree(workspace.as_object().unwrap()).unwrap();
+        assert_eq!(git.branch.as_deref(), Some("feature/demo"));
+        assert!(git.is_linked_worktree);
     }
 
     #[test]

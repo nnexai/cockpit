@@ -324,3 +324,13 @@ Files and Review own their document/tree focus and fuzzy picker. Files indexes b
 The native installer builds a standalone Tauri binary and writes a stable user desktop launcher. Updates atomically replace the executable without stopping running processes. Installation ownership is recorded for scoped update/uninstall. This workflow is verified in a disposable prefix; the user's running installation and Herdr default session were not changed.
 
 Verification and limits are recorded in `planning/daily-use-2026-09-06.md`.
+
+## 2026-09-08: bounded session refresh and terminal activity
+
+Session refresh reads worktree provenance from `session.snapshot`, without issuing `worktree.list` for every Space. Missing or malformed optional Git decoration does not invalidate pane structure or extension inspection. Explicit worktree inventory and mutations keep their existing validation and endpoint pinning. Stock Herdr 0.8.2 snapshots have no branch field; Cockpit retains repository grouping and uses the Space label when branch data is absent. A branch is displayed only when actually supplied.
+
+Automatic session recovery makes at most three attempts per outage, after 250, 500, and 1000 milliseconds. One second of live state in the same ordered stream generation renews the budget. Manual Resync and session changes reset it; obsolete timers are cancelled. Last-known GUI content and binding-local renderer choices survive resync. Only an actual binding or session change invalidates those choices.
+
+Terminal fitting remains immediate before attachment. Subsequent geometry changes use a 100-millisecond trailing debounce, cancelled before renderer disposal. Cockpit no longer sends structured idle pointer motion; controlled press, drag, release, cancellation, wheel, and keyboard paths remain. This does not add application-hover support.
+
+Issue #1 was verified rather than applied verbatim. A three-Space refresh fell from one snapshot plus three inventory requests to one snapshot only. A browser resize burst fell from fourteen resize commands to one, with no idle mouse reports. Real PTY captures verified pointer, wheel, and keyboard input. Ten browser and four Linux-native Files GUI/terminal cycles retained the selected document; an outage retained it through manual recovery. Native-to-Herdr-TUI-to-native handoff delivered input in each client. These checks used only disposable session `ci1-0908`. macOS runtime behavior was not retested on this Linux host.

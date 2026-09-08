@@ -764,7 +764,15 @@ export function App({ client }: { client: CockpitClient }) {
   const stateRef = useRef(state);
   stateRef.current = state;
   const autoResyncTimer = useRef<number | null>(null);
+  const autoResyncAttempts = useRef(0);
+  const healthyLiveTimer = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const clearRecoveryTimers = useCallback(() => {
+    if (autoResyncTimer.current !== null) window.clearTimeout(autoResyncTimer.current);
+    if (healthyLiveTimer.current !== null) window.clearTimeout(healthyLiveTimer.current);
+    autoResyncTimer.current = null;
+    healthyLiveTimer.current = null;
+  }, []);
   const requestResync = useCallback(() => {
     recoveryResyncRef.current = true;
     setResyncAttempt((value) => value + 1);
@@ -793,14 +801,14 @@ export function App({ client }: { client: CockpitClient }) {
     sessionStream.current?.close();
     sessionStream.current = null;
     resetFocus();
-    if (autoResyncTimer.current !== null) window.clearTimeout(autoResyncTimer.current);
-    autoResyncTimer.current = null;
+    clearRecoveryTimers();
+    autoResyncAttempts.current = 0;
     recoveryResyncRef.current = false;
     resetMutations();
     setSelection({ spaceId: null, tabId: null, paneId: null });
     setControlPaneId(null);
     controlInitializedEpoch.current = null;
-  }, [resetFocus, resetMutations]);
+  }, [clearRecoveryTimers, resetFocus, resetMutations]);
   const switchSession = useCallback((id: string) => {
     resetSessionRuntime();
     dispatch({ type: "switch", sessionId: id });
@@ -819,7 +827,7 @@ export function App({ client }: { client: CockpitClient }) {
       setSessionsLoaded(true);
     }
   }, [client]);
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; resetFocus(); }; }, [resetFocus]);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; clearRecoveryTimers(); resetFocus(); }; }, [clearRecoveryTimers, resetFocus]);
   useEffect(() => { let active = true; setStatus(null); setStatusError(null); void client.status().then((next) => { if (active) setStatus(next); }, (error: unknown) => { if (active) setStatusError(describeError(error, "Could not read Cockpit status")); }); return () => { active = false; }; }, [client, statusAttempt]);
   const compatible = status?.herdr.status === "compatible";
   const sessionAvailable = sessionsLoaded && sessions.some((session) => session.id === state.sessionId);
@@ -891,10 +899,50 @@ export function App({ client }: { client: CockpitClient }) {
     return () => { active = false; sessionStream.current?.close(); sessionStream.current = null; };
   }, [client, compatible, sessionAvailable, state.sessionId, state.epoch, resyncAttempt]);
   useEffect(() => {
+    if (state.sync !== "live") {
+      if (healthyLiveTimer.current !== null) {
+        window.clearTimeout(healthyLiveTimer.current);
+        healthyLiveTimer.current = null;
+      }
+      return;
+    }
+    if (healthyLiveTimer.current !== null) return;
+    const epoch = state.epoch;
+    const generation = state.generation;
+    // A stream snapshot is only a bootstrap boundary; require one second of
+    // ordered live traffic so an immediate snapshot/disconnect cannot renew
+    // the outage budget indefinitely.
+    healthyLiveTimer.current = window.setTimeout(() => {
+      healthyLiveTimer.current = null;
+      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.generation !== generation || stateRef.current.sync !== "live") return;
+      autoResyncAttempts.current = 0;
+    }, 1000);
+    return () => {
+      if (healthyLiveTimer.current !== null) {
+        window.clearTimeout(healthyLiveTimer.current);
+        healthyLiveTimer.current = null;
+      }
+    };
+  }, [state.sync, state.epoch, state.generation]);
+  useEffect(() => {
     if (state.sync !== "stale" && state.sync !== "disconnected") return;
-    if (autoResyncTimer.current !== null) return;
-    autoResyncTimer.current = window.setTimeout(() => { autoResyncTimer.current = null; setResyncAttempt((value) => value + 1); }, 250);
-    return () => { if (autoResyncTimer.current !== null) { window.clearTimeout(autoResyncTimer.current); autoResyncTimer.current = null; } };
+    if (autoResyncAttempts.current >= 3 || autoResyncTimer.current !== null) return;
+    const epoch = state.epoch;
+    const sessionId = state.sessionId;
+    const attempt = autoResyncAttempts.current;
+    autoResyncTimer.current = window.setTimeout(() => {
+      autoResyncTimer.current = null;
+      if (!mountedRef.current || stateRef.current.epoch !== epoch || stateRef.current.sessionId !== sessionId
+        || (stateRef.current.sync !== "stale" && stateRef.current.sync !== "disconnected")) return;
+      autoResyncAttempts.current += 1;
+      setResyncAttempt((value) => value + 1);
+    }, [250, 500, 1000][attempt] ?? 1000);
+    return () => {
+      if (autoResyncTimer.current !== null) {
+        window.clearTimeout(autoResyncTimer.current);
+        autoResyncTimer.current = null;
+      }
+    };
   }, [state.sync, state.epoch]);
   useEffect(() => {
     if (!state.snapshot) return;
@@ -905,6 +953,8 @@ export function App({ client }: { client: CockpitClient }) {
   }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId, reconcileFocus]);
 
   const explicitResync = () => {
+    clearRecoveryTimers();
+    autoResyncAttempts.current = 0;
     void refreshSessions();
     requestResync();
   };

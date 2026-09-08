@@ -581,7 +581,6 @@ dependencies = [
  "bincode",
  "cockpit-core",
  "cockpit-protocol",
- "futures-util",
  "nix",
  "serde",
  "serde_json",

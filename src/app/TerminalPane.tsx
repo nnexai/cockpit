@@ -180,17 +180,27 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     if (!host) return;
     const terminal = createCockpitTerminal();
     const fit = new FitAddon();
+    let resizeTimer: number | null = null;
+    let disposed = false;
     terminal.open(host);
     terminal.loadAddon(fit);
     fit.fit();
     setTerminalReady(true);
     terminalRef.current = terminal;
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => fit.fit());
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
+        if (!disposed && terminalRef.current === terminal) fit.fit();
+      }, 100);
+    });
     observer?.observe(host);
     return () => {
+      disposed = true;
       observer?.disconnect();
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       terminal.dispose();
-      terminalRef.current = null;
+      if (terminalRef.current === terminal) terminalRef.current = null;
     };
   }, []);
 
@@ -404,11 +414,11 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         sendPointerMouse("down", button, event);
       }}
       onPointerMoveCapture={(event) => {
-        if (event.timeStamp - lastMouseMotionAt.current < 16) return;
-        lastMouseMotionAt.current = event.timeStamp;
         const button = activeMouseButton.current;
-        sendPointerMouse(button ? "drag" : "moved", button, event);
-        if (button && terminalMouseInput) {
+        if (!button || event.timeStamp - lastMouseMotionAt.current < 16) return;
+        lastMouseMotionAt.current = event.timeStamp;
+        sendPointerMouse("drag", button, event);
+        if (terminalMouseInput) {
           event.preventDefault();
           event.stopPropagation();
         }

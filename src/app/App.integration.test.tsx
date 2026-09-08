@@ -281,6 +281,21 @@ function selectSession(sessionId: string): void {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
+async function advanceTimers(milliseconds: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function exhaustAutomaticRecovery(fixture: AppFixture): Promise<void> {
+  for (const delay of [250, 500, 1000]) {
+    fixture.snapshotCalls.mockRejectedValueOnce(Object.assign(new Error("snapshot unavailable"), { code: "snapshot_error" }));
+    await advanceTimers(delay);
+  }
+}
 
 describe("mounted App mutation and session ordering", () => {
   it("keeps command actions and informational shortcuts in their overlay rows", async () => {
@@ -525,5 +540,174 @@ describe("mounted App mutation and session ordering", () => {
     click(button("Create tab"));
     expect(fixture.mutateCalls).toHaveBeenCalledTimes(2);
     expect(fixture.mutateCalls.mock.calls[1]?.[0]).toBe("session-2");
+  });
+  it("stops automatic recovery after three fired attempts and keeps explicit Resync available", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      await mount(fixture);
+      const initialCalls = fixture.snapshotCalls.mock.calls.length;
+      fixture.emitError("session-1");
+      await settle();
+      await exhaustAutomaticRecovery(fixture);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 3);
+      await advanceTimers(5_000);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 3);
+      expect(button("Resync")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews the automatic recovery budget only after a stable ordered live stream", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      await mount(fixture);
+      const initialCalls = fixture.snapshotCalls.mock.calls.length;
+      fixture.emitError("session-1");
+      await settle();
+      fixture.queueSnapshot("session-1", Promise.resolve(snapshot("session-1")));
+      await advanceTimers(250);
+      fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+      await settle();
+      await advanceTimers(900);
+      fixture.emitSnapshot("session-1", 2, 1, snapshot("session-1"));
+      await settle();
+      await advanceTimers(200);
+
+      fixture.emitError("session-1");
+      await settle();
+      fixture.queueSnapshot("session-1", Promise.resolve(snapshot("session-1")));
+      await advanceTimers(250);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 1);
+      await advanceTimers(250);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 2);
+      fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+      await settle();
+      await advanceTimers(1_000);
+      fixture.emitError("session-1");
+      await settle();
+      await advanceTimers(250);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not renew retries for streams that disconnect just after their initial snapshot", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      await mount(fixture);
+      const initialCalls = fixture.snapshotCalls.mock.calls.length;
+      fixture.emitError("session-1");
+      await settle();
+      for (const delay of [250, 500, 1000]) {
+        await advanceTimers(delay);
+        fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+        await settle();
+        await advanceTimers(100);
+        fixture.emitError("session-1");
+        await settle();
+      }
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 3);
+      await advanceTimers(5_000);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 3);
+      expect(button("Resync").disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows manual Resync to recover after automatic attempts are exhausted", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      await mount(fixture);
+      const initialCalls = fixture.snapshotCalls.mock.calls.length;
+      fixture.emitError("session-1");
+      await settle();
+      await exhaustAutomaticRecovery(fixture);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 3);
+
+      click(button("Resync"));
+      await settle();
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 4);
+      fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+      await settle();
+      expect(container.querySelector('[aria-label="Recovery"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels recovery timers when switching sessions or unmounting", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      await mount(fixture);
+      const initialCalls = fixture.snapshotCalls.mock.calls.length;
+      fixture.emitError("session-1");
+      await settle();
+
+      click(button("Commands"));
+      click(button("switch session..."));
+      await settle();
+      selectSession("session-2");
+      click(button("Switch"));
+      await settle();
+      await advanceTimers(2_000);
+      expect(fixture.snapshotCalls.mock.calls.filter(([sessionId]) => sessionId === "session-1")).toHaveLength(1);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(initialCalls + 1);
+
+      fixture.emitError("session-2");
+      await settle();
+      const beforeUnmount = fixture.snapshotCalls.mock.calls.length;
+      act(() => root?.unmount());
+      root = null;
+      await advanceTimers(2_000);
+      expect(fixture.snapshotCalls.mock.calls.length).toBe(beforeUnmount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains a terminal renderer choice across refresh, stale state, and ordered recovery", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      const graphical = { ...panePresentation("session-1", "pane-1", true), extension: "review", renderer: "review", confidence: "verified_launch" } as PanePresentation;
+      fixture.setPanePresentation(graphical);
+      await mount(fixture);
+      const paneMenuItem = (label: string): HTMLButtonElement => {
+        const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === label);
+        if (!item) throw new Error(`Missing pane menu item ${label}`);
+        return item;
+      };
+      click(button("Pane"));
+      expect(paneMenuItem("Show terminal view")).toBeTruthy();
+      click(paneMenuItem("Show terminal view"));
+      click(button("Pane"));
+      click(paneMenuItem("Refresh renderer detection"));
+      await settle();
+      click(button("Pane"));
+      expect(paneMenuItem("Render as Review")).toBeTruthy();
+      click(paneMenuItem("Render as Review"));
+
+      fixture.emitError("session-1");
+      await settle();
+      click(button("Pane"));
+      expect(paneMenuItem("Show terminal view")).toBeTruthy();
+      click(paneMenuItem("Refresh renderer detection"));
+      fixture.queueSnapshot("session-1", Promise.resolve(snapshot("session-1")));
+      await advanceTimers(250);
+      fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+      await settle();
+      click(button("Pane"));
+      expect(paneMenuItem("Show terminal view")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

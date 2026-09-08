@@ -4,7 +4,7 @@
     "type": "session_snapshot",
     "snapshot": {
       "version": "0.8.2",
-      "protocol": 22,
+      "protocol": 20,
       "focused_workspace_id": "space-a",
       "focused_tab_id": "tab-a",
       "focused_pane_id": "pane-a",
@@ -15,7 +15,14 @@
           "number": 1,
           "tab_count": 1,
           "pane_count": 1,
-          "focused": true
+          "focused": true,
+          "worktree": {
+            "repo_key": "repo-opaque",
+            "repo_name": "cockpit",
+            "repo_root": "/work/cockpit",
+            "checkout_path": "/work/cockpit",
+            "is_linked_worktree": false
+          }
         }
       ],
       "tabs": [
