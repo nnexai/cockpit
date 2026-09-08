@@ -1,0 +1,50 @@
+{
+  "scope": "Implementation sequence 1: installed external tooling contract; not production browser integration or annotation interaction acceptance",
+  "cli": {
+    "executable": "/home/linuxbrew/.linuxbrew/bin/playwright-cli",
+    "version": "0.1.5",
+    "embedded_playwright_version": "1.60.0-alpha-1775237291000",
+    "browser_executable": "/home/nnex/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+    "browser_version": "Google Chrome for Testing 153.0.8010.12",
+    "installation_changes": false
+  },
+  "resources": {
+    "root": "/tmp/cockpit-browser-contract-0908-ddm_925a",
+    "session": "cockpit-contract-0908-ddm925a",
+    "profile": "/tmp/cockpit-browser-contract-0908-ddm_925a/profile",
+    "herdr_mutations": false,
+    "personal_browser_access": false
+  },
+  "verified": [
+    "Named headed Chromium launch through installed playwright-cli open --headed --profile=<absolute> --config=<absolute>.",
+    "JSON browser.launchOptions.executablePath and extension args load an unpacked MV3 service worker.",
+    "Existing spike annotation extension loads through the installed CLI; chrome.runtime manifest reports Cockpit Space feedback 0.1.0. The spike controller was not started and annotation submission was not tested.",
+    "The session resolves from its .playwright workspace and a nested directory.",
+    "The same session name fails from /tmp outside that workspace with an actionable browser-not-open error.",
+    "A shell started before browser launch discovers the later browser using an explicit session name, without a new browser environment variable.",
+    "tab-new about:blank returns indexed tab descriptions and preserves the original tab. Two same-URL tabs remain distinct.",
+    "A separate page-context check retained original window state while adding a tab.",
+    "Scoped close followed by explicit profile reopen reconnects and retains extension storage. The reopened browser had one tab, not restored arbitrary page memory.",
+    "Only the uniquely named owned session was closed; close-all, kill-all and delete-data were not used."
+  ],
+  "adapter_contract": {
+    "launch": "Run configured executable in an association-owned directory containing .playwright. Pass -s=<association-session> open [url] --headed --profile=<absolute-profile> --config=<absolute-config>.",
+    "existing_url": "Use scoped tab-new <url>, never open or goto on an existing session. Do not retry an uncertain URL-open outcome.",
+    "agent_addressing": "Include the association working directory alongside the configured executable and named session. A bare session name is insufficient from another Playwright workspace.",
+    "discovery": "Installed CLI registry lookup uses the nearest .playwright ancestor, bounded to ten levels. Session receipts include workspaceDir, socketPath, timestamp, embedded version and resolved profile/launch configuration. A receipt alone is not live ownership proof.",
+    "tab_identity": "CLI tab-list/tab-new return current numeric indices. These are transient addressing instructions, not durable document or annotation identifiers.",
+    "ownership": "CLI open starts a detached daemon. Cockpit must independently verify live process generation and receipt identity before scoped close or crash reconciliation. Killing the finite CLI invocation alone is not browser shutdown.",
+    "supported_versions": "Only CLI 0.1.5 with the recorded embedded Playwright and Chromium executable has been exercised. No broader version range is claimed."
+  },
+  "remaining_gates": [
+    "Production owner discovery, Space identity, concurrent open and shutdown integration.",
+    "Toolbar-scoped capture permissions versus controller-assisted capture, with a real live-page annotation smoke.",
+    "Durable feedback fetch/acknowledgement, local image reading, direct paste and native/browser daily-use acceptance."
+  ],
+  "source_evidence": [
+    "Installed @playwright/cli README configuration schema and skills/playwright-cli/references/session-management.md",
+    "Installed playwright-core/lib/tools/cli-client/registry.js createClientInfo/findWorkspaceDir",
+    "Installed playwright-core/lib/tools/cli-client/session.js startDaemon/stop",
+    "https://raw.githubusercontent.com/herdrdev/herdr/v0.9.0/src/workspace.rs: generate_workspace_id uses a monotonic process-local counter; reserve_workspace_ids advances it"
+  ]
+}
