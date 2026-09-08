@@ -5,3 +5,10 @@
 - Record live user observations as queued acceptance items. Interrupt one affected worker only when continuing is unsafe or its contract became invalid; send factual neutral steering.
 - Exercise Herdr mutations and terminal ownership only in uniquely named disposable sessions, never the user's active session.
 - Claim an increment complete only after its acceptance checks pass and its owned changes have a commit hash.
+
+## Luna advisory consultations
+
+- Sol may assign the existing Luna profiles unchanged; each may consult `astra-advisor` for a bounded second opinion without requesting approval. This is the explicit exception to single-question and single-slice delegation limits, not permission to delegate implementation.
+- Luna follows `skill://consult-advisor` when its runner instructions trigger consultation. One advisor is reused per assignment. Sol retains scope, shared contracts, integration, and verification ownership; an advisor cannot expand a runner's assignment.
+- Keep at least two task levels available for Sol → Luna → Astra. Do not launch consulting runners at the recursion ceiling or disable their `task`/`hub` tools. The Astra agent is read-only and cannot spawn workers.
+- Sol's handoff review includes consequential advisory decisions and actual verification, not advisor approval. The passive `/advisor` watchdog is separate and is not required for this workflow.
