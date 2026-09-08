@@ -1,11 +1,13 @@
 ---
 name: cockpit-ui-parity
-description: Preserve or deliberately evolve Herdr TUI semantics when changing Cockpit UI hierarchy, terminals, focus, ownership, layout, styling, or interactions.
+description: Use when changing Cockpit UI that represents Herdr behavior, such as Space/tab/pane hierarchy, ordering, selection, terminal focus, keyboard ownership, or Herdr-backed actions. Excludes browser-extension annotation tools, page geometry, capture controls, pairing, and other Cockpit-only UI without a Herdr TUI counterpart.
 ---
 
 # Cockpit UI parity
 
-Herdr TUI behavior is the regression oracle. Cockpit may improve desktop interaction, but every departure is explicit and verified against Herdr authority.
+Apply this skill only to behavior with a Herdr TUI counterpart. For that behavior, Herdr is the regression oracle; Cockpit may deliberately improve desktop interaction.
+
+Browser-extension annotation tools, page geometry checks, capture controls, and pairing use their own product requirements and browser evidence. A change is not a parity task merely because it affects layout, styling, focus, or interaction. For mixed changes, apply this skill only to the Herdr-backed portion.
 
 ## Establish the oracle
 
