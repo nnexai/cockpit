@@ -12,6 +12,14 @@ use crate::InspectionError;
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 4096;
 const CONFIG_VERSION: u32 = 1;
+const DEFAULT_WINDOW_SCALE_FACTOR: f64 = 1.0;
+const DEFAULT_WINDOW_DECORATIONS: bool = true;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowConfiguration {
+    pub scale_factor: f64,
+    pub decorations: bool,
+}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +33,14 @@ struct TomlConfiguration {
     checkout_template: Option<String>,
     providers: Option<Vec<ProjectProvider>>,
     limits: Option<TomlLimits>,
+    window: Option<TomlWindow>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TomlWindow {
+    scale_factor: Option<f64>,
+    decorations: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -53,13 +69,6 @@ pub fn load_project_configuration(
     let (file, file_origin) = load_file_configuration(config_path)?;
     let mut origins = BTreeMap::new();
 
-    let version = file.version.unwrap_or(CONFIG_VERSION);
-    if version != CONFIG_VERSION {
-        return Err(InspectionError::new(
-            "unsupported_config_version",
-            format!("configuration version {version} is unsupported; expected {CONFIG_VERSION}"),
-        ));
-    }
     origins.insert(
         "version".into(),
         origin(file.version.is_some(), &file_origin, false),
@@ -309,7 +318,7 @@ pub fn load_project_configuration(
     }
 
     Ok(ProjectConfiguration {
-        version,
+        version: file.version.unwrap_or(CONFIG_VERSION),
         repository_roots: roots,
         worktree_root,
         companion_root,
@@ -319,6 +328,26 @@ pub fn load_project_configuration(
         providers,
         limits,
         origins,
+    })
+}
+
+/// Load the native window presentation settings from the shared Cockpit TOML.
+/// All platforms default to a 1.0 webview scale and native decorations.
+pub fn load_window_configuration(
+    config_path: Option<&Path>,
+) -> Result<WindowConfiguration, InspectionError> {
+    let (file, _) = load_file_configuration(config_path)?;
+    let window = file.window.unwrap_or_default();
+    let scale_factor = window.scale_factor.unwrap_or(DEFAULT_WINDOW_SCALE_FACTOR);
+    if !scale_factor.is_finite() || !(0.2..=10.0).contains(&scale_factor) {
+        return Err(InspectionError::new(
+            "invalid_window_scale_factor",
+            "window.scale_factor must be finite and between 0.2 and 10.0",
+        ));
+    }
+    Ok(WindowConfiguration {
+        scale_factor,
+        decorations: window.decorations.unwrap_or(DEFAULT_WINDOW_DECORATIONS),
     })
 }
 
@@ -380,12 +409,19 @@ fn load_file_configuration(
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| InspectionError::new("invalid_config", "configuration is not valid UTF-8"))?;
-    let value = toml::from_str(&text).map_err(|error: toml::de::Error| {
+    let value: TomlConfiguration = toml::from_str(&text).map_err(|error: toml::de::Error| {
         InspectionError::new(
             "invalid_config",
             format!("Invalid configuration TOML: {}", error.message()),
         )
     })?;
+    let version = value.version.unwrap_or(CONFIG_VERSION);
+    if version != CONFIG_VERSION {
+        return Err(InspectionError::new(
+            "unsupported_config_version",
+            format!("configuration version {version} is unsupported; expected {CONFIG_VERSION}"),
+        ));
+    }
     Ok((value, "toml".into()))
 }
 
@@ -543,7 +579,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{load_project_configuration, validate_template};
+    use super::{load_project_configuration, load_window_configuration, validate_template};
 
     #[test]
     fn template_accepts_only_documented_variables() {
@@ -551,6 +587,72 @@ mod tests {
         assert!(validate_template("{repo}/{unknown}", true, "checkout_template").is_err());
         assert!(validate_template("../{repo}", true, "checkout_template").is_err());
         assert!(validate_template("/tmp/{repo}", true, "checkout_template").is_err());
+    }
+
+    #[test]
+    fn window_settings_default_to_unity_and_decorated() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-window-default-{nonce}.toml"));
+        fs::write(&path, "version = 1\n").expect("write window configuration");
+        let settings = load_window_configuration(Some(&path)).expect("window defaults");
+        let _ = fs::remove_file(path);
+        assert_eq!(settings.scale_factor, 1.0);
+        assert!(settings.decorations);
+    }
+
+    #[test]
+    fn window_settings_load_from_toml() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-window-{nonce}.toml"));
+        fs::write(
+            &path,
+            "version = 1\n[window]\nscale_factor = 2.0\ndecorations = false\n",
+        )
+        .expect("write window configuration");
+        let settings = load_window_configuration(Some(&path)).expect("window configuration");
+        let _ = fs::remove_file(path);
+        assert_eq!(settings.scale_factor, 2.0);
+        assert!(!settings.decorations);
+    }
+
+    #[test]
+    fn window_scale_factor_is_finite_and_bounded() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        for (index, value) in ["0.1", "10.1", "nan", "inf"].into_iter().enumerate() {
+            let path =
+                std::env::temp_dir().join(format!("cockpit-window-invalid-{nonce}-{index}.toml"));
+            fs::write(
+                &path,
+                format!("version = 1\n[window]\nscale_factor = {value}\n"),
+            )
+            .expect("write invalid window configuration");
+            let error = load_window_configuration(Some(&path)).expect_err("invalid scale factor");
+            let _ = fs::remove_file(path);
+            assert_eq!(error.code, "invalid_window_scale_factor");
+        }
+    }
+
+    #[test]
+    fn window_settings_reject_unsupported_configuration_versions() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-window-version-{nonce}.toml"));
+        fs::write(&path, "version = 2\n[window]\nscale_factor = 1.25\n")
+            .expect("write unsupported configuration");
+        let error = load_window_configuration(Some(&path)).expect_err("unsupported version");
+        let _ = fs::remove_file(path);
+        assert_eq!(error.code, "unsupported_config_version");
     }
 
     #[test]

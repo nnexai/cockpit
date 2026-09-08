@@ -27,7 +27,7 @@ use cockpit_protocol::v1::{
     StatusResponse, TerminalCommand, TerminalOpenRequest, TerminalOwnershipState,
     TerminalStreamMessage,
 };
-use tauri::{State, ipc::Channel};
+use tauri::{Manager, State, ipc::Channel};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -803,6 +803,8 @@ async fn cockpit_stream_cancel(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let window_config = cockpit_core::config::load_window_configuration(None)
+        .unwrap_or_else(|error| panic!("failed to load native window configuration: {error}"));
     let config =
         HerdrCliConfig::from_options(None, None, None).expect("failed to load Herdr configuration");
     let inspector = Arc::new(HerdrCliAdapter::new(config).with_server_autostart());
@@ -857,11 +859,22 @@ pub fn run() {
             .clone(),
     );
     let service = service.with_comments(comments);
-
     tauri::Builder::default()
         .manage(service)
         .manage(StreamRegistry::new())
-        .setup(move |_app| {
+        .setup(move |app| {
+            let main_window = app
+                .get_webview_window("main")
+                .expect("main window is missing from the Tauri configuration");
+            main_window
+                .set_zoom(window_config.scale_factor)
+                .expect("failed to apply configured window scale factor");
+            main_window
+                .set_decorations(window_config.decorations)
+                .expect("failed to apply configured window decorations");
+            main_window
+                .show()
+                .expect("failed to show the configured native window");
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = startup_inspector.inspect().await {
                     eprintln!("failed to initialize Herdr: {error}");

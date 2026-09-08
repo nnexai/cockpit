@@ -153,16 +153,18 @@ export function usePaneRenderers(
       onResync();
     } catch (error) {
       if (currentSession.current !== requestedSession) return;
+      const code = error instanceof CockpitClientError ? error.operationCode : undefined;
+      const outcomeUnknown = code === "request_outcome_unknown" || code === "mutation_applied_snapshot_failed";
       setPanes((current) => {
         const pane = current[paneId];
         if (!pane || currentSession.current !== requestedSession || pane.presentation.binding_id !== requestedBinding) return current;
-        const code = error instanceof CockpitClientError ? error.operationCode : undefined;
-        return { ...current, [paneId]: { ...pane, actionError: error instanceof Error ? error.message : "Context could not be opened", outcomeUnknown: code === "request_outcome_unknown" || code === "mutation_applied_snapshot_failed" } };
+        return { ...current, [paneId]: { ...pane, actionError: error instanceof Error ? error.message : "Context could not be opened", outcomeUnknown } };
       });
+      if (outcomeUnknown) onResync();
     } finally {
       launching.current = false;
       setBusy(false);
-      setRefresh((value) => value + 1);
+      if (currentSession.current === requestedSession) setRefresh((value) => value + 1);
     }
   };
 

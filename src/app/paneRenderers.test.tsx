@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { CockpitClient } from "../client/CockpitClient";
+import { CockpitClientError, type CockpitClient } from "../client/CockpitClient";
 import type { PanePresentation } from "../protocol/generated/v1";
 import { isGraphicalReview, usePaneRenderers } from "./paneRenderers";
 
@@ -119,5 +119,164 @@ it("retains the last usable presentation while inspection errors repeat", async 
     await act(async () => mounted.unmount());
     host.remove();
     vi.useRealTimers();
+  }
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const reviewWithRoot = {
+  ...presentation,
+  can_open_review: true,
+  default_root_id: "repository",
+  roots: [{
+    root_id: "repository",
+    kind: "repository",
+    label: "cockpit",
+    path: "/repo",
+    repository_id: "repository",
+    checkout_path: "/repo",
+    companion_id: null,
+  }],
+} as PanePresentation;
+
+it.each(["request_outcome_unknown", "mutation_applied_snapshot_failed"] as const)(
+  "refreshes authoritative renderer state after %s without relaunching",
+  async (operationCode) => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const mounted = createRoot(host);
+    const refreshed = {
+      ...reviewWithRoot,
+      renderer: "context",
+      extension: "context",
+      reason: "Context is ready",
+      can_open_context: true,
+      can_open_review: false,
+    } as PanePresentation;
+    const inspectPane = vi.fn()
+      .mockResolvedValueOnce(structuredClone(reviewWithRoot))
+      .mockResolvedValueOnce(structuredClone(reviewWithRoot))
+      .mockResolvedValueOnce(structuredClone(refreshed));
+    const openReview = vi.fn().mockRejectedValue(
+      new CockpitClientError("native_error", "launch confirmation failed", { operationCode }),
+    );
+    const onResync = vi.fn();
+    const client = { inspectPane, openReview } as unknown as CockpitClient;
+    function Probe() {
+      const renderers = usePaneRenderers(client, "session", ["pane"], ["pane"], true, 0, onResync);
+      const pane = renderers.panes.pane;
+      return <div>
+        <span data-testid="renderer">{pane?.presentation.renderer ?? "none"}</span>
+        <span data-testid="error">{pane?.actionError ?? ""}</span>
+        <span data-testid="unknown">{pane?.outcomeUnknown ? "unknown" : "known"}</span>
+        <button type="button" onClick={() => { void renderers.open("pane", "right", "review"); }}>open</button>
+      </div>;
+    }
+    try {
+      await act(async () => { mounted.render(<Probe />); await settle(); });
+      await act(async () => { host.querySelector<HTMLButtonElement>("button")?.click(); await settle(); });
+
+      expect(openReview).toHaveBeenCalledOnce();
+      expect(onResync).toHaveBeenCalledOnce();
+      expect(host.querySelector("[data-testid=renderer]")?.textContent).toBe("context");
+      expect(host.querySelector("[data-testid=error]")?.textContent).toBe("launch confirmation failed");
+      expect(host.querySelector("[data-testid=unknown]")?.textContent).toBe("unknown");
+    } finally {
+      await act(async () => mounted.unmount());
+      host.remove();
+    }
+  },
+);
+
+it("resyncs after a successful launch and reflects the refreshed renderer", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const refreshed = {
+    ...reviewWithRoot,
+    renderer: "context",
+    extension: "context",
+    reason: "Context is ready",
+    can_open_context: true,
+    can_open_review: false,
+  } as PanePresentation;
+  const inspectPane = vi.fn()
+    .mockResolvedValueOnce(structuredClone(reviewWithRoot))
+    .mockResolvedValueOnce(structuredClone(reviewWithRoot))
+    .mockResolvedValueOnce(structuredClone(refreshed));
+  const openReview = vi.fn().mockResolvedValue(undefined);
+  const onResync = vi.fn();
+  const client = { inspectPane, openReview } as unknown as CockpitClient;
+  function Probe() {
+    const renderers = usePaneRenderers(client, "session", ["pane"], ["pane"], true, 0, onResync);
+    const pane = renderers.panes.pane;
+    return <div>
+      <span data-testid="renderer">{pane?.presentation.renderer ?? "none"}</span>
+      <span data-testid="error">{pane?.actionError ?? ""}</span>
+      <button type="button" onClick={() => { void renderers.open("pane", "right", "review"); }}>open</button>
+    </div>;
+  }
+  try {
+    await act(async () => { mounted.render(<Probe />); await settle(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("button")?.click(); await settle(); });
+
+    expect(openReview).toHaveBeenCalledOnce();
+    expect(onResync).toHaveBeenCalledOnce();
+    expect(host.querySelector("[data-testid=renderer]")?.textContent).toBe("context");
+    expect(host.querySelector("[data-testid=error]")?.textContent).toBe("");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("ignores an obsolete uncertain launch completion without refreshing the current session", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const outcome = deferred<void>();
+  const sessionA = { ...structuredClone(reviewWithRoot), session_id: "session-a" };
+  const sessionB = { ...structuredClone(reviewWithRoot), session_id: "session-b", binding_id: "binding-b" };
+  const inspectPane = vi.fn()
+    .mockResolvedValueOnce(sessionA)
+    .mockResolvedValueOnce(sessionA)
+    .mockResolvedValue(sessionB);
+  const openReview = vi.fn().mockImplementation(() => outcome.promise);
+  const onResync = vi.fn();
+  const client = { inspectPane, openReview } as unknown as CockpitClient;
+  function Probe({ sessionId }: { sessionId: string }) {
+    const renderers = usePaneRenderers(client, sessionId, ["pane"], ["pane"], true, 0, onResync);
+    const pane = renderers.panes.pane;
+    return <div>
+      <span data-testid="session">{pane?.presentation.session_id ?? "none"}</span>
+      <button type="button" onClick={() => { void renderers.open("pane", "right", "review"); }}>open</button>
+    </div>;
+  }
+  try {
+    await act(async () => { mounted.render(<Probe sessionId="session-a" />); await settle(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("button")?.click(); await settle(); });
+    expect(openReview).toHaveBeenCalledOnce();
+
+    await act(async () => { mounted.render(<Probe sessionId="session-b" />); await settle(); });
+    outcome.reject(new CockpitClientError("native_error", "launch confirmation failed", { operationCode: "request_outcome_unknown" }));
+    await act(async () => { await settle(); });
+
+    expect(host.querySelector("[data-testid=session]")?.textContent).toBe("session-b");
+    expect(onResync).not.toHaveBeenCalled();
+    expect(inspectPane.mock.calls.filter(([sessionId]) => sessionId === "session-b")).toHaveLength(1);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
   }
 });

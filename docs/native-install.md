@@ -14,6 +14,25 @@ The default build invokes the local Tauri CLI as `bunx tauri build --no-bundle`.
 
 The desktop entry is `$XDG_DATA_HOME/applications/dev.cockpit.app.desktop` and the icon is `$XDG_DATA_HOME/icons/hicolor/256x256/apps/dev.cockpit.app.png`. The entry launches the same stable `cockpit` path. Log out and back in, or refresh the desktop environment, if a newly installed launcher does not appear immediately.
 
+## Native window settings
+
+The native Tauri window reads optional presentation settings from the same
+shared Cockpit TOML configuration file used by the core services:
+`$XDG_CONFIG_HOME/cockpit/config.toml`, or `~/.config/cockpit/config.toml` when
+`XDG_CONFIG_HOME` is unset.
+
+```toml
+[window]
+scale_factor = 1.0
+decorations = true
+```
+
+`scale_factor` controls the WebView page scale and must be finite and between
+`0.2` and `10.0` (inclusive). `decorations` controls the native title bar and
+borders. Without a `[window]` section, every platform defaults to scale `1.0`
+with decorations enabled. These settings affect the native Tauri client only;
+the browser client ignores them.
+
 For a quicker repeat build, use the Tauri debug profile:
 
 ```sh

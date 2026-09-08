@@ -13,6 +13,9 @@ use cockpit_core::{
     InspectionError,
 };
 use cockpit_protocol::context::{ContextSplitDirection, DetectionConfidence, ExtensionKind};
+#[cfg(target_os = "macos")]
+use libproc::proc_pid::pidpath;
+#[cfg(target_os = "linux")]
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -24,9 +27,13 @@ const MAX_SCHEMA_CACHE: usize = 8;
 const MAX_MANIFEST_CACHE: usize = 8;
 const MANIFEST_TTL: Duration = Duration::from_secs(5);
 const MAX_RECEIPTS: usize = 64;
+#[cfg(target_os = "linux")]
 const MAX_PLUGIN_CONTEXT_ENV_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
 const MAX_PLUGIN_CONTEXT_JSON_BYTES: usize = 16 * 1024;
+#[cfg(target_os = "linux")]
 const MAX_PLUGIN_CONTEXT_TEXT_BYTES: usize = 4 * 1024;
+#[cfg(target_os = "linux")]
 const PLUGIN_CONTEXT_ENV_KEY: &[u8] = b"HERDR_PLUGIN_CONTEXT_JSON";
 const FILE_VIEWER_ID: &str = "herdr-file-viewer";
 const FILE_VIEWER_ENTRYPOINT: &str = "file-viewer";
@@ -77,6 +84,7 @@ struct LaunchReceipt {
     kind: ExtensionKind,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, Deserialize)]
 struct RawPluginContext {
     focused_pane_cwd: Option<String>,
@@ -91,6 +99,7 @@ enum ProcessEvidence {
     Available(ProcessInfo),
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 enum PluginContextValue {
     Found(Vec<u8>),
@@ -878,12 +887,25 @@ impl ExtensionHerdrAdapter {
                 })?;
                 let (identity, _) = self.classify_process(&info, manifest, pane).expect("matched process is classifiable");
                 let viewer_cwd = if kind == ExtensionKind::Context {
-                    let viewer_cwd = viewer_context_from_process(process, &identity).ok_or_else(|| {
-                        post_mutation_error(InspectionError::new(
-                            "launch_receipt_unverified",
-                            "opened file viewer did not expose a verified plugin context",
-                        ))
-                    })?;
+                    let viewer_cwd = match viewer_context_from_process(process, &identity) {
+                        Some(viewer_cwd) => viewer_cwd,
+                        #[cfg(target_os = "macos")]
+                        None => {
+                            // macOS does not expose HERDR_PLUGIN_CONTEXT_JSON.
+                            // This fallback is safe only after the launch's
+                            // executable and generation checks above: request.cwd
+                            // was validated against the source pane immediately
+                            // before this plugin mutation.
+                            request.cwd.clone()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        None => {
+                            return Err(post_mutation_error(InspectionError::new(
+                                "launch_receipt_unverified",
+                                "opened file viewer did not expose a verified plugin context",
+                            )));
+                        }
+                    };
                     if !context_cwd_matches_approved(&viewer_cwd, &request.cwd).await {
                         return Err(post_mutation_error(InspectionError::new(
                             "launch_receipt_unverified",
@@ -1140,6 +1162,45 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn process_matching_uses_argv_zero_when_argv0_is_a_basename() {
+        let expected = PathBuf::from("/plugins/test/bin/herdr-reviewr");
+        let process = ProcessRecord {
+            pid: if cfg!(target_os = "macos") {
+                i32::MAX as u32
+            } else {
+                1
+            },
+            name: "herdr-reviewr".to_owned(),
+            argv0: Some("herdr-reviewr".to_owned()),
+            argv: Some(vec![expected.to_string_lossy().into_owned()]),
+            cwd: Some("/plugins/test".to_owned()),
+        };
+        assert!(process_matches(&process, &expected));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn process_matching_ignores_plugin_path_in_non_executable_argument() {
+        let expected = PathBuf::from("/plugins/test/bin/herdr-reviewr");
+        let process = ProcessRecord {
+            pid: if cfg!(target_os = "macos") {
+                i32::MAX as u32
+            } else {
+                1
+            },
+            name: "sh".to_owned(),
+            argv0: Some("/bin/sh".to_owned()),
+            argv: Some(vec![
+                "/bin/sh".to_owned(),
+                "-c".to_owned(),
+                expected.to_string_lossy().into_owned(),
+            ]),
+            cwd: Some("/plugins/test".to_owned()),
+        };
+        assert!(!process_matches(&process, &expected));
+    }
     #[tokio::test]
     async fn context_root_uses_git_top_level_and_refuses_git_metadata() {
         let unique = format!(
@@ -1295,6 +1356,7 @@ fn read_plugin_context_value(pid: u32) -> PluginContextValue {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn parse_plugin_context(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() || bytes.len() > MAX_PLUGIN_CONTEXT_JSON_BYTES {
         return None;
@@ -1402,21 +1464,45 @@ fn process_matches(process: &ProcessRecord, expected: &Path) -> bool {
             .is_ok_and(|executable| executable == expected)
             && HerdrCliAdapter::process_start_identity(Some(pid)) == Some(start);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        let Some(candidate) = process.argv0.as_deref().or_else(|| {
-            process
-                .argv
-                .as_ref()
-                .and_then(|argv| argv.first())
-                .map(String::as_str)
-        }) else {
+        let Ok(pid) = i32::try_from(process.pid) else {
             return false;
         };
-        if !candidate.contains('/') && !candidate.contains('\\') {
-            return false;
+        // Prefer Darwin's kernel-reported executable path. If process
+        // inspection is unavailable, fall back only to argv[0]/argv0.
+        if let Ok(executable) = pidpath(pid) {
+            return canonical_or_original(Path::new(&executable), None) == expected;
         }
-        canonical_or_original(Path::new(candidate), process.cwd.as_deref()) == expected
+        let candidates = process
+            .argv
+            .as_deref()
+            .and_then(|argv| argv.first())
+            .map(String::as_str)
+            .into_iter()
+            .chain(process.argv0.iter().map(String::as_str));
+        return candidates
+            .filter(|candidate| candidate.contains('/') || candidate.contains('\\'))
+            .any(|candidate| {
+                canonical_or_original(Path::new(candidate), process.cwd.as_deref()) == expected
+            });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        // No native executable API is available on this platform. Never
+        // inspect later arguments: they may merely contain the plugin path.
+        let candidates = process
+            .argv
+            .as_deref()
+            .and_then(|argv| argv.first())
+            .map(String::as_str)
+            .into_iter()
+            .chain(process.argv0.iter().map(String::as_str));
+        return candidates
+            .filter(|candidate| candidate.contains('/') || candidate.contains('\\'))
+            .any(|candidate| {
+                canonical_or_original(Path::new(candidate), process.cwd.as_deref()) == expected
+            });
     }
 }
 

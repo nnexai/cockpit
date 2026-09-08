@@ -310,7 +310,7 @@ Verified `herdr-file-viewer` panes may render any safe browsing folder without t
 
 - Pane and Commands menus expose Open files right/below beside Review. Files launch the installed file viewer at the selected pane's verified Git root or working directory without task setup. Open Context retains its companion-only launch meaning; both actions use Herdr's existing plugin pane operation and Cockpit's bounded root checks.
 
-- The native window disables toolkit decorations. Cockpit starts at its existing application UI; the compositor manages moving, resizing, and closing the window. This removes the redundant GTK title bar requested by the user on niri.
+- The native window defaults to WebView scale 1.0 with toolkit decorations enabled on every platform. Shared Cockpit configuration accepts `[window]` overrides for `scale_factor` and `decorations`; personal Linux preferences belong in the user's configuration rather than platform defaults.
 
 
 ## 2026-09-06: daily-use input, file navigation, and native installation
@@ -357,3 +357,13 @@ Use dedicated external Chromium associated with a Space, with machine-installed 
 Discovery must support already-running agents and agent-requested browser creation. Browser environment variables are optional; a proposed minimal open/status/close interface resolves the caller's current Herdr Space without relying on GUI focus. Normal Cockpit shutdown should close only its owned browser sessions. Exact multi-client ownership, CLI session lookup, extension launch/pairing, and artifact delivery remain implementation gates.
 
 The starting point is [Space-associated browsers and visual feedback](planning/browser-space-integration-2026-09-08.md). It distinguishes the agreed direction, proposed interfaces, and acceptance work. Spike commit `b317ea4` demonstrates browser/annotation exchange but does not implement this production design. Its custom automation CLI and enforced control gate are not the target integration; direct Playwright CLI use provides cooperative rather than enforced input coordination.
+
+## 2026-09-08: native window configuration and macOS plugin launches
+
+Native window presentation uses the shared Cockpit TOML discovery path. Every platform defaults to scale 1.0 with decorations enabled; `[window]` overrides apply before the window is shown. Scale must be finite and within 0.2 through 10.0. The source icon is 8-bit RGBA because the macOS bundler rejects its former 16-bit RGBA encoding.
+
+macOS process-generation evidence uses Darwin's microsecond start timestamp through the target-specific `libproc` safe wrapper, not parsed `ps` or `sysctl` output. Executable matching prefers the kernel executable path; a metadata fallback examines only executable-name slots, never later command arguments. After an authorized plugin launch and pane/process verification, macOS may retain the approved launch root when injected plugin context is unavailable. This does not permit adoption of pre-existing macOS file viewers without a launch receipt. Linux retains its strict process-generation and injected-context checks.
+
+An uncertain extension mutation triggers an authoritative resync without automatically repeating the launch. A browser smoke against disposable session `cockpit-patch-0908` opened a real Files pane, replaced its successful confirmation with `mutation_applied_snapshot_failed`, and verified the graphical file content, retained inline error, and exactly one launch. Linux-native smoke compared default scale 1.0 with the personal scale 1.25 override and verified the undecorated window hint. Tauri's icon generator produced an ICNS from the corrected source.
+
+macOS runtime behavior was not exercised on this Linux host. The attempted Darwin cross-check is blocked by `libproc` generating its bindings only on a macOS build host; it fails on Linux with a missing `osx_libproc_bindings.rs`. Native macOS compilation and runtime verification remain unverified, not covered by the Linux smoke.

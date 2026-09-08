@@ -1,4 +1,7 @@
+#[cfg(target_os = "macos")]
+use libproc::{bsd_info::BSDInfo, proc_pid::pidinfo};
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -856,13 +859,33 @@ impl HerdrCliAdapter {
             let pid = pid?;
             let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
             let close = stat.rfind(')')?;
-            stat.get(close + 2..)?
+            return stat
+                .get(close + 2..)?
                 .split_whitespace()
                 .nth(19)?
                 .parse()
-                .ok()
+                .ok();
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            let pid = pid?;
+            if pid <= 0 {
+                return None;
+            }
+            // Darwin's native BSD process info exposes kernel-recorded start
+            // time with microsecond precision. This avoids `ps lstart`'s
+            // locale-sensitive, one-second identity collisions while keeping
+            // the platform-specific dependency target-scoped and safe.
+            let info = pidinfo::<BSDInfo>(pid, 0).ok()?;
+            if info.pbi_start_tvusec >= 1_000_000 {
+                return None;
+            }
+            return info
+                .pbi_start_tvsec
+                .checked_shl(20)
+                .and_then(|value| value.checked_add(info.pbi_start_tvusec));
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = pid;
             None
@@ -2100,6 +2123,15 @@ impl HerdrAdapter for HerdrCliAdapter {
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn current_process_has_stable_generation_identity() {
+        let pid = i32::try_from(std::process::id()).expect("test pid fits i32");
+        let first = HerdrCliAdapter::process_start_identity(Some(pid));
+        assert!(first.is_some());
+        assert_eq!(first, HerdrCliAdapter::process_start_identity(Some(pid)));
+    }
 
     fn subscription_snapshot(panes: &[&str]) -> SessionSnapshotResponse {
         SessionSnapshotResponse {
