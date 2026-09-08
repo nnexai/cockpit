@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
-import type { TerminalCommand, TerminalOpenRequest, TerminalStreamMessage } from "../protocol/generated/v1";
+import type { TerminalCommand, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
 import { TerminalPane } from "./TerminalPane";
 const mocks = vi.hoisted(() => {
   const terminals: MockTerminal[] = [];
@@ -20,8 +20,8 @@ const mocks = vi.hoisted(() => {
     private resizeListeners: Array<(size: { cols: number; rows: number }) => void> = [];
     readonly focus = vi.fn();
     readonly dispose = vi.fn();
-    readonly write = vi.fn();
-    readonly onData = vi.fn(() => ({ dispose: vi.fn() }));
+    readonly write = vi.fn((_data: Uint8Array) => {});
+    readonly onData = vi.fn((_listener: (data: string) => void) => ({ dispose: vi.fn() }));
     readonly onBinary = vi.fn(() => ({ dispose: vi.fn() }));
     readonly onResize = vi.fn((listener: (size: { cols: number; rows: number }) => void) => {
       this.resizeListeners.push(listener);
@@ -100,8 +100,12 @@ function stream(sent: TerminalCommand[]): TerminalStream {
   return { send: (command) => sent.push(command), close: vi.fn() };
 }
 
-function message(state: "owned" | "observing"): TerminalStreamMessage {
+function message(state: TerminalOwnershipState): TerminalStreamMessage {
   return { type: "ownership", session_id: "session", pane_id: "pane", stream_id: "stream", state, message: null };
+}
+
+function mouseMode(enabled: boolean, streamId = "stream"): TerminalStreamMessage {
+  return { type: "mouse_mode", session_id: "session", pane_id: "pane", stream_id: streamId, enabled };
 }
 
 function makeClient(sent: TerminalCommand[], onMessage: Array<(value: TerminalStreamMessage) => void>) {
@@ -120,14 +124,14 @@ async function settle() {
   await Promise.resolve();
 }
 
-function pointer(type: string, timeStamp: number, button = 0) {
+function pointer(type: string, timeStamp: number, button = 0, options: { pointerId?: number; shiftKey?: boolean } = {}) {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
     button: { value: button },
     clientX: { value: 120 },
     clientY: { value: 80 },
-    pointerId: { value: 1 },
-    shiftKey: { value: false },
+    pointerId: { value: options.pointerId ?? 1 },
+    shiftKey: { value: options.shiftKey ?? false },
     ctrlKey: { value: false },
     altKey: { value: false },
     metaKey: { value: false },
@@ -136,7 +140,7 @@ function pointer(type: string, timeStamp: number, button = 0) {
   return event;
 }
 
-function paneProps(client: CockpitClient, terminalMouseInput: boolean) {
+function paneProps(client: CockpitClient, terminalMouseInput: boolean, overrides: Partial<Parameters<typeof TerminalPane>[0]> = {}) {
   return {
     client,
     request,
@@ -144,6 +148,7 @@ function paneProps(client: CockpitClient, terminalMouseInput: boolean) {
     controlAllowed: true,
     controlPending: false,
     terminalMouseInput,
+    ...overrides,
   };
 }
 
@@ -232,7 +237,10 @@ describe("TerminalPane fitting and pointer ownership", () => {
         root.render(<TerminalPane {...paneProps(client, true)} />);
         await settle();
       });
-      await act(async () => { messages[0](message("owned")); });
+      await act(async () => {
+        messages[0](mouseMode(true));
+        messages[0](message("owned"));
+      });
       const screen = host.querySelector(".xterm-screen")!;
       const geometry = vi.spyOn(screen, "getBoundingClientRect");
       const terminalHost = host.querySelector<HTMLElement>(".terminal-host")!;
@@ -258,6 +266,169 @@ describe("TerminalPane fitting and pointer ownership", () => {
         if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
         else delete (HTMLElement.prototype as Partial<Record<typeof name, unknown>>)[name];
       }
+      host.remove();
+    }
+  });
+  it("requires authoritative current-stream mode and restores xterm selection when disabled", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const pointerCaptureNames = ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"] as const;
+    const originalPointerCapture = Object.fromEntries(pointerCaptureNames.map((name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)]));
+    Object.assign(HTMLElement.prototype, {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+      hasPointerCapture: vi.fn(() => true),
+    });
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    let rootUnmounted = false;
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, true)} />);
+        await settle();
+      });
+      await act(async () => {
+        messages[0](message("owned"));
+      });
+      const terminalHost = host.querySelector<HTMLElement>(".terminal-host")!;
+      const shellSelection = pointer("pointerdown", 10);
+      terminalHost.dispatchEvent(shellSelection);
+      expect(shellSelection.defaultPrevented).toBe(false);
+      expect(sent).toEqual([]);
+
+      await act(async () => { messages[0](mouseMode(true)); });
+      const shiftSelection = pointer("pointerdown", 20, 0, { shiftKey: true });
+      terminalHost.dispatchEvent(shiftSelection);
+      expect(shiftSelection.defaultPrevented).toBe(false);
+      expect(sent).toEqual([]);
+
+      const appPointer = pointer("pointerdown", 30);
+      terminalHost.dispatchEvent(appPointer);
+      expect(appPointer.defaultPrevented).toBe(true);
+      expect(sent.filter((command) => command.type === "terminal.mouse").map((command) => command.kind)).toEqual(["down"]);
+
+      await act(async () => { messages[0](mouseMode(false)); });
+      expect(HTMLElement.prototype.releasePointerCapture).toHaveBeenCalledWith(1);
+      const restoredSelection = pointer("pointerdown", 40);
+      terminalHost.dispatchEvent(restoredSelection);
+      expect(restoredSelection.defaultPrevented).toBe(false);
+      expect(sent.filter((command) => command.type === "terminal.mouse").map((command) => command.kind)).toEqual(["down"]);
+    } finally {
+      if (!rootUnmounted) await act(async () => root.unmount());
+      for (const name of pointerCaptureNames) {
+        const descriptor = originalPointerCapture[name];
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+        else delete (HTMLElement.prototype as Partial<Record<typeof name, unknown>>)[name];
+      }
+      host.remove();
+    }
+  });
+
+  it("ignores a stale mode event after reconnect and clears pending gestures on ownership loss", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const pointerCaptureNames = ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"] as const;
+    const originalPointerCapture = Object.fromEntries(pointerCaptureNames.map((name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)]));
+    Object.assign(HTMLElement.prototype, {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+      hasPointerCapture: vi.fn(() => true),
+    });
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const firstRoot = createRoot(host);
+    try {
+      await act(async () => {
+        firstRoot.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false, controlPending: true })} />);
+        await settle();
+      });
+      const staleMessage = messages[0];
+      await act(async () => firstRoot.unmount());
+
+      const secondRoot = createRoot(host);
+      try {
+        await act(async () => {
+          secondRoot.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false, controlPending: true })} />);
+          await settle();
+        });
+        staleMessage(mouseMode(true));
+        const stalePointer = pointer("pointerdown", 10);
+        host.querySelector<HTMLElement>(".terminal-host")!.dispatchEvent(stalePointer);
+        expect(stalePointer.defaultPrevented).toBe(false);
+        expect(sent).toEqual([]);
+
+        await act(async () => {
+          messages[1](mouseMode(true));
+          messages[1](message("observing"));
+        });
+        const pendingPointer = pointer("pointerdown", 20);
+        host.querySelector<HTMLElement>(".terminal-host")!.dispatchEvent(pendingPointer);
+        expect(pendingPointer.defaultPrevented).toBe(true);
+        await act(async () => { messages[1](message("lost")); });
+        expect(HTMLElement.prototype.releasePointerCapture).toHaveBeenCalledWith(1);
+        await act(async () => { messages[1](message("owned")); });
+        expect(sent.filter((command) => command.type === "terminal.mouse")).toEqual([]);
+      } finally {
+        await act(async () => secondRoot.unmount());
+      }
+    } finally {
+      for (const name of pointerCaptureNames) {
+        const descriptor = originalPointerCapture[name];
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+        else delete (HTMLElement.prototype as Partial<Record<typeof name, unknown>>)[name];
+      }
+      host.remove();
+    }
+  });
+  it("observes after a control conflict and only takes over on a new local click", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
+      await act(async () => { messages[0](message("conflict")); });
+      expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe"]);
+      await act(async () => {
+        messages[1]({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 80, height: 24, full: true, bytes: btoa("observer output") });
+      });
+      expect(new TextDecoder().decode(mocks.terminals.at(-1)!.write.mock.calls[0][0])).toBe("observer output");
+      await act(async () => { host.querySelector(".terminal-host")!.dispatchEvent(pointer("pointerdown", 10)); });
+      expect(openTerminal.mock.calls.at(-1)![0]).toMatchObject({ mode: "control", takeover: true });
+      expect(sent).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("discards input queued during a rejected control request", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false, controlPending: true })} />); });
+      await act(async () => { host.querySelector(".terminal-host")!.dispatchEvent(pointer("pointerdown", 10)); });
+      const onData = mocks.terminals.at(-1)!.onData.mock.calls[0][0] as (data: string) => void;
+      onData("stale input");
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false, controlPending: false })} />); });
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
+      await act(async () => { messages.at(-1)!(message("owned")); });
+      expect(sent).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
       host.remove();
     }
   });

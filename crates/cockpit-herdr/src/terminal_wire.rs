@@ -14,7 +14,7 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-const HERDR_PROTOCOL_VERSION: u32 = 20;
+const HERDR_PROTOCOL_VERSION: u32 = 22;
 const MAX_NORMAL_FRAME_SIZE: usize = 2 * 1024 * 1024;
 const MAX_GRAPHICS_FRAME_SIZE: usize = 32 * 1024 * 1024;
 const READER_BUFFERED_MESSAGES: usize = 8;
@@ -30,6 +30,7 @@ enum ClientMessage {
         rows: u16,
         cell_width_px: u32,
         cell_height_px: u32,
+        pixel_mouse: bool,
     },
     Input {
         data: Vec<u8>,
@@ -39,6 +40,7 @@ enum ClientMessage {
         rows: u16,
         cell_width_px: u32,
         cell_height_px: u32,
+        pixel_mouse: bool,
     },
     Detach,
     AttachScroll {
@@ -56,6 +58,41 @@ enum ClientMessage {
         target: String,
         takeover: bool,
     },
+    AttachMouse {
+        kind: ClientMouseKind,
+        position: ClientMousePosition,
+        geometry: Option<ClientMouseGeometry>,
+        modifiers: u8,
+        lines: u16,
+    },
+}
+
+#[derive(Debug, Serialize)]
+enum ClientMouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+#[derive(Debug, Serialize)]
+enum ClientMouseKind {
+    Down(ClientMouseButton),
+    Up(ClientMouseButton),
+    Drag(ClientMouseButton),
+    Moved,
+}
+
+#[derive(Debug, Serialize)]
+enum ClientMousePosition {
+    Cell { column: u16, row: u16 },
+}
+
+#[derive(Debug, Serialize)]
+struct ClientMouseGeometry {
+    cols: u16,
+    rows: u16,
+    width_px: u32,
+    height_px: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +134,7 @@ enum ServerMessage {
     Welcome(WelcomePayload),
     Terminal(TerminalFrame),
     ServerShutdown { reason: Option<String> },
+    MouseCapture { enabled: bool },
     Parked,
 }
 
@@ -133,6 +171,7 @@ pub(crate) async fn open_terminal(
                 rows: request.rows,
                 cell_width_px: request.cell_width_px,
                 cell_height_px: request.cell_height_px,
+                pixel_mouse: false,
             },
         ),
     )
@@ -265,6 +304,7 @@ async fn run_terminal<R, W>(
     let mut previous_seq: Option<u64> = None;
     let mut attached = false;
 
+    let mut mouse_enabled = false;
     loop {
         tokio::select! {
             message = messages.recv() => {
@@ -282,9 +322,9 @@ async fn run_terminal<R, W>(
                         }
                         previous_seq = Some(frame.seq);
                         if !attached {
-                            // Stable protocol 20 has no separate attach acknowledgement. A terminal
-                            // frame can only follow server-side mode selection, so it is the verified
-                            // attach outcome; merely opening the socket never grants control.
+                            // A terminal frame can only follow server-side mode selection, so it
+                            // is the verified attach outcome; opening the socket never grants
+                            // control.
                             attached = true;
                             let state = match mode {
                                 TerminalMode::Observe => TerminalOwnershipState::Observing,
@@ -310,6 +350,17 @@ async fn run_terminal<R, W>(
                             height: frame.height,
                             full: frame.full,
                             bytes: base64::engine::general_purpose::STANDARD.encode(frame.bytes),
+                        }).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(ServerMessage::MouseCapture { enabled })) => {
+                        mouse_enabled = enabled;
+                        if sender.send(TerminalStreamMessage::MouseMode {
+                            session_id: session_id.clone(),
+                            pane_id: pane_id.clone(),
+                            stream_id: stream_id.clone(),
+                            enabled,
                         }).await.is_err() {
                             break;
                         }
@@ -382,6 +433,10 @@ async fn run_terminal<R, W>(
                     send_error(&sender, &session_id, &pane_id, &stream_id, "terminal_command_rejected", "terminal observe stream is read-only").await;
                     continue;
                 }
+                if matches!(command, TerminalCommand::Mouse { .. }) && !mouse_enabled {
+                    send_error(&sender, &session_id, &pane_id, &stream_id, "terminal_command_rejected", "terminal application mouse mode is disabled").await;
+                    continue;
+                }
                 let message = match command_to_message(command) {
                     Ok(message) => message,
                     Err(message) => {
@@ -420,68 +475,6 @@ where
     }
 }
 
-fn sgr_mouse_button_code(button: TerminalMouseButton) -> u8 {
-    match button {
-        TerminalMouseButton::Left => 0,
-        TerminalMouseButton::Middle => 1,
-        TerminalMouseButton::Right => 2,
-    }
-}
-
-fn sgr_mouse_modifier_bits(modifiers: u8) -> u8 {
-    let mut bits = 0;
-    if modifiers & 1 != 0 {
-        bits |= 4;
-    }
-    if modifiers & 2 != 0 {
-        bits |= 16;
-    }
-    if modifiers & 0b1100 != 0 {
-        bits |= 8;
-    }
-    bits
-}
-
-fn encode_sgr_mouse(
-    kind: TerminalMouseKind,
-    button: Option<TerminalMouseButton>,
-    column: u16,
-    row: u16,
-    modifiers: u8,
-) -> Result<Vec<u8>, &'static str> {
-    let (code, suffix) = match kind {
-        TerminalMouseKind::Moved => {
-            if button.is_some() {
-                return Err("terminal moved mouse events cannot have a button");
-            }
-            (35, b'M')
-        }
-        TerminalMouseKind::Down => (
-            sgr_mouse_button_code(button.ok_or("terminal mouse down events require a button")?),
-            b'M',
-        ),
-        TerminalMouseKind::Up => (
-            sgr_mouse_button_code(button.ok_or("terminal mouse up events require a button")?),
-            b'm',
-        ),
-        TerminalMouseKind::Drag => (
-            sgr_mouse_button_code(button.ok_or("terminal mouse drag events require a button")?)
-                | 32,
-            b'M',
-        ),
-    };
-    let code = code | sgr_mouse_modifier_bits(modifiers);
-    let mut report = format!(
-        "\x1b[<{};{};{}",
-        code,
-        u32::from(column) + 1,
-        u32::from(row) + 1,
-    )
-    .into_bytes();
-    report.push(suffix);
-    Ok(report)
-}
-
 fn command_to_message(command: TerminalCommand) -> Result<ClientMessage, &'static str> {
     match command {
         TerminalCommand::Input {
@@ -506,6 +499,7 @@ fn command_to_message(command: TerminalCommand) -> Result<ClientMessage, &'stati
             rows,
             cell_width_px,
             cell_height_px,
+            pixel_mouse: false,
         }),
         TerminalCommand::Scroll {
             direction,
@@ -539,9 +533,37 @@ fn command_to_message(command: TerminalCommand) -> Result<ClientMessage, &'stati
             column,
             row,
             modifiers,
-        } => Ok(ClientMessage::Input {
-            data: encode_sgr_mouse(kind, button, column, row, modifiers)?,
-        }),
+        } => {
+            let map_button = |button| match button {
+                TerminalMouseButton::Left => ClientMouseButton::Left,
+                TerminalMouseButton::Right => ClientMouseButton::Right,
+                TerminalMouseButton::Middle => ClientMouseButton::Middle,
+            };
+            let kind = match kind {
+                TerminalMouseKind::Down => ClientMouseKind::Down(map_button(
+                    button.ok_or("terminal mouse down events require a button")?,
+                )),
+                TerminalMouseKind::Up => ClientMouseKind::Up(map_button(
+                    button.ok_or("terminal mouse up events require a button")?,
+                )),
+                TerminalMouseKind::Drag => ClientMouseKind::Drag(map_button(
+                    button.ok_or("terminal mouse drag events require a button")?,
+                )),
+                TerminalMouseKind::Moved => {
+                    if button.is_some() {
+                        return Err("terminal moved mouse events cannot have a button");
+                    }
+                    ClientMouseKind::Moved
+                }
+            };
+            Ok(ClientMessage::AttachMouse {
+                kind,
+                position: ClientMousePosition::Cell { column, row },
+                geometry: None,
+                modifiers,
+                lines: 1,
+            })
+        }
         TerminalCommand::Release => Ok(ClientMessage::Detach),
     }
 }
@@ -596,6 +618,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             rows,
             cell_width_px,
             cell_height_px,
+            pixel_mouse,
         } => bincode::serde::encode_to_vec(
             &(
                 0_u32,
@@ -604,9 +627,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
                 rows,
                 cell_width_px,
                 cell_height_px,
-                1_u32,
-                0_u32,
-                2_u32,
+                pixel_mouse,
             ),
             config,
         ),
@@ -616,8 +637,16 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             rows,
             cell_width_px,
             cell_height_px,
+            pixel_mouse,
         } => bincode::serde::encode_to_vec(
-            &(3_u32, cols, rows, cell_width_px, cell_height_px),
+            &(
+                3_u32,
+                cols,
+                rows,
+                cell_width_px,
+                cell_height_px,
+                pixel_mouse,
+            ),
             config,
         ),
         ClientMessage::Detach => bincode::serde::encode_to_vec(&4_u32, config),
@@ -633,15 +662,24 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             config,
         ),
         ClientMessage::ObserveTerminal { target } => {
-            bincode::serde::encode_to_vec(&(8_u32, target), config)
+            bincode::serde::encode_to_vec(&(7_u32, target), config)
         }
         ClientMessage::ControlTerminal { target, takeover } => {
-            bincode::serde::encode_to_vec(&(9_u32, target, takeover), config)
+            bincode::serde::encode_to_vec(&(8_u32, target, takeover), config)
         }
+        ClientMessage::AttachMouse {
+            kind,
+            position,
+            geometry,
+            modifiers,
+            lines,
+        } => bincode::serde::encode_to_vec(
+            &(16_u32, kind, position, geometry, modifiers, lines),
+            config,
+        ),
     };
     payload.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
-
 async fn read_message<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<ServerMessage> {
     let size = reader.read_u32_le().await? as usize;
     if size == 0 {
@@ -650,14 +688,14 @@ async fn read_message<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Server
 
     let tag = reader.read_u8().await?;
     match tag {
-        3 => {
+        2 => {
             if size > MAX_GRAPHICS_FRAME_SIZE {
                 return Err(frame_too_large(MAX_GRAPHICS_FRAME_SIZE));
             }
             read_graphics_payload(reader, size - 1).await?;
             Ok(ServerMessage::Parked)
         }
-        0 | 2 | 4 => {
+        0 | 1 | 3 | 8 => {
             if size > MAX_NORMAL_FRAME_SIZE {
                 return Err(frame_too_large(MAX_NORMAL_FRAME_SIZE));
             }
@@ -665,12 +703,15 @@ async fn read_message<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Server
             reader.read_exact(&mut payload).await?;
             match tag {
                 0 => decode_exact(&payload).map(ServerMessage::Welcome),
-                2 => decode_exact(&payload).map(ServerMessage::Terminal),
-                4 => decode_exact(&payload).map(|reason| ServerMessage::ServerShutdown { reason }),
+                1 => decode_exact(&payload).map(ServerMessage::Terminal),
+                3 => decode_exact(&payload).map(|reason| ServerMessage::ServerShutdown { reason }),
+                // Pixel reporting is not negotiated by this cell-coordinate client.
+                8 => decode_exact::<(bool, bool)>(&payload)
+                    .map(|(enabled, _)| ServerMessage::MouseCapture { enabled }),
                 _ => unreachable!(),
             }
         }
-        1 | 5..=13 => {
+        4..=7 | 9..=20 => {
             if size > MAX_NORMAL_FRAME_SIZE {
                 return Err(frame_too_large(MAX_NORMAL_FRAME_SIZE));
             }
@@ -791,7 +832,7 @@ mod tests {
     fn terminal_frame(seq: u64, full: bool, bytes: &[u8]) -> Vec<u8> {
         framed(
             bincode::serde::encode_to_vec(
-                &(2_u32, seq, 80_u16, 24_u16, full, bytes),
+                &(1_u32, seq, 80_u16, 24_u16, full, bytes),
                 bincode::config::standard(),
             )
             .unwrap(),
@@ -818,16 +859,17 @@ mod tests {
     }
 
     #[test]
-    fn protocol_20_used_packets_match_stable_wire() {
+    fn protocol_22_used_packets_match_stable_wire() {
         assert_eq!(
             client_payload(ClientMessage::Hello {
-                version: 20,
+                version: 22,
                 cols: 80,
                 rows: 24,
                 cell_width_px: 0,
                 cell_height_px: 0,
+                pixel_mouse: false,
             }),
-            [0, 20, 80, 24, 0, 0, 1, 0, 2],
+            [0, 22, 80, 24, 0, 0, 0],
         );
         assert_eq!(
             client_payload(ClientMessage::Input {
@@ -841,8 +883,9 @@ mod tests {
                 rows: 24,
                 cell_width_px: 8,
                 cell_height_px: 16,
+                pixel_mouse: false,
             }),
-            [3, 80, 24, 8, 16],
+            [3, 80, 24, 8, 16, 0],
         );
         assert_eq!(client_payload(ClientMessage::Detach), [4]);
         assert_eq!(
@@ -862,15 +905,37 @@ mod tests {
             client_payload(ClientMessage::ObserveTerminal {
                 target: "w1:p".to_owned(),
             }),
-            [8, 4, b'w', b'1', b':', b'p'],
+            [7, 4, b'w', b'1', b':', b'p'],
         );
         assert_eq!(
             client_payload(ClientMessage::ControlTerminal {
                 target: "w1:p".to_owned(),
                 takeover: true,
             }),
-            [9, 4, b'w', b'1', b':', b'p', 1],
+            [8, 4, b'w', b'1', b':', b'p', 1],
         );
+    }
+
+    #[test]
+    fn structured_mouse_uses_cell_coordinates_and_no_raw_input() {
+        let message = command_to_message(TerminalCommand::Mouse {
+            kind: TerminalMouseKind::Down,
+            button: Some(TerminalMouseButton::Left),
+            column: 4,
+            row: 2,
+            modifiers: 0,
+        })
+        .expect("semantic mouse should become structured input");
+        assert_eq!(client_payload(message), [16, 0, 0, 0, 4, 2, 0, 0, 1],);
+        let message = command_to_message(TerminalCommand::Mouse {
+            kind: TerminalMouseKind::Moved,
+            button: None,
+            column: 4,
+            row: 2,
+            modifiers: 7,
+        })
+        .expect("semantic motion should become structured input");
+        assert_eq!(client_payload(message), [16, 3, 0, 4, 2, 0, 7, 1]);
     }
 
     #[test]
@@ -880,66 +945,6 @@ mod tests {
             panic!("expected raw input");
         };
         assert_eq!(data, [0, 255, 128]);
-    }
-
-    #[test]
-    fn semantic_mouse_is_encoded_as_raw_application_input() {
-        let cases = [
-            (
-                TerminalMouseKind::Down,
-                Some(TerminalMouseButton::Left),
-                4,
-                2,
-                0,
-                b"\x1b[<0;5;3M".as_slice(),
-            ),
-            (
-                TerminalMouseKind::Down,
-                Some(TerminalMouseButton::Left),
-                4,
-                2,
-                8,
-                b"\x1b[<8;5;3M".as_slice(),
-            ),
-            (
-                TerminalMouseKind::Up,
-                Some(TerminalMouseButton::Right),
-                4,
-                2,
-                0,
-                b"\x1b[<2;5;3m".as_slice(),
-            ),
-            (
-                TerminalMouseKind::Drag,
-                Some(TerminalMouseButton::Middle),
-                4,
-                2,
-                7,
-                b"\x1b[<61;5;3M".as_slice(),
-            ),
-            (
-                TerminalMouseKind::Moved,
-                None,
-                4,
-                2,
-                7,
-                b"\x1b[<63;5;3M".as_slice(),
-            ),
-        ];
-
-        for (kind, button, column, row, modifiers, expected) in cases {
-            let ClientMessage::Input { data } = command_to_message(TerminalCommand::Mouse {
-                kind,
-                button,
-                column,
-                row,
-                modifiers,
-            })
-            .expect("semantic mouse should become raw input") else {
-                panic!("expected raw input");
-            };
-            assert_eq!(data, expected);
-        }
     }
 
     #[tokio::test]
@@ -1018,16 +1023,19 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(read_client_payload(&mut server).await, [3, 100, 30, 8, 16]);
+        assert_eq!(
+            read_client_payload(&mut server).await,
+            [3, 100, 30, 8, 16, 0],
+        );
         assert_eq!(
             read_client_payload(&mut server).await,
             [6, 0, 1, 2, 0, 0, 0]
         );
 
         server.write_all(&second[6..]).await.unwrap();
-        server.write_all(&framed(vec![8])).await.unwrap();
+        server.write_all(&framed(vec![8, 1, 0])).await.unwrap();
         server
-            .write_all(&framed(vec![3, 3, 1, 2, 3]))
+            .write_all(&framed(vec![2, 3, 1, 2, 3]))
             .await
             .unwrap();
         server
@@ -1037,6 +1045,10 @@ mod tests {
         assert!(matches!(
             next_message(&mut stream_receiver).await,
             TerminalStreamMessage::Frame { seq, .. } if seq == "2"
+        ));
+        assert!(matches!(
+            next_message(&mut stream_receiver).await,
+            TerminalStreamMessage::MouseMode { enabled: true, .. }
         ));
         assert!(matches!(
             next_message(&mut stream_receiver).await,
@@ -1094,10 +1106,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auxiliary_messages_are_parked_between_terminal_frames() {
+    async fn auxiliary_messages_are_bounded_between_terminal_frames() {
         let mut stream = terminal_frame(1, true, b"one");
-        stream.extend(framed(vec![8]));
-        stream.extend(framed(vec![3, 3, 1, 2, 3]));
+        stream.extend(framed(vec![8, 1, 0]));
+        stream.extend(framed(vec![2, 3, 1, 2, 3]));
         stream.extend(terminal_frame(2, false, b"two"));
         let mut reader = stream.as_slice();
 
@@ -1107,7 +1119,7 @@ mod tests {
         ));
         assert!(matches!(
             read_message(&mut reader).await.unwrap(),
-            ServerMessage::Parked
+            ServerMessage::MouseCapture { enabled: true }
         ));
         assert!(matches!(
             read_message(&mut reader).await.unwrap(),
@@ -1130,7 +1142,7 @@ mod tests {
                 .unwrap();
             writer
                 .write_all(&[
-                    3,
+                    2,
                     252,
                     graphics_len as u8,
                     (graphics_len >> 8) as u8,
@@ -1157,7 +1169,7 @@ mod tests {
 
     #[tokio::test]
     async fn decoder_rejects_malformed_graphics_and_oversized_normal_frames() {
-        let malformed_graphics = framed(vec![3, 3, 1, 2]);
+        let malformed_graphics = framed(vec![2, 3, 1, 2]);
         assert!(
             read_message(&mut malformed_graphics.as_slice())
                 .await
@@ -1165,7 +1177,7 @@ mod tests {
         );
 
         let mut oversized_terminal = Vec::from(((MAX_NORMAL_FRAME_SIZE + 1) as u32).to_le_bytes());
-        oversized_terminal.push(2);
+        oversized_terminal.push(1);
         assert!(
             read_message(&mut oversized_terminal.as_slice())
                 .await
@@ -1176,7 +1188,7 @@ mod tests {
     #[tokio::test]
     async fn decoder_rejects_trailing_terminal_frame_data() {
         let mut frame = Vec::from((10_u32).to_le_bytes());
-        frame.extend([2, 1, 80, 24, 1, 1, b'x', 9, 9, 9]);
+        frame.extend([1, 1, 80, 24, 1, 1, b'x', 9, 9, 9]);
         assert!(read_message(&mut frame.as_slice()).await.is_err());
     }
 }

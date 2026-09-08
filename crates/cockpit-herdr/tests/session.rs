@@ -114,7 +114,7 @@ async fn serve_ping(listener: &UnixListener) {
     assert_eq!(request["method"], "ping");
     let response = json!({
         "id": request["id"],
-        "result": {"type": "pong", "version": "0.8.2", "protocol": 20}
+        "result": {"type": "pong", "version": "0.9.0", "protocol": 22}
     });
     reader
         .into_inner()
@@ -161,7 +161,7 @@ async fn maps_redacted_snapshot_and_sanitizes_titles() {
         .expect("snapshot should map");
     server.await.unwrap();
     assert_eq!(snapshot.session_id, "default");
-    assert_eq!(snapshot.version, "0.8.2");
+    assert_eq!(snapshot.version, "0.9.0");
     assert_eq!(snapshot.spaces[0].id, "space-a");
     assert_eq!(snapshot.spaces[0].agent_status, "unknown");
     let git = snapshot.spaces[0]
@@ -591,8 +591,8 @@ async fn propagates_subscription_setup_error_without_id() {
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
     let snapshot = cockpit_protocol::v1::SessionSnapshotResponse {
         session_id: "default".into(),
-        version: "0.8.2".into(),
-        protocol: 20,
+        version: "0.9.0".into(),
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -637,8 +637,8 @@ async fn event_subscription_rejects_identity_mismatch_before_live() {
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
     let snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
-        version: "0.8.2".into(),
-        protocol: 20,
+        version: "0.9.0".into(),
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -671,7 +671,7 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
         assert_eq!(request["method"], "ping");
         let response = json!({
             "id": request["id"],
-            "result": {"type": "pong", "version": "0.8.2", "protocol": 20}
+            "result": {"type": "pong", "version": "0.9.0", "protocol": 22}
         });
         let mut stream = reader.into_inner();
         stream
@@ -709,6 +709,36 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
             "result": {
                 "type": "session_snapshot",
                 "snapshot": {
+                    "version": "0.9.0",
+                    "protocol": 22,
+                    "focused_workspace_id": null,
+                    "focused_tab_id": null,
+                    "focused_pane_id": null,
+                    "workspaces": [],
+                    "tabs": [],
+                    "panes": [],
+                    "layouts": [],
+                    "agents": []
+                }
+            }
+        });
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "session.snapshot");
+
+        let response = json!({
+            "id": request["id"],
+            "result": {
+                "type": "session_snapshot",
+                "snapshot": {
                     "version": "0.8.1",
                     "protocol": 21,
                     "focused_workspace_id": null,
@@ -732,8 +762,8 @@ async fn event_subscription_terminates_on_identity_replacement_without_changed()
         HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
     let snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
-        version: "0.8.2".into(),
-        protocol: 20,
+        version: "0.9.0".into(),
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -774,7 +804,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/session-snapshot.json")).unwrap();
     let mut refreshed_result = fixture.get("result").cloned().unwrap();
-    refreshed_result["snapshot"]["protocol"] = json!(20);
+    refreshed_result["snapshot"]["protocol"] = json!(22);
     let server = tokio::spawn(async move {
         serve_ping(&listener).await;
         let (stream, _) = listener.accept().await.unwrap();
@@ -843,12 +873,24 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
             .write_all(format!("{response}\n{event}\n").as_bytes())
             .await
             .unwrap();
+        let (snapshot_stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(snapshot_stream);
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "session.snapshot");
+        let response = json!({"id": request["id"], "result": refreshed_result});
+        reader
+            .into_inner()
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
     });
 
     let initial_snapshot = SessionSnapshotResponse {
         session_id: "default".into(),
-        version: "0.8.2".into(),
-        protocol: 20,
+        version: "0.9.0".into(),
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,
@@ -877,11 +919,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
     let first = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
         .await
         .unwrap();
-    let second = tokio::time::timeout(Duration::from_secs(1), subscription.messages.recv())
-        .await
-        .unwrap();
     assert_eq!(first, Some(SessionChange::Changed));
-    assert_eq!(second, Some(SessionChange::Changed));
     server.await.unwrap();
     drop(fs::remove_file(socket));
 }
@@ -972,6 +1010,41 @@ async fn subscription_receiver_drop_closes_idle_peer_socket() {
             .write_all(format!("{response}\n").as_bytes())
             .await
             .unwrap();
+        let (snapshot_stream, _) = listener.accept().await.unwrap();
+        let mut snapshot_reader = BufReader::new(snapshot_stream);
+        let mut snapshot_request = String::new();
+        snapshot_reader
+            .read_line(&mut snapshot_request)
+            .await
+            .unwrap();
+        let snapshot_request: serde_json::Value = serde_json::from_str(&snapshot_request).unwrap();
+        assert_eq!(snapshot_request["method"], "session.snapshot");
+        let snapshot = json!({
+            "type": "session_snapshot",
+            "snapshot": {
+                "version": "0.9.0",
+                "protocol": 22,
+                "focused_workspace_id": null,
+                "focused_tab_id": null,
+                "focused_pane_id": null,
+                "workspaces": [],
+                "tabs": [],
+                "panes": [],
+                "layouts": [],
+                "agents": []
+            }
+        });
+        snapshot_reader
+            .into_inner()
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"id": snapshot_request["id"], "result": snapshot})
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
         let mut event = String::new();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut event))
@@ -985,8 +1058,8 @@ async fn subscription_receiver_drop_closes_idle_peer_socket() {
         HerdrCliConfig::from_options(None, Some("drop-idle".into()), Some(socket.clone())).unwrap();
     let snapshot = SessionSnapshotResponse {
         session_id: "drop-idle".into(),
-        version: "0.8.2".into(),
-        protocol: 20,
+        version: "0.9.0".into(),
+        protocol: 22,
         focused_space_id: None,
         focused_tab_id: None,
         focused_pane_id: None,

@@ -87,13 +87,13 @@ This records the decisions made during the architecture refinement interview. It
 ### Terminal attachment
 
 - Herdr owns the PTY, process, and terminal model. xterm.js owns rendering and input capture only.
-- The selected runtime is Homebrew Herdr 0.8.2, protocol 20, schema 1. Each visible pane uses a direct `TerminalAnsi` / `TerminalAttach` stream.
+- The selected runtime is Herdr 0.9.0, protocol 22, schema 1. Each visible pane uses a direct ANSI `TerminalHello` stream with `ControlTerminal` or `ObserveTerminal`.
 - Stable `TerminalFrame` ANSI bytes are authoritative. The first frame is full; every later sequence must be consecutive. Full repaints never reset xterm.
 - The JSON API remains authoritative for hierarchy, focus, and layout. One bounded reader owns each framed terminal socket without cancellation between its header and payload.
 - xterm.js renderers are mounted only for panes visible in the selected tab. Hidden tabs detach renderers/subscriptions while Herdr processes continue running.
 - Cockpit fits each pane before attachment and sends character dimensions and measured cell pixels.
 - Text/binary input uses stable raw `Input`; wheel/page scrolling uses `AttachScroll`, gated by local control intent and attachment state. Normal xterm.js panes attached to Herdr are also observed to receive wheel/scroll events.
-- Click-to-focus remains available. The earlier physical X11 direct-attach result does not establish that Herdr 0.8.2 cannot deliver SGR. Herdr's one-shot `pane.send-keys`/`pane.send-text` surfaces can inject SGR bytes into a pane PTY; keep structured application-mouse capability separate until app-mode coordinates, ownership, and physical pointer routing are proven.
+- Application mouse demand follows Herdr's per-attachment `MouseCapture` signal. Cockpit sends structured `AttachMouse` cell coordinates rather than raw SGR injection. Herdr owns the application encoding and tracking checks. Mode-off and Shift-drag preserve text selection; click-to-focus remains available.
 - Terminal graphics are parked and the image addon is removed. Known auxiliary/graphics traffic is bounded and consumed without disconnecting text terminals. Enhanced keyboard reporting is a separate capability to revalidate.
 - Control and observe requests use stable attach modes. Semantic focus, local control intent, attachment state, and process closure remain independent.
 - Attach/reconnect failure leaves the resource visible with stale/disconnected status, retry, and resync; the Herdr process is not silently closed.
@@ -172,8 +172,8 @@ This records the decisions made during the architecture refinement interview. It
 
 ## Known risks
 
-1. **Stable compatibility is a hard runtime boundary.** The active adapter targets protocol 20/schema 1 with Herdr 0.8.2 fixtures; incompatible protocols are rejected before attachment. Protocol-22 history remains reachable.
-2. **Application-mouse and temporal acceptance are split, not categorically blocked.** Explicit CLI SGR injection and normal xterm.js wheel delivery are verified/observed. Native/browser physical click forwarding, safe app-mode coordinates, drag/release, ownership, and full G01 temporal acceptance remain incomplete; the old direct-attach negative is not a blanket Herdr limitation.
+1. **Compatibility is a hard runtime boundary.** The active adapter targets Herdr 0.9.0, protocol 22/schema 1, with a captured release schema. Incompatible versions and protocols are rejected before attachment. The historical protocol-22 client-shell/graphics implementation remains separate.
+2. **Mouse autodetection is verified; broader terminal acceptance remains scoped.** Browser and Linux-native mode transitions, press/drag/release, wheel, text selection, and ownership handoff are verified. Exact pixel coordinates, idle hover forwarding, Kitty graphics, and the full G01 temporal matrix are not part of this migration.
 3. **Accessibility is intentionally best effort for this personal proof of concept, not a gate for broader distribution.**
 4. **No index/scratchpad means context membership is derived from the companion tree and frontmatter; human-created files are displayed but not managed by Cockpit.**
 5. **Herdr “Space” UI labels map to Herdr API “workspace” resources.** The adapter must keep this translation explicit.
@@ -334,3 +334,18 @@ Automatic session recovery makes at most three attempts per outage, after 250, 5
 Terminal fitting remains immediate before attachment. Subsequent geometry changes use a 100-millisecond trailing debounce, cancelled before renderer disposal. Cockpit no longer sends structured idle pointer motion; controlled press, drag, release, cancellation, wheel, and keyboard paths remain. This does not add application-hover support.
 
 Issue #1 was verified rather than applied verbatim. A three-Space refresh fell from one snapshot plus three inventory requests to one snapshot only. A browser resize burst fell from fourteen resize commands to one, with no idle mouse reports. Real PTY captures verified pointer, wheel, and keyboard input. Ten browser and four Linux-native Files GUI/terminal cycles retained the selected document; an outage retained it through manual recovery. Native-to-Herdr-TUI-to-native handoff delivered input in each client. These checks used only disposable session `ci1-0908`. macOS runtime behavior was not retested on this Linux host.
+
+## 2026-09-08: Herdr 0.9.0 compatibility and mouse autodetection
+
+The adapter now targets [Herdr 0.9.0](https://github.com/herdrdev/herdr/releases/tag/v0.9.0), protocol 22/schema 1. Direct-terminal message tags and Hello/Resize payloads follow the [tagged wire contract](https://github.com/herdrdev/herdr/blob/v0.9.0/src/protocol/wire.rs). This retains per-pane ANSI rendering, not the earlier custom client-shell or graphics path.
+
+Herdr's dynamic `MouseCapture` signal controls application pointer interception. Cockpit forwards structured cell-coordinate `AttachMouse` messages; Herdr selects SGR, legacy, or other application encoding from the live terminal mode. Wheel input retains `AttachScroll` routing. Mode-off and Shift-drag permit local text selection. Mouse state is attachment-local, defaults off, and is cleared on failure, mode exit, or ownership loss. A control conflict or takeover switches to observation; only a new local action requests takeover. Failed control requests discard queued input.
+
+Lifecycle subscriptions are live-only in this release. Cockpit uses the initial snapshot to discover pane-specific subscriptions, then reads an authoritative snapshot after the subscription acknowledgement. A changed pane set forces a rebind before readiness. Browser/native relays read their published baseline after readiness, preserving live agent-status subscriptions without relying on retained history.
+Every established-stream rebind also invalidates the published snapshot after acknowledgement, including when only agent status or labels changed during the gap. Bootstrap rebinds do not enqueue notifications before a consumer exists. A socket regression verifies recovery without a subsequent live event.
+
+Project capability inspection now includes workspace close and worktree removal. Normal close still omits `close_group`, allowing Herdr to reject accidental group closure. Existing repository-action consent does not silently grant the new Git `trust_repository` override; that optional upstream flag remains unset.
+
+Verification used only disposable session `cockpit-h090-0908`. Browser and Linux Tauri rendered real protocol-22 frames and delivered keyboard, mouse press/drag/release, and wheel input to a capturing PTY. Enabling/disabling application tracking switched pointer handling without reconnecting; disabled-mode and Shift selections emitted no pointer input. Native/browser takeover preserved observer output and allowed explicit control recovery. Browser rendering was checked at 1440×900 and 1024×640. Exact pixel targeting, idle hover, graphics, and macOS runtime behavior were not tested.
+
+The same browser run created and removed a real linked worktree and launched Files against its checkout, displaying `sample.txt` from the correct plugin context. Final gates passed 151 frontend tests and 113 Rust adapter/protocol/host tests, plus browser and native builds. The named session, clients, display server, and disposable fixture resources were removed; captured input and browser/native evidence remain under `/tmp/cockpit-h090-proof`. The user's active Herdr session and installed Cockpit executable were not replaced.

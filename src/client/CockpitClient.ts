@@ -608,6 +608,10 @@ export function parseTerminalStreamMessage(value: unknown): TerminalStreamMessag
     if (!isOwnershipState(value.state) || !isNullableString(value.message)) return malformed("Terminal ownership message is malformed");
     return { type: "ownership", session_id: value.session_id, pane_id: value.pane_id, stream_id: value.stream_id, state: value.state, message: value.message };
   }
+  if (value.type === "mouse_mode") {
+    if (!isBoolean(value.enabled)) return malformed("Terminal mouse mode message is malformed");
+    return { type: "mouse_mode", session_id: value.session_id, pane_id: value.pane_id, stream_id: value.stream_id, enabled: value.enabled };
+  }
   if (value.type === "frame") {
     if (!isString(value.seq) || !/^[0-9]+$/.test(value.seq) || !isString(value.encoding) || value.encoding !== "ansi" || !isU16(value.width) || !isU16(value.height) || !isBoolean(value.full) || !isBase64(value.bytes)) return malformed("Terminal frame message is malformed");
     try { BigInt(value.seq); } catch { return malformed("Terminal frame sequence is malformed"); }

@@ -49,8 +49,8 @@ use transport::{
 };
 
 use crate::schema::{schema_fields, status_fields};
-pub const REQUIRED_VERSION: &str = "0.8.2";
-pub const REQUIRED_PROTOCOL: u32 = 20;
+pub const REQUIRED_VERSION: &str = "0.9.0";
+pub const REQUIRED_PROTOCOL: u32 = 22;
 pub const REQUIRED_SCHEMA_VERSION: u32 = 1;
 const MAX_SAFE_REVISION: u64 = 9_007_199_254_740_991;
 const MAX_TERMINAL_LINE: usize = 1024 * 1024;
@@ -1328,7 +1328,7 @@ impl HerdrCliAdapter {
         tokio::spawn(async move {
             let mut delay_ms = 100_u64;
             let mut current_snapshot = snapshot;
-            let mut initial_ready = Some(ready_sender);
+            let initial_ready = Some(ready_sender);
             let mut identity_checked = false;
             loop {
                 if sender.is_closed() {
@@ -1343,7 +1343,7 @@ impl HerdrCliAdapter {
                         &expected_identity,
                         identity_checked_for_connection,
                         &sender,
-                        initial_ready.take(),
+                        initial_ready.clone(),
                     )
                     .await;
                 if sender.is_closed() {
@@ -1515,7 +1515,9 @@ impl HerdrCliAdapter {
                 readiness.clone(),
             )
             .await;
-        if let Some(readiness) = readiness {
+        if let Some(readiness) = readiness
+            && !matches!(&result, Ok(EventConnectionEnd::TopologyChanged(_)))
+        {
             let result = Err(result.as_ref().err().cloned().unwrap_or_else(|| {
                 InspectionError::new(
                     "subscription_setup_failed",
@@ -1661,6 +1663,24 @@ impl HerdrCliAdapter {
                 "events.subscribe acknowledgement deadline expired",
             )
         })??;
+        // Herdr subscriptions are live-only.  The caller's snapshot is only
+        // discovery state for constructing pane-specific subscriptions; take
+        // an authoritative snapshot after the ACK before reporting readiness.
+        // If topology changed while the subscription was being established,
+        // rebind with the new pane set rather than exposing a bootstrap gap.
+        let latest = self.read_snapshot(session_id).await?;
+        validate_event_snapshot_identity(&latest, expected)?;
+        if pane_set_changed(snapshot, &latest) {
+            return Ok(EventConnectionEnd::TopologyChanged(latest));
+        }
+        // Initial callers publish a snapshot after readiness. Existing consumers
+        // need another invalidation after each live-only reconnect, even when
+        // only labels or agent status changed during the subscription gap.
+        if readiness.as_ref().is_none_or(|ready| ready.is_closed())
+            && sender.send(SessionChange::Changed).await.is_err()
+        {
+            return Ok(EventConnectionEnd::StreamEnded);
+        }
         if let Some(readiness) = readiness.as_ref() {
             let _ = readiness.send(Ok(())).await;
         }
@@ -2084,8 +2104,8 @@ mod tests {
     fn subscription_snapshot(panes: &[&str]) -> SessionSnapshotResponse {
         SessionSnapshotResponse {
             session_id: "default".into(),
-            version: "0.8.2".into(),
-            protocol: 20,
+            version: "0.9.0".into(),
+            protocol: 22,
             focused_space_id: None,
             focused_tab_id: None,
             focused_pane_id: None,
@@ -2139,7 +2159,7 @@ mod tests {
     }
 
     #[test]
-    fn replayed_topology_does_not_require_a_subscription_refresh() {
+    fn topology_does_not_require_a_subscription_refresh() {
         let initial = subscription_snapshot(&["pane-a"]);
         assert!(!pane_set_changed(
             &initial,
@@ -2154,16 +2174,16 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn replayed_topology_keeps_the_existing_event_transport_open() {
+    async fn post_ack_snapshot_keeps_the_existing_event_transport_open() {
         let socket = std::env::temp_dir().join(format!(
-            "cockpit-herdr-replay-{}-{}.sock",
+            "cockpit-herdr-bootstrap-{}-{}.sock",
             std::process::id(),
             NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
         ));
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
         let mut fixture: Value =
             serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
-        fixture["result"]["snapshot"]["protocol"] = json!(20);
+        fixture["result"]["snapshot"]["protocol"] = json!(22);
         let snapshot = fixture["result"].clone();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -2177,7 +2197,7 @@ mod tests {
                 .write_all(
                     format!(
                         "{}\n",
-                        json!({"id": request["id"], "result": {"type": "pong", "version": "0.8.2", "protocol": 20}})
+                        json!({"id": request["id"], "result": {"type": "pong", "version": "0.9.0", "protocol": 22}})
                     )
                     .as_bytes(),
                 )
@@ -2194,9 +2214,33 @@ mod tests {
             events
                 .write_all(
                     format!(
-                        "{}\n{}\n",
-                        json!({"id": request["id"], "result": {"type": "subscription_started"}}),
-                        json!({"event": "pane.created", "data": {"pane": {"id": "pane-a"}}}),
+                        "{}\n",
+                        json!({"id": request["id"], "result": {"type": "subscription_started"}})
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "session.snapshot");
+            reader
+                .into_inner()
+                .write_all(
+                    format!("{}\n", json!({"id": request["id"], "result": snapshot})).as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            events
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({"event": "pane.created", "data": {"pane": {"id": "pane-a"}}})
                     )
                     .as_bytes(),
                 )
@@ -2241,6 +2285,73 @@ mod tests {
         drop(subscription);
         server.await.unwrap();
         std::fs::remove_file(socket).unwrap();
+    }
+    #[tokio::test]
+    async fn reconnect_invalidates_snapshot_without_a_following_live_event() {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-reconnect-baseline-{}-{}.sock",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        let server = tokio::spawn(async move {
+            let (events, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(events);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "events.subscribe");
+            let mut events = reader.into_inner();
+            events
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({
+                            "id": request["id"], "result": {"type": "subscription_started"}
+                        })
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let (snapshot, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(snapshot);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "session.snapshot");
+            reader
+                .into_inner()
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({
+                            "id": request["id"], "result": fixture["result"]
+                        })
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let adapter = HerdrCliAdapter::new(
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(path.clone())).unwrap(),
+        );
+        let snapshot = subscription_snapshot(&["pane-a"]);
+        let expected = EventIdentity::from_snapshot(&snapshot);
+        let (sender, mut receiver) = mpsc::channel(1);
+        let (ready, initial_caller) = mpsc::channel(1);
+        drop(initial_caller);
+        adapter
+            .event_connection("default", &snapshot, &expected, true, &sender, Some(ready))
+            .await
+            .unwrap();
+        drop(sender);
+        assert_eq!(receiver.recv().await, Some(SessionChange::Changed));
+        server.await.unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 
     #[tokio::test]

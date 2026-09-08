@@ -269,8 +269,8 @@ impl CockpitService {
             cockpit_version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: self.mode,
             capabilities: CockpitCapabilities {
-                // Cockpit translates semantic mouse commands to raw SGR bytes
-                // over the existing stable terminal input channel.
+                // Herdr encodes structured pointer events; each terminal stream
+                // separately reports whether its application requests mouse input.
                 terminal_mouse_input: self.mode == CockpitMode::Normal,
             },
             herdr,

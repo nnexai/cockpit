@@ -195,13 +195,13 @@ The behavioral authority is Herdr; the presentation is graphical. Pane/layout ac
 
 Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js owns rendering and input capture only.
 
-- The active target is Homebrew Herdr 0.8.2, protocol 20, schema 1. Each visible pane opens its own direct terminal stream with `TerminalAnsi` and `TerminalAttach`; protocol-22 client-shell work remains in committed history.
+- The active target is Herdr 0.9.0, protocol 22, schema 1. Each visible pane opens a direct ANSI terminal stream using `TerminalHello` and `ControlTerminal` or `ObserveTerminal`. This does not restore the historical client-shell/graphics implementation.
 - Herdr's JSON API owns hierarchy, focus, and layout. Stable `TerminalFrame` messages supply sequence numbers, dimensions, and ANSI bytes for each attached pane.
 - Attachment uses fitted per-pane dimensions and measured cell pixels. The first frame must be full; every later sequence must be consecutive, including full repaints.
 - A full frame is an ANSI baseline, not permission to reset xterm. Socket framing has one uninterrupted reader with bounded buffering and deterministic shutdown.
 - Terminal graphics are parked. Known auxiliary messages are consumed without exposing graphics payloads or disconnecting an otherwise usable text terminal. The image addon is not loaded.
 - Text and binary input use stable raw `Input`; wheel/page scrolling uses `AttachScroll`, gated by local control intent and attachment state. Normal xterm.js panes attached to Herdr are observed to receive wheel/scroll events.
-- Click-to-focus remains available. The prior physical X11 direct-attach result is scoped to that host-input path; it does not establish that Herdr 0.8.2 cannot carry SGR. Herdr's one-shot `pane.send-keys`/`pane.send-text` APIs can inject SGR into a pane PTY. Cockpit must trace physical pointer interception, focus, ownership, and coordinate routing before advertising structured application-mouse support, and must not inject SGR unconditionally at shell prompts.
+- Herdr's per-attachment `MouseCapture` signal enables application mouse handling automatically. Cockpit sends structured `AttachMouse` cell coordinates, and Herdr chooses the application's encoding and rejects reports when tracking is disabled. Mode-off and Shift-drag retain xterm text selection. Idle hover reports and exact pixel coordinates are not forwarded.
 - `Shift+Enter` sends a bare line-feed. The Herdr magic escape key retains higher priority.
 - Local xterm enables Kitty keyboard support; stable end-to-end enhanced-reporting behavior still requires TERM-03 evidence.
 - Only panes visible in the selected tab keep active xterm renderers/subscriptions. Hidden tabs detach UI renderers without stopping Herdr processes.

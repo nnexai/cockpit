@@ -19,10 +19,12 @@ use super::{
     schema_fields, valid_pane_id,
 };
 
-const PROJECT_METHODS: [&str; 4] = [
+const PROJECT_METHODS: [&str; 6] = [
     "worktree.list",
     "worktree.create",
     "worktree.open",
+    "worktree.remove",
+    "workspace.close",
     "tab.create",
 ];
 const MAX_PROJECT_TEXT: usize = 4096;
@@ -214,7 +216,7 @@ fn worktree_params(
     }
     if !request.trust_repository {
         return Err(unsupported(
-            "Herdr 0.8.2 exposes no worktree trust parameter",
+            "repository action consent is required for Herdr worktree operations",
         ));
     }
     let mut params = Map::new();

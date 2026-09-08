@@ -475,6 +475,17 @@ fn localize_terminal_message(
     stream_id: &str,
 ) -> TerminalStreamMessage {
     match message {
+        TerminalStreamMessage::MouseMode {
+            session_id,
+            pane_id,
+            enabled,
+            ..
+        } => TerminalStreamMessage::MouseMode {
+            session_id,
+            pane_id,
+            stream_id: stream_id.to_owned(),
+            enabled,
+        },
         TerminalStreamMessage::Ownership {
             session_id,
             pane_id,
@@ -578,7 +589,13 @@ fn validate_terminal_message(
     has_baseline: &mut bool,
 ) -> Result<(), (&'static str, &'static str)> {
     let (session_id, pane_id, stream_id) = match message {
-        TerminalStreamMessage::Ownership {
+        TerminalStreamMessage::MouseMode {
+            session_id,
+            pane_id,
+            stream_id,
+            ..
+        }
+        | TerminalStreamMessage::Ownership {
             session_id,
             pane_id,
             stream_id,

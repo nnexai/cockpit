@@ -709,6 +709,13 @@ pub enum TerminalOwnershipState {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalStreamMessage {
+    /// Whether the attached pane currently requests application mouse input.
+    MouseMode {
+        session_id: String,
+        pane_id: String,
+        stream_id: String,
+        enabled: bool,
+    },
     Ownership {
         session_id: String,
         pane_id: String,

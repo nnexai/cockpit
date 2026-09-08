@@ -150,14 +150,29 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const [controlRequested, setControlRequested] = useState(controlAllowed);
   const controlRequestedRef = useRef(controlAllowed);
   const controlRequestPendingRef = useRef(false);
+  const takeoverRequestedRef = useRef(false);
   const controlAllowedRef = useRef(controlAllowed);
   controlAllowedRef.current = controlAllowed;
-  const activeMouseButton = useRef<TerminalMouseButton | null>(null);
+  const activeMousePointer = useRef<{ button: TerminalMouseButton; pointerId: number } | null>(null);
+  const mouseModeRef = useRef(false);
   const lastMouseMotionAt = useRef(0);
   const sendInput = (command: TerminalCommand) => {
     if (!controlAllowedRef.current && !controlRequestPendingRef.current) return;
     if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) streamRef.current.send(command);
     else pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
+  };
+  const releaseCapturedPointer = () => {
+    const active = activeMousePointer.current;
+    if (!active) return;
+    const host = hostRef.current;
+    if (host?.hasPointerCapture(active.pointerId)) host.releasePointerCapture(active.pointerId);
+    activeMousePointer.current = null;
+    lastMouseMotionAt.current = 0;
+  };
+  const clearMouseMode = () => {
+    mouseModeRef.current = false;
+    pendingCommands.current = pendingCommands.current.filter((command) => command.type !== "terminal.mouse");
+    releaseCapturedPointer();
   };
   const flushPending = () => {
     const stream = streamRef.current;
@@ -169,10 +184,11 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     terminalRef.current?.focus();
     onRequestControl?.();
     if (!selected) onSelect?.();
-    if (controlAllowedRef.current && controlRequestedRef.current) return;
+    if (controlAllowedRef.current && controlRequestedRef.current && ownershipRef.current === "owned") return;
+    takeoverRequestedRef.current = true;
     controlRequestPendingRef.current = true;
-    controlRequestedRef.current = false;
-    setControlRequested(false);
+    controlRequestedRef.current = controlAllowedRef.current;
+    setControlRequested(controlAllowedRef.current);
   };
 
   useEffect(() => {
@@ -267,13 +283,17 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     if (!controlPending) {
       controlRequestPendingRef.current = false;
       pendingCommands.current = [];
-      activeMouseButton.current = null;
+      clearMouseMode();
     }
     if (controlRequestedRef.current) {
       controlRequestedRef.current = false;
       setControlRequested(false);
     }
   }, [controlAllowed, controlPending]);
+
+  useEffect(() => {
+    if (!terminalMouseInput) clearMouseMode();
+  }, [terminalMouseInput]);
 
 
 
@@ -288,7 +308,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     const openRequest: TerminalOpenRequest = {
       ...request,
       mode: controlRequested ? "control" : "observe",
-      takeover: false,
+      takeover: controlRequested && takeoverRequestedRef.current,
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
       cell_width_px: geometry.cell_width_px,
@@ -296,8 +316,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     };
     let cancelled = false;
     let stream: TerminalStream | null = null;
+    let observedStreamId: string | null = null;
     const controller = new AbortController();
     const generation = ++attachmentGeneration.current;
+    clearMouseMode();
     lastSequence.current = null;
     setError(null);
     setClosed(false);
@@ -305,6 +327,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     setOwnership(ownershipRef.current);
     const fail = (code: string, message: string) => {
       pendingCommands.current = [];
+      clearMouseMode();
       cancelled = true;
       controller.abort();
       setError({ code, message });
@@ -316,7 +339,30 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     };
     const onMessage = (message: TerminalStreamMessage) => {
       if (cancelled || generation !== attachmentGeneration.current) return;
+      if (message.type !== "mouse_mode" && observedStreamId === null) observedStreamId = message.stream_id;
+      if (message.type === "mouse_mode") {
+        if (
+          ownershipRef.current === "lost" ||
+          ownershipRef.current === "released" ||
+          ownershipRef.current === "conflict" ||
+          message.session_id !== request.session_id ||
+          message.pane_id !== request.pane_id ||
+          (observedStreamId !== null && message.stream_id !== observedStreamId)
+        ) return;
+        observedStreamId = message.stream_id;
+        if (message.enabled) mouseModeRef.current = true;
+        else clearMouseMode();
+        return;
+      }
       if (message.type === "ownership") {
+        if (message.state === "lost" || message.state === "conflict") {
+          pendingCommands.current = [];
+          clearMouseMode();
+          controlRequestPendingRef.current = false;
+          controlRequestedRef.current = false;
+          takeoverRequestedRef.current = false;
+          setControlRequested(false);
+        } else if (message.state === "released") clearMouseMode();
         ownershipRef.current = message.state;
         setOwnership(message.state);
         if (message.state === "owned") flushPending();
@@ -351,6 +397,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         fail(message.code, message.message);
       } else if (message.type === "closed") {
         cancelled = true;
+        clearMouseMode();
         setClosed(true);
         setError(null);
         setOwnership("released");
@@ -380,6 +427,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     });
     return () => {
       cancelled = true;
+      clearMouseMode();
       controller.abort();
       if (streamRef.current === stream) streamRef.current = null;
       if (stream) registerStream?.(stream, false);
@@ -393,7 +441,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect()
       ?? hostRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    forwardTerminalMouse(terminalMouseInput, sendInput, kind, button, event, bounds, terminal.cols, terminal.rows);
+    forwardTerminalMouse(terminalMouseInput && mouseModeRef.current, sendInput, kind, button, event, bounds, terminal.cols, terminal.rows);
   };
   return (
     <div
@@ -405,46 +453,47 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         const button = terminalMouseButton(event.button);
         if (!button) return;
         requestControl();
-        if (!terminalMouseInput) return;
+        // Shift is xterm's conventional selection override for app mouse mode.
+        if (!terminalMouseInput || !mouseModeRef.current || event.shiftKey) return;
         event.preventDefault();
         event.stopPropagation();
         lastMouseMotionAt.current = 0;
-        activeMouseButton.current = button;
+        activeMousePointer.current = { button, pointerId: event.pointerId };
         event.currentTarget.setPointerCapture(event.pointerId);
         sendPointerMouse("down", button, event);
       }}
       onPointerMoveCapture={(event) => {
-        const button = activeMouseButton.current;
-        if (!button || event.timeStamp - lastMouseMotionAt.current < 16) return;
-        lastMouseMotionAt.current = event.timeStamp;
-        sendPointerMouse("drag", button, event);
-        if (terminalMouseInput) {
-          event.preventDefault();
-          event.stopPropagation();
+        const active = activeMousePointer.current;
+        if (!active || active.pointerId !== event.pointerId) return;
+        if (!terminalMouseInput || !mouseModeRef.current) {
+          clearMouseMode();
+          return;
         }
+        if (event.timeStamp - lastMouseMotionAt.current < 16) return;
+        lastMouseMotionAt.current = event.timeStamp;
+        sendPointerMouse("drag", active.button, event);
+        event.preventDefault();
+        event.stopPropagation();
       }}
       onPointerUpCapture={(event) => {
-        const button = terminalMouseButton(event.button);
-        if (!button) return;
-        if (terminalMouseInput) {
+        const active = activeMousePointer.current;
+        if (!active || active.pointerId !== event.pointerId) return;
+        if (terminalMouseInput && mouseModeRef.current) {
           event.preventDefault();
           event.stopPropagation();
-          sendPointerMouse("up", button, event);
+          sendPointerMouse("up", active.button, event);
         }
-        activeMouseButton.current = null;
-        lastMouseMotionAt.current = 0;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        releaseCapturedPointer();
       }}
       onPointerCancel={(event) => {
-        const button = activeMouseButton.current;
-        if (button && terminalMouseInput) {
+        const active = activeMousePointer.current;
+        if (!active || active.pointerId !== event.pointerId) return;
+        if (terminalMouseInput && mouseModeRef.current) {
           event.preventDefault();
           event.stopPropagation();
-          sendPointerMouse("up", button, event);
+          sendPointerMouse("up", active.button, event);
         }
-        activeMouseButton.current = null;
-        lastMouseMotionAt.current = 0;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        releaseCapturedPointer();
       }}
     >
       {closed ? (
