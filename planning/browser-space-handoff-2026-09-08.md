@@ -17,6 +17,7 @@ Verification recorded during the continuation:
 - Six browser/feedback Rust tests passed, including pending capacity and unknown receipt retention; host/Herdr suites passed.
 - The broad core run passed 101 tests and failed the unrelated execution-lease exclusivity test. That test passed in isolation.
 - Both native and CLI binaries built; the installed native launcher was updated.
+- Scoped close retained the profile and left the unrelated Playwright session alive. Disposable gateway, observer, native client, fixture server, asset server, display, and Herdr process were stopped after verification; evidence files remain under the recorded temporary root.
 
 The detailed historical matrix below is not an assertion that every cross-platform and failure-injection scenario was exercised. Native image/send permutations, modal top-layer behavior, every ownership/crash combination, and the complete retention/failure matrix still require explicit evidence before claiming exhaustive plan acceptance. Preserve the user-edited integration plan.
 
