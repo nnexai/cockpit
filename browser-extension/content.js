@@ -2,9 +2,10 @@
   if (globalThis.__cockpitFeedbackLoaded) return;
   globalThis.__cockpitFeedbackLoaded = true;
   const runtime = chrome.runtime;
-  const MAX_POINTS = 8192; const MAX_ANNOTATIONS = 64; const MAX_ANCHORS_PER_ANNOTATION = 4; const GEOMETRY_EPSILON = 1;
+  const MAX_POINTS = 8192; const MAX_ANNOTATIONS = 64; const MAX_ANCHORS_PER_ANNOTATION = 4; const GEOMETRY_EPSILON = 1; const FREEHAND_TOLERANCE = 1.5;
   const state = { documentId: null, tabId: null, mode: 'browse', tool: 'freehand', annotations: [], selected: null, editing: false, alignmentDirty: false, reviewed: false, alignmentReason: null, captureAnyway: false, drawing: null, capture: null };
   const anchorRefs = new Map();
+  let capturedPointerId = null;
   let geometryBaseline = null;
   const colors = ['#d62828', '#1769aa', '#2a9d55', '#c27803', '#7c3aed'];
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -15,6 +16,32 @@
   }));
   const viewport = () => ({ width: Math.max(1, innerWidth), height: Math.max(1, innerHeight), scroll_x: scrollX, scroll_y: scrollY, device_pixel_ratio: devicePixelRatio || 1, visual_scale: visualViewport?.scale || 1 });
   const point = (event) => ({ x: event.pageX, y: event.pageY });
+  function simplifyFreehand(points, tolerance = FREEHAND_TOLERANCE) {
+    if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points.slice() : [];
+    const keep = new Uint8Array(points.length); keep[0] = 1; keep[points.length - 1] = 1;
+    const squaredTolerance = tolerance * tolerance;
+    const ranges = [[0, points.length - 1]];
+    while (ranges.length) {
+      const [start, end] = ranges.pop();
+      const first = points[start]; const last = points[end];
+      const dx = last.x - first.x; const dy = last.y - first.y; const lengthSquared = dx * dx + dy * dy;
+      let index = -1; let maximum = squaredTolerance;
+      for (let current = start + 1; current < end; current += 1) {
+        const candidate = points[current];
+        let distanceSquared;
+        if (lengthSquared === 0) {
+          const offsetX = candidate.x - first.x; const offsetY = candidate.y - first.y;
+          distanceSquared = offsetX * offsetX + offsetY * offsetY;
+        } else {
+          const projection = Math.max(0, Math.min(1, ((candidate.x - first.x) * dx + (candidate.y - first.y) * dy) / lengthSquared)); const projectedX = first.x + projection * dx; const projectedY = first.y + projection * dy;
+          const offsetX = candidate.x - projectedX; const offsetY = candidate.y - projectedY; distanceSquared = offsetX * offsetX + offsetY * offsetY;
+        }
+        if (distanceSquared > maximum) { maximum = distanceSquared; index = current; }
+      }
+      if (index !== -1) { keep[index] = 1; ranges.push([start, index], [index, end]); }
+    }
+    return points.filter((_, index) => keep[index]);
+  }
   const cssEscape = (value) => globalThis.CSS?.escape ? CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
   function locatorFor(element) {
     const result = [];
@@ -37,13 +64,17 @@
     return { tag: bounded(element.localName, 40), text: bounded(element.textContent, 600), role, name, locators: locatorFor(element), excerpt: bounded(element.textContent, 240), rect: { x: rect.left + scrollX, y: rect.top + scrollY, width: rect.width, height: rect.height } };
   }
   const host = document.createElement('cockpit-feedback-overlay');
-  host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;display:block;';
+  host.setAttribute('popover', 'manual');
+  host.style.cssText = 'all:initial;position:fixed!important;inset:0!important;z-index:2147483647!important;pointer-events:none!important;display:block!important;isolation:isolate!important;';
   const shadow = host.attachShadow({ mode: 'closed' });
   shadow.innerHTML = `<style>
-    :host{all:initial}[hidden]{display:none!important}.controls,.editor,.add-text{position:fixed;pointer-events:auto;background:#fff;color:#17212b;border:1px solid #9aa9b7;border-radius:8px;box-shadow:0 2px 14px #0003;font:13px system-ui,sans-serif}.controls{top:12px;right:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;max-width:min(440px,calc(100vw - 40px));padding:8px}.controls button,.controls select,.editor button,.add-text{font:inherit;border:1px solid #91a0ae;border-radius:4px;padding:6px 9px;background:#fff;color:inherit;cursor:pointer}.controls button.active,.controls .capture-action{background:#245fa8;color:#fff}.marks{position:fixed;inset:0;pointer-events:none;overflow:visible}.mark{fill:none;stroke:#d62828;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.mark.region{fill:#d6282815;stroke-width:3}.comment{position:fixed;max-width:min(260px,calc(100vw - 24px));padding:6px 8px;border-radius:4px;background:#fff;border:1px solid #d62828;color:#18212b;box-shadow:0 1px 4px #0003;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.4 system-ui,sans-serif;cursor:pointer}.comment.selected{outline:2px solid #1769aa}.editor{width:min(260px,calc(100vw - 40px));padding:8px;z-index:2}.editor textarea{display:block;box-sizing:border-box;width:100%;min-height:70px;margin-bottom:6px;resize:vertical;border:0;background:#fff;color:#17212b;font:14px/1.4 system-ui,sans-serif;outline:none}.editor footer{display:flex;justify-content:space-between;gap:8px}.hint{width:100%;color:#526170;font-size:12px}.review{background:#fff2c2!important;border-color:#c27803!important}</style>
-    <svg class="marks" aria-hidden="true"></svg><div class="controls" aria-label="Cockpit annotation tools"><select class="mode" aria-label="Page mode"><option value="browse">Browse</option><option value="annotate">Annotate</option></select><button data-tool="freehand" type="button">Freehand</button><button data-tool="element" type="button">Element</button><button data-tool="region" type="button">Region</button><button class="remove" type="button" disabled>Remove mark</button><button class="capture-action" type="button">Capture and save</button><button class="capture-anyway" type="button" hidden aria-label="Capture current view anyway" title="Capture the current view as shown; viewport and navigation changes still cancel">Capture anyway (as shown)</button><button class="review" type="button" hidden>Review positions</button><span class="hint" role="status"></span></div><button class="add-text" type="button" hidden>+ Text</button><div class="editor" hidden><textarea maxlength="4000" aria-label="Annotation comment" placeholder="Add an optional comment…"></textarea><footer><span>Shift+Enter for a new line</span><button class="done" type="button">Done</button></footer></div>`;
+    :host{all:initial!important;position:fixed!important;inset:0!important;z-index:2147483647!important;display:block!important;pointer-events:none!important;isolation:isolate!important}[hidden]{display:none!important}.controls,.editor,.add-text{position:fixed;z-index:2147483647;pointer-events:auto;background:#fff;color:#17212b;border:1px solid #91a0ae;border-radius:6px;box-shadow:0 4px 16px #0004;font:12px/1 system-ui,sans-serif}.controls{top:8px;right:8px;display:flex;flex-wrap:nowrap;gap:3px;align-items:center;max-width:calc(100vw - 16px);padding:4px;overflow-x:auto;scrollbar-width:none}.controls::-webkit-scrollbar{display:none}.controls button,.controls select,.editor button,.add-text{box-sizing:border-box;font:inherit;border:1px solid #91a0ae;border-radius:4px;background:#fff;color:inherit;cursor:pointer}.controls button,.controls select{height:28px}.controls button{display:inline-flex;flex:0 0 28px;align-items:center;justify-content:center;padding:0}.controls select.mode{width:88px;flex:0 0 88px;padding:0 20px 0 7px}.controls .icon{width:16px;height:16px;display:block;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.controls button:hover:not(:disabled),.controls select:hover{background:#edf2f8}.controls button:focus-visible,.controls select:focus-visible{outline:2px solid #1769aa;outline-offset:1px}.controls button:disabled{opacity:.45;cursor:default}.controls button.active,.controls .capture-action{background:#245fa8;border-color:#245fa8;color:#fff}.controls .review{background:#fff2c2;border-color:#c27803;color:#17212b}.controls .close{margin-left:1px}.hint{position:absolute;top:calc(100% + 4px);right:0;max-width:min(360px,calc(100vw - 16px));padding:5px 7px;border:1px solid #91a0ae;border-radius:4px;background:#fff;color:#526170;box-shadow:0 2px 8px #0003;font-size:11px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.marks{position:fixed;inset:0;pointer-events:none;overflow:visible}.mark{fill:none;stroke:#d62828;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.mark.region{fill:#d6282815;stroke-width:3}.comment{position:fixed;max-width:min(260px,calc(100vw - 24px));padding:6px 8px;border-radius:4px;background:#fff;border:1px solid #d62828;color:#18212b;box-shadow:0 1px 4px #0003;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.4 system-ui,sans-serif;cursor:pointer}.comment.selected{outline:2px solid #1769aa}.editor{width:min(260px,calc(100vw - 40px));padding:8px;z-index:2}.editor textarea{display:block;box-sizing:border-box;width:100%;min-height:70px;margin-bottom:6px;resize:vertical;border:0;background:#fff;color:#17212b;font:14px/1.4 system-ui,sans-serif;outline:none}.editor footer{display:flex;justify-content:space-between;gap:8px}.review{background:#fff2c2!important;border-color:#c27803!important}</style>
+    <svg class="marks" aria-hidden="true"></svg><div class="controls" aria-label="Cockpit annotation tools"><select class="mode" aria-label="Page mode" title="Page mode"><option value="browse">Browse</option><option value="annotate">Annotate</option></select><button data-tool="freehand" type="button" aria-label="Freehand tool" title="Freehand tool"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12c1.5-4 3-7 5-7 1.4 0 1.4 2 2.5 2 1 0 1.5-1.5 2.5-3"/></svg></button><button data-tool="element" type="button" aria-label="Element tool" title="Element tool"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="4"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3"/></svg></button><button data-tool="region" type="button" aria-label="Region tool" title="Region tool"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke-dasharray="2 1.5"/></svg></button><button class="remove" type="button" aria-label="Remove selected mark" title="Remove selected mark" disabled><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6 2.5h4M5 4.5l.6 9h4.8l.6-9M7 7v4M9 7v4"/></svg></button><button class="capture-action" type="button" aria-label="Capture and save" title="Capture and save"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5h2l1-2h5l1 2h2v8h-11z"/><circle cx="8" cy="9" r="2.5"/></svg></button><button class="capture-anyway" type="button" hidden aria-label="Capture current view anyway" title="Capture current view as shown"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5h2l1-2h5l1 2h2v8h-11z"/><path d="M8 6.5v3M8 11.5v.1"/></svg></button><button class="review" type="button" hidden aria-label="Review positions" title="Review positions"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="m5 8 2 2 4-4"/></svg></button><span class="hint" role="status" hidden></span><button class="close" type="button" aria-label="Hide annotation tools" title="Hide annotation tools"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div><button class="add-text" type="button" hidden>+ Text</button><div class="editor" hidden><textarea maxlength="4000" aria-label="Annotation comment" placeholder="Add an optional comment…"></textarea><footer><span>Shift+Enter for a new line</span><button class="done" type="button">Done</button></footer></div>`;
   document.documentElement.append(host);
+  if (typeof host.showPopover === 'function') { try { host.showPopover(); } catch {} }
   const controls = shadow.querySelector('.controls'); const modeSelect = shadow.querySelector('.mode'); const textarea = shadow.querySelector('textarea'); const hint = shadow.querySelector('.hint'); const marks = shadow.querySelector('.marks'); const reviewButton = shadow.querySelector('.review');
+  controls.setAttribute('role', 'toolbar');
+  hint.style.position = 'fixed'; hint.style.top = '40px'; hint.style.right = '8px';
   const editor = shadow.querySelector('.editor');
   const addText = shadow.querySelector('.add-text');
   const captureButton = shadow.querySelector('.capture-action');
@@ -52,6 +83,7 @@
   const surface = document.createElement('div');
   surface.style.cssText = 'position:fixed;inset:0;pointer-events:none;touch-action:none';
   shadow.prepend(surface);
+  const closeButton = shadow.querySelector('.close');
   const observedAnchors = new Set();
   let layoutObserver = null;
   function copyRect(rect) {
@@ -188,8 +220,8 @@
     if (geometryBaseline) geometryBaseline.anchors = geometryBaseline.anchors.filter((entry) => entry.annotationId !== annotationId);
     syncObservedAnchors();
   }
-  function setHint(text) { hint.textContent = text; }
-  function setMode(mode) { state.mode = mode === 'annotate' ? 'annotate' : 'browse'; surface.style.pointerEvents = state.mode === 'annotate' ? 'auto' : 'none'; modeSelect.value = state.mode; controls.hidden = false; for (const button of shadow.querySelectorAll('[data-tool]')) button.classList.toggle('active', button.dataset.tool === state.tool && state.mode === 'annotate'); setHint(state.mode === 'annotate' ? 'Draw, pick an element, or drag a region.' : 'Browse mode: page interactions pass through.'); render(); }
+  function setHint(text, visible = true) { hint.textContent = text; hint.hidden = !visible; }
+  function setMode(mode) { const nextMode = mode === 'annotate' ? 'annotate' : 'browse'; if (state.mode === 'annotate' && nextMode === 'browse') { releaseDrawingPointer(); state.drawing = null; } state.mode = nextMode; surface.style.pointerEvents = state.mode === 'annotate' ? 'auto' : 'none'; modeSelect.value = state.mode; controls.hidden = false; for (const button of shadow.querySelectorAll('[data-tool]')) { const active = button.dataset.tool === state.tool && state.mode === 'annotate'; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); } setHint(state.mode === 'annotate' ? 'Draw, pick an element, or drag a region.' : 'Browse mode: page interactions pass through.', false); render(); }
   function markBounds(annotation) {
     if (annotation.bounds) return annotation.bounds;
     const first = annotation.points[0] || { x: scrollX, y: scrollY };
@@ -254,8 +286,8 @@
     }
     select(annotation.id, annotation.kind !== 'freehand'); persist();
   }
-  function finishFreehand() { const drawing = state.drawing; state.drawing = null; if (!drawing || drawing.points.length < 2) { render(); return; } add({ id: uid(), kind: 'freehand', comment: '', color: colors[state.annotations.length % colors.length], points: drawing.points, bounds: null, element: null }); }
-  function finishRegion(end) { const drawing = state.drawing; state.drawing = null; if (!drawing) return; const x = Math.min(drawing.start.x, end.x), y = Math.min(drawing.start.y, end.y); const width = Math.abs(end.x - drawing.start.x), height = Math.abs(end.y - drawing.start.y); if (width < 2 || height < 2) { render(); return; } add({ id: uid(), kind: 'region', comment: '', color: colors[state.annotations.length % colors.length], points: [{ x, y }, { x: x + width, y: y + height }], bounds: { x, y, width, height }, element: null }); }
+  function finishFreehand() { const drawing = state.drawing; releaseDrawingPointer(); state.drawing = null; if (!drawing || drawing.points.length < 2) { render(); return; } add({ id: uid(), kind: 'freehand', comment: '', color: colors[state.annotations.length % colors.length], points: simplifyFreehand(drawing.points), bounds: null, element: null }); }
+  function finishRegion(end) { const drawing = state.drawing; releaseDrawingPointer(); state.drawing = null; if (!drawing) return; const x = Math.min(drawing.start.x, end.x), y = Math.min(drawing.start.y, end.y); const width = Math.abs(end.x - drawing.start.x), height = Math.abs(end.y - drawing.start.y); if (width < 2 || height < 2) { render(); return; } add({ id: uid(), kind: 'region', comment: '', color: colors[state.annotations.length % colors.length], points: [{ x, y }, { x: x + width, y: y + height }], bounds: { x, y, width, height }, element: null }); }
   function pick(event) {
     surface.style.pointerEvents = 'none';
     const element = document.elementFromPoint(event.clientX, event.clientY);
@@ -268,15 +300,16 @@
     if (state.mode !== 'annotate') return;
     event.preventDefault();
     state.editing = false;
+    capturedPointerId = event.pointerId;
     surface.setPointerCapture(event.pointerId);
-    if (state.tool === 'element') { pick(event); return; }
-    state.drawing = state.tool === 'freehand' ? { points: [point(event)] } : { start: point(event) };
+    if (state.tool === 'element') { pick(event); releaseDrawingPointer(); return; }
+    state.drawing = state.tool === 'freehand' ? { points: [point(event)], pointerId: event.pointerId } : { start: point(event), pointerId: event.pointerId };
   });
   surface.addEventListener('pointermove', (event) => { if (!state.drawing || state.mode !== 'annotate') return; if (state.tool === 'freehand' && state.drawing.points.length < MAX_POINTS) state.drawing.points.push(point(event)); else if (state.tool === 'region') state.drawing.end = point(event); render(); });
   surface.addEventListener('pointerup', (event) => { if (!state.drawing) return; if (state.tool === 'freehand') finishFreehand(); else finishRegion(point(event)); });
-  surface.addEventListener('pointercancel', () => { state.drawing = null; render(); });
+  surface.addEventListener('pointercancel', () => { releaseDrawingPointer(); state.drawing = null; render(); });
   modeSelect.addEventListener('change', () => { setMode(modeSelect.value); persist(); });
-  for (const button of shadow.querySelectorAll('[data-tool]')) button.addEventListener('click', () => { state.tool = button.dataset.tool; setMode('annotate'); });
+  for (const button of shadow.querySelectorAll('[data-tool]')) button.addEventListener('click', () => { releaseDrawingPointer(); state.drawing = null; state.tool = button.dataset.tool; setMode('annotate'); });
   function removeAnnotation(id) {
     state.annotations = state.annotations.filter((item) => item.id !== id);
     forgetAnnotation(id);
@@ -288,6 +321,8 @@
   textarea.addEventListener('input', () => { const selected = state.annotations.find(item => item.id === state.selected); if (selected) { selected.comment = bounded(textarea.value, 4000); render(); persist(); } });
   addText.addEventListener('click', () => select(state.selected, true));
   function finishEditing() { state.editing = false; render(); persist(); }
+  function releaseDrawingPointer() { const pointerId = capturedPointerId ?? state.drawing?.pointerId; if (Number.isFinite(pointerId) && surface.hasPointerCapture(pointerId)) surface.releasePointerCapture(pointerId); capturedPointerId = null; }
+  function closeControls() { releaseDrawingPointer(); state.drawing = null; state.editing = false; setMode('browse'); controls.hidden = true; editor.hidden = true; addText.hidden = true; }
   shadow.querySelector('.done').addEventListener('click', finishEditing);
   editor.addEventListener('keydown', event => {
     event.stopPropagation();
@@ -304,6 +339,7 @@
   }
   captureButton.addEventListener('click', () => startCapture(false));
   captureAnywayButton.addEventListener('click', () => startCapture(true));
+  closeButton.addEventListener('click', closeControls);
   reviewButton.addEventListener('click', () => {
     geometryBaseline = makeGeometryBaseline(false);
     const status = geometryStatus(geometryBaseline);

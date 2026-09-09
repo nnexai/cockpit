@@ -480,6 +480,13 @@ fn validate_operation_id(value: &str) -> Result<(), InspectionError> {
     Ok(())
 }
 
+fn strip_annotation_points(mut annotation: Value) -> Value {
+    if let Value::Object(fields) = &mut annotation {
+        fields.remove("points");
+    }
+    annotation
+}
+
 fn select_pending<'a>(
     captures: &'a [BrowserFeedbackCapture],
     ids: &[String],
@@ -499,6 +506,7 @@ fn select_pending<'a>(
                     && requested.contains(annotation.id.as_str())
             })
             .map(serde_json::to_value)
+            .map(|result| result.map(strip_annotation_points))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| InspectionError::new("browser_feedback_payload", error.to_string()))?;
         if !annotations.is_empty() {
@@ -576,4 +584,89 @@ fn bounded_message(message: &str) -> String {
         .filter(|character| !character.is_control())
         .take(8 * 1024)
         .collect()
+}
+#[cfg(test)]
+mod tests {
+    use super::strip_annotation_points;
+    use serde_json::json;
+
+    #[test]
+    fn strip_annotation_points_preserves_feedback_metadata() {
+        let annotation = json!({
+            "id": "annotation-1",
+            "kind": "freehand",
+            "comment": "Needs work",
+            "color": "#ff0000",
+            "bounds": {"x": 1, "y": 2, "width": 3, "height": 4},
+            "element": {"tag": "button", "text": "Save"},
+            "points": [{"x": 1, "y": 2}, {"x": 3, "y": 4}],
+        });
+
+        let stripped = strip_annotation_points(annotation);
+
+        assert_eq!(stripped["id"], "annotation-1");
+        assert_eq!(stripped["comment"], "Needs work");
+        assert_eq!(stripped["bounds"]["width"], 3);
+        assert_eq!(stripped["element"]["text"], "Save");
+        assert!(stripped.get("points").is_none());
+    }
+    #[test]
+    fn pending_feedback_selection_omits_points_for_agent_payload() {
+        use cockpit_protocol::browser_feedback::{
+            BrowserAnnotation, BrowserAnnotationKind, BrowserCaptureContext,
+            BrowserFeedbackCapture, BrowserPageEvidence, BrowserViewport,
+        };
+
+        let capture = BrowserFeedbackCapture {
+            id: "capture-1".to_owned(),
+            context: BrowserCaptureContext {
+                association_key: "association".to_owned(),
+                session_id: "session".to_owned(),
+                space_id: "space".to_owned(),
+                space_label: "Space".to_owned(),
+                playwright_session: "playwright".to_owned(),
+                working_directory: "/tmp".to_owned(),
+                invocation: "open".to_owned(),
+                browser_instance: "browser".to_owned(),
+            },
+            page: BrowserPageEvidence {
+                url: "https://example.test".to_owned(),
+                title: "Example".to_owned(),
+                tab_id: 1,
+                document_id: "document".to_owned(),
+                captured_at: "2026-09-09T00:00:00Z".to_owned(),
+                viewport: BrowserViewport {
+                    width: 100.0,
+                    height: 100.0,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    device_pixel_ratio: 1.0,
+                    visual_scale: 1.0,
+                },
+                image_width: 100,
+                image_height: 100,
+            },
+            annotations: vec![BrowserAnnotation {
+                id: "annotation-1".to_owned(),
+                kind: BrowserAnnotationKind::Freehand,
+                comment: "Needs work".to_owned(),
+                color: "#ff0000".to_owned(),
+                points: vec![
+                    cockpit_protocol::browser_feedback::BrowserPoint { x: 1.0, y: 2.0 },
+                    cockpit_protocol::browser_feedback::BrowserPoint { x: 3.0, y: 4.0 },
+                ],
+                bounds: None,
+                element: None,
+            }],
+            pending_ids: vec!["annotation-1".to_owned()],
+            image_path: "/tmp/capture.png".to_owned(),
+        };
+
+        let captures = [capture];
+        let ids = ["annotation-1".to_owned()];
+        let selected = super::select_pending(&captures, &ids).unwrap();
+        let annotation = &selected[0].1[0];
+        assert_eq!(annotation["comment"], "Needs work");
+        assert!(annotation.get("points").is_none());
+    }
 }

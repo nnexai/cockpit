@@ -768,12 +768,14 @@ impl BrowserService {
         command.arg("--version");
         let output =
             run_bounded_command(command, 1024, 1024, CLI_TIMEOUT, "Playwright CLI").await?;
-        if !output.status.success()
-            || String::from_utf8_lossy(&output.stdout).trim() != REQUIRED_PLAYWRIGHT_CLI_VERSION
-        {
+        let version = String::from_utf8_lossy(&output.stdout);
+        let reported_version = version.lines().next().unwrap_or("").trim();
+        if !output.status.success() || !compatible_playwright_cli_version(reported_version) {
             return Err(InspectionError::new(
                 "browser_cli_incompatible",
-                format!("Playwright CLI {REQUIRED_PLAYWRIGHT_CLI_VERSION} is required"),
+                format!(
+                    "Playwright CLI {REQUIRED_PLAYWRIGHT_CLI_VERSION} or a later 0.1.x bugfix release is required (found {reported_version})",
+                ),
             ));
         }
         Ok(())
@@ -1158,6 +1160,20 @@ fn launch_configuration(configuration: &BrowserConfiguration) -> Result<Value, I
     }
     Ok(config)
 }
+fn compatible_playwright_cli_version(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let Some(major) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+        return false;
+    };
+    let Some(minor) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+        return false;
+    };
+    let Some(patch) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+        return false;
+    };
+    major == 0 && minor == 1 && patch >= 5 && parts.next().is_none()
+}
+
 fn resolve_executable(path: &Path, label: &str) -> Result<PathBuf, InspectionError> {
     let candidate = if path.components().count() == 1 {
         env::var_os("PATH")
@@ -1407,6 +1423,7 @@ fn process_start_identity(pid: i32) -> Option<u64> {
     use libproc::{bsd_info::BSDInfo, proc_pid::pidinfo};
 
     let info = pidinfo::<BSDInfo>(pid, 0).ok()?;
+
     if info.pbi_start_tvusec >= 1_000_000 {
         return None;
     }
@@ -1423,6 +1440,17 @@ fn process_start_identity(_pid: i32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::association_key;
+    #[test]
+    fn playwright_cli_accepts_later_bugfix_releases_only() {
+        assert!(super::compatible_playwright_cli_version("0.1.5"));
+        assert!(super::compatible_playwright_cli_version("0.1.17"));
+        assert!(!super::compatible_playwright_cli_version("0.1.4"));
+        assert!(!super::compatible_playwright_cli_version("0.2.0"));
+        assert!(!super::compatible_playwright_cli_version("1.1.5"));
+        assert!(!super::compatible_playwright_cli_version("0.1"));
+        assert!(!super::compatible_playwright_cli_version("0.1.17.1"));
+        assert!(!super::compatible_playwright_cli_version("0.1.17-alpha"));
+    }
 
     #[test]
     fn association_key_changes_with_endpoint_process_generation() {
