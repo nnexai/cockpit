@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -30,6 +31,9 @@ class NativeInstallTests(unittest.TestCase):
         self.binary = self.root / "candidate"
         self.binary.write_bytes(b"first native binary")
         self.binary.chmod(0o755)
+        self.cli_binary = self.root / "candidate-cli"
+        self.cli_binary.write_bytes(b"first Cockpit CLI")
+        self.cli_binary.chmod(0o755)
         self.icon = self.root / "icon.png"
         self.icon.write_bytes(b"png fixture")
 
@@ -37,12 +41,15 @@ class NativeInstallTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_prefix_install_writes_stable_launcher_desktop_entry_and_receipt(self) -> None:
-        installer.install(self.paths, self.binary, self.icon)
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
 
         self.assertEqual(self.paths.binary.read_bytes(), b"first native binary")
         self.assertTrue(os.access(self.paths.binary, os.X_OK))
         self.assertTrue(self.paths.launcher.is_symlink())
         self.assertEqual(self.paths.launcher.resolve(), self.paths.binary)
+        self.assertEqual(self.paths.cli_binary.read_bytes(), b"first Cockpit CLI")
+        self.assertTrue(self.paths.cli_launcher.is_symlink())
+        self.assertEqual(self.paths.cli_launcher.resolve(), self.paths.cli_binary)
         desktop = self.paths.desktop.read_text(encoding="utf-8")
         self.assertIn(f'Exec="{self.paths.launcher}"', desktop)
         self.assertIn(installer.DESKTOP_MARKER, desktop)
@@ -50,14 +57,45 @@ class NativeInstallTests(unittest.TestCase):
         receipt = json.loads(self.paths.receipt.read_text(encoding="utf-8"))
         self.assertEqual(receipt["status"], "installed")
         self.assertEqual(receipt["paths"]["binary"], str(self.paths.binary))
+        self.assertEqual(receipt["paths"]["cli_binary"], str(self.paths.cli_binary))
+        self.assertEqual(receipt["artifact_sha256"]["cli_binary"], installer.sha256(self.paths.cli_binary))
         self.assertEqual(receipt["artifact_sha256"]["binary"], installer.sha256(self.paths.binary))
+    def test_legacy_install_receipt_migrates_to_include_the_cli(self) -> None:
+        self.paths.binary.parent.mkdir(parents=True)
+        self.paths.binary.write_bytes(b"legacy native binary")
+        self.paths.binary.chmod(0o755)
+        self.paths.icon.parent.mkdir(parents=True)
+        self.paths.icon.write_bytes(b"legacy icon")
+        self.paths.desktop.parent.mkdir(parents=True)
+        self.paths.desktop.write_text("legacy desktop\n", encoding="utf-8")
+        self.paths.launcher.parent.mkdir(parents=True)
+        self.paths.launcher.symlink_to(self.paths.binary)
+        legacy = {
+            "schema": 1,
+            "application_id": installer.APPLICATION_ID,
+            "status": "installed",
+            "paths": installer.legacy_receipt_paths(self.paths),
+            "artifact_sha256": {
+                "binary": installer.sha256(self.paths.binary),
+                "icon": installer.sha256(self.paths.icon),
+                "desktop": installer.sha256(self.paths.desktop),
+            },
+        }
+        self.paths.receipt.write_text(json.dumps(legacy), encoding="utf-8")
+
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+
+        receipt = json.loads(self.paths.receipt.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["schema"], 2)
+        self.assertTrue(self.paths.cli_launcher.is_symlink())
+
 
     def test_update_replaces_the_stable_binary_without_changing_launcher_path(self) -> None:
-        installer.install(self.paths, self.binary, self.icon)
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
         original_inode = self.paths.binary.stat().st_ino
         with self.paths.binary.open("rb") as running_binary:
             self.binary.write_bytes(b"second native binary")
-            installer.install(self.paths, self.binary, self.icon)
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
             self.assertEqual(running_binary.read(), b"first native binary")
 
         self.assertEqual(self.paths.binary.read_bytes(), b"second native binary")
@@ -70,7 +108,7 @@ class NativeInstallTests(unittest.TestCase):
             self.skipTest("GLib desktop discovery is not installed")
         # TryExec is a string, not a shell command: quoting it hides the app.
         self.paths = installer.install_paths(self.root / "prefix with spaces")
-        installer.install(self.paths, self.binary, self.icon)
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
         gio = ctypes.CDLL(library)
         gio.g_desktop_app_info_new_from_filename.argtypes = [ctypes.c_char_p]
         gio.g_desktop_app_info_new_from_filename.restype = ctypes.c_void_p
@@ -84,12 +122,12 @@ class NativeInstallTests(unittest.TestCase):
         self.paths.launcher.write_text("foreign launcher\n", encoding="utf-8")
 
         with self.assertRaisesRegex(installer.InstallError, "without an installer receipt"):
-            installer.install(self.paths, self.binary, self.icon)
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
 
         self.assertEqual(self.paths.launcher.read_text(encoding="utf-8"), "foreign launcher\n")
 
     def test_uninstall_removes_owned_files_and_preserves_configuration(self) -> None:
-        installer.install(self.paths, self.binary, self.icon)
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
         configuration = self.paths.app_root / "config" / "settings.json"
         configuration.parent.mkdir()
         configuration.write_text('{"keep": true}\n', encoding="utf-8")
@@ -98,12 +136,14 @@ class NativeInstallTests(unittest.TestCase):
 
         self.assertFalse(self.paths.binary.exists())
         self.assertFalse(self.paths.launcher.exists())
+        self.assertFalse(self.paths.cli_binary.exists())
+        self.assertFalse(self.paths.cli_launcher.exists())
         self.assertFalse(self.paths.desktop.exists())
         self.assertFalse(self.paths.icon.exists())
         self.assertEqual(configuration.read_text(encoding="utf-8"), '{"keep": true}\n')
 
     def test_uninstall_keeps_an_unrecognized_launcher_and_its_receipt(self) -> None:
-        installer.install(self.paths, self.binary, self.icon)
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
         self.paths.launcher.unlink()
         self.paths.launcher.write_text("replacement launcher\n", encoding="utf-8")
 
@@ -113,18 +153,31 @@ class NativeInstallTests(unittest.TestCase):
         self.assertEqual(self.paths.launcher.read_text(encoding="utf-8"), "replacement launcher\n")
 
     def test_update_refuses_to_replace_a_modified_installed_binary(self) -> None:
-        installer.install(self.paths, self.binary, self.icon)
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
         self.paths.binary.write_bytes(b"replacement binary")
         self.paths.binary.chmod(0o755)
 
         with self.assertRaisesRegex(installer.InstallError, "modified installed files: binary"):
-            installer.install(self.paths, self.binary, self.icon)
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+    def test_update_refuses_to_replace_a_foreign_cli_launcher(self) -> None:
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        self.paths.cli_launcher.unlink()
+        self.paths.cli_launcher.write_text("replacement CLI launcher\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(installer.InstallError, "modified installed files: cli_launcher"):
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+
 
     def test_xdg_paths_respect_disposable_environment(self) -> None:
         paths = installer.install_paths(None, {"HOME": str(self.root / "home"), "XDG_DATA_HOME": str(self.root / "data"), "XDG_BIN_HOME": str(self.root / "bin")})
 
         self.assertEqual(paths.data_home, (self.root / "data").resolve())
         self.assertEqual(paths.bin_home, (self.root / "bin").resolve())
+    def test_macos_defaults_use_application_support(self) -> None:
+        with mock.patch.object(installer.sys, "platform", "darwin"):
+            paths = installer.install_paths(None, {"HOME": str(self.root / "home")})
+
+        self.assertEqual(paths.data_home, (self.root / "home" / "Library" / "Application Support").resolve())
 
 
 if __name__ == "__main__":

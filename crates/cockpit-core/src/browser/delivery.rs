@@ -560,9 +560,9 @@ fn feedback_payload(
             "invocation": browser.map(|value| value.invocation.as_str()).unwrap_or(""),
         },
         "instructions": [
-            "Inspect the browser feedback below and use image_path to view the PNG.",
-            "Use cockpit browser status --current to refresh browser addressing.",
-            "Use cockpit browser feedback --current to read pending feedback; after reviewing images, run cockpit browser feedback ack --current --id <annotation-id> for the exact reviewed IDs.",
+            "Open Cockpit's Browser feedback view to review, acknowledge, and send these annotations.",
+            "If you are using a terminal, the companion Cockpit CLI is `cockpit-cli`; run `cockpit-cli browser status --current` to refresh browser addressing.",
+            "Use `cockpit-cli browser feedback --current` to read pending feedback; after reviewing images, run `cockpit-cli browser feedback ack --current --id <annotation-id>` for the exact reviewed IDs.",
         ],
         "requested_annotation_ids": ids,
         "captures": captures,

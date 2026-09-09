@@ -1,6 +1,6 @@
-# Native Linux install
+# Native user-local install
 
-`scripts/install-native.py` builds Cockpit's Tauri binary, then installs only files owned by Cockpit. It never uses `sudo`, starts Cockpit, stops a running Cockpit process, or changes configuration.
+`scripts/install-native.py` builds and installs both Cockpit surfaces: the graphical Tauri application and the `cockpit-cli` terminal tool. It installs only files owned by Cockpit. It never uses `sudo`, starts Cockpit, stops a running Cockpit process, or changes configuration.
 
 Run this from the repository root:
 
@@ -8,11 +8,11 @@ Run this from the repository root:
 python3 scripts/install-native.py
 ```
 
-The default build invokes the local Tauri CLI as `bunx tauri build --no-bundle`. That builds the frontend and creates `target/release/cockpit-tauri`, without generating an AppImage, deb, or rpm bundle. The installer copies that binary to `$XDG_DATA_HOME/cockpit/bin/cockpit`, or `~/.local/share/cockpit/bin/cockpit` when `XDG_DATA_HOME` is unset.
+The default build invokes the local Tauri CLI as `bunx tauri build --no-bundle`, then builds the CLI with Cargo. It creates `target/release/cockpit-tauri` and `target/release/cockpit`. The installer copies the graphical binary to `$XDG_DATA_HOME/cockpit/bin/cockpit`, or `~/.local/share/cockpit/bin/cockpit` on Linux and `~/Library/Application Support/cockpit/bin/cockpit` on macOS. The CLI is installed beside it as `cockpit-cli`.
 
-`$XDG_BIN_HOME/cockpit`, or `~/.local/bin/cockpit` by default, is a stable symlink to that binary. Existing Cockpit processes retain their old executable image. The installer writes a new temporary binary beside the installed binary, syncs it, then atomically replaces the old file. New launches use the update without killing or restarting anything.
+`$XDG_BIN_HOME/cockpit` and `$XDG_BIN_HOME/cockpit-cli`, or `~/.local/bin/cockpit` and `~/.local/bin/cockpit-cli` by default, are stable symlinks to the installed binaries. Existing Cockpit processes retain their old executable image. The installer writes new temporary binaries beside the installed binaries, syncs them, then atomically replaces the old files. New launches use the update without killing or restarting anything.
 
-The desktop entry is `$XDG_DATA_HOME/applications/dev.cockpit.app.desktop` and the icon is `$XDG_DATA_HOME/icons/hicolor/256x256/apps/dev.cockpit.app.png`. The entry launches the same stable `cockpit` path. Log out and back in, or refresh the desktop environment, if a newly installed launcher does not appear immediately.
+The desktop entry is written under the selected data directory at `applications/dev.cockpit.app.desktop`, and the icon at `icons/hicolor/256x256/apps/dev.cockpit.app.png`. Linux desktop environments consume these files. On macOS, the user-local binaries work from a shell; add the selected `bin` directory to `PATH` if it is not already present.
 
 ## Native window settings
 
@@ -46,9 +46,9 @@ python3 scripts/install-native.py --reuse
 python3 scripts/install-native.py --reuse --debug
 ```
 
-`--reuse` expects `target/release/cockpit-tauri`, or `target/debug/cockpit-tauri` with `--debug`.
+`--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`, or their `target/debug` counterparts with `--debug`.
 
-Use a disposable prefix for an isolated verification. It contains its launcher in `PREFIX/bin` and its data, desktop entry, and icon under `PREFIX/share`:
+Use a disposable prefix for an isolated verification. It contains both launchers in `PREFIX/bin` and its data, desktop entry, and icon under `PREFIX/share`:
 
 ```sh
 python3 scripts/install-native.py --prefix /tmp/cockpit-native-check
@@ -61,13 +61,14 @@ XDG_DATA_HOME=/tmp/cockpit-data XDG_BIN_HOME=/tmp/cockpit-bin \
   python3 scripts/install-native.py --reuse
 ```
 
-Run the launcher directly after installation:
+Run the graphical application or CLI directly after installation:
 
 ```sh
 cockpit
+cockpit-cli browser status --current
 ```
 
-For a prefix install, run `PREFIX/bin/cockpit`. The installer does not add any directory to `PATH`.
+For a prefix install, run `PREFIX/bin/cockpit` or `PREFIX/bin/cockpit-cli`. The installer does not add any directory to `PATH`.
 
 To remove an installation, use the same XDG values or prefix used to install it:
 
@@ -76,7 +77,7 @@ python3 scripts/install-native.py --uninstall
 python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 ```
 
-Uninstall reads the install receipt and removes only the launcher, desktop entry, icon, installed binary, and receipt that it owns. It leaves configuration and changed replacement paths in place. An update also stops before replacing a changed installed file, so resolve that change or uninstall it before continuing.
+Uninstall reads the install receipt and removes only the launchers, desktop entry, icon, installed application and CLI binaries, and receipt that it owns. It leaves configuration and changed replacement paths in place. An update also stops before replacing a changed installed file, so resolve that change or uninstall it before continuing.
 
 ## Space browser annotations
 
