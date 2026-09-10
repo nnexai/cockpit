@@ -43,8 +43,10 @@ export function createCockpitTerminal(fontSize = applicationFontSize()): Termina
   return new Terminal({
     convertEol: false,
     cursorBlink: false,
-    fontFamily: '"IosevkaTerm Nerd Font Mono", "FiraCode Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
+    fontFamily: 'ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
     fontSize,
+    lineHeight: 1,
+    scrollbar: { showScrollbar: true, width: 8 },
     theme: { background: "#0c1016", foreground: "#d8dee8" },
     scrollback: 5000,
     vtExtensions: { kittyKeyboard: true },
@@ -133,9 +135,13 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
     cell_height_px: bounds && terminal.rows > 0 ? Math.max(1, Math.round(bounds.height / terminal.rows)) : 0,
   };
 }
+type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
+
 
 export function TerminalPane({ client, request, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const lastResizeRef = useRef<TerminalResize | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const streamRef = useRef<TerminalStream | null>(null);
   const attachmentGeneration = useRef(0);
@@ -200,6 +206,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     let disposed = false;
     terminal.open(host);
     terminal.loadAddon(fit);
+    fitRef.current = fit;
     fit.fit();
     setTerminalReady(true);
     terminalRef.current = terminal;
@@ -216,6 +223,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       observer?.disconnect();
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       terminal.dispose();
+      if (fitRef.current === fit) fitRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
   }, []);
@@ -236,13 +244,23 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       const stream = streamRef.current;
       if (!stream) return;
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
-      stream.send({
+      const resizeCommand: TerminalResize = {
         type: "terminal.resize",
         cols,
         rows,
         cell_width_px: bounds ? Math.max(1, Math.round(bounds.width / Math.max(1, cols))) : 0,
         cell_height_px: bounds ? Math.max(1, Math.round(bounds.height / Math.max(1, rows))) : 0,
-      });
+      };
+      const previous = lastResizeRef.current;
+      if (
+        previous
+        && previous.cols === resizeCommand.cols
+        && previous.rows === resizeCommand.rows
+        && previous.cell_width_px === resizeCommand.cell_width_px
+        && previous.cell_height_px === resizeCommand.cell_height_px
+      ) return;
+      lastResizeRef.current = resizeCommand;
+      stream.send(resizeCommand);
     });
     terminal.attachCustomWheelEventHandler((event) => {
       if (event.deltaY === 0) return true;
@@ -313,6 +331,13 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
       cell_width_px: geometry.cell_width_px,
       cell_height_px: geometry.cell_height_px,
+    };
+    lastResizeRef.current = {
+      type: "terminal.resize",
+      cols: openRequest.cols,
+      rows: openRequest.rows,
+      cell_width_px: openRequest.cell_width_px,
+      cell_height_px: openRequest.cell_height_px,
     };
     let cancelled = false;
     let stream: TerminalStream | null = null;
@@ -418,6 +443,9 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       }
       stream = opened;
       streamRef.current = opened;
+      if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal && fitRef.current) {
+        fitRef.current.fit();
+      }
       flushPending();
       registerStream?.(opened, true);
     }, (cause: unknown) => {

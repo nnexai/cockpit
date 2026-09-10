@@ -60,15 +60,15 @@ xterm.js-specific consequence: `Terminal.onData` and `Terminal.onBinary` are use
 
 ### 3.1 Renderer readiness and glyph continuity
 
-The renderer must be initialized before its stream:
+The stable DOM renderer must be initialized before its stream:
 
 1. create and open xterm;
-2. load the version-compatible Fit and Canvas addons;
+2. load the version-compatible Fit addon;
 3. fit to the actual pane bounds;
 4. only then attach to Herdr using the fitted rows and columns;
 5. refit from `ResizeObserver` when pane geometry changes.
 
-Canvas rendering and xterm custom glyphs are required for continuous box-drawing characters used heavily by OMP and other terminal applications. Do not switch back to the DOM renderer or independently upgrade xterm/addon major versions without a zoomed visual check of multi-row vertical lines, junctions, and corners. A renderer that shows text but introduces one-pixel seams is a regression.
+Use the final terminal metrics baseline: native system monospace first (`ui-monospace`, then FiraCode Nerd Font Mono, Hack Nerd Font Mono, IBM Plex Mono, Noto Sans Mono, `monospace`), line height `1`, and an explicit visible 8 px scrollbar. Keep the DOM renderer and existing xterm beta/addon versions; do not add Canvas or other renderer dependencies. Verify continuous box-drawing glyphs at zoom when renderer or font metrics change.
 
 ### 4. Visible-pane subscription lifetime
 
@@ -179,7 +179,7 @@ Accessibility is best effort in this proof of concept, but these behaviors are s
 - [ ] Hierarchy/layout mutations use capability-gated Herdr operations, stable IDs, authoritative ordering, and no local layout algorithm.
 - [ ] Exactly one writable terminal attachment is honored per pane; external ownership loss falls back to observation without a reclaim loop, and an explicit local action can take control again.
 - [ ] xterm.js is renderer/input glue only; no Cockpit PTY/process or authoritative scrollback exists.
-- [ ] Fit and Canvas initialize before stream attachment; initial rows/columns match pane bounds and box-drawing glyphs remain continuous at zoom.
+- [ ] Stable DOM renderer and Fit initialize before stream attachment; initial rows/columns match pane bounds, terminal metrics use the explicit baseline, and box-drawing glyphs remain continuous at zoom.
 - [ ] Terminal renderers and live subscriptions exist only for visible panes in the selected tab; disposal is idempotent and remount resyncs.
 - [ ] Ordinary input/resize is routed through `CockpitClient` with pane/session/owner checks.
 - [ ] Magic escape is intercepted with Herdr priority before terminal input or GUI shortcuts.

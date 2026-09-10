@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
-import { TerminalPane } from "./TerminalPane";
+import { createCockpitTerminal, TerminalPane } from "./TerminalPane";
 const mocks = vi.hoisted(() => {
   const terminals: MockTerminal[] = [];
   const fits: MockFitAddon[] = [];
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
   class MockTerminal {
     cols = 80;
     rows = 24;
-    options = { fontSize: 14 };
+    options: Record<string, unknown>;
     element: HTMLElement | null = null;
     private resizeListeners: Array<(size: { cols: number; rows: number }) => void> = [];
     readonly focus = vi.fn();
@@ -30,7 +30,8 @@ const mocks = vi.hoisted(() => {
     readonly attachCustomKeyEventHandler = vi.fn();
     readonly attachCustomWheelEventHandler = vi.fn();
 
-    constructor() {
+    constructor(options: Record<string, unknown> = {}) {
+      this.options = { fontSize: 14, ...options };
       terminals.push(this);
     }
 
@@ -162,10 +163,61 @@ afterEach(() => {
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {
+  it("uses the final DOM renderer metrics and visible scrollbar options", () => {
+    const terminal = createCockpitTerminal(16);
+    expect(terminal.options).toMatchObject({
+      fontFamily: 'ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
+      fontSize: 16,
+      lineHeight: 1,
+      scrollbar: { showScrollbar: true, width: 8 },
+    });
+  });
+
+  it("re-fits after delayed attachment and sends one changed authoritative resize", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    mocks.fitDimensions.push([100, 30], [120, 40]);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    let resolveOpened: ((value: TerminalStream) => void) | null = null;
+    const delayedOpen = new Promise<TerminalStream>((resolve) => { resolveOpened = resolve; });
+    openTerminal.mockImplementationOnce((_request: TerminalOpenRequest, receive: (value: TerminalStreamMessage) => void) => {
+      messages.push(receive);
+      return delayedOpen;
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false)} />);
+        await settle();
+      });
+      expect(openTerminal.mock.calls[0]?.[0]).toMatchObject({ cols: 100, rows: 30, cell_width_px: 8, cell_height_px: 13 });
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
+
+      await act(async () => {
+        resolveOpened!(stream(sent));
+        await settle();
+      });
+      expect(sent.filter((command): command is Extract<TerminalCommand, { type: "terminal.resize" }> => command.type === "terminal.resize")).toEqual([
+        { type: "terminal.resize", cols: 120, rows: 40, cell_width_px: 7, cell_height_px: 10 },
+      ]);
+
+      mocks.observers[0].callback([], mocks.observers[0] as unknown as ResizeObserver);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sent.filter((command) => command.type === "terminal.resize")).toHaveLength(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("debounces resize fitting and cancels a stale callback across remount", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
-    mocks.fitDimensions.push([80, 24], [120, 40], [100, 30]);
+    mocks.fitDimensions.push([80, 24], [80, 24], [120, 40], [100, 30]);
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];
     const { client, openTerminal } = makeClient(sent, messages);
@@ -196,6 +248,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
       firstObserver.callback([], firstObserver as unknown as ResizeObserver);
       await act(async () => root.unmount());
       rootUnmounted = true;
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(100);
       expect(sent.filter((command) => command.type === "terminal.resize")).toHaveLength(1);
 
