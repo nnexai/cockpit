@@ -15,6 +15,7 @@ const snapshot: ReviewSnapshot = {
 const diff: ReviewFileDiff = {
   binding_id: "binding", session_id: "session", pane_id: "pane", review_id: "review", generation: 1,
   file: changedFile, old_source: "one\ntwo\n", new_source: "one\ntwo\n", old_source_hash: "old", new_source_hash: "new",
+  old_source_offset: 0, new_source_offset: 0, old_source_total_bytes: 8, new_source_total_bytes: 8,
   old_total_lines: 2, new_total_lines: 2, old_source_truncated: false, new_source_truncated: false, truncated: false, diagnostics: [],
   hunks: [
     { old_path: "src/file.ts", new_path: "src/file.ts", old_start: 1, new_start: 1, lines: [{ kind: "context", old_line: 1, new_line: 1, text: "one" }] },

@@ -398,7 +398,12 @@ export type ReviewSnapshot = { binding_id: string, session_id: string, pane_id: 
  */
 source_id: string, comparison: ReviewComparison, base_revision: string | null, head_revision: string | null, index_revision: string, worktree_revision: string, files: Array<ReviewChangedFile>, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
-export type ReviewFileRequest = { binding_id: string, review_id: string, generation: number, file_id: string, };
+export type ReviewFileRequest = { binding_id: string, review_id: string, generation: number, file_id: string,
+/**
+ * Optional continuation for a large immutable source side. When absent,
+ * the response contains the normal bounded preview for both sides.
+ */
+source_side: ReviewSide | null, source_offset: number, };
 
 export type ReviewDiffLine = { kind: ReviewDiffLineKind, old_line: number | null, new_line: number | null,
 /**
@@ -413,7 +418,12 @@ export type ReviewFileDiff = { binding_id: string, session_id: string, pane_id: 
  * Bounded immutable text retained for old/new review-side capture and
  * expansion of unchanged lines. None means binary, unreadable, or capped.
  */
-old_source: string | null, new_source: string | null, old_source_hash: string | null, new_source_hash: string | null, old_total_lines: number | null, new_total_lines: number | null, old_source_truncated: boolean, new_source_truncated: boolean, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
+old_source: string | null, new_source: string | null, old_source_hash: string | null, new_source_hash: string | null,
+/**
+ * Byte ranges represented by old_source/new_source. A truncated source
+ * can be continued with ReviewFileRequest.source_side/source_offset.
+ */
+old_source_offset: number, new_source_offset: number, old_source_total_bytes: number | null, new_source_total_bytes: number | null, old_total_lines: number | null, new_total_lines: number | null, old_source_truncated: boolean, new_source_truncated: boolean, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextSnapshotRequest = { binding_id: string, root_id: string, repository_id: string, mode: ContextSnapshotMode, };
 

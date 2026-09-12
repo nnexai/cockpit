@@ -102,6 +102,12 @@ pub struct ReviewFileRequest {
     pub review_id: String,
     pub generation: u32,
     pub file_id: String,
+    /// Optional continuation for a large immutable source side. When absent,
+    /// the response contains the normal bounded preview for both sides.
+    #[serde(default)]
+    pub source_side: Option<ReviewSide>,
+    #[serde(default)]
+    pub source_offset: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -137,6 +143,16 @@ pub struct ReviewFileDiff {
     pub new_source: Option<String>,
     pub old_source_hash: Option<String>,
     pub new_source_hash: Option<String>,
+    /// Byte ranges represented by old_source/new_source. A truncated source
+    /// can be continued with ReviewFileRequest.source_side/source_offset.
+    #[serde(default)]
+    pub old_source_offset: u32,
+    #[serde(default)]
+    pub new_source_offset: u32,
+    #[serde(default)]
+    pub old_source_total_bytes: Option<u32>,
+    #[serde(default)]
+    pub new_source_total_bytes: Option<u32>,
     pub old_total_lines: Option<u32>,
     pub new_total_lines: Option<u32>,
     pub old_source_truncated: bool,

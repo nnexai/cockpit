@@ -3,6 +3,7 @@ import type {
   ReviewChangedFile,
   ReviewComparison,
   ReviewFileDiff,
+  ReviewFileRequest,
   ReviewSnapshot,
   ReviewSnapshotRequest,
 } from "../../protocol/generated/v1";
@@ -19,7 +20,7 @@ export type ReviewPaneProps = {
   bindingId: string;
   repositoryId: string;
   snapshot: (request: ReviewSnapshotRequest, signal: AbortSignal) => Promise<ReviewSnapshot>;
-  file: (request: { binding_id: string; review_id: string; generation: number; file_id: string }, signal: AbortSignal) => Promise<ReviewFileDiff>;
+  file: (request: ReviewFileRequest, signal: AbortSignal) => Promise<ReviewFileDiff>;
   selectedLines?: ReviewLineSelection;
   onCreateLineComment?: () => void;
   onCreateFileComment?: () => void;
@@ -28,7 +29,7 @@ export type ReviewPaneProps = {
   canCreateLineComment?: boolean;
   canCreateFileComment?: boolean;
   onSelectLines?: (file: ReviewChangedFile, side: "old" | "new", start: number, end: number, lines: string[], shift: boolean) => void;
-  renderFile?: (snapshot: ReviewSnapshot, diff: ReviewFileDiff, content: (comments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode) => ReactNode) => ReactNode;
+  renderFile?: (snapshot: ReviewSnapshot, diff: ReviewFileDiff, content: (comments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode) => ReactNode, loadSourcePage: (side: "old" | "new", offset: number) => Promise<ReviewFileDiff>) => ReactNode;
   renderLineComments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode;
   viewState?: ReviewViewState;
   onViewStateChange?: (state: ReviewViewState) => void;
@@ -223,7 +224,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     const generation = generationRef.current;
     if (previousSelectedRef.current !== selected) setDiff(null);
     previousSelectedRef.current = selected;
-    void file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: selected }, controller.signal)
+    void file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: selected, source_side: null, source_offset: 0 }, controller.signal)
       .then((next) => {
         if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
           && next.review_id === review.review_id && next.generation === review.generation && next.binding_id === bindingId) setDiff(next);
@@ -357,9 +358,11 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     const selection = selectedLines?.fileId === diff?.file.file_id ? selectedLines : null;
     return Boolean(lineNumber !== null && selection && selection.side === side && lineNumber >= Math.min(selection.start, selection.end) && lineNumber <= Math.max(selection.start, selection.end));
   };
-  const diffContent = (comments = renderLineComments) => <>
-        {selectedFile ? <header><code>{fileLabel(selectedFile)}</code><span>{selectedFile.summary}</span></header> : null}
-        {selectedFile?.binary ? <p className="review-empty">Binary content has no text anchors.</p> : null}
+  const diffContent = (comments = renderLineComments) => {
+    const shownFile = diff?.file ?? selectedFile;
+    return <>
+        {shownFile ? <header><code>{fileLabel(shownFile)}</code><span>{shownFile.summary}</span></header> : null}
+        {shownFile?.binary ? <p className="review-empty">Binary content has no text anchors.</p> : null}
         {diff?.hunks.map((hunk, index) => <section className={`review-hunk${hunkIndex === index ? " is-current" : ""}`} tabIndex={-1} key={`${index}-${hunk.old_start}-${hunk.new_start}`}>
           <header>@@ -{hunk.old_start} +{hunk.new_start} @@</header>
           {hunk.lines.map((line, lineIndex) => <Fragment key={`${lineIndex}-${line.old_line ?? ""}-${line.new_line ?? ""}`}><button type="button" className={`review-line is-${line.kind}${isSelectedLine("old", line.old_line) || isSelectedLine("new", line.new_line) ? " is-selected" : ""}`} data-old-line={line.old_line ?? undefined} data-new-line={line.new_line ?? undefined} onClick={(event) => {
@@ -373,9 +376,10 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
           </button>{comments?.(diff, line.old_line, line.new_line)}</Fragment>)}
         </section>)}
         {diff?.diagnostics.map((item, index) => <p key={`${item.code}-${index}`} className="review-notice">{item.message}</p>)}
-        {diff && diff.hunks.length === 0 && !selectedFile?.binary ? <p className="review-empty">No textual hunk is available for this change.</p> : null}
+        {diff && diff.hunks.length === 0 && !diff.file.binary ? <p className="review-empty">No textual hunk is available for this change.</p> : null}
         {!review && !pending ? <p className="review-empty">{comparison === "branch" ? "Enter a base ref, then press Enter or Refresh to compare branches." : "Choose a verified Review pane to load a local Git snapshot."}</p> : null}
   </>;
+  };
 
   return <section className="review-pane" aria-label="Local review" ref={paneRef} onKeyDownCapture={(event) => {
     if (isEditingTarget(event.target)) return;
@@ -409,7 +413,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         {review && review.files.length === 0 ? <p>No changes in this scope.</p> : null}
       </nav>
       <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus(); }} onKeyDown={onDiffKeyDown}>
-        {renderFile && review && diff ? renderFile(review, diff, diffContent) : diffContent()}
+        {renderFile && review && diff ? renderFile(review, diff, diffContent, (side, offset) => file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, source_side: side, source_offset: offset }, new AbortController().signal)) : diffContent()}
       </main>
     </div>
     <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : "Select a line"}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount === null ? "Loading comments…" : `${commentCount} comments`}</button><span><kbd>Alt+↑↓</kbd> hunk</span></span></footer>
