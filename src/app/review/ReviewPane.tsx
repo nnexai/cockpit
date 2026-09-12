@@ -8,6 +8,7 @@ import type {
 } from "../../protocol/generated/v1";
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
+import type { ReviewViewState } from "../context/ContextViewer";
 import "./review.css";
 
 export type ReviewLineSelection = { fileId: string; side: "old" | "new"; start: number; end: number } | null;
@@ -23,12 +24,14 @@ export type ReviewPaneProps = {
   onCreateLineComment?: () => void;
   onCreateFileComment?: () => void;
   onOpenCommentOverview?: () => void;
-  commentCount?: number;
+  commentCount?: number | null;
   canCreateLineComment?: boolean;
   canCreateFileComment?: boolean;
   onSelectLines?: (file: ReviewChangedFile, side: "old" | "new", start: number, end: number, lines: string[], shift: boolean) => void;
   renderFile?: (snapshot: ReviewSnapshot, diff: ReviewFileDiff, content: (comments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode) => ReactNode) => ReactNode;
   renderLineComments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode;
+  viewState?: ReviewViewState;
+  onViewStateChange?: (state: ReviewViewState) => void;
 };
 
 const modes: Array<{ value: ReviewComparison; label: string }> = [
@@ -118,16 +121,22 @@ function isEditingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
 }
 
-export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, commentCount = 0, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, renderLineComments }: ReviewPaneProps) {
+export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
   const baseId = useId();
-  const [comparison, setComparison] = useState<ReviewComparison>("all_local");
-  const [baseRef, setBaseRef] = useState("");
-  const [draftBaseRef, setDraftBaseRef] = useState("");
+  const [comparison, setComparison] = useState<ReviewComparison>(viewState?.comparison ?? "all_local");
+  const [baseRef, setBaseRef] = useState(viewState?.baseRef ?? "");
+  const [draftBaseRef, setDraftBaseRef] = useState(viewState?.draftBaseRef ?? "");
   const [review, setReview] = useState<ReviewSnapshot | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(viewState?.fileId ?? null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const viewStateRef = useRef(viewState);
+  viewStateRef.current = viewState;
   const [diff, setDiff] = useState<ReviewFileDiff | null>(null);
+  const previousSelectedRef = useRef(selected);
   const [pending, setPending] = useState(false);
-  const [hunkIndex, setHunkIndex] = useState(-1);
+  const [hunkIndex, setHunkIndex] = useState(viewState?.hunkIndex ?? -1);
+  const [scrollTop, setScrollTop] = useState(viewState?.scrollTop ?? 0);
   const diffRef = useRef<HTMLElement | null>(null);
   const filesRef = useRef<HTMLElement | null>(null);
   const paneRef = useRef<HTMLElement | null>(null);
@@ -139,6 +148,24 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   identityRef.current = identity;
 
   const selectedFile = useMemo(() => review?.files.find((item) => item.file_id === selected) ?? null, [review, selected]);
+  useEffect(() => {
+    const selectionForFile = selectedLines?.fileId === selected ? selectedLines : null;
+    onViewStateChange?.({
+      comparison,
+      baseRef,
+      draftBaseRef,
+      fileId: selected,
+      filePath: selectedFile?.new_path ?? selectedFile?.old_path ?? (selected === null ? null : viewStateRef.current?.filePath ?? null),
+      side: selectionForFile?.side ?? null,
+      selectionStart: selectionForFile?.start ?? null,
+      selectionEnd: selectionForFile?.end ?? null,
+      hunkIndex,
+      scrollTop,
+      mode: viewStateRef.current?.mode ?? "diff",
+      commentCount: viewStateRef.current?.commentCount ?? null,
+    });
+  }, [baseRef, comparison, draftBaseRef, hunkIndex, onViewStateChange, scrollTop, selected, selectedFile, selectedLines]);
+
   const refresh = useCallback(async () => {
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -159,8 +186,10 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
         && next.binding_id === bindingId && next.session_id === sessionId && next.pane_id === paneId) {
         setReview(next);
-        setSelected(next.files[0]?.file_id ?? null);
-        setDiff(null);
+        const retained = next.files.find((item) => item.file_id === selectedRef.current)
+          ?? next.files.find((item) => (item.new_path ?? item.old_path) === viewStateRef.current?.filePath && item.comparison === comparison)
+          ?? next.files[0];
+        setSelected(retained?.file_id ?? null);
       }
     } catch (reason) {
       if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current) setError(errorText(reason));
@@ -192,7 +221,8 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     if (!review || !selected) { setDiff(null); return; }
     const controller = new AbortController();
     const generation = generationRef.current;
-    setDiff(null);
+    if (previousSelectedRef.current !== selected) setDiff(null);
+    previousSelectedRef.current = selected;
     void file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: selected }, controller.signal)
       .then((next) => {
         if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
@@ -201,7 +231,9 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       .catch((reason) => { if (!controller.signal.aborted && generation === generationRef.current) setError(errorText(reason)); });
     return () => controller.abort();
   }, [bindingId, file, identity, review, selected]);
-  useEffect(() => { setHunkIndex(-1); }, [diff?.file.file_id]);
+  useEffect(() => {
+    if (diffRef.current) diffRef.current.scrollTop = scrollTop;
+  }, [diff?.review_id, diff?.generation, scrollTop]);
 
   const fileNavigationOrder = () => {
     if (!review?.files.length) return [];
@@ -375,11 +407,11 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         {review ? <ReviewFileTree files={review.files} selected={selected} onSelect={setSelected} /> : null}
         {review && review.files.length === 0 ? <p>No changes in this scope.</p> : null}
       </nav>
-      <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus(); }} onKeyDown={onDiffKeyDown}>
+      <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus(); }} onKeyDown={onDiffKeyDown}>
         {renderFile && review && diff ? renderFile(review, diff, diffContent) : diffContent()}
       </main>
     </div>
-    <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : "Select a line"}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount} comments</button><span><kbd>Alt+↑↓</kbd> hunk</span></span></footer>
+    <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : "Select a line"}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount === null ? "Loading comments…" : `${commentCount} comments`}</button><span><kbd>Alt+↑↓</kbd> hunk</span></span></footer>
     {pickerOpen ? <FilePicker candidates={(review?.files ?? []).map((item) => ({ id: item.file_id, path: filePath(item), detail: `${fileStatus(item)} · ${item.comparison.replaceAll("_", " ")}` } satisfies FileNavigationCandidate))} onChoose={(candidate) => { setSelected(candidate.id); setHunkIndex(-1); setPickerOpen(false); focusContent(); }} onDismiss={() => { setPickerOpen(false); focusContent(); }} /> : null}
   </section>;
 }

@@ -20,6 +20,7 @@ import type {
   ContextRoot,
   PanePresentation,
   CommentDraft,
+  ReviewComparison,
 } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "./CommentDrafts";
 import { ContextSearch } from "./ContextSearch";
@@ -51,15 +52,48 @@ export interface ContextCommentEditorState {
   selection: { start: number; end: number } | null;
 }
 
+export interface ReviewViewState {
+  comparison: ReviewComparison;
+  baseRef: string;
+  draftBaseRef: string;
+  fileId: string | null;
+  filePath: string | null;
+  side: "old" | "new" | null;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  hunkIndex: number;
+  scrollTop: number;
+  mode: "diff" | "source";
+  commentCount: number | null;
+}
+
 export interface ContextViewState {
   rootId: string | null;
   path: string | null;
   files: Record<string, ContextFileViewState>;
   commentEditor: ContextCommentEditorState | null;
+  review: ReviewViewState | null;
 }
 
 export function createContextViewState(): ContextViewState {
-  return { rootId: null, path: null, files: {}, commentEditor: null };
+  return { rootId: null, path: null, files: {}, commentEditor: null, review: null };
+}
+
+export function createReviewViewState(): ReviewViewState {
+  return {
+    comparison: "all_local",
+    baseRef: "",
+    draftBaseRef: "",
+    fileId: null,
+    filePath: null,
+    side: null,
+    selectionStart: null,
+    selectionEnd: null,
+    hunkIndex: -1,
+    scrollTop: 0,
+    mode: "diff",
+    commentCount: null,
+  };
 }
 
 

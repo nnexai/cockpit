@@ -44,7 +44,7 @@ it("retains renderer choice and view for a stable binding across polls, refresh,
       <span data-testid="renderer">{isGraphicalReview(pane) ? "review" : "terminal"}</span>
       <span data-testid="view">{pane?.view.path ?? ""}</span>
       <button type="button" onClick={() => renderers.choose("pane", "terminal")}>terminal</button>
-      <button type="button" onClick={() => renderers.updateView("pane", "binding", { rootId: "root", path: "notes.md", files: {}, commentEditor: null })}>view</button>
+      <button type="button" onClick={() => renderers.updateView("pane", "binding", { rootId: "root", path: "notes.md", files: {}, commentEditor: null, review: null })}>view</button>
       <button type="button" onClick={renderers.refresh}>refresh</button>
     </div>;
   }

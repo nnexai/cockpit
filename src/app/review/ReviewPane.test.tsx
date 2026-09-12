@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { ReviewFileDiff, ReviewFileRequest, ReviewSnapshot, ReviewSnapshotRequest } from "../../protocol/generated/v1";
-import { SourceLines } from "../context/ContextViewer";
+import { createReviewViewState, SourceLines } from "../context/ContextViewer";
 import { ReviewPane } from "./ReviewPane";
 
 const changedFile = { file_id: "file", comparison: "all_local", status: "modified", old_path: "src/file.ts", new_path: "src/file.ts", binary: false, additions: 2, deletions: 1, summary: "2 hunks", old_revision: "old", new_revision: "new" } as const;
@@ -291,6 +291,44 @@ it("keeps the selected file and arrow navigation across parent updates", async (
     const files = host.querySelector<HTMLElement>(".review-files")!;
     await act(async () => files.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
     expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("third");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("retains the reviewed file identity across a refreshed snapshot", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const second = { ...changedFile, file_id: "second", old_path: "docs/second.md", new_path: "docs/second.md" };
+  const responses = [
+    { ...snapshot, files: [changedFile, second] },
+    { ...snapshot, generation: 2, files: [{ ...changedFile }, { ...second }] },
+  ];
+  const loadSnapshot = vi.fn(async () => structuredClone(responses.shift() ?? responses[0]));
+  const loadFile = vi.fn(async (request: ReviewFileRequest) => ({ ...diff, file: request.file_id === "second" ? second : changedFile }));
+  const view = { ...createReviewViewState(), fileId: second.file_id, filePath: second.new_path };
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="refresh" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={view} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
+    await act(async () => host.querySelector<HTMLButtonElement>(".review-toolbar button:last-child")!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("shows an unknown comment count while the review comment batch is loading", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="count" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => snapshot} file={async () => diff} />));
+    expect(host.querySelector(".review-status-actions button:last-of-type")?.textContent).toBe("Loading comments…");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
