@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cockpit UI refinement studies</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="study.css">
+</head>
+<body>
+  <header class="study-controls">
+    <strong>UI study</strong>
+    <label>View <select id="direction"><option value="drawer">B · Responsive drawer</option><option value="rail">A · Refined rail</option><option value="before">Atlas capture</option></select></label>
+    <label>State <select id="scenario"><option value="live">Recorded layout</option><option value="observing">Observing terminal</option><option value="loading">Loading</option><option value="empty">No agents</option><option value="stale">Stale</option><option value="disconnected">Disconnected</option><option value="error">Initial error</option><option value="recovering">Recovering</option></select></label>
+    <button id="notes-button" aria-expanded="false">Notes</button>
+    <a href="surfaces.html">Special panes</a><a href="../README.md">Task packets</a>
+    <span id="viewport"></span>
+  </header>
+  <div class="study-note" id="study-note" role="status">Proposal only. Terminal interiors are unmodified atlas pixels, clipped to fit. No live Herdr actions.</div>
+  <aside id="notes" class="notes" hidden>
+    <p><strong>A</strong> keeps the 224 px rail at 800 px. Agents follow Spaces without the large empty band. Exact status text joins the existing name line.</p>
+    <p><strong>B</strong> uses the same rail above 800 px and a dismissible drawer at 800 px and below. Opening the drawer overlays the canvas; it does not resize or rearrange its panes.</p>
+    <p>Both keep the recorded Space order, agent order, two tabs, and two equal terminal panes. No terminal text, font, status semantics, or sorting change is proposed. Narrow terminal columns remain a constraint of the actual layout.</p>
+    <p>Try sidebar resize/collapse, portrait navigation, right-click or pane ⋯, Commands, Feedback, and the State selector. Retry is a local visual demonstration. Resource-selection and mutation controls explain their existing action here instead of pretending to contact Herdr.</p>
+  </aside>
+  <div id="before" hidden><img id="before-image" alt="Original Cockpit atlas screenshot at this viewport"></div>
+  <div id="app" class="workbench" data-direction="drawer" data-scenario="live">
+    <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+    <aside id="sidebar" class="sidebar" aria-label="Spaces and agents">
+      <section class="spaces-section" aria-labelledby="spaces-heading">
+        <div class="section-heading"><h2 id="spaces-heading">Spaces</h2><button id="sidebar-collapse" class="small-action" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button><button class="small-action" aria-label="Set up a task Space" data-existing="Set up a task Space">+</button><button id="drawer-close" aria-label="Close sidebar">×</button></div>
+        <div class="space-list">
+          <button class="space-row selected" data-existing="Focus Atlas Alpha" aria-current="true"><span class="glyph" aria-hidden="true">○</span><span>Atlas Alpha</span></button>
+          <button class="space-row" data-existing="Focus Atlas Beta"><span class="glyph" aria-hidden="true">○</span><span>Atlas Beta</span></button>
+        </div>
+      </section>
+      <div id="rail-resizer" role="separator" tabindex="0" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="192" aria-valuemax="360" aria-valuenow="224"></div>
+      <section class="agents-section" aria-labelledby="agents-heading">
+        <div class="section-heading"><h2 id="agents-heading">Agents</h2></div>
+        <div class="agent-list" id="agent-list"></div>
+        <p class="empty-agents" hidden>No agents detected.</p>
+      </section>
+    </aside>
+    <main id="workarea" class="workarea">
+      <nav class="tab-toolbar" aria-label="Tabs and actions">
+        <button id="drawer-toggle" class="drawer-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Open sidebar">☰<span>Sidebar</span></button>
+        <div class="tab-list" role="tablist">
+          <button class="tab selected" role="tab" aria-selected="true" data-existing="Focus tab 1, Review"><span>1</span> Review</button>
+          <button class="tab" role="tab" aria-selected="false" data-existing="Focus tab 2, Context"><span>2</span> Context</button>
+          <button class="tab-add" aria-label="Create tab" data-existing="Create tab">+</button>
+        </div>
+        <div class="toolbar-actions"><button id="commands-button" aria-haspopup="dialog">Commands</button></div>
+      </nav>
+      <div class="pane-canvas">
+        <section class="pane selected" aria-label="alpha-editor terminal">
+          <div class="pane-label"><span>alpha-editor</span><span id="ownership" hidden aria-label="Observing. Selecting the pane requests control." title="Observing. Selecting the pane requests control.">◌</span><button class="pane-more" aria-label="Actions for alpha-editor" title="Pane actions" data-pane-menu="alpha-editor">⋯</button></div>
+          <div class="terminal-content terminal-left" role="img" aria-label="Unmodified recorded alpha-editor terminal pixels"></div>
+        </section>
+        <section class="pane" aria-label="alpha-terminal terminal">
+          <div class="pane-label"><span>alpha-terminal</span><button class="pane-more" aria-label="Actions for alpha-terminal" title="Pane actions" data-pane-menu="alpha-terminal">⋯</button></div>
+          <div class="terminal-content terminal-right" role="img" aria-label="Unmodified recorded alpha-terminal pixels"></div>
+        </section>
+        <div id="recovery" class="recovery" hidden aria-live="polite"><span id="recovery-message"></span><button id="retry">Reconnect</button></div>
+        <div id="initial-state" class="initial-state" hidden><p id="initial-message"></p><button id="initial-retry" hidden>Retry</button></div>
+      </div>
+    </main>
+  </div>
+  <dialog id="commands-dialog" class="menu-dialog" aria-labelledby="commands-title">
+    <div class="dialog-heading"><h2 id="commands-title">Commands</h2><button data-close aria-label="Close commands">×</button></div>
+    <input id="command-search" class="command-search" aria-label="Find a command" placeholder="Find a command…" autocomplete="off">
+    <div class="compact-actions" id="command-actions">
+      <div class="action-pair"><span>Open files</span><button data-existing="Open files right">Right</button><button data-existing="Open files below">Below</button></div>
+      <div class="action-pair"><span>Open Context</span><button data-existing="Open Context right">Right</button><button data-existing="Open Context below">Below</button></div>
+      <div class="action-pair"><span>Open Review</span><button data-existing="Open Review right">Right</button><button data-existing="Open Review below">Below</button></div>
+      <button id="feedback-open">Browser feedback</button>
+      <button data-existing="Send browser context">Send browser context</button>
+      <div class="action-pair"><span>Space browser</span><button data-existing="Open browser for Space">Open</button><button data-existing="Show browser for Space">Show</button><button data-existing="Close browser for Space">Close</button></div>
+      <button data-existing="Render as Context">Render as Context</button>
+    </div>
+    <p id="command-empty" hidden>No matching commands.</p>
+    <div class="secondary-actions"><button data-existing="Switch session">Switch session…</button><button data-existing="Recover task cleanup">Recover task cleanup…</button><button id="shortcuts-toggle" aria-expanded="false">Keyboard shortcuts <span>⌄</span></button></div>
+    <div id="shortcuts" hidden><span>Commands</span><kbd>Ctrl+B ?</kbd><span>New tab</span><kbd>Ctrl+B c</kbd><span>Zoom pane</span><kbd>Ctrl+B z</kbd></div>
+  </dialog>
+  <dialog id="resource-dialog" class="resource-dialog" aria-labelledby="resource-title"><div class="dialog-heading"><h2 id="resource-title"></h2><button data-close aria-label="Close resource actions">×</button></div><div class="compact-actions" id="resource-actions"></div></dialog>
+  <dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-title">
+    <div class="dialog-heading"><h2 id="feedback-title">Feedback <span>· Atlas Alpha</span></h2><button id="refresh-feedback">Refresh</button><button data-close aria-label="Close feedback">×</button></div>
+    <div class="feedback-content"><p id="feedback-message">No pending annotations.</p><span id="browser-status">Browser open</span></div>
+  </dialog>
+  <script src="study.js"></script>
+</body>
+</html>
