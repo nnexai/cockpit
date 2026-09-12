@@ -24,6 +24,10 @@ let fixtureUrl;
 let shuttingDown = false;
 let lastPointer = { x: 0, y: 0 };
 let mouseButtons = 0;
+let latestFrame;
+let frameSequence = 0;
+let screencastStarted = false;
+let frameError;
 
 function protocolError(message) {
   const error = new Error(message);
@@ -105,10 +109,50 @@ async function startBrowser() {
     await cdp.send('Runtime.enable');
     await cdp.send('Page.setLifecycleEventsEnabled', { enabled: true });
     await page.goto(fixtureUrl, { waitUntil: 'domcontentloaded' });
+    await startScreencast();
   } catch (error) {
     throw new Error(`Could not launch Chromium through Playwright${executablePath ? ` (${executablePath})` : ''}: ${error.message}. Run "bun install --frozen-lockfile" then "bunx playwright install chromium", or set BROWSER_BINARY.`);
   }
 }
+async function waitForFrameAfter(sequence, timeoutMs = 8_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (!latestFrame || latestFrame.sequence <= sequence) {
+    if (frameError) throw frameError;
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new Error(`timed out waiting for screencast frame after ${sequence}`);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(remaining, 25)));
+  }
+  if (frameError) throw frameError;
+  return latestFrame;
+}
+
+async function startScreencast() {
+  const baseline = frameSequence;
+  cdp.on('Page.screencastFrame', (event) => {
+    frameSequence += 1;
+    latestFrame = {
+      data: event.data,
+      metadata: event.metadata && typeof event.metadata === 'object' ? event.metadata : {},
+      sequence: frameSequence,
+    };
+    writeFrameEvent(latestFrame);
+    // Page.startScreencast applies protocol backpressure: Chromium sends the
+    // next frame only after every sessionId has been acknowledged.
+    void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch((error) => {
+      frameError ??= error;
+    });
+  });
+  await cdp.send('Page.startScreencast', {
+    everyNthFrame: 1,
+    format: 'jpeg',
+    maxHeight: HEIGHT,
+    maxWidth: WIDTH,
+    quality: 70,
+  });
+  screencastStarted = true;
+  await waitForFrameAfter(baseline);
+}
+
 
 function ensureReady() {
   if (!page || !cdp || !fixtureUrl) throw new Error('Browser is not started');
@@ -163,36 +207,56 @@ async function evaluatePageState(x = lastPointer.x, y = lastPointer.y) {
   return result.result?.value || { title: '', url: fixtureUrl, activeElement: 'BODY', fixtureStatus: '', selectedText: '', scrollY: 0, cursor: 'default' };
 }
 
-async function captureScreenshot() {
-  let lastError;
-  for (const delay of [0, 50, 100, 200, 400]) {
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    try {
-      // Playwright's cross-platform screenshot path waits for a paint; CDP remains
-      // the control/inspection boundary for input and Runtime state.
-      const image = await page.screenshot({ type: 'png' });
-      return image.toString('base64');
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(`Unable to capture Chromium screenshot after bounded retries: ${lastError?.message || 'unknown error'}`);
-}
-
 async function snapshot() {
   ensureReady();
-  const [image, state] = await Promise.all([
-    captureScreenshot(),
+  const [frame, state] = await Promise.all([
+    waitForFrameAfter(0),
     evaluatePageState(),
   ]);
   return {
-    pngDataUrl: `data:image/png;base64,${image}`,
+    jpegDataUrl: `data:image/jpeg;base64,${frame.data}`,
     width: WIDTH,
     height: HEIGHT,
     title: String(state.title || '').slice(0, 200),
     url: String(state.url || fixtureUrl).slice(0, 2048),
     cursor: String(state.cursor || 'default'),
   };
+}
+
+let pendingFrameEvent;
+let frameWritePending = false;
+let lastPublishedFrame = 0;
+
+function writeFrameEvent(frame) {
+  // The helper keeps at most one frame waiting for the Rust reader. CDP ACKs
+  // still happen for every frame, while stdout transport coalesces to latest.
+  pendingFrameEvent = frame;
+  if (frameWritePending) return;
+  frameWritePending = true;
+  const flush = () => {
+    const next = pendingFrameEvent;
+    pendingFrameEvent = undefined;
+    if (next && next.sequence > lastPublishedFrame) {
+      lastPublishedFrame = next.sequence;
+      const line = JSON.stringify({
+        event: 'screencastFrame',
+        frame: {
+          jpegDataUrl: `data:image/jpeg;base64,${next.data}`,
+          metadata: next.metadata,
+          sequence: next.sequence,
+          width: WIDTH,
+          height: HEIGHT,
+        },
+      });
+      if (!process.stdout.write(`${line}\n`)) {
+        process.stdout.once('drain', flush);
+        return;
+      }
+    }
+    if (pendingFrameEvent) queueMicrotask(flush);
+    else frameWritePending = false;
+  };
+  flush();
 }
 
 async function inspect() {
@@ -301,19 +365,27 @@ async function dispatchInput(event) {
 
 async function navigate(url) {
   ensureReady();
+  const baseline = frameSequence;
   await page.goto(assertNavigationUrl(url), { waitUntil: 'domcontentloaded' });
+  await waitForFrameAfter(baseline);
   return snapshot();
 }
 
 async function reload() {
   ensureReady();
+  const baseline = frameSequence;
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitForFrameAfter(baseline);
   return snapshot();
 }
 
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  try {
+    if (cdp && screencastStarted) await cdp.send('Page.stopScreencast');
+  } catch { /* process is already exiting */ }
+  screencastStarted = false;
   try { await browser?.close(); } catch { /* process is already exiting */ }
   browser = undefined;
   context = undefined;

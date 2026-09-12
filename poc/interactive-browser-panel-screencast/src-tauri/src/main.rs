@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
-use tauri::{Emitter, Manager, RunEvent, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 const MAX_PROTOCOL_LINE: usize = 8 * 1024 * 1024;
 
@@ -27,7 +29,7 @@ impl Default for AppState {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
-    png_data_url: String,
+    jpeg_data_url: String,
     width: u32,
     height: u32,
     title: String,
@@ -62,12 +64,12 @@ struct StopResult {
 struct HelperProcess {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    pending: Arc<Mutex<HashMap<u64, mpsc::SyncSender<Result<Value, String>>>>>,
     next_id: u64,
 }
 
 impl HelperProcess {
-    fn spawn() -> Result<Self, String> {
+    fn spawn(app: &AppHandle) -> Result<Self, String> {
         let node = env::var("NODE_BINARY").unwrap_or_else(|_| "node".to_string());
         let helper_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -88,10 +90,69 @@ impl HelperProcess {
             .stdout
             .take()
             .ok_or_else(|| "browser helper stdout was unavailable".to_string())?;
+        let pending = Arc::new(Mutex::new(HashMap::<u64, mpsc::SyncSender<Result<Value, String>>>::new()));
+        let pending_reader = Arc::clone(&pending);
+        let app = app.clone();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            while let Ok(read) = reader.read_line(&mut line) {
+                if read == 0 {
+                    break;
+                }
+                if line.len() > MAX_PROTOCOL_LINE {
+                    line.clear();
+                    continue;
+                }
+                let response: Value = match serde_json::from_str(&line) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        line.clear();
+                        continue;
+                    }
+                };
+                if response.get("event").and_then(Value::as_str) == Some("screencastFrame") {
+                    if let Some(frame) = response.get("frame").cloned() {
+                        let _ = app.emit("interactive-browser-panel-screencast-frame", frame);
+                    }
+                    line.clear();
+                    continue;
+                }
+                let Some(id) = response.get("id").and_then(Value::as_u64) else {
+                    line.clear();
+                    continue;
+                };
+                let waiter = pending_reader
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.remove(&id));
+                if let Some(waiter) = waiter {
+                    let result = if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                        response
+                            .get("result")
+                            .cloned()
+                            .ok_or_else(|| "browser helper response omitted result".to_string())
+                    } else {
+                        Err(response
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("browser helper rejected the request")
+                            .to_string())
+                    };
+                    let _ = waiter.send(result);
+                }
+                line.clear();
+            }
+            if let Ok(mut pending) = pending_reader.lock() {
+                for (_, waiter) in pending.drain() {
+                    let _ = waiter.send(Err("browser helper exited unexpectedly".to_string()));
+                }
+            }
+        });
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            pending,
             next_id: 1,
         })
     }
@@ -110,41 +171,18 @@ impl HelperProcess {
         if encoded.len() > MAX_PROTOCOL_LINE {
             return Err("helper request exceeded protocol limit".to_string());
         }
-        writeln!(self.stdin, "{encoded}")
-            .and_then(|_| self.stdin.flush())
-            .map_err(|error| format!("could not write to browser helper: {error}"))?;
-
-        let mut line = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut line)
-            .map_err(|error| format!("could not read browser helper response: {error}"))?;
-        if read == 0 {
-            let status = self
-                .child
-                .try_wait()
-                .ok()
-                .flatten()
-                .map(|value| format!(" ({value})"))
-                .unwrap_or_default();
-            return Err(format!("browser helper exited unexpectedly{status}"));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.pending
+            .lock()
+            .map_err(|_| "browser response state lock is poisoned".to_string())?
+            .insert(id, sender);
+        if let Err(error) = writeln!(self.stdin, "{encoded}").and_then(|_| self.stdin.flush()) {
+            self.pending.lock().ok().and_then(|mut pending| pending.remove(&id));
+            return Err(format!("could not write to browser helper: {error}"));
         }
-        if line.len() > MAX_PROTOCOL_LINE {
-            return Err("helper response exceeded protocol limit".to_string());
-        }
-        let response: Value = serde_json::from_str(&line)
-            .map_err(|error| format!("browser helper returned invalid JSON: {error}"))?;
-        if response.get("ok").and_then(Value::as_bool) != Some(true) {
-            return Err(response
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("browser helper rejected the request")
-                .to_string());
-        }
-        response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| "browser helper response omitted result".to_string())
+        receiver
+            .recv()
+            .map_err(|_| "browser helper response channel closed".to_string())?
     }
 }
 
@@ -171,13 +209,13 @@ impl AppState {
         }
     }
 
-    fn request(&self, method: &str, arguments: Option<Value>) -> Result<Value, String> {
+    fn request(&self, app: &AppHandle, method: &str, arguments: Option<Value>) -> Result<Value, String> {
         let mut slot = self
             .helper
             .lock()
             .map_err(|_| "browser state lock is poisoned".to_string())?;
         if slot.is_none() {
-            *slot = Some(HelperProcess::spawn()?);
+            *slot = Some(HelperProcess::spawn(app)?);
         }
         let result = slot
             .as_mut()
@@ -197,8 +235,8 @@ fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, String> {
 }
 
 #[tauri::command]
-fn browser_start(state: State<'_, AppState>) -> Result<Snapshot, String> {
-    match state.request("start", None).and_then(decode) {
+fn browser_start(app: AppHandle, state: State<'_, AppState>) -> Result<Snapshot, String> {
+    match state.request(&app, "start", None).and_then(decode) {
         Ok(snapshot) => Ok(snapshot),
         Err(error) => {
             state.stop();
@@ -208,38 +246,38 @@ fn browser_start(state: State<'_, AppState>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
-fn browser_snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
-    state.request("snapshot", None).and_then(decode)
+fn browser_snapshot(app: AppHandle, state: State<'_, AppState>) -> Result<Snapshot, String> {
+    state.request(&app, "snapshot", None).and_then(decode)
 }
 
 #[tauri::command]
-fn browser_input(state: State<'_, AppState>, event: Value) -> Result<InputAck, String> {
+fn browser_input(app: AppHandle, state: State<'_, AppState>, event: Value) -> Result<InputAck, String> {
     if !event.is_object() || serde_json::to_vec(&event).map_or(true, |bytes| bytes.len() > 8 * 1024) {
         return Err("input event must be a bounded JSON object".to_string());
     }
     state
-        .request("input", Some(json!({ "event": event })))
+        .request(&app, "input", Some(json!({ "event": event })))
         .and_then(decode)
 }
 
 #[tauri::command]
-fn browser_reload(state: State<'_, AppState>) -> Result<Snapshot, String> {
-    state.request("reload", None).and_then(decode)
+fn browser_reload(app: AppHandle, state: State<'_, AppState>) -> Result<Snapshot, String> {
+    state.request(&app, "reload", None).and_then(decode)
 }
 
 #[tauri::command]
-fn browser_navigate(state: State<'_, AppState>, url: String) -> Result<Snapshot, String> {
+fn browser_navigate(app: AppHandle, state: State<'_, AppState>, url: String) -> Result<Snapshot, String> {
     if url.len() > 2048 {
         return Err("URL is too long".to_string());
     }
     state
-        .request("navigate", Some(json!({ "url": url })))
+        .request(&app, "navigate", Some(json!({ "url": url })))
         .and_then(decode)
 }
 
 #[tauri::command]
-fn browser_inspect(state: State<'_, AppState>) -> Result<InspectResult, String> {
-    state.request("inspect", None).and_then(decode)
+fn browser_inspect(app: AppHandle, state: State<'_, AppState>) -> Result<InspectResult, String> {
+    state.request(&app, "inspect", None).and_then(decode)
 }
 
 #[tauri::command]

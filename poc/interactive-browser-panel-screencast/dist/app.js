@@ -43,9 +43,9 @@ function applyCursor(cursor) {
 }
 
 function applySnapshot(snapshot) {
-  if (!snapshot?.pngDataUrl) throw new Error('Snapshot did not include a PNG data URL');
+  if (!snapshot?.jpegDataUrl) throw new Error('Snapshot did not include a JPEG data URL');
   currentSnapshot = snapshot;
-  image.src = snapshot.pngDataUrl;
+  image.src = snapshot.jpegDataUrl;
   image.hidden = false;
   emptyState.hidden = true;
   title.textContent = snapshot.title || 'Untitled page';
@@ -53,6 +53,15 @@ function applySnapshot(snapshot) {
   pageUrl.textContent = snapshot.url;
   applyCursor(snapshot.cursor);
   if (document.activeElement !== address) address.value = snapshot.url;
+}
+
+function applyScreencastFrame(frame) {
+  if (!frame?.jpegDataUrl) return;
+  image.src = frame.jpegDataUrl;
+  image.hidden = false;
+  emptyState.hidden = true;
+  dimensions.textContent = `${frame.width} × ${frame.height}`;
+  if (currentSnapshot) currentSnapshot = { ...currentSnapshot, width: frame.width, height: frame.height };
 }
 
 function applyInputAck(ack) {
@@ -64,14 +73,12 @@ async function command(name, args = {}) {
   if (!invoke) throw new Error('Tauri global API is unavailable; launch this page through Tauri');
   return invoke(name, args);
 }
-
 async function start() {
   setStatus('Launching…');
   try {
     applySnapshot(await command('browser_start'));
     setStatus('Ready', 'ok');
-    reportAction('Chromium fixture started');
-    schedulePoll();
+    reportAction('Chromium screencast started');
     if (await command('browser_self_test_enabled')) {
       selfTestRequested = true;
       void runSelfTest();
@@ -83,40 +90,6 @@ async function start() {
   }
 }
 
-let frameTimer;
-let frameInFlight = false;
-let frameAgain = false;
-
-function scheduleFrame(delay = 90) {
-  clearTimeout(frameTimer);
-  frameTimer = setTimeout(refreshFrame, delay);
-}
-
-function schedulePoll() {
-  scheduleFrame(900);
-}
-
-async function refreshFrame() {
-  frameTimer = undefined;
-  if (frameInFlight) {
-    frameAgain = true;
-    return;
-  }
-  frameInFlight = true;
-  try {
-    applySnapshot(await command('browser_snapshot'));
-  } catch (error) {
-    setStatus(String(error), 'error');
-  } finally {
-    frameInFlight = false;
-    if (frameAgain) {
-      frameAgain = false;
-      scheduleFrame(70);
-    } else {
-      schedulePoll();
-    }
-  }
-}
 
 function inputQueuePending() {
   return inputBusy;
@@ -127,7 +100,6 @@ function queueInput(event, description, quiet = false, strict = false, frameDela
     inputBusy = true;
     const ack = await command('browser_input', { event });
     applyInputAck(ack);
-    scheduleFrame(frameDelay);
     if (!quiet) {
       setStatus('Ready', 'ok');
       reportAction(description);
@@ -250,7 +222,7 @@ async function runSelfTest() {
     dispatchPanelPointer('pointermove', 620, 120, { button: 0, buttons: 1 });
     dispatchPanelPointer('pointerup', 620, 120, { button: 0, buttons: 0 });
     await waitForInputIdle();
-    await refreshFrame();
+    applySnapshot(await command('browser_snapshot'));
     result = await command('browser_inspect');
     if (!result.selectedText?.length) throw new Error('drag input did not select fixture text');
 
@@ -453,6 +425,9 @@ document.querySelector('#inspect').addEventListener('click', async () => {
 });
 
 if (eventApi?.listen) {
+  void eventApi.listen('interactive-browser-panel-screencast-frame', (event) => {
+    applyScreencastFrame(event?.payload);
+  });
   void eventApi.listen('interactive-browser-panel-self-test', () => {
     selfTestRequested = true;
     void runSelfTest();

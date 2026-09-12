@@ -28,7 +28,7 @@
         <img id="screenshot" alt="Live screenshot from the Chromium fixture" draggable="false">
         <div id="empty-state">Launching the isolated Chromium helper…</div>
       </div>
-      <p class="note">Mouse, wheel, and keyboard events in this pane are forwarded to a separate Chromium process through Chrome DevTools Protocol. This is a Playwright-backed renderer seam with bounded screenshot polling, not a CEF implementation or a streaming browser engine.</p>
+      <p class="note">Mouse, wheel, keyboard, and text-selection events in this pane are forwarded to a separate Chromium process through Chrome DevTools Protocol. JPEG frames arrive through the bounded CDP screencast transport; this is not CEF, WebRTC, or a streaming browser engine.</p>
     </section>
     <aside class="details">
       <h2>CDP status</h2>

@@ -78,7 +78,7 @@ async function run() {
   await expectRejected('validateUrl', { url: 'ftp://google.de' }, 'http:// and https://');
   const first = await request('start');
   assert(first.width === 1024 && first.height === 720, 'start did not return the fixed viewport');
-  assert(first.pngDataUrl.startsWith('data:image/png;base64,'), 'start did not return a PNG data URL');
+  assert(first.jpegDataUrl.startsWith('data:image/jpeg;base64,'), 'start did not return a JPEG screencast data URL');
 
   const reloaded = await request('reload');
   assert(reloaded.url === first.url, 'reload left the local fixture URL');
@@ -116,7 +116,7 @@ async function run() {
   const beforeScroll = await request('inspect');
   await request('input', { event: { kind: 'mouseMove', x: 500, y: 600, buttons: 0, modifiers: 0 } });
   const wheelAck = await request('input', { event: { kind: 'wheel', x: 500, y: 600, deltaX: 0, deltaY: 500, modifiers: 0 } });
-  assert(!wheelAck.pngDataUrl && typeof wheelAck.cursor === 'string', 'wheel acknowledgement was not small');
+  assert(!wheelAck.jpegDataUrl && typeof wheelAck.cursor === 'string', 'wheel acknowledgement was not a frame payload');
   const afterScroll = await request('inspect');
   assert(afterScroll.scrollY > beforeScroll.scrollY, 'wheel input did not change scrollY');
 
@@ -127,7 +127,7 @@ async function run() {
   assert(selected.selectedText?.length > 0, 'drag input did not select fixture text');
 
   const finalSnapshot = await request('snapshot');
-  assert(finalSnapshot.pngDataUrl !== beforeTyping.pngDataUrl, 'frame did not change after typing, scrolling, and selection');
+  assert(finalSnapshot.jpegDataUrl !== beforeTyping.jpegDataUrl, 'screencast frame did not change after typing, scrolling, and selection');
   console.log('interactive-browser-panel smoke passed: pointer, typing, button, wheel, selection, reload, inspect, snapshot');
 }
 
