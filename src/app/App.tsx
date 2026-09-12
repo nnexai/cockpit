@@ -656,6 +656,12 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
 }) {
   const snapshot = state.snapshot;
   const spaces = snapshot?.spaces ?? [];
+  const selectedSpace = byId(spaces, selection.spaceId);
+  const setupParent = selectedSpace?.git ? {
+    label: selectedSpace.label,
+    repositoryKey: selectedSpace.git.repository_key,
+    checkoutPath: selectedSpace.git.checkout_path,
+  } : null;
   const allTabs = snapshot?.tabs ?? [];
   const tabs = tabsForSpace(allTabs, selection.spaceId);
   const selectedTab = byId(tabs, selection.tabId);
@@ -1000,7 +1006,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       <button type="button" className="session-command" disabled={!renderers.panes[selection.paneId ?? ""]?.presentation.renderer} title={renderers.panes[selection.paneId ?? ""]?.presentation.reason} onClick={() => { setCommandsOpen(false); if (selection.paneId) renderers.choose(selection.paneId, (isGraphicalContext(renderers.panes[selection.paneId]) || isGraphicalReview(renderers.panes[selection.paneId])) ? "terminal" : renderers.panes[selection.paneId]?.presentation.renderer ?? "context"); }}>{isGraphicalContext(renderers.panes[selection.paneId ?? ""]) || isGraphicalReview(renderers.panes[selection.paneId ?? ""]) ? "Show terminal view" : renderers.panes[selection.paneId ?? ""]?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
     </>} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
-    {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
+    {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
     {feedbackOpen && (feedbackSpaceId === selection.spaceId || feedbackLookup === null) ? <FeedbackPanel lookup={feedbackLookup} images={feedbackImages} busy={feedbackBusy} error={feedbackError} sendResult={feedbackResult} riskPending={feedbackRisk !== null} onRefresh={refreshFeedback} onAcknowledge={() => { void acknowledgeFeedback(); }} onSend={sendDisplayedFeedback} onRetryRisk={retryUnknownFeedback} onDismiss={() => setFeedbackOpen(false)} /> : null}

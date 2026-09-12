@@ -97,7 +97,7 @@ export function parseWorkspaceOperation(value: unknown): WorkspaceOperation {
     || !text(value.session_id) || !text(value.state)
     || !["planned", "running", "completed", "partial", "outcome_unknown", "cancelled", "needs_review"].includes(value.state)
     || !text(value.step) || !["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified",
-      "companion_ready", "environment_requested", "environment_ready", "completed"].includes(value.step)
+      "companion_ready", "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed"].includes(value.step)
     || !nullableText(value.workspace_id) || !nullableText(value.tab_id) || !nullableText(value.pane_id)
     || !nullableText(value.companion_id) || !bool(value.resume_allowed) || !bool(value.cancel_requested)
     || !text(value.updated_at) || !(value.error === null || parseErrorEnvelope(value.error) !== undefined)

@@ -190,6 +190,7 @@
 .setup-repository-meta { color: var(--text-muted); font-size: 11px; }
 .setup-selected-note { margin: 10px 0 0; color: var(--text-secondary); }
 .setup-selected-note code { color: var(--text-primary); }
+.setup-parent-warning { color: var(--warning, #e7b14a); }
 
 .setup-config,
 .setup-diagnostics,
@@ -282,6 +283,7 @@
 .setup-progress-track { height: 4px; margin-top: 12px; overflow: hidden; background: var(--border); }
 .setup-progress-track span { display: block; height: 100%; background: var(--accent); transition: width 80ms linear; }
 .setup-progress-meta { margin: 7px 0 0; color: var(--text-muted); font-family: "IBM Plex Mono", "Noto Sans Mono", monospace; font-size: 11px; }
+.setup-progress-message { margin: 10px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 18px; }
 .setup-transient { margin: 10px 0 0; color: var(--warning, #e7b14a); font-size: 12px; line-height: 18px; }
 .setup-error { margin: 10px 0 0; border-left: 2px solid var(--blocked, #ff6b78); padding-left: 9px; color: var(--blocked, #ff6b78); font-size: 12px; line-height: 18px; }
 .setup-dialog-error { margin: 12px 24px 0; }

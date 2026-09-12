@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ProjectConfiguration, RepositoryListResponse, WorkspaceOperation } from "../../protocol/generated/v1";
-import { operationSnapshotIsNewer, SetupDialog } from "./SetupDialog";
+import { operationSnapshotIsNewer, operationStatusMessage, SetupDialog } from "./SetupDialog";
 
 function operation(generation: number, sequence: number): WorkspaceOperation {
   return { generation, sequence } as WorkspaceOperation;
@@ -94,6 +94,38 @@ describe("SetupDialog operation snapshot ordering", () => {
 
   it("accepts the first authoritative snapshot without inventing an ordering", () => {
     expect(operationSnapshotIsNewer(null, operation(0, 0))).toBe(true);
+  });
+
+  it("explains Context checkpoints and offers a source retry for partial imports", () => {
+    expect(operationStatusMessage({ state: "running", step: "context_preparing", error: null }))
+      .toContain("Preparing the Context");
+    expect(operationStatusMessage({ state: "running", step: "context_ready", error: null }))
+      .toContain("Context is ready");
+    expect(operationStatusMessage({
+      state: "partial",
+      step: "context_preparing",
+      error: { code: "source_provider_unsupported", message: "provider is unavailable" },
+    })).toContain("Retry the source step");
+  });
+
+  it("preselects the repository associated with the selected Space", async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    await act(async () => {
+      root = createRoot(container!);
+      root.render(createElement(SetupDialog, {
+        client,
+        sessionId: "session-1",
+        open: true,
+        selectedParent: { label: "Parent", repositoryKey: "/repositories/repository/.git", checkoutPath: "/repositories/repository" },
+        onClose: () => undefined,
+        onCompleted: () => undefined,
+      }));
+    });
+    await settle();
+
+    expect(container.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')?.textContent).toContain("Repository");
+    expect(container.textContent).toContain("Opened from Parent");
   });
 
   it("keeps the typed field focused across terminal updates and its own rerender", async () => {

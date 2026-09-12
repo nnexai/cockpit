@@ -18,8 +18,15 @@ export type SetupDialogProps = {
   client: CockpitClient;
   sessionId: string;
   open: boolean;
+  selectedParent?: SetupParent | null;
   onClose: () => void;
   onCompleted: (operation: WorkspaceOperation) => void;
+};
+
+export type SetupParent = {
+  label: string;
+  repositoryKey: string;
+  checkoutPath: string;
 };
 
 type FormState = {
@@ -62,6 +69,54 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function modeLabel(mode: WorkspaceSetupMode): string {
   return mode === "create" ? "Create linked worktree" : "Open existing checkout";
+}
+
+function issueUrlPlaceholder(configuration: ProjectConfiguration | null): string {
+  const github = configuration?.providers.find((provider) => provider.id === "github" && provider.base_url === "https://github.com");
+  return github ? "https://github.com/owner/repository/issues/number" : "https://provider.example/owner/repository/issues/number";
+}
+
+export function operationStatusMessage(operation: Pick<WorkspaceOperation, "state" | "step" | "error">): string {
+  const sourceFailure = operation.error?.code.startsWith("source_") ?? false;
+  if (operation.state === "partial" && sourceFailure) {
+    return "Source import is partial. Retry the source step to finish Context; the reviewed workspace and companion remain available for review.";
+  }
+  if (operation.state === "partial") {
+    return "Workspace setup is partial. Review the retained effects and retry the recorded failed step.";
+  }
+  if (operation.state === "needs_review") {
+    return "Workspace setup needs review. Inspect the retained effects before choosing a recovery action.";
+  }
+  switch (operation.step) {
+    case "context_preparing":
+      return "Preparing the Context companion and validating source availability.";
+    case "context_ready":
+      return "Context is ready. Preparing the context-aware terminal.";
+    case "completed":
+      return "Workspace, Context, and the context-aware terminal are ready.";
+    default:
+      return `Setup is at ${operation.step.replaceAll("_", " ")}.`;
+  }
+}
+
+function operationStepLabel(step: WorkspaceOperation["step"]): string {
+  switch (step) {
+    case "context_preparing": return "Preparing Context";
+    case "context_ready": return "Context ready";
+    default: return step.replaceAll("_", " ");
+  }
+}
+
+function sourceRetry(operation: WorkspaceOperation): boolean {
+  return operation.error?.code.startsWith("source_") ?? false;
+}
+
+function resolveParentRepository(repositories: RepositoryCandidate[], parent: SetupParent): RepositoryCandidate | null {
+  const checkoutMatches = repositories.filter((repository) => repository.checkout_path === parent.checkoutPath || repository.root === parent.checkoutPath);
+  if (checkoutMatches.length === 1) return checkoutMatches[0];
+  if (checkoutMatches.length > 1) return null;
+  const commonMatches = repositories.filter((repository) => repository.common_dir === parent.repositoryKey);
+  return commonMatches.length === 1 ? commonMatches[0] : null;
 }
 
 function recoveryActionFor(operation: WorkspaceOperation): WorkspaceRecoveryAction | null {
@@ -178,26 +233,28 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
   const failed = operation.state === "partial" || operation.state === "needs_review";
   const recoveryAction = recoveryActionFor(operation);
   const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Recover existing checkout" : recoveryAction === "retry_environment" ? "Retry environment" : null;
+  const retrySource = sourceRetry(operation);
   return (
     <section className="setup-progress" aria-live="polite" aria-busy={busy} aria-label="Workspace setup progress">
-      <div className="setup-progress-heading"><div><span className="setup-eyebrow">Durable operation</span><h3>{operation.step.replaceAll("_", " ")}</h3></div><span className={`setup-state setup-state-${operation.state}`}>{operation.state.replaceAll("_", " ")}</span></div>
+      <div className="setup-progress-heading"><div><span className="setup-eyebrow">Durable operation</span><h3>{operationStepLabel(operation.step)}</h3></div><span className={`setup-state setup-state-${operation.state}`}>{operation.state.replaceAll("_", " ")}</span></div>
       <div className="setup-progress-track"><span style={{ width: `${operation.step === "completed" ? 100 : Math.min(94, Math.max(8, (operation.sequence + 1) * 10))}%` }} /></div>
       <p className="setup-progress-meta">Generation {operation.generation} · update {operation.sequence} · last updated {operation.updated_at}</p>
+      <p className="setup-progress-message" role="status">{operationStatusMessage(operation)}</p>
       {readError ? <p className="setup-transient" role="status">Could not read the latest operation snapshot. Showing the last confirmed progress; no mutation was retried.</p> : null}
       {operation.error ? <p className="setup-error" role="alert"><strong>{operation.error.code}</strong> {operation.error.message}</p> : null}
       {operation.owned_resources.length > 0 ? <div className="setup-owned"><strong>Resources retained</strong><ul>{operation.owned_resources.map((resource, index) => <li key={`${resource.kind}-${resource.path}-${index}`}><code>{resource.path}</code> · {resource.created_by_operation ? "created by this operation" : "existing resource"}</li>)}</ul></div> : null}
       <div className="setup-progress-actions">
         {operation.state === "running" || operation.state === "planned" ? <button type="button" onClick={onCancel} disabled={busy}>Cancel operation</button> : null}
-        {failed && operation.resume_allowed ? <button type="button" className="setup-primary" onClick={onResume} disabled={busy}>Resume failed step</button> : null}
+        {failed && operation.resume_allowed ? <button type="button" className="setup-primary" onClick={onResume} disabled={busy}>{retrySource ? "Retry source import" : "Resume failed step"}</button> : null}
         {recoveryAction && recoveryLabel ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>{recoveryLabel}</button> : null}
       </div>
-      {failed ? <p className="setup-recovery-note">Completed effects remain in place. Resume addresses only the recorded failed step.</p> : null}
+      {failed ? <p className="setup-recovery-note">Completed effects remain in place. {retrySource ? "Retry addresses only the source import." : "Resume addresses only the recorded failed step."}</p> : null}
       {recoveryAction === "accept_existing_worktree" ? <p className="setup-recovery-note">The worktree outcome is uncertain. Cockpit validates the exact checkout and, only when Herdr has no workspace open for it, explicitly opens that checkout once. It never redispatches Create. Review the resulting state, then explicitly resume if offered.</p> : null}
       {recoveryAction === "retry_environment" ? <p className="setup-recovery-note">The environment outcome is uncertain. A previous request may have opened a tab. Retrying may create a new environment tab; any uncertain old tab or pane remains untouched. Reconcile does not dispatch Herdr mutations. Review the resulting state, then explicitly resume if offered.</p> : null}
     </section>
   );
 }
-export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: SetupDialogProps) {
+export function SetupDialog({ client, sessionId, open, selectedParent = null, onClose, onCompleted }: SetupDialogProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const loadRequestToken = useRef(0);
@@ -309,14 +366,18 @@ export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: S
       setRepositories(response.repositories);
       setDiagnostics(response.diagnostics);
       setLoadState(response.repositories.length === 0 ? "empty" : "ready");
-      setForm((current) => ({ ...current, repositoryId: current.repositoryId || response.repositories[0]?.repository_id || "" }));
+      const parentRepository = selectedParent ? resolveParentRepository(response.repositories, selectedParent) : null;
+      setForm((current) => ({
+        ...current,
+        repositoryId: current.repositoryId || parentRepository?.repository_id || (selectedParent ? "" : response.repositories[0]?.repository_id || ""),
+      }));
     }).catch((error: unknown) => {
       if (!active || token !== loadRequestToken.current) return;
       setLoadState("error");
       setLoadError(errorMessage(error, "Could not load project configuration and repositories."));
     });
     return () => { active = false; };
-  }, [client, open, requestRefresh, sessionId]);
+  }, [client, open, requestRefresh, sessionId, selectedParent?.checkoutPath, selectedParent?.repositoryKey]);
 
 
   useEffect(() => {
@@ -356,6 +417,8 @@ export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: S
     return !query || `${repository.name} ${repository.root} ${repository.repository_id}`.toLowerCase().includes(query);
   });
   const selectedRepository = repositories.find((repository) => repository.repository_id === form.repositoryId) ?? null;
+  const parentRepository = selectedParent ? resolveParentRepository(repositories, selectedParent) : null;
+  const parentRepositoryMatched = parentRepository !== null;
 
   const createPlan = useCallback(async () => {
     if (!form.repositoryId) {
@@ -539,6 +602,7 @@ export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: S
         {operationError ? <p className="setup-error setup-dialog-error" role="alert">{operationError}</p> : null}
         {!operationDone ? <main className="setup-body">
           {step === 1 ? <section className="setup-step-content" aria-labelledby="repository-heading"><div className="setup-section-heading"><div><h3 id="repository-heading">Local repository</h3><p>Repository selection is required. An artifact URL never clones or discovers a remote repository.</p></div>{configuration ? <span className="setup-config-badge">Config v{configuration.version}</span> : null}</div>
+            {selectedParent ? <p className={`setup-selected-note${loadState === "ready" && !parentRepositoryMatched ? " setup-parent-warning" : ""}`} role={loadState === "ready" && !parentRepositoryMatched ? "alert" : "status"}>{loadState === "loading" ? <>Opened from <strong>{selectedParent.label}</strong>; checking its checkout against configured repositories.</> : parentRepositoryMatched ? <>Opened from <strong>{selectedParent.label}</strong>; matched <code>{parentRepository?.root}</code>. Change the selection below only if you intend to use another repository.</> : <>Opened from <strong>{selectedParent.label}</strong>, but no unambiguous configured repository matches its checkout. Choose one explicitly; setup will not switch repositories for you.</>}</p> : null}
             {loadState === "loading" ? <p className="setup-empty">Loading configured repositories…</p> : null}
             {loadState === "error" ? <div className="setup-empty setup-empty-error"><strong>Could not load project setup</strong><p>{loadError}</p><button type="button" onClick={() => setRequestRefresh((value) => value + 1)}>Reload repositories</button></div> : null}
             {loadState === "empty" ? <div className="setup-empty"><strong>No configured local repositories</strong><p>Add a repository root to the startup configuration, then reload. No Herdr workspace was created.</p></div> : null}
@@ -546,11 +610,11 @@ export function SetupDialog({ client, sessionId, open, onClose, onCompleted }: S
             {configuration ? <div className="setup-config"><strong>Configured roots</strong><ul><li>Repositories: <code>{configuration.repository_roots.length > 0 ? configuration.repository_roots.join(", ") : "(none)"}</code></li><li>Worktrees: <code>{configuration.worktree_root}</code></li><li>Companions: <code>{configuration.companion_root}</code></li><li>State: <code>{configuration.state_root}</code></li></ul></div> : null}
             <DiagnosticList diagnostics={diagnosticsWithLoad} />
             <Field label="Task name" hint="optional" htmlFor="setup-task-name"><input id="setup-task-name" value={form.taskName} onChange={onField("taskName")} placeholder="Short task description" /></Field>
-            <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onField("artifactUrl")} placeholder="https://forge.example/team/repo/issues/142" /></Field>
+            <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onField("artifactUrl")} placeholder={issueUrlPlaceholder(configuration)} /></Field>
             <div className="setup-actions"><button type="button" className="setup-primary" disabled={!form.repositoryId || loadState !== "ready"} onClick={() => setStep(2)}>Continue to worktree</button></div>
           </section> : null}
           {step === 2 ? <section className="setup-step-content" aria-labelledby="worktree-heading"><div className="setup-section-heading"><div><h3 id="worktree-heading">Worktree</h3><p>Choose create or open. Branch and destination values are reviewed before any Herdr mutation.</p></div></div><div className="setup-choice-grid"><button type="button" className={form.mode === "create" ? "is-selected" : ""} aria-pressed={form.mode === "create"} onClick={() => setWorktreeMode("create")}><strong>Create linked worktree</strong><span>New checkout below the configured worktree root.</span></button><button type="button" className={form.mode === "open" ? "is-selected" : ""} aria-pressed={form.mode === "open"} onClick={() => setWorktreeMode("open")}><strong>Open existing checkout</strong><span>Use an already-discovered local checkout; it remains borrowed.</span></button></div>{form.mode === "open" ? <><p className="setup-label">Open target</p><div className="setup-choice-grid"><button type="button" className={form.openTarget === "branch" ? "is-selected" : ""} aria-pressed={form.openTarget === "branch"} onClick={() => updateOpenTarget("branch", form.branch)}><strong>Branch</strong><span>Resolve one existing checkout by branch.</span></button><button type="button" className={form.openTarget === "path" ? "is-selected" : ""} aria-pressed={form.openTarget === "path"} onClick={() => updateOpenTarget("path", form.checkoutPath)}><strong>Checkout path</strong><span>Use one exact existing checkout path.</span></button></div>{form.openTarget === "branch" ? <Field label="Branch" hint="required for Open" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={(event) => updateOpenTarget("branch", event.target.value)} placeholder="feature/task-name" /></Field> : <Field label="Checkout path" hint="required for Open" htmlFor="setup-checkout"><input id="setup-checkout" value={form.checkoutPath} onChange={(event) => updateOpenTarget("path", event.target.value)} placeholder="/absolute/path/to/checkout" /></Field>}</> : <><Field label="Branch" hint="required by policy" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onField("branch")} placeholder="feature/task-name" /></Field><Field label="Base ref" hint="optional" htmlFor="setup-base"><input id="setup-base" value={form.base} onChange={onField("base")} placeholder="main" /></Field><Field label="Destination" hint="optional" htmlFor="setup-checkout"><input id="setup-checkout" value={form.checkoutPath} onChange={onField("checkoutPath")} placeholder="Configured worktree root default" /></Field></>}<Field label="Space label" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onField("label")} placeholder={form.taskName || "Task workspace"} /></Field><div className="setup-checkboxes"><label><input type="checkbox" checked={form.focus} onChange={onField("focus")} /> Focus the resulting Space and context terminal</label></div><p className="setup-info">Open supplies exactly one branch or checkout path. Base refs are rejected for Open. Create validates branch names and destinations against Git and configured roots; collisions stop before mutation.</p><div className="setup-actions"><button type="button" onClick={() => setStep(1)}>Back</button><button type="button" className="setup-primary" onClick={() => setStep(3)}>Continue to context</button></div></section> : null}
-          {step === 3 ? <section className="setup-step-content" aria-labelledby="context-heading"><div className="setup-section-heading"><div><h3 id="context-heading">Context</h3><p>Review the companion association and terminal environment. Start agents manually in the new terminal.</p></div></div><div className="setup-context-card"><strong>Companion association</strong><p>A Cockpit-owned companion is created at the reviewed path. The manifest records the Herdr session, returned workspace, repository provenance, and optional artifact.</p><span className="setup-badge">Selected after planning</span></div><div className="setup-context-card"><strong>Sources</strong><p>{form.artifactUrl.trim() ? "The supplied artifact URL is retained for typed validation; provider downloads remain explicit and bounded." : "No artifact selected. Repository-only setup creates no remote source."}</p></div><div className="setup-context-card"><strong>Terminal handoff</strong><p>A new context-aware terminal receives allowlisted <code>COCKPIT_*</code> values for processes Cockpit creates. The original Herdr root pane is unchanged; start an agent manually.</p></div><div className="setup-consent"><strong>Per-operation repository consent</strong><p>Stock Herdr cannot suppress configured repository actions. This consent applies only to this reviewed operation; it is not a Herdr trust flag.</p><label><input type="checkbox" checked={form.repositoryConsent} onChange={onField("repositoryConsent")} /> I understand and consent to the configured repository actions for this operation.</label></div><div className="setup-actions"><button type="button" onClick={() => setStep(2)}>Back</button><button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryId || !form.repositoryConsent}>{planState.pending ? "Planning…" : "Review exact effects"}</button></div>{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}</section> : null}
+          {step === 3 ? <section className="setup-step-content" aria-labelledby="context-heading"><div className="setup-section-heading"><div><h3 id="context-heading">Context</h3><p>Review the companion association and terminal environment. Start agents manually in the new terminal.</p></div></div><div className="setup-context-card"><strong>Companion association</strong><p>A Cockpit-owned companion is created at the reviewed path. The manifest records the Herdr session, returned workspace, repository provenance, and optional artifact.</p><span className="setup-badge">Selected after planning</span></div><div className="setup-context-card"><strong>Sources</strong><p>{form.artifactUrl.trim() ? "The supplied artifact URL is retained for typed validation; provider downloads remain explicit and bounded." : "No artifact selected. Repository-only setup creates no remote source."}</p></div><div className="setup-context-card"><strong>Installed Context viewer</strong><p>Opening a Context pane requires the configured file-viewer support to be installed and available at the Herdr endpoint. This setup does not install or enable viewer support; Context reports its availability when opened, and source failures remain partial with an explicit retry.</p></div><div className="setup-context-card"><strong>Terminal handoff</strong><p>A new context-aware terminal receives allowlisted <code>COCKPIT_*</code> values for processes Cockpit creates. The original Herdr root pane is unchanged; start an agent manually.</p></div><div className="setup-consent"><strong>Per-operation repository consent</strong><p>Stock Herdr cannot suppress configured repository actions. This consent applies only to this reviewed operation; it is not a Herdr trust flag.</p><label><input type="checkbox" checked={form.repositoryConsent} onChange={onField("repositoryConsent")} /> I understand and consent to the configured repository actions for this operation.</label></div><div className="setup-actions"><button type="button" onClick={() => setStep(2)}>Back</button><button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryId || !form.repositoryConsent}>{planState.pending ? "Planning…" : "Review exact effects"}</button></div>{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}</section> : null}
           {step === 4 ? <section className="setup-step-content" aria-labelledby="review-heading"><div className="setup-section-heading"><div><h3 id="review-heading">Review before starting</h3><p>Nothing is created until you explicitly start this reviewed operation.</p></div></div>{planState.pending ? <p className="setup-empty">Preparing exact paths and effects…</p> : null}{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}{planState.plan ? <PlanSummary plan={planState.plan} /> : null}<div className="setup-actions"><button type="button" onClick={() => setStep(3)}>Back</button>{planState.plan ? <button type="button" className="setup-primary" onClick={() => void start()} disabled={Boolean(operation) || actionPending || !planState.plan.trust_repository}>Start {modeLabel(planState.plan.mode)}</button> : <button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryConsent}>Create review plan</button>}</div></section> : null}
         </main> : null}
         {operationDone ? <section className="setup-complete" aria-live="polite"><h3>Workspace setup completed</h3><p>The Herdr workspace, companion association, and context-aware terminal are ready. Start an agent manually in the new terminal; the original root pane was left unchanged.</p><PlanSummary plan={operation.plan} /><div className="setup-actions"><button type="button" className="setup-primary" onClick={handleClose}>Done</button></div></section> : null}
