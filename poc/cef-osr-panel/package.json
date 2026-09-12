@@ -1,0 +1,11 @@
+{
+  "name": "cef-osr-panel-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

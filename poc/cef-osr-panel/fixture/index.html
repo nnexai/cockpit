@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CEF OSR/CDP fixture</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f5f7fb; color: #1b2433; }
+    main { max-width: 760px; margin: 0 auto; padding: 48px 36px; }
+    .card { background: #fff; border: 1px solid #d8e0ef; border-radius: 16px; padding: 30px; box-shadow: 0 10px 32px #22385c1a; }
+    h1 { margin: 0 0 8px; color: #1c4279; }
+    p { margin: 8px 0 22px; color: #53627b; }
+    label { display: block; margin-bottom: 8px; font-weight: 700; }
+    .row { display: flex; gap: 10px; }
+    input { box-sizing: border-box; flex: 1; min-width: 0; border: 2px solid #b9c7df; border-radius: 9px; padding: 10px 12px; font: inherit; }
+    input:focus { outline: 3px solid #8bb9ff66; border-color: #3679d8; }
+    button { border: 0; border-radius: 9px; padding: 10px 20px; background: #1769d1; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button:hover { background: #0e56b4; }
+    #result { margin: 22px 0 0; padding: 14px 16px; border-radius: 9px; background: #eef4ff; color: #244d87; min-height: 24px; }
+    .tag { display: inline-block; margin-top: 20px; color: #687792; font-size: 13px; }
+    .reading { min-height: 1800px; margin-top: 26px; padding: 26px 30px; border: 1px solid #d8e0ef; border-radius: 16px; background: #fff; }
+    .reading h2 { margin: 0 0 10px; color: #1c4279; font-size: 22px; }
+    .reading p { margin: 14px 0; }
+    .marker { margin-top: 900px; padding: 22px; border-radius: 12px; background: #e8f5ee; color: #195b3c; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>CEF windowless rendering fixture</h1>
+      <p>This page is loaded from disk by CEF and is inspectable through its remote CDP endpoint.</p>
+      <label for="name">Type a name, then activate the button</label>
+      <div class="row">
+        <input id="name" autocomplete="off" placeholder="Ada Lovelace">
+        <button id="greet" type="button">Greet</button>
+      </div>
+      <div id="result" role="status" aria-live="polite">Waiting for a greeting...</div>
+      <span class="tag">No network request is needed for this fixture</span>
+    </section>
+    <article class="reading">
+      <h2>Scrollable content</h2>
+      <p id="selection-source">This sentence is selectable inside the real Chromium renderer.</p>
+      <p>CDP smoke control changes the greeting and scroll position while the native X11 host displays BGRA frames received from CEF's render handler.</p>
+      <p>Long local content makes viewport movement observable without depending on a remote server or changing the controls above the fold.</p>
+      <p>Windowless rendering remains separate from the X11 host: Chromium paints into memory, and the POC copies the latest frame into an XImage.</p>
+      <div class="marker" id="scroll-marker">Scroll marker: the lower part of the local fixture is visible.</div>
+    </article>
+  </main>
+  <script>
+    const name = document.querySelector('#name');
+    const result = document.querySelector('#result');
+    document.querySelector('#greet').addEventListener('click', () => {
+      const value = name.value.trim();
+      result.textContent = value ? `Hello, ${value}! CEF received your input.` : 'Please type a name first.';
+      result.dataset.changed = 'true';
+    });
+    name.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') document.querySelector('#greet').click();
+    });
+  </script>
+</body>
+</html>

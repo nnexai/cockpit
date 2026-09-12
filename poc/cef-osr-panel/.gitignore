@@ -1,0 +1,7 @@
+/build/
+/.cef/
+/.downloads/
+/runtime/
+*.tar
+*.tar.bz2
+*.tar.gz
