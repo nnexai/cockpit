@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-12T20:33:47+02:00",
+  "lastUpdatedAt": "2026-09-12T20:44:56+02:00",
+  "status": "PASS_FRESH_RUNTIME_CAPTURE",
+  "sourceCommit": "d7da954",
+  "sourceCommitFull": "d7da954fbbeaa294425b7b50de6a09efe3658f51",
+  "client": "browser",
+  "runtime": {
+    "herdrVersion": "0.9.0",
+    "session": "ca12",
+    "gateway": "http://127.0.0.1:4203/",
+    "browserProfile": "/tmp/ca12/profile-atlas-app",
+    "runRoot": "/tmp/ca12",
+    "checkout": "/tmp/ca12/repos/cockpit",
+    "taskCheckout": "/tmp/ca12/worktrees/cockpit-f8a47c77-6d04-49a6-bafd-c610046ae463",
+    "taskCompanion": "/tmp/ca12/companions/f8a47c77-6d04-49a6-bafd-c610046ae463",
+    "workspaces": ["w1", "w2"],
+    "taskTab": "w2:t2",
+    "issue": "https://github.com/nnexai/cockpit/issues/4",
+    "installedArtifacts": {
+      "tauriDebugSha256": "96efdd64f19d5cbc771c9f17162fa69a57b7a621685644cd24ef424027b4d352",
+      "hostCliSha256": "a1fe318ee1c1b4c12e4d87f16387fa31dd36f80d37f57925752c0b7f05846031",
+      "staticBundle": "dist (318 modules)"
+    }
+  },
+  "captureSet": [
+    {"path":"app-shell-desktop.png","scenario":"startup.session-selection","viewport":"1440x900","sha256":"082806e111079409483573f52e34726d961efab4ee95b66a7c6d2119fb12969d"},
+    {"path":"app-sidebar-collapsed.png","scenario":"spaces.agents-sidebar","viewport":"1440x900","sha256":"d4f69bd6cf57f04e33ab9bef036be5de14ad811f8783fbde566111233e8f6d8d"},
+    {"path":"app-drawer-480.png","scenario":"spaces.agents-sidebar","viewport":"480x900","sha256":"a54083e716c449befb1c2a5df751ca3d19b0bab231c763a50a3ad7099b9c231a"},
+    {"path":"app-drawer-800.png","scenario":"spaces.agents-sidebar","viewport":"800x1000","sha256":"9e2b603873f59b3eb13f7cf90a888b7530545c1534fdf1c92fe1b86ae154c8c5"},
+    {"path":"app-commands-search-desktop.png","scenario":"menus.command-pane","viewport":"1440x900","sha256":"aa95119d18e75329b58679696d084a177ebdd9741696a8e1bcc8a5419e1685fa"},
+    {"path":"app-commands-search-480.png","scenario":"menus.command-pane","viewport":"480x900","sha256":"043cab1a59901423f8d314383b3a92d3168ab81d225b08a4573b12965d91a300"},
+    {"path":"app-resource-menu.png","scenario":"menus.command-pane","viewport":"1440x900","sha256":"a59b4c610abb30da659fea76e01f52add8d1617206f33aba01052f3c205ea67a"},
+    {"path":"app-setup-draft.png","scenario":"setup.repository-artifact-to-workspace","viewport":"1440x900","sha256":"831d17f403f839922df22f82698ca4b16a2fbdbf5f532f4e6a1f72885a35badb"},
+    {"path":"app-setup-review-plan.png","scenario":"setup.repository-artifact-to-workspace","viewport":"1440x900","sha256":"61d959d1eaf92ecaacfb986ddffdbb808ebc42632be996e2cf8d458bc885d496"},
+    {"path":"app-files-source.png","scenario":"context.files-browse-render-search-comment-paste","viewport":"1440x900","viewportNote":"real imported issue source preview","sha256":"751fa0e7fce33253a4a82b8bb898654172cf1b89d0d449da82435868f0d542bf"},
+    {"path":"app-files-picker-dialog.png","scenario":"context.files-browse-render-search-comment-paste","viewport":"1440x900","viewportNote":"Go to file picker with imported asset","sha256":"674c9cebe1ef5481ad7ed2a57f9f535a3944ad1faff7fd627b9cf4bde613855a"},
+    {"path":"app-context-issue-1440.png","scenario":"context.sources-import-and-snapshot","viewport":"1440x900","viewportNote":"issue #4 rendered preview","sha256":"487b43ba57f61c7cb6af98124a6c4a9c22db11793fc37d3bc9aef4b70ffd0b4e"},
+    {"path":"app-context-split-360.png","scenario":"context.sources-import-and-snapshot","viewport":"1440x900","paneGeometry":{"contextWidth":371.390625,"sourceTextLength":9048,"pickerReachable":true},"sha256":"57dd13a444e9c4b20c12683de9274f84061128be21eefcd486a5bcfda22aa2ea"},
+    {"path":"app-context-zoom-480.png","scenario":"context.sources-import-and-snapshot","viewport":"480x900","paneGeometry":{"selected":"Context","contextWidth":478,"sourceTextLength":373,"sourceFont":"13px / 19px IBM Plex Mono"},"authoritativeZoom":"w2:p4 zoomed=true","sha256":"d00b8896064539ea4a243839387e3e9bb12bca2fe53b868a3fe797c292d3ff07"},
+    {"path":"app-review-diff.png","scenario":"review.local-scopes-navigation-comments-fallback","viewport":"1440x900","viewportNote":"real CONTEXT.md tracked diff","sha256":"803b8b077e2ba4a4349130640b8447b506ee057d30b31879f7c2079f33c7fbaa"},
+    {"path":"app-review-line-comment-desktop.png","scenario":"review.local-scopes-navigation-comments-fallback","viewport":"1440x900","viewportNote":"line comment editor on real diff","sha256":"8b8105cd73462a38324f7d9e744f196fda9e7e186b2a244eafbdb1c287749959"},
+    {"path":"app-review-line-comment-480.png","scenario":"review.local-scopes-navigation-comments-fallback","viewport":"480x900","capturedAt":"2026-09-12T20:44:56+02:00","viewportNote":"saved line comment in authoritative zoomed portrait Review","paneGeometry":{"selected":"Review","reviewWidth":478,"commentText":"Atlas portrait Review comment"},"authoritativeZoom":"w2:p6 zoomed=true","sha256":"206a0d6764f54b3c3545ff2a8cd7be3bb8b4c705e114f9323d44fc78c409419a"}
+  ],
+  "observedActions": [
+    "Created the task Space from the UI with GitHub issue #4 automatic import and repository consent.",
+    "Opened the imported issue in Context and used the live file picker.",
+    "Resized the Context split through the browser separator to 371.39 px at 1440x900.",
+    "Selected Context and enabled authoritative Herdr pane zoom at 480x900.",
+    "Added one harmless tracked fixture line in the run-owned checkout and opened the real Review diff.",
+    "Captured the line comment editor and saved the comment through the UI."
+  ],
+  "cleanup": {
+    "owner": "atlas app screenshot capture",
+    "ownedResources": ["Herdr session ca12", "gateway 4203", "browser profile atlas-app", "ca12 worktree and companion"],
+    "protectedResources": ["Herdr default", "Cockpit PID 2523753", "gateway 191105", "unrelated worktree dirt"],
+    "state": "cleaned; Herdr session ca12, gateway 4203, and browser atlas-app stopped; run root retained for receipt inspection."
+  },
+  "rerun": "scripts/capture-app.py"
+}

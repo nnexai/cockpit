@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cockpit current visual atlas</title>
+  <style>
+    :root { color-scheme: dark; --bg:#111315; --panel:#191c20; --line:#30363d; --text:#edf0f2; --muted:#a9b1ba; --app:#74b9ff; --browser:#f6b26b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1500px; margin:0 auto; padding:28px clamp(16px,3vw,44px) 56px; }
+    header { display:flex; flex-wrap:wrap; align-items:end; gap:18px 28px; border-bottom:1px solid var(--line); padding-bottom:20px; }
+    h1 { margin:0; font-size:clamp(24px,3vw,36px); letter-spacing:-.03em; }
+    .intro { max-width:720px; margin:8px 0 0; color:var(--muted); }
+    .controls { margin-left:auto; display:flex; align-items:center; gap:10px; color:var(--muted); }
+    select { border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text); padding:8px 10px; font:inherit; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px 16px; margin:18px 0; color:var(--muted); font-size:12px; }
+    .meta a { color:#9ecbff; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr)); gap:18px; }
+    .card { overflow:hidden; background:var(--panel); border:1px solid var(--line); border-radius:9px; }
+    .thumb { display:block; aspect-ratio:16/10; background:#0b0d0f; border-bottom:1px solid var(--line); }
+    .thumb img { display:block; width:100%; height:100%; object-fit:contain; }
+    .thumb.missing { display:grid; place-items:center; color:#737d88; font-size:12px; padding:20px; text-align:center; }
+    .body { padding:13px 14px 15px; }
+    .line { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    h2 { margin:0; font-size:15px; }
+    .surface { border-radius:999px; padding:2px 7px; color:#0f1419; font-size:11px; font-weight:700; }
+    .surface.app { background:var(--app); } .surface.browser { background:var(--browser); }
+    .caption { min-height:42px; margin:8px 0 12px; color:var(--muted); font-size:13px; }
+    .details { display:flex; flex-wrap:wrap; gap:6px; color:#c7cdd3; font-size:11px; }
+    .tag { border:1px solid var(--line); border-radius:4px; padding:2px 5px; }
+    .open { display:inline-block; margin-top:12px; color:#9ecbff; font-size:12px; }
+    .empty { color:var(--muted); padding:30px 0; }
+    @media (max-width:620px) { main { padding-top:20px; } .controls { margin-left:0; width:100%; } select { flex:1; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div><h1>Cockpit current visual atlas</h1><p class="intro">A compact gallery of the current app and production extension. Each card links to the full-size runtime capture.</p></div>
+      <label class="controls" for="filter">Show <select id="filter"><option value="all">All surfaces</option><option value="app">Cockpit app</option><option value="browser">Browser extension</option></select></label>
+    </header>
+    <div class="meta" id="meta">Loading gallery…</div>
+    <section class="grid" id="grid" aria-live="polite"></section>
+  </main>
+  <!-- atlas-manifest:start -->
+    <script id="atlas-data" type="application/json">{"schemaVersion":1,"atlasId":"cockpit-current-visualatlas-2026-09-12","title":"Cockpit current visual atlas","status":"ready","sourceCommit":"d7da954fbbeaa294425b7b50de6a09efe3658f51","createdOn":"2026-09-12","purpose":"A concise visual reference for the current Cockpit app and production browser extension.","policy":{"currentGallery":"Only screenshots captured by the current owned runtime lanes belong here.","runtimeReceipts":["app-receipt.json","browser-receipt.json"],"historicalEvidence":"The parent atlas indexes and runtime trees remain available but are not copied into this gallery."},"viewports":[{"id":"desktop","width":1440,"height":900,"use":"primary desktop reference"},{"id":"narrow","width":800,"height":1000,"use":"portrait layout where columns change"},{"id":"mobile","width":480,"height":800,"use":"portrait controls and popup"},{"id":"split-pane","width":360,"height":800,"use":"real narrow split pane"}],"shots":[{"id":"app-shell-desktop","surface":"app","title":"Workbench shell","caption":"Spaces, tabs, agents, and the focused pane in the daily workbench.","file":"app-shell-desktop.png","viewport":"1440x900","tags":["shell","spaces","tabs"],"receipt":"app-receipt.json"},{"id":"app-sidebar-collapsed","surface":"app","title":"Collapsed sidebar","caption":"The workbench with the navigation sidebar collapsed to give the pane more room.","file":"app-sidebar-collapsed.png","viewport":"1440x900","tags":["shell","responsive"],"receipt":"app-receipt.json"},{"id":"app-drawer-480","surface":"app","title":"Space drawer at 480px","caption":"The compact Space drawer at portrait width.","file":"app-drawer-480.png","viewport":"480x900","tags":["shell","spaces","responsive"],"receipt":"app-receipt.json"},{"id":"app-drawer-800","surface":"app","title":"Space drawer at 800px","caption":"The Space drawer and workbench at 800 pixel portrait width.","file":"app-drawer-800.png","viewport":"800x1000","tags":["shell","spaces","responsive"],"receipt":"app-receipt.json"},{"id":"app-commands-search-desktop","surface":"app","title":"Command menu","caption":"The command search menu open over the workbench with its selected result.","file":"app-commands-search-desktop.png","viewport":"1440x900","tags":["commands","menu","keyboard"],"receipt":"app-receipt.json"},{"id":"app-commands-search-480","surface":"app","title":"Command menu at 480px","caption":"The command search menu at portrait width.","file":"app-commands-search-480.png","viewport":"480x900","tags":["commands","menu","responsive"],"receipt":"app-receipt.json"},{"id":"app-resource-menu","surface":"app","title":"Resource menu","caption":"Resource and pane actions exposed from the focused workbench.","file":"app-resource-menu.png","viewport":"1440x900","tags":["menu","pane"],"receipt":"app-receipt.json"},{"id":"app-setup-draft","surface":"app","title":"Setup draft","caption":"Repository setup with the initial project details ready for review.","file":"app-setup-draft.png","viewport":"1440x900","tags":["setup","lifecycle"],"receipt":"app-receipt.json"},{"id":"app-setup-review-plan","surface":"app","title":"Setup review plan","caption":"The owned repository setup plan before the worktree operation begins.","file":"app-setup-review-plan.png","viewport":"1440x900","tags":["setup","lifecycle"],"receipt":"app-receipt.json"},{"id":"app-files-source","surface":"app","title":"Files source view","caption":"An imported issue source rendered in the Files view.","file":"app-files-source.png","viewport":"1440x900","tags":["files","viewer"],"receipt":"app-receipt.json"},{"id":"app-files-picker-dialog","surface":"app","title":"Files picker","caption":"The live Go to file picker over the Files view.","file":"app-files-picker-dialog.png","viewport":"1440x900","tags":["files","search"],"receipt":"app-receipt.json"},{"id":"app-context-issue","surface":"app","title":"Context issue preview","caption":"The imported issue rendered in Context with its document hierarchy.","file":"app-context-issue-1440.png","viewport":"1440x900","tags":["context","rendering"],"receipt":"app-receipt.json"},{"id":"app-context-split","surface":"app","title":"Context split pane","caption":"Context resized through the real browser separator, with pane geometry recorded in the receipt.","file":"app-context-split-360.png","viewport":"1440x900","tags":["context","split-pane"],"receipt":"app-receipt.json"},{"id":"app-context-zoom","surface":"app","title":"Context at 480px","caption":"The Context pane at portrait width with authoritative pane zoom enabled.","file":"app-context-zoom-480.png","viewport":"480x900","tags":["context","responsive"],"receipt":"app-receipt.json"},{"id":"app-review-diff","surface":"app","title":"Review diff","caption":"A real tracked diff opened in Review.","file":"app-review-diff.png","viewport":"1440x900","tags":["review","diff"],"receipt":"app-receipt.json"},{"id":"app-review-line-comment","surface":"app","title":"Review line comment","caption":"The line comment editor over the selected Review diff.","file":"app-review-line-comment-desktop.png","viewport":"1440x900","tags":["review","comments"],"receipt":"app-receipt.json"},{"id":"app-review-line-comment-480","surface":"app","title":"Review comment at 480px","caption":"The saved line comment in portrait Review.","file":"app-review-line-comment-480.png","viewport":"480x900","tags":["review","comments","responsive"],"receipt":"app-receipt.json"},{"id":"browser-toolbar","surface":"browser","title":"Extension toolbar","caption":"The production extension toolbar on the owned page.","file":"screenshots/browser-toolbar-desktop.png","viewport":"1050x793","tags":["annotation","page"],"receipt":"browser-receipt.json"},{"id":"browser-toolbar-portrait","surface":"browser","title":"Extension toolbar at 480px","caption":"The annotation toolbar at portrait width.","file":"screenshots/browser-toolbar-portrait.png","viewport":"480x900","tags":["annotation","responsive"],"receipt":"browser-receipt.json"},{"id":"browser-hover-outline","surface":"browser","title":"Element hover outline","caption":"The extension's element targeting outline on the owned page.","file":"screenshots/browser-element-hover-outline.png","viewport":"1050x793","tags":["annotation","element"],"receipt":"browser-receipt.json"},{"id":"browser-comment-editor","surface":"browser","title":"Element comment editor","caption":"The production extension editor for an anchored element comment.","file":"screenshots/browser-element-comment-editor.png","viewport":"1050x793","tags":["annotation","comments"],"receipt":"browser-receipt.json"},{"id":"browser-region-comment","surface":"browser","title":"Region comment","caption":"A region annotation with its comment editor on the owned page.","file":"screenshots/browser-region-comment.png","viewport":"1050x793","tags":["annotation","region","comments"],"receipt":"browser-receipt.json"},{"id":"browser-cockpit-feedback","surface":"browser","title":"Pending capture feedback panel","caption":"Actual Cockpit panel for the pending capture: the browser association has no eligible agent.","file":"screenshots/browser-cockpit-feedback.png","viewport":"panel crop 760x696","tags":["capture","feedback","pending"],"receipt":"browser-receipt.json"},{"id":"browser-popup-pending","surface":"browser","title":"Popup with pending feedback","caption":"The connected popup showing a pending annotation.","file":"screenshots/browser-popup-pending.png","viewport":"375x600","tags":["popup","feedback"],"receipt":"browser-receipt.json"}],"historical":[{"label":"Workbench evidence index","file":"../workbench-terminal/index.json"},{"label":"Setup, Context, and Review evidence index","file":"../setup-context-review/index.json"},{"label":"Browser extension evidence index","file":"../browser-extension/index.json"},{"label":"Full evidence workflow and receipts","file":"../workflow/"}]}</script>
+    <!-- atlas-manifest:end -->
+  <script>
+    const grid = document.querySelector('#grid');
+    const filter = document.querySelector('#filter');
+    const meta = document.querySelector('#meta');
+    const atlas = JSON.parse(document.querySelector('#atlas-data').textContent);
+    const esc = (value) => String(value).replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    function render() {
+      const value = filter.value;
+      const shots = atlas.shots.filter((shot) => value === 'all' || shot.surface === value);
+      grid.innerHTML = shots.length ? shots.map((shot) => `
+        <article class="card">
+          <a class="thumb" href="${esc(shot.file)}" data-shot="${esc(shot.id)}"><img src="${esc(shot.file)}" alt="${esc(shot.title)}" loading="lazy"></a>
+          <div class="body"><div class="line"><h2>${esc(shot.title)}</h2><span class="surface ${esc(shot.surface)}">${esc(shot.surface)}</span></div>
+            <p class="caption">${esc(shot.caption)}</p><div class="details"><span class="tag">${esc(shot.viewport)}</span>${shot.tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join('')}</div>
+            <a class="open" href="${esc(shot.file)}">Open full size</a>
+          </div>
+        </article>`).join('') : '<p class="empty">No shots match this filter.</p>';
+      meta.innerHTML = `${shots.length} of ${atlas.shots.length} cards · source <code>${esc(atlas.sourceCommit)}</code> · <a href="../workbench-terminal/index.json">historical indexes</a> · <a href="README.md">gallery notes</a>`;
+      grid.querySelectorAll('img').forEach((image) => image.addEventListener('error', () => { const link = image.closest('.thumb'); link.classList.add('missing'); link.innerHTML = 'Awaiting runtime capture'; }));
+    }
+    render();
+    filter.addEventListener('change', render);
+  </script>
+</body>
+</html>

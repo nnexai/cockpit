@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "surface": "browser-extension",
+  "capturedAt": "2026-09-12T20:43:00+02:00",
+  "sourceCommit": "d7da954fbbeaa294425b7b50de6a09efe3658f51",
+  "hostCliSha256": "a1fe318ee1c1b4c12e4d87f16387fa31dd36f80d37f57925752c0b7f05846031",
+  "run": {
+    "root": "/tmp/cab12",
+    "herdrSession": "cab12",
+    "space": "w1",
+    "gateway": "http://127.0.0.1:4204",
+    "fixture": "http://127.0.0.1:4205/",
+    "profile": "/tmp/cab12/profileatlas-browser",
+    "cdp": "http://127.0.0.1:4206"
+  },
+  "productionExtension": {
+    "id": "fblkilbfbmpndnfjaacljmcljhepakok",
+    "name": "Cockpit Space feedback",
+    "version": "1.53251.27787.18982",
+    "bundle": "/tmp/cab12/cockpit-state/browser/extensions/7ddd104b285da8f8636aff37/55851365-f1e7-480a-9b16-6d1490afa932",
+    "browserInstance": "55851365-f1e7-480a-9b16-6d1490afa932",
+    "associationKey": "7ddd104b285da8f8636aff37"
+  },
+  "capture": {
+    "method": "CDP screenshot plus production extension prepare-capture/finish-capture and authenticated /capture",
+    "cockpitFeedbackCaptureScript": "scripts/capture-feedback.js",
+    "captureId": "c36004fd-cfcc-4434-a28f-1074a8b90a20",
+    "uiCaptureId": "e75e393b-3572-4888-9d8c-a76bebe6e373",
+    "uiAssociationKey": "1480ba298c18ffce4dd3ffd0",
+    "annotationIds": ["171bd540-6c78-4783-8970-2233261d5e44"],
+    "pendingCount": 1,
+    "image": "screenshots/browser-captured-image.png",
+    "viewport": { "width": 1050, "height": 793 },
+    "httpStatus": 200,
+    "cameraPermissionNote": "Chrome 153 direct toolbar camera reported the activeTab permission message; the production prepare/finish path and authenticated capture save succeeded."
+  },
+  "screenshots": [
+    { "path": "screenshots/browser-toolbar-desktop.png", "state": "annotation toolbar on readable fixture", "viewport": [1050, 793] },
+    { "path": "screenshots/browser-toolbar-portrait.png", "state": "annotation toolbar on portrait viewport", "viewport": [480, 900] },
+    { "path": "screenshots/browser-element-hover-outline.png", "state": "element tool hover outline", "viewport": [1050, 793] },
+    { "path": "screenshots/browser-element-comment-editor.png", "state": "element mark with inline comment editor", "viewport": [1050, 793] },
+    { "path": "screenshots/browser-region-comment.png", "state": "region mark with comment", "viewport": [1050, 793] },
+    { "path": "screenshots/browser-captured-image.png", "state": "saved populated capture", "viewport": [1050, 793] },
+    { "path": "screenshots/browser-popup-pending.png", "state": "connected popup with pending annotation", "viewport": [375, 600] },
+    { "path": "screenshots/browser-cockpit-feedback.png", "state": "actual Cockpit Space feedback panel with populated capture", "viewport": [760, 696], "sha256": "25519299c0008574ed70f875ff12ba0ac195af95f0cb3ea601d8bbd16ef9e2ec", "provenance": "Playwright CLI screenshot of the live Cockpit dialog" }
+  ],
+  "omitted": [
+    { "path": "screenshots/browser-capture-complete.png", "reason": "exploratory camera permission error state; omit from curated gallery" }
+  ],
+  "cleanup": {
+    "owned": ["/tmp/cab12", "herdr session cab12", "gateway 4204", "fixture 4205", "Chrome profile /tmp/cab12/profileatlas-browser"],
+    "protected": ["default Herdr session", "user process PID 2523753", "gateway PID 191105"]
+  }
+}
