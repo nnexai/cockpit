@@ -1,0 +1,133 @@
+### Page
+- Page URL: http://127.0.0.1:4197/
+- Page Title: Cockpit
+- Console: 1 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=e9]:
+  - complementary "Spaces and agents" [ref=e10]:
+    - generic [ref=e11]:
+      - button "Switch session, current cf12" [ref=e12]:
+        - generic [aria-hidden] [ref=e13]: ●
+        - generic [ref=e14]: cf12
+        - generic [ref=e15]: live
+        - generic [aria-hidden] [ref=e16]: ⌄
+      - button "Collapse sidebar" [ref=e18] [cursor=pointer]: ‹
+    - region [ref=e19]:
+      - generic [ref=e20]:
+        - heading "spaces" [level=2] [ref=e21]
+        - button "Set up a task Space" [disabled] [ref=e22] [cursor=pointer]: +
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - button "cockpit" [ref=e25] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e26]: ·
+          - button "Collapse cockpit" [expanded] [ref=e193] [cursor=pointer]: ⌄
+        - button "final cf12 issue4 flow" [ref=e195] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e196]: ·
+    - region [ref=e29]:
+      - generic [ref=e30]:
+        - heading "agents" [level=2] [ref=e31]
+        - generic [ref=e32]: "0"
+      - paragraph [ref=e34]: Inbox empty
+  - separator "Resize sidebar" [ref=e35]
+  - main [ref=e36]:
+    - navigation "Tabs" [ref=e37]:
+      - tablist [ref=e38]:
+        - tab "Tab 1" [ref=e200] [cursor=pointer]:
+          - generic [ref=e201]: "1"
+        - 'tab "Tab 2: final cf12 issue4 flow context" [selected] [ref=e203] [cursor=pointer]':
+          - generic [ref=e204]: "2"
+          - generic [ref=e205]: final cf12 issue4 flow context
+        - button "Create tab" [ref=e42] [cursor=pointer]: +
+      - button "Commands" [ref=e44] [cursor=pointer]
+    - region "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e206]:
+      - generic [ref=e207]:
+        - button "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e208] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e209]: ›
+        - button "Pane actions for /t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e211] [cursor=pointer]: ⋯
+      - generic "Terminal w2:p3" [ref=e213]:
+        - generic [ref=e216]:
+          - textbox "Terminal input" [active] [ref=e217]
+          - generic [aria-hidden]:
+            - generic: Welcome to fish, the friendly interactive shell
+            - generic:
+              - generic: Type
+              - generic: help
+              - generic: for instructions on how to use fish
+            - generic:
+              - generic: …
+              - generic: "-c24589da-36c1-4772-9153-b81a43101ebd"
+              - generic: (cf12-final-issue4)>
+  - dialog [ref=e58]:
+    - banner [ref=e59]:
+      - generic [ref=e60]:
+        - generic [ref=e61]: New task Space
+        - heading "Set up a workspace" [level=2] [ref=e62]
+        - paragraph [ref=e63]: Choose a configured local repository, review exact effects, then create or open through Herdr.
+      - button "Close setup dialog" [ref=e64] [cursor=pointer]: Close
+    - navigation "Setup steps" [ref=e65]:
+      - button "1 Repository" [ref=e66] [cursor=pointer]:
+        - generic [ref=e67]: "1"
+        - generic [ref=e68]: Repository
+      - button "2 Workspace & review" [ref=e69] [cursor=pointer]:
+        - generic [ref=e70]: "2"
+        - generic [ref=e71]: Workspace & review
+    - region "Workspace setup progress" [ref=e181]:
+      - generic [ref=e182]:
+        - heading "completed" [level=3] [ref=e218]
+        - generic [ref=e185]: completed
+      - status [ref=e188]: Workspace, Context, and the context-aware terminal are ready.
+      - generic [ref=e219]:
+        - strong [ref=e220]: Resources retained
+        - list [ref=e221]:
+          - listitem [ref=e222]:
+            - code [ref=e223]: /tmp/cfinal12/worktrees/cockpit-c24589da-36c1-4772-9153-b81a43101ebd
+            - text: · created by this operation
+          - listitem [ref=e224]:
+            - code [ref=e225]: /tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd
+            - text: · created by this operation
+    - generic [ref=e226]:
+      - heading "Workspace setup completed" [level=3] [ref=e227]
+      - paragraph [ref=e228]: The Herdr workspace, companion association, and context-aware terminal are ready. Start an agent manually in the new terminal; the original root pane was left unchanged.
+      - generic [ref=e229]:
+        - generic [ref=e230]:
+          - generic [ref=e231]: Repository
+          - code [ref=e232]: /tmp/cfinal12/repos/cockpit
+        - generic [ref=e233]:
+          - generic [ref=e234]: Operation
+          - strong [ref=e235]: Create linked worktree
+        - generic [ref=e236]:
+          - generic [ref=e237]: Checkout
+          - code [ref=e238]: /tmp/cfinal12/worktrees/cockpit-c24589da-36c1-4772-9153-b81a43101ebd
+        - generic [ref=e239]:
+          - generic [ref=e240]: Companion
+          - code [ref=e241]: /tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd
+        - generic [ref=e242]:
+          - generic [ref=e243]: Branch / base
+          - code [ref=e244]: cf12-final-issue4
+        - generic [ref=e245]:
+          - generic [ref=e246]: Label
+          - generic [ref=e247]: final cf12 issue4 flow
+        - generic [ref=e248]:
+          - generic [ref=e249]: Artifact
+          - generic [ref=e250]: issue · nnexai/cockpit#4
+        - generic [ref=e251]:
+          - generic [ref=e252]: Focus / consent
+          - generic [ref=e253]: Focus new context terminal · Consent recorded
+        - generic [ref=e254]:
+          - strong [ref=e255]: Exact effects
+          - list [ref=e256]:
+            - listitem [ref=e257]: Create Herdr worktree at /tmp/cfinal12/worktrees/cockpit-c24589da-36c1-4772-9153-b81a43101ebd
+            - listitem [ref=e258]: Associate Cockpit companion at /tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd
+            - listitem [ref=e259]: Create a new context-aware terminal with allowlisted COCKPIT_* environment
+            - listitem [ref=e260]: Record the selected artifact in the companion manifest
+        - paragraph [ref=e261]:
+          - strong [ref=e262]: "Terminal boundary:"
+          - text: the Herdr-created root pane cannot receive environment values retroactively. Cockpit creates a new context-aware terminal for new processes only; start an agent manually there. The root pane remains unchanged.
+      - button "Done" [ref=e264] [cursor=pointer]
+    - contentinfo [ref=e102]:
+      - generic [ref=e103]:
+        - text: Session
+        - code [ref=e104]: cf12
+      - generic [ref=e105]: Closing hides this dialog; it does not cancel or remove resources.
+```

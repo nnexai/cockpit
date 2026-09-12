@@ -1,0 +1,158 @@
+### Page
+- Page URL: http://127.0.0.1:4197/
+- Page Title: Cockpit
+- Console: 1 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=e9]:
+  - complementary "Spaces and agents" [ref=e10]:
+    - generic [ref=e11]:
+      - button "Switch session, current cf12" [ref=e12]:
+        - generic [aria-hidden] [ref=e13]: ●
+        - generic [ref=e14]: cf12
+        - generic [ref=e15]: live
+        - generic [aria-hidden] [ref=e16]: ⌄
+      - button "Collapse sidebar" [ref=e18] [cursor=pointer]: ‹
+    - region [ref=e19]:
+      - generic [ref=e20]:
+        - heading "spaces" [level=2] [ref=e21]
+        - button "Set up a task Space" [disabled] [ref=e22] [cursor=pointer]: +
+      - button "cockpit" [ref=e25] [cursor=pointer]:
+        - generic [aria-hidden] [ref=e26]: ·
+    - region [ref=e29]:
+      - generic [ref=e30]:
+        - heading "agents" [level=2] [ref=e31]
+        - generic [ref=e32]: "0"
+      - paragraph [ref=e34]: Inbox empty
+  - separator "Resize sidebar" [ref=e35]
+  - main [ref=e36]:
+    - navigation "Tabs" [ref=e37]:
+      - tablist [ref=e38]:
+        - tab "Tab 1" [selected] [ref=e40] [cursor=pointer]:
+          - generic [ref=e41]: "1"
+        - button "Create tab" [ref=e42] [cursor=pointer]: +
+      - button "Commands" [ref=e44] [cursor=pointer]
+    - region "/t/c/r/cockpit" [ref=e46]:
+      - generic [ref=e47]:
+        - button "/t/c/r/cockpit" [ref=e48] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e49]: ›
+        - button "Pane actions for /t/c/r/cockpit" [ref=e51] [cursor=pointer]: ⋯
+      - generic "Terminal w1:p1" [ref=e53]:
+        - generic [ref=e56]:
+          - textbox "Terminal input" [ref=e57]
+          - generic [aria-hidden]:
+            - generic: Welcome to fish, the friendly interactive shell
+            - generic:
+              - generic: Type
+              - generic: help
+              - generic: for instructions on how to use fish
+            - generic:
+              - generic: nnex
+              - generic: "@nnex-framework"
+              - generic: /t/c/r/cockpit
+              - generic: (main)>
+  - dialog [ref=e58]:
+    - banner [ref=e59]:
+      - generic [ref=e60]:
+        - generic [ref=e61]: New task Space
+        - heading "Set up a workspace" [level=2] [ref=e62]
+        - paragraph [ref=e63]: Choose a configured local repository, review exact effects, then create or open through Herdr.
+      - button "Close setup dialog" [ref=e64] [cursor=pointer]: Close
+    - navigation "Setup steps" [ref=e65]:
+      - button "1 Repository" [ref=e66] [cursor=pointer]:
+        - generic [ref=e67]: "1"
+        - generic [ref=e68]: Repository
+      - button "2 Workspace & review" [ref=e69] [cursor=pointer]:
+        - generic [ref=e70]: "2"
+        - generic [ref=e71]: Workspace & review
+    - main [ref=e72]:
+      - region [ref=e106]:
+        - generic [ref=e108]:
+          - heading "Workspace and review" [level=3] [ref=e109]
+          - paragraph [ref=e110]: Choose create or open, then review exact paths and effects before Herdr is changed.
+        - generic [ref=e111]:
+          - button "Create linked worktree New checkout below the configured worktree root." [pressed] [ref=e112] [cursor=pointer]:
+            - strong [ref=e113]: Create linked worktree
+            - generic [ref=e114]: New checkout below the configured worktree root.
+          - button "Open existing checkout Use one already-discovered local checkout." [ref=e115] [cursor=pointer]:
+            - strong [ref=e116]: Open existing checkout
+            - generic [ref=e117]: Use one already-discovered local checkout.
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - text: Branch
+            - generic [ref=e120]: · required
+          - textbox "Branch · required" [ref=e121]:
+            - /placeholder: feature/task-name
+            - text: cf12-final-issue4
+        - generic [ref=e122]:
+          - generic [ref=e123]:
+            - text: Base ref
+            - generic [ref=e124]: · optional
+          - textbox "Base ref · optional" [ref=e125]:
+            - /placeholder: main
+        - generic [ref=e126]:
+          - generic [ref=e127]:
+            - text: Destination
+            - generic [ref=e128]: · optional
+          - textbox "Destination · optional" [ref=e129]:
+            - /placeholder: Configured worktree root default
+        - generic [ref=e130]:
+          - generic [ref=e131]:
+            - text: Space label
+            - generic [ref=e132]: · optional
+          - textbox "Space label · optional" [ref=e133]:
+            - /placeholder: final cf12 issue4 flow
+        - generic [ref=e135]:
+          - checkbox "Focus the resulting Space and context terminal" [checked] [ref=e136]
+          - text: Focus the resulting Space and context terminal
+        - group [ref=e137]:
+          - generic "Context readiness and additional sources" [ref=e138] [cursor=pointer]
+        - generic [ref=e139]:
+          - strong [ref=e140]: Repository consent
+          - generic [ref=e141]:
+            - checkbox "I understand and consent to the configured repository actions for this operation." [checked] [ref=e142]
+            - text: I understand and consent to the configured repository actions for this operation.
+        - generic [ref=e146]:
+          - generic [ref=e147]:
+            - generic [ref=e148]: Repository
+            - code [ref=e149]: /tmp/cfinal12/repos/cockpit
+          - generic [ref=e150]:
+            - generic [ref=e151]: Operation
+            - strong [ref=e152]: Create linked worktree
+          - generic [ref=e153]:
+            - generic [ref=e154]: Checkout
+            - code [ref=e155]: /tmp/cfinal12/worktrees/cockpit-c24589da-36c1-4772-9153-b81a43101ebd
+          - generic [ref=e156]:
+            - generic [ref=e157]: Companion
+            - code [ref=e158]: /tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd
+          - generic [ref=e159]:
+            - generic [ref=e160]: Branch / base
+            - code [ref=e161]: cf12-final-issue4
+          - generic [ref=e162]:
+            - generic [ref=e163]: Label
+            - generic [ref=e164]: final cf12 issue4 flow
+          - generic [ref=e165]:
+            - generic [ref=e166]: Artifact
+            - generic [ref=e167]: issue · nnexai/cockpit#4
+          - generic [ref=e168]:
+            - generic [ref=e169]: Focus / consent
+            - generic [ref=e170]: Focus new context terminal · Consent recorded
+          - generic [ref=e171]:
+            - strong [ref=e172]: Exact effects
+            - list [ref=e173]:
+              - listitem [ref=e174]: Create Herdr worktree at /tmp/cfinal12/worktrees/cockpit-c24589da-36c1-4772-9153-b81a43101ebd
+              - listitem [ref=e175]: Associate Cockpit companion at /tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd
+              - listitem [ref=e176]: Create a new context-aware terminal with allowlisted COCKPIT_* environment
+              - listitem [ref=e177]: Record the selected artifact in the companion manifest
+          - paragraph [ref=e178]:
+            - strong [ref=e179]: "Terminal boundary:"
+            - text: the Herdr-created root pane cannot receive environment values retroactively. Cockpit creates a new context-aware terminal for new processes only; start an agent manually there. The root pane remains unchanged.
+        - generic [ref=e143]:
+          - button "Back" [ref=e144] [cursor=pointer]
+          - button "Start Create linked worktree" [ref=e180] [cursor=pointer]
+    - contentinfo [ref=e102]:
+      - generic [ref=e103]:
+        - text: Session
+        - code [ref=e104]: cf12
+      - generic [ref=e105]: Closing hides this dialog; it does not cancel or remove resources.
+```

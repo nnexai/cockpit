@@ -1,0 +1,122 @@
+### Page
+- Page URL: http://127.0.0.1:4197/
+- Page Title: Cockpit
+- Console: 1 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=e32]:
+  - button "Close sidebar" [ref=e980]
+  - dialog "Spaces and agents" [ref=e981]:
+    - banner [ref=e982]:
+      - button "Switch session, current cf12" [ref=e35]:
+        - generic [aria-hidden] [ref=e36]: ●
+        - generic [ref=e37]: cf12
+        - generic [ref=e38]: live
+        - generic [aria-hidden] [ref=e39]: ⌄
+      - generic [ref=e40]:
+        - button "Collapse sidebar" [ref=e41] [cursor=pointer]: ‹
+        - button "Close sidebar" [active] [ref=e983] [cursor=pointer]: ×
+    - region [ref=e42]:
+      - generic [ref=e43]:
+        - heading "spaces" [level=2] [ref=e44]
+        - button "Set up a task Space" [ref=e45] [cursor=pointer]: +
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - button "cockpit" [ref=e48] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e49]: ·
+          - button "Collapse cockpit" [expanded] [ref=e52] [cursor=pointer]: ⌄
+        - button "final cf12 issue4 flow" [ref=e54] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e55]: ·
+    - region [ref=e58]:
+      - generic [ref=e59]:
+        - heading "agents" [level=2] [ref=e60]
+        - generic [ref=e61]: "0"
+      - paragraph [ref=e63]: Inbox empty
+  - main [ref=e65]:
+    - button "Open sidebar" [expanded] [ref=e984] [cursor=pointer]: ☰ Sidebar
+    - navigation "Tabs" [ref=e66]:
+      - tablist [ref=e67]:
+        - tab "Tab 1" [ref=e69] [cursor=pointer]:
+          - generic [ref=e70]: "1"
+        - 'tab "Tab 2: final cf12 issue4 flow context" [selected] [ref=e72] [cursor=pointer]':
+          - generic [ref=e73]: "2"
+          - generic [ref=e74]: final cf12 issue4 flow context
+        - button "Create tab" [ref=e75] [cursor=pointer]: +
+      - button "Commands" [ref=e77] [cursor=pointer]
+    - region "reviewr" [ref=e91]:
+      - generic [ref=e92]:
+        - button "reviewr" [ref=e93] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e94]: ›
+        - button "Pane actions for reviewr" [ref=e96] [cursor=pointer]: ⋯
+      - region "Local review" [ref=e99]:
+        - generic [ref=e100]:
+          - generic [ref=e101]: Comparison
+          - combobox "Comparison" [ref=e102]:
+            - option "All local changes" [selected]
+            - option "Staged"
+            - option "Unstaged"
+            - option "Untracked"
+            - option "Branch"
+          - button "Choose review file" [ref=e103] [cursor=pointer]: Files
+          - generic "Review navigation" [ref=e104]:
+            - button "Previous file" [ref=e105] [cursor=pointer]: ←
+            - button "Next file" [ref=e106] [cursor=pointer]: →
+            - button "Previous hunk" [ref=e107] [cursor=pointer]: ↑
+            - button "Next hunk" [ref=e108] [cursor=pointer]: ↓
+          - button "Refresh" [ref=e986] [cursor=pointer]
+        - main "Unified diff" [ref=e111]:
+          - generic [ref=e113]:
+            - button "Expand full source" [ref=e114] [cursor=pointer]
+            - generic [ref=e115]: new side
+            - button "Old source" [ref=e116] [cursor=pointer]
+            - button "New source" [ref=e117] [cursor=pointer]
+          - generic [ref=e118]:
+            - code [ref=e119]: CONTEXT.md
+            - generic [ref=e120]: unstaged modified
+          - generic [ref=e121]:
+            - generic [ref=e122]: "@@ -377 +377 @@"
+            - 'button "377 377 The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16." [ref=e123] [cursor=pointer]':
+              - generic [ref=e124]: "377"
+              - generic [ref=e125]: "377"
+              - code [ref=e126]: "The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16."
+            - button "378 378" [ref=e127] [cursor=pointer]:
+              - generic [ref=e128]: "378"
+              - generic [ref=e129]: "378"
+              - code [ref=e130]
+            - 'button "379 379 The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`." [ref=e131] [cursor=pointer]':
+              - generic [ref=e132]: "379"
+              - generic [ref=e133]: "379"
+              - code [ref=e134]: "The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`."
+            - button "380 +" [ref=e135] [cursor=pointer]:
+              - generic [ref=e137]: "380"
+              - code [ref=e138]: +
+            - button "381 +<!-- cf12 final workflow review fixture -->" [ref=e139] [cursor=pointer]:
+              - generic [ref=e141]: "381"
+              - code [ref=e142]: +<!-- cf12 final workflow review fixture -->
+            - generic "Comments on line 381" [ref=e170]:
+              - article [ref=e171]:
+                - generic [ref=e172]:
+                  - strong [ref=e173]: Lines 381–381
+                  - generic [ref=e174]: current
+                - paragraph [ref=e175]: cf12 line draft survives refresh
+                - generic [ref=e176]:
+                  - button "Edit" [ref=e177] [cursor=pointer]
+                  - button "Delete" [ref=e178] [cursor=pointer]
+          - region "Comments for CONTEXT.md" [ref=e179]:
+            - heading "File comments" [level=3] [ref=e180]
+            - article [ref=e181]:
+              - generic [ref=e182]:
+                - strong [ref=e183]: Whole file
+                - generic [ref=e184]: current
+              - paragraph [ref=e185]: cf12 file draft survives refresh
+              - generic [ref=e186]:
+                - button "Edit" [ref=e187] [cursor=pointer]
+                - button "Delete" [ref=e188] [cursor=pointer]
+        - generic "Review shortcuts" [ref=e143]:
+          - generic [ref=e144]: Select a line
+          - generic [ref=e145]:
+            - button "C comment" [disabled] [ref=e146]
+            - button "Shift+C file" [ref=e147] [cursor=pointer]
+            - button "2 comments" [ref=e189] [cursor=pointer]
+            - generic [ref=e149]: Alt+↑↓ hunk
+```

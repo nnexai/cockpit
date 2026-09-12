@@ -1,0 +1,276 @@
+### Page
+- Page URL: http://127.0.0.1:4197/
+- Page Title: Cockpit
+- Console: 1 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=e9]:
+  - complementary "Spaces and agents" [ref=e10]:
+    - generic [ref=e11]:
+      - button "Switch session, current cf12" [ref=e12]:
+        - generic [aria-hidden] [ref=e13]: ●
+        - generic [ref=e14]: cf12
+        - generic [ref=e15]: live
+        - generic [aria-hidden] [ref=e16]: ⌄
+      - button "Collapse sidebar" [ref=e18] [cursor=pointer]: ‹
+    - region [ref=e19]:
+      - generic [ref=e20]:
+        - heading "spaces" [level=2] [ref=e21]
+        - button "Set up a task Space" [ref=e22] [cursor=pointer]: +
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - button "cockpit" [ref=e25] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e26]: ·
+          - button "Collapse cockpit" [expanded] [ref=e193] [cursor=pointer]: ⌄
+        - button "final cf12 issue4 flow" [ref=e195] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e196]: ·
+    - region [ref=e29]:
+      - generic [ref=e30]:
+        - heading "agents" [level=2] [ref=e31]
+        - generic [ref=e32]: "0"
+      - paragraph [ref=e34]: Inbox empty
+  - separator "Resize sidebar" [ref=e35]
+  - main [ref=e36]:
+    - navigation "Tabs" [ref=e37]:
+      - tablist [ref=e38]:
+        - tab "Tab 1" [ref=e200] [cursor=pointer]:
+          - generic [ref=e201]: "1"
+        - 'tab "Tab 2: final cf12 issue4 flow context" [selected] [ref=e203] [cursor=pointer]':
+          - generic [ref=e204]: "2"
+          - generic [ref=e205]: final cf12 issue4 flow context
+        - button "Create tab" [ref=e42] [cursor=pointer]: +
+      - button "Commands" [ref=e44] [cursor=pointer]
+    - generic [ref=e45]:
+      - region "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e206]:
+        - generic [ref=e207]:
+          - button "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e208] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e209]: ›
+          - button "Pane actions for /t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e211] [cursor=pointer]: ⋯
+        - generic "Terminal w2:p3" [ref=e213]:
+          - generic [ref=e216]:
+            - textbox "Terminal input" [ref=e217]
+            - generic [aria-hidden]:
+              - generic: Welcome to fish, the friendly interactive shell
+              - generic:
+                - generic: Type
+                - generic: help
+                - generic: for instructions on how to use fish
+              - generic:
+                - generic: …
+                - generic: "-c24589da-36c1-4772-9153-b81a43101ebd"
+                - generic: (cf12-final-is
+      - region "Files" [ref=e416]:
+        - generic [ref=e417]:
+          - button "Files" [ref=e418] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e419]: ›
+          - button "Pane actions for Files" [ref=e421] [cursor=pointer]: ⋯
+        - region "Context file viewer" [ref=e423]:
+          - generic [ref=e424]:
+            - generic "/tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd" [ref=e425]: cockpit context
+            - button "Resources" [ref=e426] [cursor=pointer]
+            - button "0 comments" [ref=e427] [cursor=pointer]
+            - button "Refresh Context files" [ref=e428] [cursor=pointer]: Refresh
+            - button "Show terminal" [ref=e429] [cursor=pointer]
+          - generic [ref=e430]:
+            - complementary "Context files" [ref=e431]:
+              - generic [ref=e432]:
+                - text: FILES
+                - generic [ref=e433]: cockpit context
+              - region "Search Context" [ref=e434]:
+                - generic [ref=e435]:
+                  - generic [ref=e436]: Search companion
+                  - searchbox "Search companion" [ref=e437]
+                  - button "Search" [disabled] [ref=e438]
+              - button "sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue" [ref=e453] [cursor=pointer]:
+                - generic [ref=e454]: ⌄
+                - generic [aria-hidden] [ref=e455]: ▸
+              - button "asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md" [active] [ref=e458] [cursor=pointer]:
+                - generic [aria-hidden] [ref=e459]: ·
+                - generic "sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md" [ref=e460]: asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md
+                - generic [ref=e461]: 8993 B
+            - main [ref=e444]:
+              - generic [ref=e462]:
+                - code: sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md
+                - generic [ref=e463]: 8993 B · revision 55:235847:8993:1789236545122485473
+                - generic [ref=e464]: "\"nnexai/cockpit#4\" · fetched \"1789236534821\""
+              - button "View source" [ref=e466] [cursor=pointer]
+              - generic [ref=e467]:
+                - group [ref=e468]:
+                  - generic "Metadata" [ref=e469] [cursor=pointer]
+                - article [ref=e470]:
+                  - heading "Fix OMP terminal cell-width drift in Cockpit xterm" [level=1] [ref=e471] [cursor=pointer]
+                  - heading "Summary" [level=2] [ref=e472] [cursor=pointer]
+                  - paragraph [ref=e473] [cursor=pointer]: "Cockpit's xterm rendering of OMP showed a visible cell-metric mismatch against Herdr/Ghostty. The problem was most noticeable around the intentional blank cell between OMP's inner vertical divider and the following horizontal rule: spaces, ordinary text, and box-drawing glyphs did not present a reliably uniform pitch."
+                  - heading "User-visible symptom" [level=2] [ref=e474] [cursor=pointer]
+                  - paragraph [ref=e475] [cursor=pointer]: "At the normal macOS desktop viewport:"
+                  - list [ref=e476] [cursor=pointer]:
+                    - listitem [ref=e477]: OMP's frame appeared less dense than the Herdr/Ghostty frame.
+                    - listitem [ref=e478]: The blank cell after an inner divider looked wider than the neighboring text/box cells.
+                    - listitem [ref=e479]: Horizontal rules appeared visually offset even though the authoritative OMP frame contains the same one-cell blank separator.
+                    - listitem [ref=e480]: Nerd Font/powerline glyphs needed to remain rendered.
+                  - paragraph [ref=e481] [cursor=pointer]: The blank separator is intentional OMP output and should remain one terminal cell wide; the fix is to stabilize its cell metrics, not remove the separator.
+                  - heading "Root cause" [level=2] [ref=e482] [cursor=pointer]
+                  - paragraph [ref=e483] [cursor=pointer]:
+                    - code [ref=e484]: TerminalPane
+                    - text: used a 13 px terminal and a fallback chain beginning with
+                    - code [ref=e485]: IosevkaTerm Nerd Font Mono
+                    - text: ", which is not installed on the target macOS workstation. The resulting fallback path could mix terminal glyph metrics. The active"
+                    - code [ref=e486]: /Applications/Cockpit.app
+                    - text: also retained an older bundle because
+                    - code [ref=e487]: scripts/install-native.py --reuse
+                    - text: updates the user-local binary but does not copy the
+                    - code [ref=e488]: .app
+                    - text: bundle into
+                    - code [ref=e489]: /Applications
+                    - text: .
+                  - heading "Patch" [level=2] [ref=e490] [cursor=pointer]
+                  - code [ref=e492] [cursor=pointer]: "diff --git a/src/app/TerminalPane.tsx b/src/app/TerminalPane.tsx --- a/src/app/TerminalPane.tsx +++ b/src/app/TerminalPane.tsx @@ -34,8 +34,8 @@ function decodeFrame(bytes: string): Uint8Array { } -const TERMINAL_FONT_FAMILY = '\"IosevkaTerm Nerd Font Mono\", \"FiraCode Nerd Font Mono\", \"IBM Plex Mono\", \"Noto Sans Mono\", monospace'; -const TERMINAL_FONT_SIZE = 13; +const TERMINAL_FONT_FAMILY = '\"FiraCode Nerd Font Mono\", \"Hack Nerd Font Mono\", monospace'; +const TERMINAL_FONT_SIZE = 11; const TERMINAL_LINE_HEIGHT = 1;"
+                  - code [ref=e494] [cursor=pointer]: "diff --git a/src/app/TerminalPane.test.tsx b/src/app/TerminalPane.test.tsx --- a/src/app/TerminalPane.test.tsx +++ b/src/app/TerminalPane.test.tsx @@ -163,11 +163,11 @@ afterEach(() => { describe(\"TerminalPane fitting and pointer ownership\", () => { - it(\"uses the terminal glyph stack at the compact design size\", () => { + it(\"uses the Herdr-matched terminal glyph density\", () => { const terminal = createCockpitTerminal(); expect(terminal.options).toMatchObject({ - fontFamily: '\"IosevkaTerm Nerd Font Mono\", \"FiraCode Nerd Font Mono\", \"IBM Plex Mono\", \"Noto Sans Mono\", monospace', - fontSize: 13, + fontFamily: '\"FiraCode Nerd Font Mono\", \"Hack Nerd Font Mono\", monospace', + fontSize: 11, lineHeight: 1, });"
+                  - heading "Verification" [level=2] [ref=e495] [cursor=pointer]
+                  - list [ref=e496] [cursor=pointer]:
+                    - listitem [ref=e497]:
+                      - code [ref=e498]: bun run test src/app/TerminalPane.test.tsx
+                      - text: — 8 tests passed.
+                    - listitem [ref=e499]:
+                      - code [ref=e500]: bun run typecheck
+                      - text: — passed.
+                    - listitem [ref=e501]:
+                      - code [ref=e502]: bun install --frozen-lockfile
+                      - text: — passed.
+                    - listitem [ref=e503]:
+                      - code [ref=e504]: bun run tauri:build
+                      - text: — macOS arm64 app and DMG built successfully.
+                    - listitem [ref=e505]:
+                      - text: The rebuilt bundle was copied to
+                      - code [ref=e506]: /Applications/Cockpit.app
+                      - text: and Cockpit was restarted.
+                    - listitem [ref=e507]: A uniquely named disposable Herdr session was rendered in a disposable native Cockpit process. Text, spaces, box-drawing glyphs, and the intentional separator cell aligned to one horizontal pitch; no cumulative drift was visible and Nerd Font icons remained rendered.
+                  - paragraph [ref=e508] [cursor=pointer]:
+                    - text: Implemented in commits
+                    - code [ref=e509]: 811484b
+                    - text: and
+                    - code [ref=e510]: 318ce4f
+                    - text: .
+                  - heading "GitHub comment 5617094901" [level=2] [ref=e511] [cursor=pointer]
+                  - paragraph [ref=e512] [cursor=pointer]: "Author: khacon Created: 2026-09-10T10:23:22Z Updated: 2026-09-10T10:23:22Z URL: https://github.com/nnexai/cockpit/issues/4#issuecomment-5617094901"
+                  - heading "Renderer follow-up (2026-09-10)" [level=2] [ref=e513] [cursor=pointer]
+                  - paragraph [ref=e514] [cursor=pointer]: "The spacing experiment separates two effects:"
+                  - list [ref=e515] [cursor=pointer]:
+                    - listitem [ref=e516]:
+                      - code [ref=e517]: "lineHeight: 1"
+                      - text: is the change that fixes the vertical cell pitch. It brought the repeated OMP separator rows from the previous roughly 113 px rhythm down to the Herdr-like roughly 88–90 px rhythm. Canvas is not required for that spacing correction.
+                    - listitem [ref=e518]:
+                      - text: Canvas was a separate glyph-rasterization experiment intended to improve box-drawing junction/endpoint continuity. The DOM renderer with
+                      - code [ref=e519]: "lineHeight: 1"
+                      - text: already had the corrected vertical rhythm; the remaining question was only whether Canvas made the horizontal rule edges look closer at zoom.
+                  - paragraph [ref=e520] [cursor=pointer]:
+                    - text: Current implementation (
+                    - code [ref=e521]: 58240ed
+                    - text: ) uses Canvas plus
+                    - code [ref=e522]: "lineHeight: 1"
+                    - text: . A native macOS smoke with continuous output stayed rendered for 60 seconds, but
+                    - code [ref=e523]: "@xterm/addon-canvas@0.8.0-beta.48"
+                    - text: declares an xterm 5 peer while Cockpit uses xterm 6. An earlier Canvas attempt caused a blank native terminal after several seconds and was removed in
+                    - code [ref=e524]: f94d786
+                    - text: ; the current pairing did not reproduce that blanking during the smoke.
+                  - paragraph [ref=e525] [cursor=pointer]:
+                    - text: "Conclusion: Canvas is not necessary to fix the reported cell-spacing drift. It is only justified if the exact zoomed box-drawing glyph continuity is judged better than the DOM renderer. The minimal fix is the font/cell metrics plus"
+                    - code [ref=e526]: "lineHeight: 1"
+                    - text: ; Canvas remains a compatibility-risk tradeoff rather than a spacing requirement.
+                  - heading "GitHub comment 5617254169" [level=2] [ref=e527] [cursor=pointer]
+                  - paragraph [ref=e528] [cursor=pointer]: "Author: khacon Created: 2026-09-10T10:35:54Z Updated: 2026-09-10T10:35:54Z URL: https://github.com/nnexai/cockpit/issues/4#issuecomment-5617254169"
+                  - heading "Final Canvas validation and minimal fix (2026-09-10)" [level=2] [ref=e529] [cursor=pointer]
+                  - paragraph [ref=e530] [cursor=pointer]: "I ran an A/B comparison against the same disposable Herdr session and the same continuously refreshed box-drawing frame:"
+                  - list [ref=e531] [cursor=pointer]:
+                    - listitem [ref=e532]:
+                      - text: DOM renderer +
+                      - code [ref=e533]: "lineHeight: 1"
+                      - text: ": correct cell pitch, continuous borders, preserved intentional one-cell separator, and no blanking after several minutes of output."
+                    - listitem [ref=e534]:
+                      - text: Canvas renderer +
+                      - code [ref=e535]: "lineHeight: 1"
+                      - text: ": visually equivalent at native capture size; no measurable glyph-continuity improvement."
+                  - paragraph [ref=e536] [cursor=pointer]: "The apparent right-edge offset in the DOM capture is the intended separator cell: inner horizontal rules stop one cell before the outer border. Pixel positions matched that one-cell gap; it is not cumulative drift."
+                  - paragraph [ref=e537] [cursor=pointer]:
+                    - text: "Conclusion: Canvas is not needed. The actual fix is the terminal metrics, especially"
+                    - code [ref=e538]: "lineHeight: 1"
+                    - text: ", with the stable font stack and 13 px size. Canvas adds no observed benefit here and carries an xterm 5 peer declaration against Cockpit’s xterm 6 plus a previously observed native blanking failure."
+                  - paragraph [ref=e539] [cursor=pointer]:
+                    - text: Minimal patch committed as
+                    - code [ref=e540]: 51f6d3d
+                    - text: (
+                    - code [ref=e541]: "fix: keep stable DOM terminal renderer"
+                    - text: "):"
+                  - list [ref=e542] [cursor=pointer]:
+                    - listitem [ref=e543]:
+                      - text: removes
+                      - code [ref=e544]: "@xterm/addon-canvas"
+                      - text: from source, package manifest, and lockfile;
+                    - listitem [ref=e545]: removes the Canvas-specific test;
+                    - listitem [ref=e546]:
+                      - text: keeps the Herdr-matched font metrics and
+                      - code [ref=e547]: "lineHeight: 1"
+                      - text: ;
+                    - listitem [ref=e548]:
+                      - text: records the validated DOM-renderer baseline in
+                      - code [ref=e549]: research/ui-implementation-constraints.md
+                      - text: .
+                  - paragraph [ref=e550] [cursor=pointer]:
+                    - text: "Verification: 8 focused"
+                    - code [ref=e551]: TerminalPane
+                    - text: tests passed, TypeScript passed, macOS arm64 Tauri build passed, and the installed final bundle rendered the disposable frame without blacking or blanking.
+                  - heading "GitHub comment 5619089402" [level=2] [ref=e552] [cursor=pointer]
+                  - paragraph [ref=e553] [cursor=pointer]: "Author: khacon Created: 2026-09-10T13:01:16Z Updated: 2026-09-10T13:01:16Z URL: https://github.com/nnexai/cockpit/issues/4#issuecomment-5619089402"
+                  - heading "Resolution update (2026-09-10)" [level=2] [ref=e554] [cursor=pointer]
+                  - paragraph [ref=e555] [cursor=pointer]: "The earlier font-only description was incomplete. Two independent sizing errors remained:"
+                  - list [ref=e556] [cursor=pointer]:
+                    - listitem [ref=e557]:
+                      - text: Cockpit put
+                      - code [ref=e558]: FiraCode Nerd Font Mono
+                      - text: first in the stack. Herdr/Ghostty uses the native system monospace metrics, so box-drawing glyph advances and cell height differed.
+                    - listitem [ref=e559]: xterm/FitAddon reserved its default 15 px scrollbar width even though Cockpit's terminal treatment uses an 8 px overlay scrollbar. Narrow panes therefore received too few columns and right-edge content could be clipped.
+                  - paragraph [ref=e560] [cursor=pointer]: "The final terminal configuration is now:"
+                  - code [ref=e562] [cursor=pointer]: "fontFamily: 'ui-monospace, \"FiraCode Nerd Font Mono\", \"Hack Nerd Font Mono\", \"IBM Plex Mono\", \"Noto Sans Mono\", monospace' lineHeight: 1 scrollbar: { showScrollbar: true, width: 8 }"
+                  - paragraph [ref=e563] [cursor=pointer]: The intentional OMP blank separator cell remains unchanged. It is one terminal cell, not drift.
+                  - heading "Final changes" [level=3] [ref=e564] [cursor=pointer]
+                  - list [ref=e565] [cursor=pointer]:
+                    - listitem [ref=e566]:
+                      - code [ref=e567]: 4c78207
+                      - text: — resync the fitted terminal size after delayed attachment.
+                    - listitem [ref=e568]:
+                      - code [ref=e569]: c5cd8f9
+                      - text: — reserve the compact 8 px scrollbar width.
+                    - listitem [ref=e570]:
+                      - code [ref=e571]: 0c38d1c
+                      - text: — match native system monospace metrics.
+                  - heading "Verification" [level=3] [ref=e572] [cursor=pointer]
+                  - list [ref=e573] [cursor=pointer]:
+                    - listitem [ref=e574]:
+                      - text: 9 focused
+                      - code [ref=e575]: TerminalPane
+                      - text: tests passed.
+                    - listitem [ref=e576]: TypeScript validation passed.
+                    - listitem [ref=e577]: Locked macOS arm64 Tauri build passed.
+                    - listitem [ref=e578]:
+                      - text: The rebuilt bundle was copied to
+                      - code [ref=e579]: /Applications/Cockpit.app
+                      - text: .
+                    - listitem [ref=e580]:
+                      - text: The installed app was restarted from
+                      - code [ref=e581]: /Applications/Cockpit.app/Contents/MacOS/cockpit-tauri
+                      - text: .
+                    - listitem [ref=e582]:
+                      - text: The installed binary matches
+                      - code [ref=e583]: target/release/cockpit-tauri
+                      - text: byte-for-byte and is
+                      - code [ref=e584]: Mach-O 64-bit executable arm64
+                      - text: .
+                    - listitem [ref=e585]: A disposable native Herdr glyph probe rendered 12 complete OMP-style rectangles with aligned corners, continuous rules, intact right borders, and fully visible right-edge markers.
+                  - paragraph [ref=e586] [cursor=pointer]: Canvas is not part of the final fix. The DOM renderer is stable with these metrics, while Canvas had xterm-version compatibility risk and no observed visual benefit.
+              - generic "Context comment shortcuts" [ref=e587]:
+                - generic [ref=e588]: Select a line
+                - generic [ref=e589]:
+                  - button "C comment" [disabled] [ref=e590]
+                  - button "Shift+C file" [ref=e591] [cursor=pointer]
+      - separator "Resize pane w2:p3 horizontally" [ref=e446]
+```

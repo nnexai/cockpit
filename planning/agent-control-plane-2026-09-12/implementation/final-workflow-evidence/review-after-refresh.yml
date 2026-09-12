@@ -1,0 +1,172 @@
+### Page
+- Page URL: http://127.0.0.1:4197/
+- Page Title: Cockpit
+- Console: 0 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=f1e9]:
+  - complementary "Spaces and agents" [ref=f1e10]:
+    - generic [ref=f1e11]:
+      - button "Switch session, current cf12" [ref=f1e12]:
+        - generic [aria-hidden] [ref=f1e13]: ●
+        - generic [ref=f1e14]: cf12
+        - generic [ref=f1e15]: live
+        - generic [aria-hidden] [ref=f1e16]: ⌄
+      - button "Collapse sidebar" [ref=f1e18] [cursor=pointer]: ‹
+    - region [ref=f1e19]:
+      - generic [ref=f1e20]:
+        - heading "spaces" [level=2] [ref=f1e21]
+        - button "Set up a task Space" [ref=f1e22] [cursor=pointer]: +
+      - generic [ref=f1e23]:
+        - generic [ref=f1e24]:
+          - button "cockpit" [ref=f1e25] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e26]: ·
+          - button "Collapse cockpit" [expanded] [ref=f1e29] [cursor=pointer]: ⌄
+        - button "final cf12 issue4 flow" [ref=f1e31] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e32]: ·
+    - region [ref=f1e35]:
+      - generic [ref=f1e36]:
+        - heading "agents" [level=2] [ref=f1e37]
+        - generic [ref=f1e38]: "0"
+      - paragraph [ref=f1e40]: Inbox empty
+  - separator "Resize sidebar" [ref=f1e41]
+  - main [ref=f1e42]:
+    - navigation "Tabs" [ref=f1e43]:
+      - tablist [ref=f1e44]:
+        - tab "Tab 1" [ref=f1e46] [cursor=pointer]:
+          - generic [ref=f1e47]: "1"
+        - 'tab "Tab 2: final cf12 issue4 flow context" [selected] [ref=f1e49] [cursor=pointer]':
+          - generic [ref=f1e50]: "2"
+          - generic [ref=f1e51]: final cf12 issue4 flow context
+        - button "Create tab" [ref=f1e52] [cursor=pointer]: +
+      - button "Commands" [ref=f1e54] [cursor=pointer]
+    - generic [ref=f1e55]:
+      - region "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=f1e56]:
+        - generic [ref=f1e57]:
+          - button "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=f1e58] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e59]: ›
+          - button "Pane actions for /t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=f1e61] [cursor=pointer]: ⋯
+        - generic "Terminal w2:p3" [ref=f1e63]:
+          - generic [ref=f1e66]:
+            - textbox "Terminal input" [ref=f1e67]
+            - generic [aria-hidden]:
+              - generic: Welcome to fish, the frien
+              - generic:
+                - generic: Type
+                - generic: help
+                - generic: for instructions
+              - generic:
+                - generic: …
+                - generic: "-c24589da-36c1-4772-9153-"
+              - generic:
+                - generic: …
+                - generic: da-36c1-4772-9153-b81a431
+      - region "reviewr" [ref=f1e68]:
+        - generic [ref=f1e69]:
+          - button "reviewr" [ref=f1e70] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e71]: ›
+          - button "Pane actions for reviewr" [ref=f1e73] [cursor=pointer]: ⋯
+        - region "Local review" [ref=f1e76]:
+          - generic [ref=f1e77]:
+            - generic [ref=f1e78]: Comparison
+            - combobox "Comparison" [ref=f1e79]:
+              - option "All local changes" [selected]
+              - option "Staged"
+              - option "Unstaged"
+              - option "Untracked"
+              - option "Branch"
+            - button "Choose review file" [ref=f1e80] [cursor=pointer]: Files
+            - generic "Review navigation" [ref=f1e81]:
+              - button "Previous file" [ref=f1e82] [cursor=pointer]: ←
+              - button "Next file" [ref=f1e83] [cursor=pointer]: →
+              - button "Previous hunk" [ref=f1e84] [cursor=pointer]: ↑
+              - button "Next hunk" [ref=f1e85] [cursor=pointer]: ↓
+            - button "↻Refresh" [ref=f1e86] [cursor=pointer]
+          - main "Unified diff" [ref=f1e88]:
+            - generic [ref=f1e89]:
+              - button "Expand full source" [ref=f1e90] [cursor=pointer]
+              - generic [ref=f1e91]: new side
+              - button "Old source" [ref=f1e92] [cursor=pointer]
+              - button "New source" [ref=f1e93] [cursor=pointer]
+            - generic [ref=f1e94]:
+              - code [ref=f1e95]: CONTEXT.md
+              - generic [ref=f1e96]: unstaged modified
+            - generic [ref=f1e97]:
+              - generic [ref=f1e98]: "@@ -377 +377 @@"
+              - 'button "377 377 The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16." [ref=f1e99] [cursor=pointer]':
+                - generic [ref=f1e100]: "377"
+                - generic [ref=f1e101]: "377"
+                - code [ref=f1e102]: "The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16."
+              - button "378 378" [ref=f1e103] [cursor=pointer]:
+                - generic [ref=f1e104]: "378"
+                - generic [ref=f1e105]: "378"
+                - code [ref=f1e106]
+              - 'button "379 379 The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`." [ref=f1e107] [cursor=pointer]':
+                - generic [ref=f1e108]: "379"
+                - generic [ref=f1e109]: "379"
+                - code [ref=f1e110]: "The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`."
+              - button "380 +" [ref=f1e111] [cursor=pointer]:
+                - generic [ref=f1e113]: "380"
+                - code [ref=f1e114]: +
+              - button "381 +<!-- cf12 final workflow review fixture -->" [ref=f1e115] [cursor=pointer]:
+                - generic [ref=f1e117]: "381"
+                - code [ref=f1e118]: +<!-- cf12 final workflow review fixture -->
+              - generic "Comments on line 381" [ref=f1e119]:
+                - article [ref=f1e120]:
+                  - generic [ref=f1e121]:
+                    - strong [ref=f1e122]: Lines 381–381
+                    - generic [ref=f1e123]: current
+                  - paragraph [ref=f1e124]: cf12 line draft survives refresh
+                  - generic [ref=f1e125]:
+                    - button "Edit" [ref=f1e126] [cursor=pointer]
+                    - button "Delete" [ref=f1e127] [cursor=pointer]
+            - region "Comments for CONTEXT.md" [ref=f1e128]:
+              - heading "File comments" [level=3] [ref=f1e129]
+              - article [ref=f1e130]:
+                - generic [ref=f1e131]:
+                  - strong [ref=f1e132]: Whole file
+                  - generic [ref=f1e133]: current
+                - paragraph [ref=f1e134]: cf12 file draft survives refresh
+                - generic [ref=f1e135]:
+                  - button "Edit" [ref=f1e136] [cursor=pointer]
+                  - button "Delete" [ref=f1e137] [cursor=pointer]
+          - generic "Review shortcuts" [ref=f1e138]:
+            - generic [ref=f1e139]: Select a line
+            - generic [ref=f1e140]:
+              - button "C comment" [disabled] [ref=f1e141]
+              - button "Shift+C file" [ref=f1e142] [cursor=pointer]
+              - button "2 comments" [ref=f1e143] [cursor=pointer]
+              - generic [ref=f1e144]: Alt+↑↓ hunk
+      - region "Files" [ref=f1e145]:
+        - generic [ref=f1e146]:
+          - button "Files" [ref=f1e147] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e148]: ›
+          - button "Pane actions for Files" [ref=f1e150] [cursor=pointer]: ⋯
+        - region "Context file viewer" [ref=f1e152]:
+          - generic [ref=f1e153]:
+            - generic "/tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd" [ref=f1e154]: cockpit context
+            - button "Resources" [ref=f1e155] [cursor=pointer]
+            - button "0 comments" [ref=f1e156] [cursor=pointer]
+            - button "Refresh Context files" [ref=f1e157] [cursor=pointer]: Refresh
+            - button "Show terminal" [ref=f1e158] [cursor=pointer]
+          - generic [ref=f1e159]:
+            - complementary "Context files" [ref=f1e160]:
+              - generic [ref=f1e161]:
+                - text: FILES
+                - generic [ref=f1e162]: cockpit context
+              - region "Search Context" [ref=f1e163]:
+                - generic [ref=f1e164]:
+                  - generic [ref=f1e165]: Search companion
+                  - searchbox "Search companion" [disabled] [ref=f1e166]
+                  - button "Search" [disabled] [ref=f1e167]
+              - button "sources" [ref=f1e169] [cursor=pointer]:
+                - generic [ref=f1e170]: ›
+                - generic [aria-hidden] [ref=f1e171]: ▸
+            - main [ref=f1e173]:
+              - generic [ref=f1e174]: Select a file to inspect its source.
+      - generic:
+        - separator "Resize pane w2:p3 horizontally" [ref=f1e175]
+        - separator "Resize pane w2:p5 horizontally" [ref=f1e176]
+```
+### Events
+- New console entries: .playwright-cli/console-2026-09-12T18-08-23-520Z.log#L5

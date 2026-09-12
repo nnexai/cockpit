@@ -1,0 +1,660 @@
+### Page
+- Page URL: http://127.0.0.1:4197/
+- Page Title: Cockpit
+- Console: 1 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=e32]:
+  - complementary "Spaces and agents" [ref=e33]:
+    - generic [ref=e34]:
+      - button "Switch session, current cf12" [ref=e35]:
+        - generic [aria-hidden] [ref=e36]: ●
+        - generic [ref=e37]: cf12
+        - generic [ref=e38]: live
+        - generic [aria-hidden] [ref=e39]: ⌄
+      - button "Collapse sidebar" [ref=e41] [cursor=pointer]: ‹
+    - region [ref=e42]:
+      - generic [ref=e43]:
+        - heading "spaces" [level=2] [ref=e44]
+        - button "Set up a task Space" [ref=e45] [cursor=pointer]: +
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - button "cockpit" [ref=e48] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e49]: ·
+          - button "Collapse cockpit" [expanded] [ref=e52] [cursor=pointer]: ⌄
+        - button "final cf12 issue4 flow" [ref=e54] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e55]: ·
+    - region [ref=e58]:
+      - generic [ref=e59]:
+        - heading "agents" [level=2] [ref=e60]
+        - generic [ref=e61]: "0"
+      - paragraph [ref=e63]: Inbox empty
+  - separator "Resize sidebar" [ref=e64]
+  - main [ref=e65]:
+    - navigation "Tabs" [ref=e66]:
+      - tablist [ref=e67]:
+        - tab "Tab 1" [ref=e69] [cursor=pointer]:
+          - generic [ref=e70]: "1"
+        - 'tab "Tab 2: final cf12 issue4 flow context" [selected] [ref=e72] [cursor=pointer]':
+          - generic [ref=e73]: "2"
+          - generic [ref=e74]: final cf12 issue4 flow context
+        - button "Create tab" [ref=e75] [cursor=pointer]: +
+      - button "Commands" [ref=e77] [cursor=pointer]
+    - generic [ref=e78]:
+      - region "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e79]:
+        - generic [ref=e80]:
+          - button "/t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e81] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e82]: ›
+          - button "Pane actions for /t/c/w/cockpit-c24589da-36c1-4772-9153-b81a43101ebd" [ref=e84] [cursor=pointer]: ⋯
+        - generic "Terminal w2:p3" [ref=e86]:
+          - generic [ref=e89]:
+            - textbox "Terminal input" [ref=e90]
+            - generic [aria-hidden]:
+              - generic: Welcome to fish, the friendly interactive
+              - generic:
+                - generic: Type
+                - generic: help
+                - generic: for instructions on how to use f
+              - generic:
+                - generic: …
+                - generic: "-c24589da-36c1-4772-9153-b81a43101ebd"
+                - generic: (cf
+              - generic:
+                - generic: …
+                - generic: da-36c1-4772-9153-b81a43101ebd
+                - generic: (cf12-fina
+      - region "reviewr" [ref=e91]:
+        - generic [ref=e92]:
+          - button "reviewr" [ref=e93] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e94]: ›
+          - button "Pane actions for reviewr" [ref=e96] [cursor=pointer]: ⋯
+        - region "Local review" [ref=e99]:
+          - generic [ref=e100]:
+            - generic [ref=e101]: Comparison
+            - combobox "Comparison" [ref=e102]:
+              - option "All local changes" [selected]
+              - option "Staged"
+              - option "Unstaged"
+              - option "Untracked"
+              - option "Branch"
+            - button "Choose review file" [ref=e103] [cursor=pointer]: Files
+            - generic "Review navigation" [ref=e104]:
+              - button "Previous file" [ref=e105] [cursor=pointer]: ←
+              - button "Next file" [ref=e106] [cursor=pointer]: →
+              - button "Previous hunk" [ref=e107] [cursor=pointer]: ↑
+              - button "Next hunk" [ref=e108] [cursor=pointer]: ↓
+            - button "Refresh" [ref=e109] [cursor=pointer]
+          - main "Unified diff" [ref=e111]:
+            - generic [ref=e113]:
+              - button "Expand full source" [ref=e114] [cursor=pointer]
+              - generic [ref=e115]: new side
+              - button "Old source" [ref=e116] [cursor=pointer]
+              - button "New source" [ref=e117] [cursor=pointer]
+            - generic [ref=e118]:
+              - code [ref=e119]: CONTEXT.md
+              - generic [ref=e120]: unstaged modified
+            - generic [ref=e121]:
+              - generic [ref=e122]: "@@ -377 +377 @@"
+              - 'button "377 377 The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16." [ref=e123] [cursor=pointer]':
+                - generic [ref=e124]: "377"
+                - generic [ref=e125]: "377"
+                - code [ref=e126]: "The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16."
+              - button "378 378" [ref=e127] [cursor=pointer]:
+                - generic [ref=e128]: "378"
+                - generic [ref=e129]: "378"
+                - code [ref=e130]
+              - 'button "379 379 The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`." [ref=e131] [cursor=pointer]':
+                - generic [ref=e132]: "379"
+                - generic [ref=e133]: "379"
+                - code [ref=e134]: "The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`."
+              - button "380 +" [ref=e135] [cursor=pointer]:
+                - generic [ref=e137]: "380"
+                - code [ref=e138]: +
+              - button "381 +<!-- cf12 final workflow review fixture -->" [ref=e139] [cursor=pointer]:
+                - generic [ref=e141]: "381"
+                - code [ref=e142]: +<!-- cf12 final workflow review fixture -->
+              - generic "Comments on line 381" [ref=e170]:
+                - article [ref=e171]:
+                  - generic [ref=e172]:
+                    - strong [ref=e173]: Lines 381–381
+                    - generic [ref=e174]: current
+                  - paragraph [ref=e175]: cf12 line draft survives refresh
+                  - generic [ref=e176]:
+                    - button "Edit" [ref=e177] [cursor=pointer]
+                    - button "Delete" [ref=e178] [cursor=pointer]
+            - region "Comments for CONTEXT.md" [ref=e179]:
+              - heading "File comments" [level=3] [ref=e180]
+              - article [ref=e181]:
+                - generic [ref=e182]:
+                  - strong [ref=e183]: Whole file
+                  - generic [ref=e184]: current
+                - paragraph [ref=e185]: cf12 file draft survives refresh
+                - generic [ref=e186]:
+                  - button "Edit" [ref=e187] [cursor=pointer]
+                  - button "Delete" [ref=e188] [cursor=pointer]
+          - generic "Review shortcuts" [ref=e143]:
+            - generic [ref=e144]: Select a line
+            - generic [ref=e145]:
+              - button "C comment" [disabled] [ref=e146]
+              - button "Shift+C file" [ref=e147] [cursor=pointer]
+              - button "2 comments" [ref=e189] [cursor=pointer]
+              - generic [ref=e149]: Alt+↑↓ hunk
+      - region "Files" [ref=e150]:
+        - generic [ref=e151]:
+          - button "Files" [ref=e152] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e153]: ›
+          - button "Pane actions for Files" [ref=e155] [cursor=pointer]: ⋯
+        - region "Context file viewer" [ref=e157]:
+          - generic [ref=e158]:
+            - generic "/tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd" [ref=e159]: cockpit context
+            - button "Choose Context file" [ref=e160] [cursor=pointer]: Files
+            - button "Resources" [ref=e161] [cursor=pointer]
+            - button "0 comments" [ref=e162] [cursor=pointer]
+            - button "Refresh Context files" [ref=e163] [cursor=pointer]: Refresh
+            - button "Show terminal" [ref=e164] [cursor=pointer]
+          - main [ref=e166]:
+            - generic [ref=e195]:
+              - code: sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md
+              - generic [ref=e196]: 8993 B · revision 55:235847:8993:1789236545122485473
+              - generic [ref=e197]: "\"nnexai/cockpit#4\" · fetched \"1789236534821\""
+            - button "Rendered preview" [active] [pressed] [ref=e325] [cursor=pointer]
+            - grid "Source lines" [ref=e326]:
+              - generic [ref=e327]:
+                - row [ref=e329] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e330]: "1"
+                  - code [ref=e331]: "---"
+                - row [ref=e333] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e334]: "2"
+                  - code [ref=e335]: "schema_version: 1"
+                - row [ref=e337] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e338]: "3"
+                  - code [ref=e339]: "provider: \"github\""
+                - row [ref=e341] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e342]: "4"
+                  - code [ref=e343]: "resource_type: \"issue\""
+                - row [ref=e345] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e346]: "5"
+                  - code [ref=e347]: "canonical_id: \"nnexai/cockpit#4\""
+                - row [ref=e349] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e350]: "6"
+                  - code [ref=e351]: "provider_instance: \"https://github.com\""
+                - row [ref=e353] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e354]: "7"
+                  - code [ref=e355]: "source_url: \"https://github.com/nnexai/cockpit/issues/4\""
+                - row [ref=e357] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e358]: "8"
+                  - code [ref=e359]: "fetched_at: \"1789236534821\""
+                - row [ref=e361] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e362]: "9"
+                  - code [ref=e363]: "source_revision: \"2026-09-10T13:01:16Z\""
+                - row [ref=e365] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e366]: "10"
+                  - code [ref=e367]: "content_hash: \"sha256:84eb3eea6218c20318d3c8d0898c5bb4c302e843474a0a8d5bb6220140eb6639\""
+                - row [ref=e369] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e370]: "11"
+                  - code [ref=e371]: "generated: true"
+                - row [ref=e373] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e374]: "12"
+                  - code [ref=e375]: "---"
+                - row [ref=e377] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e378]: "13"
+                  - code [ref=e379]
+                - row [ref=e381] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e382]: "14"
+                  - code [ref=e383]: "# Fix OMP terminal cell-width drift in Cockpit xterm"
+                - row [ref=e385] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e386]: "15"
+                  - code [ref=e387]
+                - row [ref=e389] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e390]: "16"
+                  - code [ref=e391]: "## Summary"
+                - row [ref=e393] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e394]: "17"
+                  - code [ref=e395]
+                - row [ref=e397] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e398]: "18"
+                  - code [ref=e399]: "Cockpit's xterm rendering of OMP showed a visible cell-metric mismatch against Herdr/Ghostty. The problem was most noticeable around the intentional blank cell between OMP's inner vertical divider and the following horizontal rule: spaces, ordinary text, and box-drawing glyphs did not present a reliably uniform pitch."
+                - row [ref=e401] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e402]: "19"
+                  - code [ref=e403]
+                - row [ref=e405] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e406]: "20"
+                  - code [ref=e407]: "## User-visible symptom"
+                - row [ref=e409] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e410]: "21"
+                  - code [ref=e411]
+                - row [ref=e413] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e414]: "22"
+                  - code [ref=e415]: "At the normal macOS desktop viewport:"
+                - row [ref=e417] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e418]: "23"
+                  - code [ref=e419]
+                - row [ref=e421] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e422]: "24"
+                  - code [ref=e423]: "- OMP's frame appeared less dense than the Herdr/Ghostty frame."
+                - row [ref=e425] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e426]: "25"
+                  - code [ref=e427]: "- The blank cell after an inner divider looked wider than the neighboring text/box cells."
+                - row [ref=e429] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e430]: "26"
+                  - code [ref=e431]: "- Horizontal rules appeared visually offset even though the authoritative OMP frame contains the same one-cell blank separator."
+                - row [ref=e433] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e434]: "27"
+                  - code [ref=e435]: "- Nerd Font/powerline glyphs needed to remain rendered."
+                - row [ref=e437] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e438]: "28"
+                  - code [ref=e439]
+                - row [ref=e441] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e442]: "29"
+                  - code [ref=e443]: The blank separator is intentional OMP output and should remain one terminal cell wide; the fix is to stabilize its cell metrics, not remove the separator.
+                - row [ref=e445] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e446]: "30"
+                  - code [ref=e447]
+                - row [ref=e449] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e450]: "31"
+                  - code [ref=e451]: "## Root cause"
+                - row [ref=e453] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e454]: "32"
+                  - code [ref=e455]
+                - row [ref=e457] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e458]: "33"
+                  - code [ref=e459]: "`TerminalPane` used a 13 px terminal and a fallback chain beginning with `IosevkaTerm Nerd Font Mono`, which is not installed on the target macOS workstation. The resulting fallback path could mix terminal glyph metrics. The active `/Applications/Cockpit.app` also retained an older bundle because `scripts/install-native.py --reuse` updates the user-local binary but does not copy the `.app` bundle into `/Applications`."
+                - row [ref=e461] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e462]: "34"
+                  - code [ref=e463]
+                - row [ref=e465] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e466]: "35"
+                  - code [ref=e467]: "## Patch"
+                - row [ref=e469] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e470]: "36"
+                  - code [ref=e471]
+                - row [ref=e473] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e474]: "37"
+                  - code [ref=e475]: "```diff"
+                - row [ref=e477] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e478]: "38"
+                  - code [ref=e479]: diff --git a/src/app/TerminalPane.tsx b/src/app/TerminalPane.tsx
+                - row [ref=e481] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e482]: "39"
+                  - code [ref=e483]: "--- a/src/app/TerminalPane.tsx"
+                - row [ref=e485] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e486]: "40"
+                  - code [ref=e487]: +++ b/src/app/TerminalPane.tsx
+                - row [ref=e489] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e490]: "41"
+                  - code [ref=e491]: "@@ -34,8 +34,8 @@ function decodeFrame(bytes: string): Uint8Array {"
+                - row [ref=e493] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e494]: "42"
+                  - code [ref=e495]: "}"
+                - row [ref=e497] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e498]: "43"
+                  - code [ref=e499]
+                - row [ref=e501] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e502]: "44"
+                  - code [ref=e503]: "-const TERMINAL_FONT_FAMILY = '\"IosevkaTerm Nerd Font Mono\", \"FiraCode Nerd Font Mono\", \"IBM Plex Mono\", \"Noto Sans Mono\", monospace';"
+                - row [ref=e505] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e506]: "45"
+                  - code [ref=e507]: "-const TERMINAL_FONT_SIZE = 13;"
+                - row [ref=e509] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e510]: "46"
+                  - code [ref=e511]: +const TERMINAL_FONT_FAMILY = '"FiraCode Nerd Font Mono", "Hack Nerd Font Mono", monospace';
+                - row [ref=e513] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e514]: "47"
+                  - code [ref=e515]: +const TERMINAL_FONT_SIZE = 11;
+                - row [ref=e517] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e518]: "48"
+                  - code [ref=e519]: const TERMINAL_LINE_HEIGHT = 1;
+                - row [ref=e521] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e522]: "49"
+                  - code [ref=e523]: "```"
+                - row [ref=e525] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e526]: "50"
+                  - code [ref=e527]
+                - row [ref=e529] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e530]: "51"
+                  - code [ref=e531]: "```diff"
+                - row [ref=e533] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e534]: "52"
+                  - code [ref=e535]: diff --git a/src/app/TerminalPane.test.tsx b/src/app/TerminalPane.test.tsx
+                - row [ref=e537] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e538]: "53"
+                  - code [ref=e539]: "--- a/src/app/TerminalPane.test.tsx"
+                - row [ref=e541] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e542]: "54"
+                  - code [ref=e543]: +++ b/src/app/TerminalPane.test.tsx
+                - row [ref=e545] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e546]: "55"
+                  - code [ref=e547]: "@@ -163,11 +163,11 @@ afterEach(() => {"
+                - row [ref=e549] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e550]: "56"
+                  - code [ref=e551]: "describe(\"TerminalPane fitting and pointer ownership\", () => {"
+                - row [ref=e553] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e554]: "57"
+                  - code [ref=e555]: "- it(\"uses the terminal glyph stack at the compact design size\", () => {"
+                - row [ref=e557] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e558]: "58"
+                  - code [ref=e559]: "+ it(\"uses the Herdr-matched terminal glyph density\", () => {"
+                - row [ref=e561] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e562]: "59"
+                  - code [ref=e563]: const terminal = createCockpitTerminal();
+                - row [ref=e565] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e566]: "60"
+                  - code [ref=e567]: "expect(terminal.options).toMatchObject({"
+                - row [ref=e569] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e570]: "61"
+                  - code [ref=e571]: "- fontFamily: '\"IosevkaTerm Nerd Font Mono\", \"FiraCode Nerd Font Mono\", \"IBM Plex Mono\", \"Noto Sans Mono\", monospace',"
+                - row [ref=e573] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e574]: "62"
+                  - code [ref=e575]: "- fontSize: 13,"
+                - row [ref=e577] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e578]: "63"
+                  - code [ref=e579]: "+ fontFamily: '\"FiraCode Nerd Font Mono\", \"Hack Nerd Font Mono\", monospace',"
+                - row [ref=e581] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e582]: "64"
+                  - code [ref=e583]: "+ fontSize: 11,"
+                - row [ref=e585] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e586]: "65"
+                  - code [ref=e587]: "lineHeight: 1,"
+                - row [ref=e589] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e590]: "66"
+                  - code [ref=e591]: "});"
+                - row [ref=e593] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e594]: "67"
+                  - code [ref=e595]: "```"
+                - row [ref=e597] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e598]: "68"
+                  - code [ref=e599]
+                - row [ref=e601] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e602]: "69"
+                  - code [ref=e603]: "## Verification"
+                - row [ref=e605] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e606]: "70"
+                  - code [ref=e607]
+                - row [ref=e609] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e610]: "71"
+                  - code [ref=e611]: "- `bun run test src/app/TerminalPane.test.tsx` — 8 tests passed."
+                - row [ref=e613] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e614]: "72"
+                  - code [ref=e615]: "- `bun run typecheck` — passed."
+                - row [ref=e617] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e618]: "73"
+                  - code [ref=e619]: "- `bun install --frozen-lockfile` — passed."
+                - row [ref=e621] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e622]: "74"
+                  - code [ref=e623]: "- `bun run tauri:build` — macOS arm64 app and DMG built successfully."
+                - row [ref=e625] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e626]: "75"
+                  - code [ref=e627]: "- The rebuilt bundle was copied to `/Applications/Cockpit.app` and Cockpit was restarted."
+                - row [ref=e629] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e630]: "76"
+                  - code [ref=e631]: "- A uniquely named disposable Herdr session was rendered in a disposable native Cockpit process. Text, spaces, box-drawing glyphs, and the intentional separator cell aligned to one horizontal pitch; no cumulative drift was visible and Nerd Font icons remained rendered."
+                - row [ref=e633] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e634]: "77"
+                  - code [ref=e635]
+                - row [ref=e637] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e638]: "78"
+                  - code [ref=e639]: "Implemented in commits `811484b` and `318ce4f`."
+                - row [ref=e641] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e642]: "79"
+                  - code [ref=e643]
+                - row [ref=e645] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e646]: "80"
+                  - code [ref=e647]
+                - row [ref=e649] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e650]: "81"
+                  - code [ref=e651]: "## GitHub comment 5617094901"
+                - row [ref=e653] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e654]: "82"
+                  - code [ref=e655]: "Author: khacon"
+                - row [ref=e657] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e658]: "83"
+                  - code [ref=e659]: "Created: 2026-09-10T10:23:22Z"
+                - row [ref=e661] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e662]: "84"
+                  - code [ref=e663]: "Updated: 2026-09-10T10:23:22Z"
+                - row [ref=e665] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e666]: "85"
+                  - code [ref=e667]: "URL: https://github.com/nnexai/cockpit/issues/4#issuecomment-5617094901"
+                - row [ref=e669] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e670]: "86"
+                  - code [ref=e671]
+                - row [ref=e673] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e674]: "87"
+                  - code [ref=e675]: "## Renderer follow-up (2026-09-10)"
+                - row [ref=e677] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e678]: "88"
+                  - code [ref=e679]
+                - row [ref=e681] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e682]: "89"
+                  - code [ref=e683]: "The spacing experiment separates two effects:"
+                - row [ref=e685] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e686]: "90"
+                  - code [ref=e687]
+                - row [ref=e689] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e690]: "91"
+                  - code [ref=e691]: "- `lineHeight: 1` is the change that fixes the vertical cell pitch. It brought the repeated OMP separator rows from the previous roughly 113 px rhythm down to the Herdr-like roughly 88–90 px rhythm. Canvas is not required for that spacing correction."
+                - row [ref=e693] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e694]: "92"
+                  - code [ref=e695]: "- Canvas was a separate glyph-rasterization experiment intended to improve box-drawing junction/endpoint continuity. The DOM renderer with `lineHeight: 1` already had the corrected vertical rhythm; the remaining question was only whether Canvas made the horizontal rule edges look closer at zoom."
+                - row [ref=e697] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e698]: "93"
+                  - code [ref=e699]
+                - row [ref=e701] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e702]: "94"
+                  - code [ref=e703]: "Current implementation (`58240ed`) uses Canvas plus `lineHeight: 1`. A native macOS smoke with continuous output stayed rendered for 60 seconds, but `@xterm/addon-canvas@0.8.0-beta.48` declares an xterm 5 peer while Cockpit uses xterm 6. An earlier Canvas attempt caused a blank native terminal after several seconds and was removed in `f94d786`; the current pairing did not reproduce that blanking during the smoke."
+                - row [ref=e705] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e706]: "95"
+                  - code [ref=e707]
+                - row [ref=e709] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e710]: "96"
+                  - code [ref=e711]: "Conclusion: Canvas is not necessary to fix the reported cell-spacing drift. It is only justified if the exact zoomed box-drawing glyph continuity is judged better than the DOM renderer. The minimal fix is the font/cell metrics plus `lineHeight: 1`; Canvas remains a compatibility-risk tradeoff rather than a spacing requirement."
+                - row [ref=e713] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e714]: "97"
+                  - code [ref=e715]
+                - row [ref=e717] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e718]: "98"
+                  - code [ref=e719]: "## GitHub comment 5617254169"
+                - row [ref=e721] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e722]: "99"
+                  - code [ref=e723]: "Author: khacon"
+                - row [ref=e725] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e726]: "100"
+                  - code [ref=e727]: "Created: 2026-09-10T10:35:54Z"
+                - row [ref=e729] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e730]: "101"
+                  - code [ref=e731]: "Updated: 2026-09-10T10:35:54Z"
+                - row [ref=e733] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e734]: "102"
+                  - code [ref=e735]: "URL: https://github.com/nnexai/cockpit/issues/4#issuecomment-5617254169"
+                - row [ref=e737] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e738]: "103"
+                  - code [ref=e739]
+                - row [ref=e741] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e742]: "104"
+                  - code [ref=e743]: "## Final Canvas validation and minimal fix (2026-09-10)"
+                - row [ref=e745] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e746]: "105"
+                  - code [ref=e747]
+                - row [ref=e749] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e750]: "106"
+                  - code [ref=e751]: "I ran an A/B comparison against the same disposable Herdr session and the same continuously refreshed box-drawing frame:"
+                - row [ref=e753] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e754]: "107"
+                  - code [ref=e755]
+                - row [ref=e757] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e758]: "108"
+                  - code [ref=e759]: "- DOM renderer + `lineHeight: 1`: correct cell pitch, continuous borders, preserved intentional one-cell separator, and no blanking after several minutes of output."
+                - row [ref=e761] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e762]: "109"
+                  - code [ref=e763]: "- Canvas renderer + `lineHeight: 1`: visually equivalent at native capture size; no measurable glyph-continuity improvement."
+                - row [ref=e765] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e766]: "110"
+                  - code [ref=e767]
+                - row [ref=e769] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e770]: "111"
+                  - code [ref=e771]: "The apparent right-edge offset in the DOM capture is the intended separator cell: inner horizontal rules stop one cell before the outer border. Pixel positions matched that one-cell gap; it is not cumulative drift."
+                - row [ref=e773] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e774]: "112"
+                  - code [ref=e775]
+                - row [ref=e777] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e778]: "113"
+                  - code [ref=e779]: "Conclusion: Canvas is not needed. The actual fix is the terminal metrics, especially `lineHeight: 1`, with the stable font stack and 13 px size. Canvas adds no observed benefit here and carries an xterm 5 peer declaration against Cockpit’s xterm 6 plus a previously observed native blanking failure."
+                - row [ref=e781] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e782]: "114"
+                  - code [ref=e783]
+                - row [ref=e785] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e786]: "115"
+                  - code [ref=e787]: "Minimal patch committed as `51f6d3d` (`fix: keep stable DOM terminal renderer`):"
+                - row [ref=e789] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e790]: "116"
+                  - code [ref=e791]
+                - row [ref=e793] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e794]: "117"
+                  - code [ref=e795]: "- removes `@xterm/addon-canvas` from source, package manifest, and lockfile;"
+                - row [ref=e797] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e798]: "118"
+                  - code [ref=e799]: "- removes the Canvas-specific test;"
+                - row [ref=e801] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e802]: "119"
+                  - code [ref=e803]: "- keeps the Herdr-matched font metrics and `lineHeight: 1`;"
+                - row [ref=e805] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e806]: "120"
+                  - code [ref=e807]: "- records the validated DOM-renderer baseline in `research/ui-implementation-constraints.md`."
+                - row [ref=e809] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e810]: "121"
+                  - code [ref=e811]
+                - row [ref=e813] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e814]: "122"
+                  - code [ref=e815]: "Verification: 8 focused `TerminalPane` tests passed, TypeScript passed, macOS arm64 Tauri build passed, and the installed final bundle rendered the disposable frame without blacking or blanking."
+                - row [ref=e817] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e818]: "123"
+                  - code [ref=e819]
+                - row [ref=e821] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e822]: "124"
+                  - code [ref=e823]: "## GitHub comment 5619089402"
+                - row [ref=e825] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e826]: "125"
+                  - code [ref=e827]: "Author: khacon"
+                - row [ref=e829] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e830]: "126"
+                  - code [ref=e831]: "Created: 2026-09-10T13:01:16Z"
+                - row [ref=e833] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e834]: "127"
+                  - code [ref=e835]: "Updated: 2026-09-10T13:01:16Z"
+                - row [ref=e837] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e838]: "128"
+                  - code [ref=e839]: "URL: https://github.com/nnexai/cockpit/issues/4#issuecomment-5619089402"
+                - row [ref=e841] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e842]: "129"
+                  - code [ref=e843]
+                - row [ref=e845] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e846]: "130"
+                  - code [ref=e847]: "## Resolution update (2026-09-10)"
+                - row [ref=e849] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e850]: "131"
+                  - code [ref=e851]
+                - row [ref=e853] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e854]: "132"
+                  - code [ref=e855]: "The earlier font-only description was incomplete. Two independent sizing errors remained:"
+                - row [ref=e857] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e858]: "133"
+                  - code [ref=e859]
+                - row [ref=e861] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e862]: "134"
+                  - code [ref=e863]: "1. Cockpit put `FiraCode Nerd Font Mono` first in the stack. Herdr/Ghostty uses the native system monospace metrics, so box-drawing glyph advances and cell height differed."
+                - row [ref=e865] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e866]: "135"
+                  - code [ref=e867]: 2. xterm/FitAddon reserved its default 15 px scrollbar width even though Cockpit's terminal treatment uses an 8 px overlay scrollbar. Narrow panes therefore received too few columns and right-edge content could be clipped.
+                - row [ref=e869] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e870]: "136"
+                  - code [ref=e871]
+                - row [ref=e873] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e874]: "137"
+                  - code [ref=e875]: "The final terminal configuration is now:"
+                - row [ref=e877] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e878]: "138"
+                  - code [ref=e879]
+                - row [ref=e881] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e882]: "139"
+                  - code [ref=e883]: "```ts"
+                - row [ref=e885] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e886]: "140"
+                  - code [ref=e887]: "fontFamily: 'ui-monospace, \"FiraCode Nerd Font Mono\", \"Hack Nerd Font Mono\", \"IBM Plex Mono\", \"Noto Sans Mono\", monospace'"
+                - row [ref=e889] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e890]: "141"
+                  - code [ref=e891]: "lineHeight: 1"
+                - row [ref=e893] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e894]: "142"
+                  - code [ref=e895]: "scrollbar: { showScrollbar: true, width: 8 }"
+                - row [ref=e897] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e898]: "143"
+                  - code [ref=e899]: "```"
+                - row [ref=e901] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e902]: "144"
+                  - code [ref=e903]
+                - row [ref=e905] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e906]: "145"
+                  - code [ref=e907]: The intentional OMP blank separator cell remains unchanged. It is one terminal cell, not drift.
+                - row [ref=e909] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e910]: "146"
+                  - code [ref=e911]
+                - row [ref=e913] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e914]: "147"
+                  - code [ref=e915]: "### Final changes"
+                - row [ref=e917] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e918]: "148"
+                  - code [ref=e919]
+                - row [ref=e921] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e922]: "149"
+                  - code [ref=e923]: "- `4c78207` — resync the fitted terminal size after delayed attachment."
+                - row [ref=e925] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e926]: "150"
+                  - code [ref=e927]: "- `c5cd8f9` — reserve the compact 8 px scrollbar width."
+                - row [ref=e929] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e930]: "151"
+                  - code [ref=e931]: "- `0c38d1c` — match native system monospace metrics."
+                - row [ref=e933] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e934]: "152"
+                  - code [ref=e935]
+                - row [ref=e937] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e938]: "153"
+                  - code [ref=e939]: "### Verification"
+                - row [ref=e941] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e942]: "154"
+                  - code [ref=e943]
+                - row [ref=e945] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e946]: "155"
+                  - code [ref=e947]: "- 9 focused `TerminalPane` tests passed."
+                - row [ref=e949] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e950]: "156"
+                  - code [ref=e951]: "- TypeScript validation passed."
+                - row [ref=e953] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e954]: "157"
+                  - code [ref=e955]: "- Locked macOS arm64 Tauri build passed."
+                - row [ref=e957] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e958]: "158"
+                  - code [ref=e959]: "- The rebuilt bundle was copied to `/Applications/Cockpit.app`."
+                - row [ref=e961] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e962]: "159"
+                  - code [ref=e963]: "- The installed app was restarted from `/Applications/Cockpit.app/Contents/MacOS/cockpit-tauri`."
+                - row [ref=e965] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e966]: "160"
+                  - code [ref=e967]: "- The installed binary matches `target/release/cockpit-tauri` byte-for-byte and is `Mach-O 64-bit executable arm64`."
+                - row [ref=e969] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e970]: "161"
+                  - code [ref=e971]: "- A disposable native Herdr glyph probe rendered 12 complete OMP-style rectangles with aligned corners, continuous rules, intact right borders, and fully visible right-edge markers."
+                - row [ref=e973] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e974]: "162"
+                  - code [ref=e975]
+                - row [ref=e977] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=e978]: "163"
+                  - code [ref=e979]: Canvas is not part of the final fix. The DOM renderer is stable with these metrics, while Canvas had xterm-version compatibility risk and no observed visual benefit.
+            - generic "Context comment shortcuts" [ref=e320]:
+              - generic [ref=e321]: Select a line
+              - generic [ref=e322]:
+                - button "C comment" [disabled] [ref=e323]
+                - button "Shift+C file" [ref=e324] [cursor=pointer]
+      - generic:
+        - separator "Resize pane w2:p3 horizontally" [ref=e168]
+        - separator "Resize pane w2:p5 horizontally" [ref=e169]
+```

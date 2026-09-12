@@ -1,33 +1,71 @@
 {
-  "captured_at": "2026-09-12T20:03:00+02:00",
-  "source_head": "a089ffa3d3a00b8ac8c1ee57b970c14d26a6415f",
-  "workflow": "issue-4 automatic import -> Context -> Review draft -> refresh/reopen",
-  "status": "PASS_FROM_REAL_CHECKOUT_RECEIPT",
-  "real_workflow_evidence": {
-    "readme": "planning/agent-control-plane-2026-09-12/implementation/README.md",
-    "setup_receipt": "planning/agent-control-plane-2026-09-12/workflow/issue-4/setup-operation.json",
-    "review_annotations": "planning/agent-control-plane-2026-09-12/workflow/issue-4/saved-annotations.json",
-    "filesystem_proof": "planning/agent-control-plane-2026-09-12/workflow/issue-4/filesystem-proof.json",
-    "real_checkout_root": "/tmp/cockpit-real-20260912",
-    "issue": "nnexai/cockpit#4",
-    "comments": 3,
-    "draft_refresh_reopen": true
+  "captured_at": "2026-09-12T20:16:00+02:00",
+  "source_head": "dba6aa7808d0c1c1796030943e1df05502dafc28",
+  "workflow_checkout_head": "637367bbabc08bd0e81435cfd64e2b4f3d39add7",
+  "installed_artifacts": {
+    "tauri_debug_sha256": "96efdd64f19d5cbc771c9f17162fa69a57b7a621685644cd24ef424027b4d352",
+    "host_cli_sha256": "a1fe318ee1c1b4c12e4d87f16387fa31dd36f80d37f57925752c0b7f05846031",
+    "static_bundle": "dist (318 modules)"
   },
-  "current_readiness": {
-    "github_provider": "~/.config/cockpit/config.toml now contains id=github, base_url=https://github.com, executable=gh",
-    "authenticated_readonly_check": "gh api repos/nnexai/cockpit/issues/4 returned issue #4 with 3 comments",
-    "ordinary_relaunch": "required for PID 2523753 to load the installed bundle and provider configuration"
+  "workflow": "issue-4 automatic import -> Context -> Review draft -> refresh/tab return",
+  "status": "PASS_FROM_FRESH_REAL_FINAL_WORKFLOW",
+  "fresh_runtime": {
+    "root": "/tmp/cfinal12",
+    "herdr_version": "0.9.0",
+    "herdr_session": "cf12",
+    "gateway": "http://127.0.0.1:4197/",
+    "browser_profile": "/tmp/cfinal12/browserprofile",
+    "parent_workspace": "w1",
+    "task_workspace": "w2",
+    "task_tab": "w2:t2",
+    "checkout": "/tmp/cfinal12/worktrees/cockpit-c24589da-36c1-4772-9153-b81a43101ebd",
+    "companion": "/tmp/cfinal12/companions/c24589da-36c1-4772-9153-b81a43101ebd",
+    "issue_asset": "sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md"
   },
-  "latest_narrow_check": {
-    "viewport": "360x900",
-    "files_pane_px": 90,
-    "review_pane_px": 180,
-    "context_source_visible": true,
-    "snapshot": "/tmp/csu12-evidence/final-narrow-360.yml"
+  "workflow_actions": [
+    "Opened New task Space from the current browser UI.",
+    "Entered https://github.com/nnexai/cockpit/issues/4 and observed GitHub provider identity plus automatic import in the reviewed plan.",
+    "Created the linked worktree and companion through the UI with repository consent; setup reported Workspace, Context, and the context-aware terminal ready.",
+    "Opened Context through Commands, selected the imported issue asset through Choose Context file, and rendered its real source grid without terminal cd or manual download.",
+    "Added one harmless tracked CONTEXT.md fixture line in the run-owned checkout, opened Review, saved one line comment and one whole-file comment through the UI.",
+    "Reloaded the browser and switched Tab 1 -> Tab 2; both Review comments and the selected changed file remained present."
+  ],
+  "desktop_geometry": {
+    "viewport": "1440x900",
+    "context_pane_px": 371.390625,
+    "review_pane_px": 411.75,
+    "context_source_box": {"x": 1067.59375, "y": 201, "width": 371.390625, "height": 674},
+    "context_source_text_length": 9236,
+    "context_source_font": "13px / 19px IBM Plex Mono, Noto Sans Mono, monospace",
+    "context_file_picker_reachable": true,
+    "evidence": "implementation/final-workflow-evidence/desktop-measure.json"
   },
-  "shell_runtime_receipts": {
-    "production_capture": "/tmp/cshp12/cockpit-state/browser/feedback/capture-c77997e1-2067-4482-9e8b-ce7559dfeb5b.json",
-    "production_capture_png_bytes": 142295,
-    "paired_annotation": "3b6db49f-254f-4a3a-b8bc-7ccca6a2c676"
+  "narrow_zoom_geometry": {
+    "viewport": "480x900",
+    "herdr_zoom_command": "herdr --session cf12 pane zoom --pane w2:p5 --on",
+    "herdr_layout": "implementation/final-workflow-evidence/herdr-zoom-layout.json (zoomed=true, focused_pane_id=w2:p5)",
+    "selected_viewer": "Review",
+    "review_pane_px": 478,
+    "review_diff_box": {"x": 1, "y": 94, "width": 478, "height": 435},
+    "review_source_text_length": 1218,
+    "review_source_font": "13px / 19px IBM Plex Mono, Noto Sans Mono, monospace",
+    "evidence": "implementation/final-workflow-evidence/review-480-zoomed-measure.json"
+  },
+  "evidence": {
+    "directory": "implementation/final-workflow-evidence",
+    "desktop_screenshot": "implementation/final-workflow-evidence/desktop-1440-context-360.png",
+    "narrow_screenshot": "implementation/final-workflow-evidence/review-480-zoomed.png",
+    "rerunnable_harness": "implementation/final-workflow-evidence/run.py",
+    "setup_receipt": "implementation/final-workflow-evidence/setup-created.yml",
+    "context_source": "implementation/final-workflow-evidence/context-source-1440.yml",
+    "review_drafts": "implementation/final-workflow-evidence/review-drafts-saved.yml",
+    "refresh_proof": "implementation/final-workflow-evidence/review-after-refresh.yml",
+    "tab_return_proof": "implementation/final-workflow-evidence/review-tab-return.yml"
+  },
+  "cleanup": {
+    "owner": "cf12 final browser verification",
+    "run_owned_resources": "Herdr session cf12, gateway PID, browser profile, worktree, companion",
+    "protected_resources": "default Herdr session, user PID 2523753, gateway 191105, unrelated dirty work",
+    "state": "Run retained for receipt inspection; stop only cf12-owned processes/resources."
   }
 }
