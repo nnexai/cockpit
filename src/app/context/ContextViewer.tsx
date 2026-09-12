@@ -418,6 +418,12 @@ function MarkdownView({
     restoredScrollIdentity.current = scrollIdentity;
     if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop;
   }, [scrollIdentity, state.scrollTop]);
+  useEffect(() => {
+    for (const block of scrollRef.current?.querySelectorAll<HTMLElement>("[data-source-start]") ?? []) {
+      const selected = Number(block.dataset.sourceStart) === state.selectionStart && Number(block.dataset.sourceEnd) === state.selectionEnd;
+      block.classList.toggle("is-selected-block", selected);
+    }
+  }, [state.selectionStart, state.selectionEnd]);
   const components: Components = useMemo(() => ({
     p: ({ node, children, ...props }) => <p {...props} {...blockData(node, derived.sourceLines)}>{children}</p>,
     h1: ({ node, children, ...props }) => <h1 {...props} {...blockData(node, derived.sourceLines)}>{children}</h1>,
@@ -448,6 +454,7 @@ function MarkdownView({
   }), [derived.sourceLines, derived.text, client, presentation.session_id, presentation.pane_id, presentation.binding_id, state.rootId, state.path]);
   return (
     <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
+      if (event.target instanceof Element && event.target.closest("dialog, button, textarea")) return;
       const span = spanFromClick(event);
       if (span) onSelect(span.start, span.end);
     }}>
@@ -1065,7 +1072,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
                 </RenderErrorBoundary>
               </>;
             })()}
-            {actions ? <footer className="context-comment-status" aria-label="Context comment shortcuts"><span>{selectedLines ?? "Select a line"}</span><span className="context-comment-status-actions"><button type="button" onClick={() => { if (fileState!.mode !== "source") updateFile({ mode: "source" }); actions.createLines(); }} disabled={!commentStatus.canCreateLines} title={commentStatus.canCreateLines ? "Comment on selected lines (C)" : "Select source lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={actions.createWholeFile} disabled={!commentStatus.canCreateWholeFile} title={commentStatus.canCreateWholeFile ? "Comment on whole file (Shift+C)" : "Source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={() => actions.openOverview()} title="Open comments overview">{commentStatus.count} comments</button></span></footer> : null}
+            {actions ? <footer className="context-comment-status" aria-label="Context comment shortcuts"><span>{selectedLines ?? "Select a line"}</span><span className="context-comment-status-actions"><button type="button" onClick={() => actions.createLines()} disabled={!commentStatus.canCreateLines} title={commentStatus.canCreateLines ? "Comment on selected lines (C)" : "Select source lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={actions.createWholeFile} disabled={!commentStatus.canCreateWholeFile} title={commentStatus.canCreateWholeFile ? "Comment on whole file (Shift+C)" : "Source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={() => actions.openOverview()} title="Open comments overview">{commentStatus.count} comments</button></span></footer> : null}
           </>}
         </>
       );
@@ -1084,7 +1091,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         onEditorStateChange={(commentEditor) => onChange({ ...value, commentEditor })}
         invalidationGeneration={invalidationGeneration}
         sourceIdentity={root.companion_id ?? root.root_id}
-        inlineEditor
+        inlineEditor={effectiveMode !== "markdown"}
         showToolbar={false}
         onCommentStatusChange={updateCommentStatus}
         onEditorDismissed={restoreSourceFocus}

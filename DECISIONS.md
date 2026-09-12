@@ -379,3 +379,7 @@ Ownership is explicit in setup plans. Opened directories remain borrowed. Teardo
 Configured repository actions run without per-operation consent. The optional upstream Git `trust_repository` flag remains unset. The compact form obtains provider metadata through the shared Rust service, matches provider identity to configured local repositories, preserves explicit edits, and ignores superseded lookups. Ambiguous matching requires selection. Review defaults use the provider's actual source branch. Open paths and new-worktree destinations have separate form state.
 
 Every submission gets a fresh plan. Once dispatched, its receipt survives a closed dialog or a lost response; Cockpit reads and reconciles that operation rather than submitting a second setup. Browser and native adapters share the same contract. See the [execution record](planning/product-atlas-2026-09-12/polish/execution.md) for verification and platform limits.
+
+### 2026-09-13: optional comment message preview
+
+The user's targeted polish review removes the manual preview prerequisite for pasting comments to an agent. Preparation supplies the current payload hash and eligible target; sending still revalidates the source and payload, preserves stale-source and uncertain-delivery handling, and pastes without submitting. Preview remains an optional disclosure. Draft saves commit the captured comment without rereading the entire batch; freshness is checked on batch inspection and delivery preparation.

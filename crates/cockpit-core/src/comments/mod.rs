@@ -229,7 +229,6 @@ impl CommentsService {
                 batch.drafts.push(draft);
             }
         }
-        self.refresh_states(&mut batch, &evidence).await;
         self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
         let committed = self

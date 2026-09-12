@@ -436,3 +436,19 @@
 .viewer-tree-search .context-search-form { display: grid; gap: 6px; }
 .viewer-tree-search input { width: 100%; min-width: 0; }
 .context-tree-row:not(:has(.context-tree-disclosure:empty)) .context-tree-icon:empty { display: none; }
+
+:root { --viewer-source-line-height: 20px; --viewer-source-gutter: 4ch; }
+.context-viewer .context-body.has-file-overview { grid-template-columns: minmax(180px, min(220px, 35%)) minmax(0, 1fr); }
+.context-viewer .context-source-line { column-gap: 16px; }
+.context-viewer .context-line-number { padding-right: 4px; }
+.context-viewer .context-markdown-body { font-size: 14px; line-height: 1.5; }
+.context-viewer .context-markdown-body p + p { margin-top: 10px; }
+.context-viewer .context-markdown-body li { margin: 3px 0; }
+.context-viewer .context-markdown-body .is-selected-block { background: var(--surface-selected); box-shadow: -2px 0 var(--accent); }
+.context-viewer > .context-body .comment-editor { flex: 0 0 auto; margin: 12px 24px; max-height: 50%; overflow: auto; }
+.review-pane .review-line { min-height: 20px; line-height: 20px; }
+.review-pane .review-hunk { flex: 0 0 auto; }
+.comment-editor { flex-shrink: 0; }
+@container (max-width: 520px) {
+  .context-viewer .context-body.has-file-overview { display: flex; }
+}

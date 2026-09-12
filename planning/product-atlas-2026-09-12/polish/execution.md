@@ -53,3 +53,9 @@ The initial implementation did not follow the mock closely enough. This pass app
 Review scroll events now record position without writing it back to the scroller. Focus restoration uses `preventScroll`. The initial file inventory now includes Git line counts, including renamed paths, and bounded readable untracked-file counts. Binary or unavailable counts remain unspecified.
 
 Validation was deliberately limited at the user's request: frontend production build, one focused scroll/focus regression, and one real-Git inventory-count regression passed. Final visual acceptance belongs to the user; no extended browser/native verification session was run.
+
+## Targeted corrections after user review
+
+Replaced the sidebar grid with a stable flex row, corrected the first-child connector, removed the pane overflow button, simplified the Pane/Commands primary menus, widened the Files tree, and tightened diff/source/document spacing. Markdown comments keep Preview active and mount a visible editor. Message preview is optional; paste still uses the prepared payload hash, fresh backend source checks, and existing uncertain-delivery handling. Saving a comment no longer rereads every draft's source before committing.
+
+The native and host builds passed; 16 focused comment/review tests passed. A disposable browser check retained the complete pane geometry after collapsing the sidebar. The user authorized restarting Cockpit. Installed the debug builds and restarted both the desktop and the stale browser-owning gateway. A read-only feedback lookup then returned the existing capture with four pending annotations. No capture was discarded or acknowledged. The disposable test runtime was stopped.

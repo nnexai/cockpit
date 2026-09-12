@@ -2641,3 +2641,26 @@ kbd {
 .space-setup { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px; }
 .agent-row { font-size: 13px; }
 .setup-overlay { background: rgb(3 6 11 / 72%); }
+
+/* Keep the work area in one flex row when its sidebar is hidden. */
+.workbench { display: flex; min-height: 0; height: 100dvh; }
+.workbench > .sidebar { flex: 0 0 var(--sidebar-width, 224px); }
+.workbench > .sidebar-resizer { flex: 0 0 1px; }
+.workbench > .main-workarea { flex: 1 1 0; width: 0; height: 100%; }
+.space-connector.is-first::before { top: -1px; }
+.space-connector:not(.is-last) { align-self: stretch; height: auto; }
+.context-menu-advanced { margin: 5px 0; }
+.context-menu-advanced > summary { padding: 9px 10px; color: var(--text-muted); cursor: pointer; font-size: 11px; }
+.context-menu button { line-height: 18px; }
+.context-menu-heading { margin: 0; }
+.context-menu { box-shadow: 0 10px 35px #0006; }
+.command-overlay { align-self: start; margin-top: min(12vh, 100px); background: var(--surface); max-height: calc(100dvh - 140px); }
+.command-group { display: block; }
+.command-group h3 { font-size: 9px; font-weight: 500; margin: 0; padding: 10px 10px 7px; }
+.command-row { min-height: 34px; color: var(--text-primary); }
+.command-row-label small { font-size: 10px; }
+.tab-strip-action { border-left: 0; height: 30px; align-self: center; border-radius: 4px; }
+@media (max-width: 800px) {
+  .workbench { display: flex; }
+  .workbench > .sidebar { width: min(300px, calc(100vw - 48px)); }
+}

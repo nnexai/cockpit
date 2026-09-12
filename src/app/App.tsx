@@ -519,7 +519,6 @@ function PaneView({ pane, label, selected, busy, controlAllowed, controlPending,
         <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{isGraphicalReview(renderer) ? "Review" : isGraphicalContext(renderer) ? "Files" : title}</span>{graphical ? <span className="pane-subtitle">/ {isGraphicalReview(renderer) ? "Local changes" : "Context"}</span> : null}
       </button>
       {controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null}
-      <button type="button" disabled={busy} className="pane-overflow" aria-label={`Pane actions for ${title}`} title="Pane actions" onClick={onMenu}><UiIcon name="more" /></button>
     </header>
     {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
       onPointerDownCapture={(event) => {
@@ -606,8 +605,12 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [showAll, setShowAll] = useState(false);
   const normalized = query.trim().toLocaleLowerCase();
-  const filtered = actions.filter((action) => !normalized || `${action.label} ${action.shortcut ?? ""} ${action.group}`.toLocaleLowerCase().includes(normalized));
+  const primaryIds = ["prefix:zoom-pane", "renderer:review-right", "space:setup", "browser:feedback", "session:switch"];
+  const filtered = normalized || showAll
+    ? actions.filter((action) => !normalized || `${action.label} ${action.shortcut ?? ""} ${action.group}`.toLocaleLowerCase().includes(normalized))
+    : primaryIds.flatMap(id => actions.filter(action => action.id === id));
   useEffect(() => setActive((current) => Math.min(current, Math.max(0, filtered.length - 1))), [filtered.length]);
   useEffect(() => { searchRef.current?.focus(); }, []);
   useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [active, normalized]);
@@ -621,10 +624,10 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
   }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
-    const groupActions = filtered.filter((action) => action.group === group);
+    const groupActions = !normalized && !showAll ? (group === "Navigate" ? filtered : []) : filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
     return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => { const index = filtered.indexOf(action); return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{action.label}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>; })}</section>;
-  })}</div><footer className="command-footer"><span>↑↓ move · Enter run · Esc close</span><button type="button" onClick={onSwitchSession}>Switch session…</button></footer></section></div>;
+  })}</div><footer className="command-footer"><span>↑↓ navigate · Enter choose · Esc close</span><button type="button" onClick={() => { setShowAll(value => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
 }
 
 export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
@@ -1210,28 +1213,31 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (!pane) return null;
     const renderer = renderers.panes[pane.id];
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
-      <p className="context-menu-heading" role="presentation">Pane</p>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}><UiIcon name="sidebar" />Split right</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}><UiIcon name="sidebar" />Split down</button>
+      <p className="context-menu-heading" role="presentation">Selected pane · {isGraphicalReview(renderer) ? "Review" : isGraphicalContext(renderer) ? "Files" : "Terminal"}</p>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}><UiIcon name="expand" />Expand / restore pane</button>
+      {isGraphicalContext(renderer) || isGraphicalReview(renderer) ? <button role="menuitem" type="button" onClick={() => menuAction(() => { document.querySelector<HTMLElement>(".pane-view.is-selected .context-document, .pane-view.is-selected .review-diff")?.focus({ preventScroll: true }); dispatchFileNavigation("open-picker"); })}><UiIcon name="search" />Go to file…</button> : null}
       <p className="context-menu-heading" role="presentation">Open view</p>
-      {rendererActionDefinitions.map(({ id, label, direction, kind }) => {
+      {rendererActionDefinitions.filter(action => action.direction === "right").map(({ id, label, direction, kind }) => {
         const capability = kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context;
-        return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? "Select a pane with the required capability"} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}><UiIcon name="file" />{label}</button>;
+        return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? label} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}><UiIcon name="file" />{kind === "review" ? "Review" : kind === "files" ? "Files" : "Context"}</button>;
       })}
-      <p className="context-menu-heading" role="presentation">Advanced</p>
-      <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}>{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : renderer?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
-      <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}><UiIcon name="refresh" />Refresh renderer detection</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}><UiIcon name="expand" />Toggle zoom</button>
-      <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}><UiIcon name="right" />Swap...</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}><UiIcon name="right" />Move...</button>
+      <details className="context-menu-advanced"><summary>Advanced</summary>
+        <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename pane</button>
+        {(["right", "down"] as const).map(direction => <button key={direction} role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction, ratio: null }, true))}><UiIcon name="sidebar" />Split {direction}</button>)}
+        {rendererActionDefinitions.filter(action => action.direction === "down").map(({ id, label, direction, kind }) => <button key={id} role="menuitem" type="button" disabled={disabled || !(kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context)} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}><UiIcon name="file" />{label}</button>)}
+        <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}><UiIcon name="terminal" />{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : "Render document"}</button>
+        <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}><UiIcon name="refresh" />Refresh renderer detection</button>
+        <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); })}><UiIcon name="right" />Swap…</button>
+        <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); })}><UiIcon name="right" />Move…</button>
+      </details>
       <div className="context-menu-separator" role="presentation" />
-      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}><UiIcon name="close" />Close</button>
+      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}><UiIcon name="close" />Close pane</button>
     </ContextMenu>;
   };
   const selectedRenderer = selection.paneId ? renderers.panes[selection.paneId] : undefined;
   const selectedPane = byId(panes, selection.paneId);
   const commandActions: CommandAction[] = [
+    { id: "space:setup", label: "Set up a Space", group: "Navigate", run: () => { setCommandsOpen(false); setSetupOpen(true); } },
     ...prefixCommandActions.map(({ command, label, shortcut, group }) => ({
       id: `prefix:${command}`, label, shortcut, group,
       disabled: (command.includes("space") && !selectedSpace) || (command.includes("tab") && !selectedTab) || (command.includes("pane") && !selectedPane),
@@ -1252,8 +1258,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     }),
   ];
   const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;
-  const workbenchStyle: CSSProperties = { gridTemplateColumns: `${sidebarCollapsed ? 0 : sidebarWidth}px ${sidebarCollapsed ? 0 : 1}px minmax(0, 1fr)` };
-  const sidebarClass = `sidebar${sidebarCollapsed ? " is-collapsed" : ""}`;
+  const workbenchStyle: CSSProperties & { "--sidebar-width": string } = { "--sidebar-width": `${sidebarWidth}px` };
+  const sidebarClass = "sidebar";
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>

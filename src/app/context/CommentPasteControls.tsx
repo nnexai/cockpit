@@ -9,7 +9,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
   const [prepared, setPrepared] = useState<CommentPastePrepareResponse | null>(null);
   const [targetPane, setTargetPane] = useState("");
   const [receipt, setReceipt] = useState<CommentPasteReceipt | null>(null);
-  const [reviewedHash, setReviewedHash] = useState<string | null>(null);
+
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [duplicateRisk, setDuplicateRisk] = useState(false);
@@ -35,21 +35,10 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
     if (!prepared) return;
     setTargetPane((current) => prepared.targets.some((candidate) => candidate.pane_id === current) ? current : (prepared.targets[0]?.pane_id ?? ""));
   }, [prepared]);
-  useEffect(() => {
-    let active = true;
-    setReviewedHash(null);
-    if (preview?.exportable && preview.batch_id === batch.batch_id && preview.generation === batch.generation) {
-      void crypto.subtle.digest("SHA-256", new TextEncoder().encode(preview.payload)).then(hash => {
-        if (active) setReviewedHash(`sha256:${Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("")}`);
-      }).catch(() => { if (active) setError("This window could not verify the preview bytes for paste."); });
-    }
-    return () => { active = false; };
-  }, [batch.batch_id, batch.generation, preview]);
-  const previewMatches = reviewedHash !== null && reviewedHash === prepared?.payload_hash;
   const target = prepared?.targets.find(candidate => candidate.pane_id === targetPane);
   const previousUnknown = prepared?.receipts.some(item => !item.user_confirmed && (item.state === "outcome_unknown" || item.state === "pending")) ?? false;
   const send = async () => {
-    if (!prepared || !target || !previewMatches || pending || (previousUnknown && !duplicateRisk)) return;
+    if (!prepared || !target || pending || (previousUnknown && !duplicateRisk)) return;
     setPending(true); setError(null); setReceipt(null);
     const operationId = crypto.randomUUID();
     try {
@@ -89,12 +78,11 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
     <p>Paste fills the selected agent input without submitting.</p>
     {error ? <p role="alert">{error}</p> : null}
     {receipts.map(item => <p role="status" key={item.operation_id}>Paste {item.state === "outcome_unknown" ? "outcome unknown" : item.state}{item.message ? `: ${item.message}` : ""}</p>)}
-    {!previewMatches ? <p className="comment-paste-notice">Refresh the preview before pasting.</p> : null}
     {prepared?.reason ? <p role="status">{prepared.reason}</p> : null}
     {prepared?.paste_available && prepared.targets.length === 0 ? <p>No eligible agent in this tab.</p> : null}
     {prepared && prepared.targets.length > 0 ? <label>Agent in this tab<select aria-label="Paste target agent" value={targetPane} onChange={event => setTargetPane(event.target.value)} disabled={pending}>{prepared.targets.map(item => <option key={item.pane_id} value={item.pane_id}>{item.agent_label} · {item.pane_id}</option>)}</select></label> : null}
     {needsResolution.length > 0 ? <label><input type="checkbox" checked={duplicateRisk} onChange={event => setDuplicateRisk(event.target.checked)} /> I checked the agent input. Marking pasted resolves this delivery; retrying may duplicate it.</label> : null}
     {needsResolution.map(item => <button type="button" key={item.operation_id} disabled={pending || !duplicateRisk} onClick={() => void markPasted(item.operation_id)}>Mark pasted · {item.operation_id.slice(0, 8)}</button>)}
-    <div className="comment-draft-actions"><button type="button" onClick={() => void prepare()} disabled={pending}>Refresh targets</button><button type="button" onClick={() => void send()} disabled={pending || !target || !previewMatches || !prepared?.paste_available || (previousUnknown && !duplicateRisk)}>{pending ? "Pasting…" : "Paste to agent"}</button></div>
+    <div className="comment-draft-actions"><button type="button" onClick={() => void prepare()} disabled={pending}>Refresh targets</button><button type="button" onClick={() => void send()} disabled={pending || !target || !prepared?.paste_available || (previousUnknown && !duplicateRisk)}>{pending ? "Pasting…" : "Paste to agent"}</button></div>
   </section>;
 }

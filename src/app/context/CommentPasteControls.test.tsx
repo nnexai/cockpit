@@ -8,7 +8,7 @@ import type { CommentBatch, CommentPastePrepareResponse, CommentPreview } from "
 import { CommentPasteControls } from "./CommentPasteControls";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-it("requires the displayed bytes and explicit duplicate acknowledgment before sending once", async () => {
+it("uses the prepared payload and requires duplicate acknowledgment before retrying", async () => {
   vi.stubGlobal("crypto", webcrypto);
   const payload = "Exact reviewed prose α";
   const hash = `sha256:${Buffer.from(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))).toString("hex")}`;
@@ -21,7 +21,7 @@ it("requires the displayed bytes and explicit duplicate acknowledgment before se
   const accepted = vi.fn();
   const host = document.createElement("div"); document.body.append(host); const mounted = createRoot(host);
   const render = async (text: string) => {
-    await act(async () => { mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={{ batch_id: "batch", generation: 1, exportable: true, payload: text } as CommentPreview} onAccepted={accepted} />); });
+    await act(async () => { mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={null} onAccepted={accepted} />); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
   };
   const button = () => [...host.querySelectorAll("button")].find(item => item.textContent === "Paste to agent")!;
