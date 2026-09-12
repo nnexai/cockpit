@@ -973,7 +973,17 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     }
     setDocuments((current) => {
       const next = { ...current };
-      for (const path of invalidated) delete next[keyFor(root.root_id, path)];
+      for (const path of invalidated) {
+        const key = keyFor(root.root_id, path);
+        const state = next[key];
+        if (state?.document) {
+          next[key] = {
+            status: "error",
+            document: state.document,
+            error: "Source changed; the previous view is retained until it is refreshed.",
+          };
+        }
+      }
       return next;
     });
     if (selectedPath && invalidated.has(selectedPath)) {
