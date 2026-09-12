@@ -36,6 +36,7 @@ use cockpit_protocol::{
     },
 };
 use tauri::{Manager, State, ipc::Channel};
+use tokio::{io::AsyncWriteExt, process::Command as TokioCommand};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -43,6 +44,47 @@ const MAX_STREAMS: usize = 256;
 const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 const MAX_TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
+
+#[tauri::command]
+async fn cockpit_clipboard_write(text: String) -> Result<(), ErrorResponse> {
+    #[cfg(target_os = "linux")]
+    { write_linux_clipboard(&text).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = text; Err(stream_error("clipboard_unavailable", "The native clipboard adapter is unavailable on this platform")) }
+}
+
+#[tauri::command]
+async fn cockpit_clipboard_read() -> Result<String, ErrorResponse> {
+    #[cfg(target_os = "linux")]
+    { read_linux_clipboard().await }
+    #[cfg(not(target_os = "linux"))]
+    { Err(stream_error("clipboard_unavailable", "The native clipboard adapter is unavailable on this platform")) }
+}
+
+#[cfg(target_os = "linux")]
+async fn write_linux_clipboard(text: &str) -> Result<(), ErrorResponse> {
+    let mut process = TokioCommand::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| stream_error("clipboard_unavailable", format!("Could not start wl-copy: {error}")))?;
+    let mut stdin = process.stdin.take().ok_or_else(|| stream_error("clipboard_unavailable", "wl-copy stdin was unavailable"))?;
+    stdin.write_all(text.as_bytes()).await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not write the clipboard: {error}")))?;
+    drop(stdin);
+    let status = process.wait().await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not finish the clipboard write: {error}")))?;
+    if status.success() { Ok(()) } else { Err(stream_error("clipboard_write_failed", format!("wl-copy exited with {status}"))) }
+}
+
+#[cfg(target_os = "linux")]
+async fn read_linux_clipboard() -> Result<String, ErrorResponse> {
+    let output = TokioCommand::new("wl-paste")
+        .args(["--no-newline", "--type", "text/plain"])
+        .output()
+        .await
+        .map_err(|error| stream_error("clipboard_unavailable", format!("Could not start wl-paste: {error}")))?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|error| stream_error("clipboard_read_failed", format!("The clipboard was not valid UTF-8: {error}")))
+    } else { Err(stream_error("clipboard_read_failed", format!("wl-paste exited with {}", output.status))) }
+}
 
 /// A cancellation/cleanup handle shared with a stream relay task.
 struct StreamControl {
@@ -197,6 +239,19 @@ fn stream_error(code: &str, message: impl Into<String>) -> ErrorResponse {
     ErrorResponse {
         code: code.to_owned(),
         message: message.into(),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod clipboard_tests {
+    use super::{read_linux_clipboard, write_linux_clipboard};
+
+    #[tokio::test]
+    async fn native_clipboard_roundtrip_preserves_unicode_and_newlines() {
+        let expected = "Cockpit αβγ\nline two\n✓ 终端";
+        write_linux_clipboard(expected).await.expect("wl-copy should accept text");
+        let actual = read_linux_clipboard().await.expect("wl-paste should return text");
+        assert_eq!(actual, expected);
     }
 }
 
@@ -1015,7 +1070,9 @@ pub fn run() {
             cockpit_session_subscribe,
             cockpit_terminal_open,
             cockpit_terminal_command,
-            cockpit_stream_cancel
+            cockpit_stream_cancel,
+            cockpit_clipboard_read,
+            cockpit_clipboard_write
         ])
         .build(tauri::generate_context!())
         .expect("error while building Cockpit Tauri application")

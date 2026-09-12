@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
+import { createClipboardAccess, type ClipboardAccess } from "../client/clipboard";
 
 
 export const MAX_PENDING_CONTROL_COMMANDS = 64;
@@ -58,22 +59,14 @@ export function createCockpitTerminal(fontSize = applicationFontSize()): Termina
   });
 }
 
-type ClipboardAccess = Pick<Clipboard, "readText" | "writeText">;
-
-function browserClipboard(): ClipboardAccess {
-  const clipboard = globalThis.navigator?.clipboard;
-  if (!clipboard) throw new Error("Clipboard access is unavailable");
-  return clipboard;
-}
-
-export async function copyTerminalSelection(terminal: Pick<Terminal, "getSelection">, clipboard: ClipboardAccess = browserClipboard()): Promise<boolean> {
+export async function copyTerminalSelection(terminal: Pick<Terminal, "getSelection">, clipboard: ClipboardAccess = createClipboardAccess()): Promise<boolean> {
   const selection = terminal.getSelection();
   if (!selection) return false;
   await clipboard.writeText(selection);
   return true;
 }
 
-export async function readTerminalClipboard(clipboard: ClipboardAccess = browserClipboard()): Promise<string> {
+export async function readTerminalClipboard(clipboard: ClipboardAccess = createClipboardAccess()): Promise<string> {
   return clipboard.readText();
 }
 
