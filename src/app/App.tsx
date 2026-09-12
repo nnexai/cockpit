@@ -552,6 +552,16 @@ function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; muta
 }
 
 type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser"; disabled?: boolean; reason?: string; run: () => void };
+type RendererActionDefinition = { id: string; label: string; direction: "right" | "down"; kind: "review" | "files" | "context" };
+
+const rendererActionDefinitions: RendererActionDefinition[] = [
+  { id: "review-right", label: "Open Review right", direction: "right", kind: "review" },
+  { id: "review-down", label: "Open Review below", direction: "down", kind: "review" },
+  { id: "files-right", label: "Open files right", direction: "right", kind: "files" },
+  { id: "files-down", label: "Open files below", direction: "down", kind: "files" },
+  { id: "context-right", label: "Open Context right", direction: "right", kind: "context" },
+  { id: "context-down", label: "Open Context below", direction: "down", kind: "context" },
+];
 
 const prefixCommandActions: Array<{ command: PrefixCommand; label: string; shortcut: string; group: CommandAction["group"] }> = [
   { command: "new-space", label: "New Space", shortcut: "Ctrl+B Shift+N", group: "Space" },
@@ -1160,7 +1170,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (menu.target.kind === "space") {
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button>{space.id === selection.spaceId ? <><button role="menuitem" type="button" disabled={disabled || browserBusy} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}>Open browser</button><button role="menuitem" type="button" disabled={disabled || browserBusy} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}>Show browser</button><button role="menuitem" type="button" disabled={disabled || feedbackBusy} onClick={() => menuAction(openFeedback)}>Browser feedback</button><button role="menuitem" type="button" disabled={disabled || browserBusy} className="destructive" onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}>Close browser</button></> : null}<button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}>Review task cleanup…</button></ContextMenu>;
+      const browserReason = space.id === selection.spaceId ? undefined : "Select this Space first";
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}>Open browser</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}>Show browser</button><button role="menuitem" type="button" disabled={disabled || feedbackBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(openFeedback)}>Browser feedback</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} className="destructive" title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}>Close browser</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}>Review task cleanup…</button></ContextMenu>;
     }
     if (menu.target.kind === "tab") {
       const tab = allTabs.find((candidate) => candidate.id === menu.target.id);
@@ -1174,12 +1185,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right", "review"); })}>Open Review right</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_review} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down", "review"); })}>Open Review below</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_files} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right", "files"); })}>Open files right</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_files} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down", "files"); })}>Open files below</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "right"); })}>Open Context right</button>
-      <button role="menuitem" type="button" disabled={disabled || !renderer?.presentation.can_open_context} title={renderer?.presentation.reason} onClick={() => menuAction(() => { void renderers.open(pane.id, "down"); })}>Open Context below</button>
+      {rendererActionDefinitions.map(({ id, label, direction, kind }) => {
+        const capability = kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context;
+        return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? "Select a pane with the required capability"} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}>{label}</button>;
+      })}
       <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}>{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : renderer?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
       <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}>Refresh renderer detection</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button>
@@ -1204,12 +1213,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
     { id: "browser:feedback", label: "Browser feedback", group: "Browser", disabled: !selection.spaceId || feedbackBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: openFeedback },
     { id: "browser:context", label: "Send browser context", group: "Browser", disabled: !selection.spaceId || feedbackBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { setFeedbackOpen(true); void sendFeedback([], globalThis.crypto?.randomUUID?.() ?? `browser-context-${Date.now()}-${Math.random().toString(36).slice(2)}`, false); } },
-    { id: "renderer:review-right", label: "Open Review right", group: "Pane", disabled: mutationBusy || !selectedRenderer?.presentation.can_open_review, reason: selectedRenderer?.presentation.reason ?? "Select a pane with a configured repository", run: () => { if (selection.paneId) void renderers.open(selection.paneId, "right", "review"); } },
-    { id: "renderer:review-down", label: "Open Review below", group: "Pane", disabled: mutationBusy || !selectedRenderer?.presentation.can_open_review, reason: selectedRenderer?.presentation.reason ?? "Select a pane with a configured repository", run: () => { if (selection.paneId) void renderers.open(selection.paneId, "down", "review"); } },
-    { id: "renderer:files-right", label: "Open files right", group: "Pane", disabled: mutationBusy || !selectedRenderer?.presentation.can_open_files, reason: selectedRenderer?.presentation.reason ?? "Select a pane with a configured repository", run: () => { if (selection.paneId) void renderers.open(selection.paneId, "right", "files"); } },
-    { id: "renderer:files-down", label: "Open files below", group: "Pane", disabled: mutationBusy || !selectedRenderer?.presentation.can_open_files, reason: selectedRenderer?.presentation.reason ?? "Select a pane with a configured repository", run: () => { if (selection.paneId) void renderers.open(selection.paneId, "down", "files"); } },
-    { id: "renderer:context-right", label: "Open Context right", group: "Pane", disabled: mutationBusy || !selectedRenderer?.presentation.can_open_context, reason: selectedRenderer?.presentation.reason ?? "Context requires a configured companion directory", run: () => { if (selection.paneId) void renderers.open(selection.paneId, "right"); } },
-    { id: "renderer:context-down", label: "Open Context below", group: "Pane", disabled: mutationBusy || !selectedRenderer?.presentation.can_open_context, reason: selectedRenderer?.presentation.reason ?? "Context requires a configured companion directory", run: () => { if (selection.paneId) void renderers.open(selection.paneId, "down"); } },
+    ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
+      const capability = kind === "review" ? selectedRenderer?.presentation.can_open_review : kind === "files" ? selectedRenderer?.presentation.can_open_files : selectedRenderer?.presentation.can_open_context;
+      const reason = selectedRenderer?.presentation.reason ?? (kind === "context" ? "Context requires a configured companion directory" : "Select a pane with a configured repository");
+      return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability, reason, run: () => { if (selection.paneId) void renderers.open(selection.paneId, direction, kind === "context" ? undefined : kind); } };
+    }),
   ];
   const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;
   const workbenchStyle: CSSProperties = { gridTemplateColumns: `${sidebarCollapsed ? 48 : sidebarWidth}px 5px minmax(0, 1fr)` };
