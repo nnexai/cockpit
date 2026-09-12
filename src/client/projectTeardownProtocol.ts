@@ -46,7 +46,7 @@ export function parseWorkspaceTeardownExecuteRequest(value: unknown): WorkspaceT
 
 export function parseWorkspaceTeardownPreview(value: unknown): WorkspaceTeardownPreview {
   if (!record(value) || !operationId(value.operation_id) || !workspaceId(value.workspace_id)
-    || !text(value.endpoint_identity) || !text(value.repository_key) || !text(value.repository_root)
+    || !text(value.endpoint_identity) || !nullableText(value.repository_key) || !nullableText(value.repository_root)
     || !text(value.checkout_path) || !["owned_created", "borrowed_opened", "foreign", "unknown"].includes(String(value.ownership))
     || !["live", "missing", "ambiguous"].includes(String(value.workspace_state))
     || !["owned", "missing", "foreign", "ambiguous"].includes(String(value.companion_state))

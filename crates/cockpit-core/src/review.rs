@@ -2755,6 +2755,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ProjectHerdrAdapter for NoopAdapter {
+        async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> {
+            unavailable()
+        }
+
         async fn project_inventory(
             &self,
             _: &str,

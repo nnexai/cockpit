@@ -3,7 +3,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
-use cockpit_core::sources::{SourceAsset, SourceFetchRequest, SourceProvider, SourceRef};
+use cockpit_core::sources::{
+    SourceAsset, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+};
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 use serde::Deserialize;
@@ -553,6 +555,14 @@ fn value_reference(value: &Value, name: &str) -> Option<String> {
     })
 }
 
+fn review_source_branch(value: &Value) -> Option<String> {
+    value
+        .get("head")
+        .and_then(|head| value_string(head, &["ref", "label"]))
+        .or_else(|| value_string(value, &["head_ref", "headRef"]))
+        .filter(|branch| !branch.is_empty())
+}
+
 fn append_bounded(body: &mut String, value: &str, limit: usize) -> Result<(), InspectionError> {
     body.push_str(value);
     if body.len() > limit {
@@ -587,6 +597,90 @@ impl SourceProvider for TeaSourceProvider {
             SourceCapability::Review,
             SourceCapability::Wiki,
         ]
+    }
+    async fn metadata(
+        &self,
+        request: &SourceFetchRequest,
+    ) -> Result<SourceMetadata, InspectionError> {
+        let (repo, kind) = artifact_kind(request, &self.base_url)?;
+        match kind {
+            ArtifactKind::Issue(index) => {
+                let issue: Issue = serde_json::from_slice(
+                    &self
+                        .command(&vec![
+                            "issues".into(),
+                            index.to_string(),
+                            "--output".into(),
+                            "json".into(),
+                            "--repo".into(),
+                            repo,
+                            "--login".into(),
+                            self.login.clone(),
+                        ])
+                        .await?,
+                )
+                .map_err(|_| {
+                    InspectionError::new(
+                        "source_provider_contract",
+                        "Tea issue JSON did not match the verified contract",
+                    )
+                })?;
+                if issue.index != index {
+                    return Err(InspectionError::new(
+                        "source_provider_contract",
+                        "Tea returned a different issue index",
+                    ));
+                }
+                Ok(SourceMetadata {
+                    title: issue.title,
+                    source_branch: None,
+                })
+            }
+            ArtifactKind::Review(index) => {
+                let review: Value = serde_json::from_slice(
+                    &self
+                        .command(&vec![
+                            "pulls".into(),
+                            index.to_string(),
+                            "--output".into(),
+                            "json".into(),
+                            "--fields".into(),
+                            "index,title,head".into(),
+                            "--repo".into(),
+                            repo,
+                            "--login".into(),
+                            self.login.clone(),
+                        ])
+                        .await?,
+                )
+                .map_err(|_| {
+                    InspectionError::new(
+                        "source_provider_contract",
+                        "Tea pull request JSON did not match the verified contract",
+                    )
+                })?;
+                if value_string(&review, &["index"]).and_then(|value| value.parse::<u64>().ok())
+                    != Some(index)
+                {
+                    return Err(InspectionError::new(
+                        "source_provider_contract",
+                        "Tea returned a different pull request index",
+                    ));
+                }
+                let title = value_string(&review, &["title"]).ok_or_else(|| {
+                    InspectionError::new("source_provider_contract", "Tea pull request has no title")
+                })?;
+                let source_branch = review_source_branch(&review);
+                Ok(SourceMetadata {
+                    title,
+                    source_branch,
+                })
+            }
+            ArtifactKind::Wiki(_) => Err(InspectionError::new(
+                "source_metadata_unsupported",
+                "Tea wiki artifacts do not provide workspace defaults",
+            )),
+        }
     }
     async fn fetch(
         &self,
@@ -693,7 +787,7 @@ impl SourceProvider for TeaSourceProvider {
 mod tests {
     use super::{
         Duration, SourceFetchRequest, SourceProvider, TeaSourceProvider, Url, base_path,
-        parse_comments, provider_instance,
+        parse_comments, provider_instance, review_source_branch,
     };
     use cockpit_core::sources::SourceAuthority;
     use std::io::{Read, Write};
@@ -706,6 +800,17 @@ mod tests {
     use std::thread::{self, JoinHandle};
 
     static FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn review_metadata_uses_the_head_ref_not_the_commit_sha() {
+        let review = serde_json::json!({
+            "head": { "sha": "7f4c", "ref": "feature/workspace-defaults" }
+        });
+        assert_eq!(
+            review_source_branch(&review).as_deref(),
+            Some("feature/workspace-defaults")
+        );
+    }
 
     #[derive(Clone, Copy)]
     enum FixtureMode {

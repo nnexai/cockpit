@@ -261,7 +261,9 @@ The stable input matrix now records separate paths: physical host mouse through 
 
 Prioritize repository/worktree setup and graphical Context, then the remaining selected reference, source, and review workflows. Outstanding terminal/repair gates remain recorded; they do not authorize calling the release complete, but they no longer hold independent feature implementation behind additional terminal experiments.
 
-## Reviewed repository and worktree setup
+## Reviewed repository and worktree setup (historical)
+
+The path-only opening and repository-action policy below supersede this increment's branch-based Open selector and per-operation consent. Its evidence describes the implementation at that time.
 
 The `task…` entry point discovers only configured local repositories, reviews exact create/open effects, then delegates worktree mutations to stock Herdr. Open resolves exactly one branch or checkout-path selector from fresh inventory. Cockpit's repository ID is a filesystem-bound catalog identity; Herdr's repository key is the canonical Git common directory. They are not interchangeable.
 
@@ -367,3 +369,13 @@ macOS process-generation evidence uses Darwin's microsecond start timestamp thro
 An uncertain extension mutation triggers an authoritative resync without automatically repeating the launch. A browser smoke against disposable session `cockpit-patch-0908` opened a real Files pane, replaced its successful confirmation with `mutation_applied_snapshot_failed`, and verified the graphical file content, retained inline error, and exactly one launch. Linux-native smoke compared default scale 1.0 with the personal scale 1.25 override and verified the undecorated window hint. Tauri's icon generator produced an ICNS from the corrected source.
 
 macOS runtime behavior was not exercised on this Linux host. The attempted Darwin cross-check is blocked by `libproc` generating its bindings only on a macOS build host; it fails on Linux with a missing `osx_libproc_bindings.rs`. Native macOS compilation and runtime verification remain unverified, not covered by the Linux smoke.
+
+## 2026-09-13: Directory opening and compact task setup
+
+The [approved UI polish](planning/product-atlas-2026-09-12/polish/implementation-plan.md) replaces branch-based Open with a path-only operation. Herdr `workspace.create` opens the validated directory exactly as supplied, including plain directories and directories nested within Git checkouts. Git discovery adds metadata; it does not initialize Git, switch branches, or confer deletion ownership. New worktrees continue through Herdr's worktree API.
+
+Ownership is explicit in setup plans. Opened directories remain borrowed. Teardown offers worktree removal only for an owned Create with an exact creation receipt and fresh linked-worktree, endpoint, and clean-status checks. Legacy records remain readable; unproven legacy Creates require review and cannot resume provisioning. Missing ownership metadata never grants deletion authority.
+
+Configured repository actions run without per-operation consent. The optional upstream Git `trust_repository` flag remains unset. The compact form obtains provider metadata through the shared Rust service, matches provider identity to configured local repositories, preserves explicit edits, and ignores superseded lookups. Ambiguous matching requires selection. Review defaults use the provider's actual source branch. Open paths and new-worktree destinations have separate form state.
+
+Every submission gets a fresh plan. Once dispatched, its receipt survives a closed dialog or a lost response; Cockpit reads and reconciles that operation rather than submitting a second setup. Browser and native adapters share the same contract. See the [execution record](planning/product-atlas-2026-09-12/polish/execution.md) for verification and platform limits.

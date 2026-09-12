@@ -1034,6 +1034,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            projects::cockpit_resolve_workspace_defaults,
             projects::cockpit_project_configuration,
             projects::cockpit_repositories,
             projects::cockpit_workspace_plan,

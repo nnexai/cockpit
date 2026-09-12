@@ -56,12 +56,13 @@ use crate::context::{
     ContextSplitDirection, DetectionConfidence, ExtensionKind, PanePresentation,
     ReviewLaunchRequest,
 };
+use crate::project_defaults::{WorkspaceDefaults, WorkspaceDefaultsRequest};
 use crate::projects::{
     ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectLimits, ProjectProvider,
     RepositoryCandidate, RepositoryListResponse, WorkspaceOperation, WorkspaceOperationRequest,
-    WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
-    WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
-    WorkspaceSetupRequest,
+    WorkspaceCheckoutOwnership, WorkspaceOperationState, WorkspaceOperationStep,
+    WorkspaceOwnedResource, WorkspaceReconcileRequest, WorkspaceRecoveryAction,
+    WorkspaceSetupMode, WorkspaceSetupPlan, WorkspaceSetupRequest,
 };
 use ts_rs::{Config, TS};
 
@@ -151,7 +152,10 @@ pub fn render_v1() -> String {
         RepositoryCandidate::decl(&config),
         ProjectDiagnostic::decl(&config),
         RepositoryListResponse::decl(&config),
+        WorkspaceDefaultsRequest::decl(&config),
+        WorkspaceDefaults::decl(&config),
         WorkspaceSetupMode::decl(&config),
+        WorkspaceCheckoutOwnership::decl(&config),
         WorkspaceSetupRequest::decl(&config),
         ProjectArtifact::decl(&config),
         WorkspaceSetupPlan::decl(&config),

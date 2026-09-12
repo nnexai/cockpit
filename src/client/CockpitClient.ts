@@ -54,6 +54,7 @@ import type {
   TerminalStreamMessage,
   ProjectConfiguration,
   RepositoryListResponse,
+  WorkspaceDefaults, WorkspaceDefaultsRequest,
   WorkspaceSetupRequest,
   WorkspaceSetupPlan,
   WorkspaceOperationRequest,
@@ -124,6 +125,7 @@ export interface CockpitClient {
   browserFeedbackImage(request: BrowserFeedbackImageRequest): Promise<BrowserFeedbackImage>;
   sendBrowserFeedback(request: BrowserFeedbackSendRequest): Promise<BrowserFeedbackSendResponse>;
   projectConfiguration(): Promise<ProjectConfiguration>;
+  resolveWorkspaceDefaults(request: WorkspaceDefaultsRequest): Promise<WorkspaceDefaults>;
   repositories(): Promise<RepositoryListResponse>;
   planWorkspace(sessionId: string, request: WorkspaceSetupRequest): Promise<WorkspaceSetupPlan>;
   startWorkspace(sessionId: string, request: WorkspaceOperationRequest): Promise<WorkspaceOperation>;

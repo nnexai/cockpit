@@ -706,7 +706,11 @@ impl ContextService {
         result.next_offset = (end < before.len()).then_some(end as u32);
         if result.truncated {
             result.diagnostics.push(diagnostic(
-                if line_truncated { "context_preview_lines" } else { "context_preview_bytes" },
+                if line_truncated {
+                    "context_preview_lines"
+                } else {
+                    "context_preview_bytes"
+                },
                 if line_truncated {
                     "file exceeds the configured preview line limit; continue reading for more"
                 } else {
@@ -981,10 +985,10 @@ impl ContextService {
         let source_repository_id = actual_cwd.as_deref().and_then(|cwd| {
             roots
                 .iter()
-                .find(|root| {
-                    root.root.kind == ContextRootKind::Repository
-                        && is_within(cwd, &root.canonical)
+                .filter(|root| {
+                    root.root.kind == ContextRootKind::Repository && is_within(cwd, &root.canonical)
                 })
+                .max_by_key(|root| root.canonical.components().count())
                 .map(|root| root.root.root_id.clone())
         });
         let default_root_id = if renderer == Some(ExtensionKind::Context) {
@@ -1005,18 +1009,17 @@ impl ContextService {
                 .or_else(|| roots.first().map(|root| root.root.root_id.clone()))
         } else {
             source_repository_id
-                .or_else(|| current_repository_id
-                .as_deref()
-                .and_then(|repository_id| {
-                    roots
-                        .iter()
-                        .find(|root| {
-                            root.root.kind == ContextRootKind::Repository
-                                && root.root.repository_id == repository_id
-                        })
-                        .map(|root| root.root.root_id.clone())
+                .or_else(|| {
+                    current_repository_id.as_deref().and_then(|repository_id| {
+                        roots
+                            .iter()
+                            .find(|root| {
+                                root.root.kind == ContextRootKind::Repository
+                                    && root.root.repository_id == repository_id
+                            })
+                            .map(|root| root.root.root_id.clone())
+                    })
                 })
-                )
                 .or_else(|| roots.first().map(|root| root.root.root_id.clone()))
         };
         let mut reason = evidence.reason.clone();
@@ -1979,6 +1982,10 @@ mod review_checkout_tests {
 
     #[async_trait::async_trait]
     impl ProjectHerdrAdapter for TestAdapter {
+        async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> {
+            unavailable()
+        }
+
         async fn project_inventory(
             &self,
             _: &str,

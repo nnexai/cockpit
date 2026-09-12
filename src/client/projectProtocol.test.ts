@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWorkspaceOperation } from "./projectProtocol";
+import { parseWorkspaceOperation, parseWorkspaceSetupRequest, parseWorkspaceDefaults } from "./projectProtocol";
 
 const repository = {
   repository_id: "repo-1",
@@ -28,7 +28,7 @@ const plan = {
   companion_created_by_operation: true,
   label: "Task",
   focus: true,
-  trust_repository: true,
+  ownership: "owned_worktree",
   artifact: null,
   effects: [],
   warnings: [],
@@ -60,4 +60,16 @@ describe("workspace operation protocol", () => {
     expect(parseWorkspaceOperation(operation("context_preparing")).step).toBe("context_preparing");
     expect(parseWorkspaceOperation(operation("context_ready")).step).toBe("context_ready");
   });
+});
+
+it("opens a directory without repository fields and rejects worktree fields on that operation", () => {
+  const request = { operation: "open", path: "/notes/nested", label: "Notes", task_name: null, focus: true };
+  expect(parseWorkspaceSetupRequest(request)).toEqual(request);
+  expect(() => parseWorkspaceSetupRequest({ ...request, repository_id: "repo", branch: "main" })).toThrow();
+});
+
+it("keeps unmatched provider defaults unselected and rejects a repository outside the returned matches", () => {
+  const defaults = { artifact: { provider_id: "github", kind: "issue", canonical_id: "acme/repo#2", original_url: "https://github.com/acme/repo/issues/2", canonical_url: "https://github.com/acme/repo/issues/2" }, repositories: [], repository_id: null, branch: null, label: null, checkout_path: null };
+  expect(parseWorkspaceDefaults(defaults)).toEqual(defaults);
+  expect(() => parseWorkspaceDefaults({ ...defaults, repository_id: "unmatched" })).toThrow();
 });

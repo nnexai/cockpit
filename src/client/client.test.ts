@@ -83,6 +83,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in terminal fixture"); }),
     browserFeedbackImage: vi.fn(async () => { throw new Error("Unexpected browser feedback image in terminal fixture"); }),
     sendBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback send in terminal fixture"); }),
+    resolveWorkspaceDefaults: vi.fn(async () => { throw new Error("Unexpected workspace defaults in terminal fixture"); }),
     projectConfiguration: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
     planWorkspace: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),

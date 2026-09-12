@@ -4,7 +4,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
-use cockpit_core::sources::{SourceAsset, SourceFetchRequest, SourceProvider, SourceRef};
+use cockpit_core::sources::{
+    SourceAsset, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+};
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 use serde::Deserialize;
@@ -328,6 +330,36 @@ impl SourceProvider for GithubSourceProvider {
 
     fn capabilities(&self) -> Vec<SourceCapability> {
         vec![SourceCapability::Issue, SourceCapability::IssueComments]
+    }
+
+    async fn metadata(
+        &self,
+        request: &SourceFetchRequest,
+    ) -> Result<SourceMetadata, InspectionError> {
+        let (repository, number) = issue_kind(request, &self.base_url)?;
+        let issue = parse_issue(
+            &self
+                .command(&[
+                    "issue".into(),
+                    "view".into(),
+                    number.to_string(),
+                    "--repo".into(),
+                    repository,
+                    "--json".into(),
+                    "number,title".into(),
+                ])
+                .await?,
+        )?;
+        if issue.number != number {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "GitHub returned a different issue number",
+            ));
+        }
+        Ok(SourceMetadata {
+            title: issue.title,
+            source_branch: None,
+        })
     }
 
     async fn fetch(

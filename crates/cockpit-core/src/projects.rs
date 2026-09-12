@@ -1,3 +1,5 @@
+mod defaults;
+
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::{
@@ -13,9 +15,10 @@ use cockpit_protocol::project_teardown::{
 };
 use cockpit_protocol::projects::{
     ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse,
-    WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationState, WorkspaceOperationStep,
-    WorkspaceOwnedResource, WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode,
-    WorkspaceSetupPlan, WorkspaceSetupRequest,
+    WorkspaceCheckoutOwnership, WorkspaceOperation, WorkspaceOperationRequest,
+    WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
+    WorkspaceReconcileRequest, WorkspaceRecoveryAction, WorkspaceSetupMode, WorkspaceSetupPlan,
+    WorkspaceSetupRequest,
 };
 use cockpit_protocol::v1::ErrorResponse;
 use sha2::{Digest, Sha256};
@@ -116,226 +119,198 @@ impl ProjectService {
     ) -> Result<WorkspaceSetupPlan, InspectionError> {
         validate_session(session)?;
         validate_setup_request(request)?;
-        if !request.trust_repository {
-            return Err(InspectionError::new(
-                "consent_required",
-                "repository actions require explicit consent before review",
-            ));
-        }
-        if request.mode == WorkspaceSetupMode::Open
-            && (request.branch.is_some() == request.checkout_path.is_some())
-        {
-            return Err(InspectionError::new(
-                "invalid_selector",
-                "Open requires exactly one branch or checkout path selector",
-            ));
-        }
         let catalog = RepositoryCatalog::new(self.configuration.clone());
-        let repository = catalog.resolve(&request.repository_id).await?;
-        let inventory = self
-            .adapter
-            .project_inventory(session, &repository.checkout_path)
-            .await?;
-        verify_inventory(&inventory, &repository)?;
-        let mut artifact = match request.artifact_url.as_deref() {
-            Some(url) => {
-                let artifact = repositories::resolve_artifact(&self.configuration, url)?;
-                if artifact.canonical_url.contains('@') {
-                    return Err(InspectionError::new(
-                        "secret_input",
-                        "artifact URL userinfo is not allowed",
-                    ));
-                }
-                Some(artifact)
-            }
-            None => None,
-        };
-        if let Some(artifact) = artifact.as_ref() {
-            let sources = self.sources.as_ref().ok_or_else(|| {
-                InspectionError::new(
-                    "source_provider_unsupported",
-                    "source validation is not configured in this host",
-                )
-            })?;
-            let authority = source_authority_for_checkout(
-                &self.configuration,
-                Path::new(&repository.checkout_path),
-                &artifact.provider_id,
-            )
-            .await?;
-            sources
-                .validate_artifact(SourceFetchRequest {
-                    provider_id: artifact.provider_id.clone(),
-                    artifact_url: artifact.canonical_url.clone(),
-                    authority,
-                })
-                .await?;
-        }
         let operation_id = Uuid::new_v4().to_string();
-        let (checkout_path, branch) = if request.mode == WorkspaceSetupMode::Open {
-            let found = if let Some(branch) = request.branch.as_deref() {
-                inventory
-                    .worktrees
-                    .iter()
-                    .filter(|entry| entry.branch.as_deref() == Some(branch))
-                    .collect::<Vec<_>>()
-            } else {
-                let path = request.checkout_path.as_deref().expect("selector checked");
-                inventory
-                    .worktrees
-                    .iter()
-                    .filter(|entry| entry.checkout_path == path)
-                    .collect::<Vec<_>>()
-            };
-            let entry = match found.as_slice() {
-                [entry] => *entry,
-                [] => {
-                    return Err(InspectionError::new(
-                        "worktree_not_found",
-                        "Open selector did not match a fresh Herdr worktree listing",
-                    ));
+        let (
+            repository,
+            mode,
+            ownership,
+            branch,
+            base,
+            checkout_path,
+            companion_id,
+            companion_created_by_operation,
+            label,
+            focus,
+            artifact,
+            effects,
+        ) = match request {
+            WorkspaceSetupRequest::Create {
+                repository_id,
+                branch,
+                base_ref,
+                checkout_path,
+                label,
+                task_name,
+                artifact_url,
+                focus,
+            } => {
+                let repository = catalog.resolve(repository_id).await?;
+                let inventory = self
+                    .adapter
+                    .project_inventory(session, &repository.checkout_path)
+                    .await?;
+                verify_inventory(&inventory, &repository)?;
+                let artifact = match artifact_url.as_deref() {
+                    Some(url) => {
+                        let artifact = repositories::resolve_artifact(&self.configuration, url)?;
+                        if artifact.canonical_url.contains('@') {
+                            return Err(InspectionError::new(
+                                "secret_input",
+                                "artifact URL userinfo is not allowed",
+                            ));
+                        }
+                        Some(artifact)
+                    }
+                    None => None,
+                };
+                if let Some(artifact) = artifact.as_ref() {
+                    let sources = self.sources.as_ref().ok_or_else(|| {
+                        InspectionError::new(
+                            "source_provider_unsupported",
+                            "source validation is not configured in this host",
+                        )
+                    })?;
+                    let authority = source_authority_for_checkout(
+                        &self.configuration,
+                        Path::new(&repository.checkout_path),
+                        &artifact.provider_id,
+                    )
+                    .await?;
+                    sources
+                        .validate_artifact(SourceFetchRequest {
+                            provider_id: artifact.provider_id.clone(),
+                            artifact_url: artifact.canonical_url.clone(),
+                            authority,
+                        })
+                        .await?;
                 }
-                _ => {
-                    return Err(InspectionError::new(
-                        "worktree_conflict",
-                        "Open selector matched multiple worktrees",
-                    ));
-                }
-            };
-            (entry.checkout_path.clone(), entry.branch.clone())
-        } else {
-            let branch = match request.branch.as_deref() {
-                Some(branch) => branch.to_owned(),
-                None => expand_template(
-                    &self.configuration.branch_template,
-                    &repository,
-                    request,
-                    artifact.as_ref(),
-                )?,
-            };
-            catalog.validate_branch(&repository, &branch).await?;
-            let path = match request.checkout_path.as_deref() {
-                Some(path) => bounded_path(
-                    path,
-                    Path::new(&self.configuration.worktree_root),
-                    "checkout_path",
-                )?,
-                None => {
-                    let path = expand_path_template(
-                        &self.configuration.checkout_template,
+                let branch = match branch.as_deref() {
+                    Some(branch) => branch.to_owned(),
+                    None => expand_template(
+                        &self.configuration.branch_template,
                         &repository,
-                        &operation_id,
-                        &slug(
-                            request
-                                .task_name
-                                .as_deref()
-                                .or_else(|| artifact.as_ref().map(|a| a.canonical_id.as_str()))
-                                .unwrap_or("task"),
-                        ),
-                    )?;
-                    bounded_path(
-                        &path,
+                        task_name.as_deref(),
+                        artifact.as_ref(),
+                    )?,
+                };
+                catalog.validate_branch(&repository, &branch).await?;
+                let path = match checkout_path.as_deref() {
+                    Some(path) => bounded_path(
+                        path,
                         Path::new(&self.configuration.worktree_root),
                         "checkout_path",
-                    )?
-                }
-            };
-            (path, Some(branch))
-        };
-        let base = if request.mode == WorkspaceSetupMode::Open {
-            None
-        } else {
-            match request.base.as_deref() {
-                Some(base) => Some(catalog.resolve_base(&repository, base).await?),
-                None => None,
+                    )?,
+                    None => {
+                        let path = expand_path_template(
+                            &self.configuration.checkout_template,
+                            &repository,
+                            &operation_id,
+                            &slug(
+                                task_name
+                                    .as_deref()
+                                    .or_else(|| artifact.as_ref().map(|a| a.canonical_id.as_str()))
+                                    .unwrap_or("task"),
+                            ),
+                        )?;
+                        bounded_path(
+                            &path,
+                            Path::new(&self.configuration.worktree_root),
+                            "checkout_path",
+                        )?
+                    }
+                };
+                let base = match base_ref.as_deref() {
+                    Some(base) => Some(catalog.resolve_base(&repository, base).await?),
+                    None => None,
+                };
+                let label = label.clone().unwrap_or_else(|| {
+                    task_name.clone().unwrap_or_else(|| repository.name.clone())
+                });
+                validate_text(&label, "label", 256)?;
+                (
+                    Some(repository),
+                    WorkspaceSetupMode::Create,
+                    WorkspaceCheckoutOwnership::OwnedWorktree,
+                    Some(branch),
+                    base,
+                    path,
+                    operation_id.clone(),
+                    true,
+                    label,
+                    *focus,
+                    artifact,
+                    vec!["Create configured Herdr worktree".to_owned()],
+                )
+            }
+            WorkspaceSetupRequest::Open {
+                path,
+                label,
+                task_name,
+                focus,
+            } => {
+                let checkout_path = accessible_directory(path)?;
+                let repository = catalog
+                    .discover_checkout(Path::new(&checkout_path))
+                    .await
+                    .ok();
+                let label = label.clone().unwrap_or_else(|| {
+                    task_name
+                        .clone()
+                        .unwrap_or_else(|| directory_label(&checkout_path))
+                });
+                validate_text(&label, "label", 256)?;
+                (
+                    repository,
+                    WorkspaceSetupMode::Open,
+                    WorkspaceCheckoutOwnership::BorrowedDirectory,
+                    None,
+                    None,
+                    checkout_path,
+                    operation_id.clone(),
+                    true,
+                    label,
+                    *focus,
+                    None,
+                    vec![
+                        "Create Herdr Space for borrowed directory; Cockpit will never delete it"
+                            .to_owned(),
+                    ],
+                )
             }
         };
-        let (companion_id, companion_created_by_operation) =
-            if request.mode == WorkspaceSetupMode::Open {
-                let matches = self
-                    .store
-                    .list_companions(&self.configuration.companion_root)?
-                    .into_iter()
-                    .filter(|(_, manifest)| {
-                        manifest.repository_key == repository.common_dir
-                            && manifest.repository_root == repository.root
-                            && manifest.checkout_path == checkout_path
-                    })
-                    .collect::<Vec<_>>();
-                match matches.as_slice() {
-                    [] => (operation_id.clone(), true),
-                    [(id, manifest)]
-                        if manifest.ownership == "cockpit"
-                            && artifact.as_ref().map_or(true, |requested| {
-                                Some(requested) == manifest.artifact.as_ref()
-                            }) =>
-                    {
-                        if artifact.is_none() {
-                            artifact = manifest.artifact.clone();
-                        }
-                        (id.clone(), false)
-                    }
-                    [(_, _)] => {
-                        return Err(InspectionError::new(
-                            "association_conflict",
-                            "existing checkout companion metadata differs from the reviewed plan",
-                        ));
-                    }
-                    _ => {
-                        return Err(InspectionError::new(
-                            "association_conflict",
-                            "multiple companions are associated with the exact checkout",
-                        ));
-                    }
-                }
-            } else {
-                (operation_id.clone(), true)
-            };
         let companion_path = bounded_path(
             &companion_id,
             Path::new(&self.configuration.companion_root),
             "companion_path",
         )?;
-        let label = request.label.clone().unwrap_or_else(|| {
-            request
-                .task_name
-                .clone()
-                .unwrap_or_else(|| repository.name.clone())
-        });
-        validate_text(&label, "label", 256)?;
-        let mut effects = vec![
-            format!(
-                "{} Herdr worktree at {}",
-                if request.mode == WorkspaceSetupMode::Create {
-                    "Create"
-                } else {
-                    "Open"
-                },
-                checkout_path
-            ),
-            format!("Associate Cockpit companion at {}", companion_path),
+        let endpoint_identity = if mode == WorkspaceSetupMode::Create {
+            let repository = repository.as_ref().expect("Create plan has repository");
+            let inventory = self
+                .adapter
+                .project_inventory(session, &repository.checkout_path)
+                .await?;
+            verify_inventory(&inventory, repository)?;
+            inventory.endpoint_identity
+        } else {
+            self.adapter.project_endpoint_identity(session).await?
+        };
+        let mut effects = effects;
+        effects.push(format!("Associate Cockpit companion at {}", companion_path));
+        effects.push(
             "Create a new context-aware terminal with allowlisted COCKPIT_* environment".to_owned(),
-        ];
-        if request.mode == WorkspaceSetupMode::Open {
-            effects
-                .push("Borrow existing checkout; Cockpit will not claim or delete it".to_owned());
-            if !companion_created_by_operation {
-                effects.push(
-                    "Borrow existing companion; preserve its creation ownership and user files"
-                        .to_owned(),
-                );
-            }
-        }
+        );
         if artifact.is_some() {
             effects.push("Record the selected artifact in the companion manifest".to_owned());
         }
         let plan = WorkspaceSetupPlan {
             operation_id,
             generation: 1,
-            endpoint_identity: inventory.endpoint_identity.clone(),
+            endpoint_identity,
             session_id: session.to_owned(),
             repository,
-            mode: request.mode,
+            mode,
+            ownership,
             branch,
             base,
             checkout_path,
@@ -343,8 +318,7 @@ impl ProjectService {
             companion_id,
             companion_created_by_operation,
             label,
-            focus: request.focus,
-            trust_repository: request.trust_repository,
+            focus,
             artifact,
             effects,
             warnings: Vec::new(),
@@ -866,11 +840,37 @@ impl ProjectService {
         session: &str,
         operation: WorkspaceOperation,
     ) -> Result<FreshTeardownEvidence, InspectionError> {
+        if operation.plan.mode == WorkspaceSetupMode::Open || operation.plan.repository.is_none() {
+            let endpoint_identity = self.adapter.project_endpoint_identity(session).await?;
+            let companion = match self.store.read_companion(
+                &self.configuration.companion_root,
+                &operation.plan.companion_id,
+            ) {
+                Ok(manifest) => Some(manifest),
+                Err(error) if error.code == "companion_missing" => None,
+                Err(error) => return Err(error),
+            };
+            return Ok(FreshTeardownEvidence {
+                receipt: self.store.read_teardown_receipt(&operation.operation_id)?,
+                endpoint_identity,
+                repository_key: String::new(),
+                repository_root: String::new(),
+                worktrees: vec![WorkspaceTeardownWorktree {
+                    checkout_path: operation.plan.checkout_path.clone(),
+                    open_workspace_id: operation.workspace_id.clone(),
+                    is_linked_worktree: false,
+                    dirty: None,
+                }],
+                operation,
+                companion,
+            });
+        }
+        let repository = operation.plan.repository.as_ref().expect("checked above");
         let inventory = self
             .adapter
-            .project_inventory(session, &operation.plan.repository.checkout_path)
+            .project_inventory(session, &repository.checkout_path)
             .await?;
-        verify_inventory(&inventory, &operation.plan.repository)?;
+        verify_inventory(&inventory, repository)?;
         let matching_count = inventory
             .worktrees
             .iter()
@@ -919,8 +919,8 @@ impl ProjectService {
         })
     }
     /// Return companions whose durable metadata is still authorized by the
-    /// current Herdr endpoint and a fresh worktree inventory. Paths supplied by
-    /// callers are never used as authorization.
+    /// current Herdr endpoint and, for owned worktrees, a fresh inventory.
+    /// Paths supplied by callers are never used as authorization.
     pub async fn context_companions(
         &self,
         session_id: &str,
@@ -964,8 +964,20 @@ impl ProjectService {
                     .iter()
                     .any(|resource| resource.kind == "companion" && resource.created_by_operation)
                 || operation.plan.companion_id != companion_id
-                || operation.plan.repository.common_dir != manifest.repository_key
-                || operation.plan.repository.root != manifest.repository_root
+                || operation
+                    .plan
+                    .repository
+                    .as_ref()
+                    .map(|repository| repository.common_dir.as_str())
+                    .unwrap_or("")
+                    != manifest.repository_key
+                || operation
+                    .plan
+                    .repository
+                    .as_ref()
+                    .map(|repository| repository.root.as_str())
+                    .unwrap_or("")
+                    != manifest.repository_root
                 || operation.plan.checkout_path != manifest.checkout_path
             {
                 return Err(InspectionError::new(
@@ -979,31 +991,44 @@ impl ProjectService {
                     "multiple companions are associated with the exact checkout",
                 ));
             }
-            let inventory = self
-                .adapter
-                .project_inventory(session_id, &operation.plan.repository.checkout_path)
-                .await?;
-            if inventory.endpoint_identity != endpoint_identity
-                || inventory.repository_key != manifest.repository_key
-                || inventory.repository_root != manifest.repository_root
+            if operation.plan.mode == WorkspaceSetupMode::Create {
+                let repository = operation
+                    .plan
+                    .repository
+                    .as_ref()
+                    .expect("Create operation has repository");
+                let inventory = self
+                    .adapter
+                    .project_inventory(session_id, &repository.checkout_path)
+                    .await?;
+                if inventory.endpoint_identity != endpoint_identity
+                    || inventory.repository_key != manifest.repository_key
+                    || inventory.repository_root != manifest.repository_root
+                {
+                    return Err(InspectionError::new(
+                        "stale_identity",
+                        "companion provenance is not confirmed by the current Herdr endpoint",
+                    ));
+                }
+                let matches = inventory
+                    .worktrees
+                    .iter()
+                    .filter(|entry| {
+                        entry.checkout_path == manifest.checkout_path
+                            && entry.open_workspace_id.as_deref() == Some(workspace_id)
+                    })
+                    .count();
+                if matches != 1 {
+                    return Err(InspectionError::new(
+                        "association_conflict",
+                        "fresh inventory did not prove exactly one companion worktree",
+                    ));
+                }
+            } else if self.adapter.project_endpoint_identity(session_id).await? != endpoint_identity
             {
                 return Err(InspectionError::new(
                     "stale_identity",
-                    "companion provenance is not confirmed by the current Herdr endpoint",
-                ));
-            }
-            let matches = inventory
-                .worktrees
-                .iter()
-                .filter(|entry| {
-                    entry.checkout_path == manifest.checkout_path
-                        && entry.open_workspace_id.as_deref() == Some(workspace_id)
-                })
-                .count();
-            if matches != 1 {
-                return Err(InspectionError::new(
-                    "association_conflict",
-                    "fresh inventory did not prove exactly one companion worktree",
+                    "companion endpoint is no longer current",
                 ));
             }
             let companion_path = Path::new(&self.configuration.companion_root).join(&companion_id);
@@ -1012,12 +1037,17 @@ impl ProjectService {
             roots.push(ContextRoot {
                 root_id,
                 kind: ContextRootKind::Companion,
-                label: format!("{} context", operation.plan.repository.name),
+                label: format!("{} context", operation.plan.label),
                 path: Path::new(&self.configuration.companion_root)
                     .join(&companion_id)
                     .to_string_lossy()
                     .into_owned(),
-                repository_id: operation.plan.repository.repository_id.clone(),
+                repository_id: operation
+                    .plan
+                    .repository
+                    .as_ref()
+                    .map(|repository| repository.repository_id.clone())
+                    .unwrap_or_default(),
                 checkout_path: manifest.checkout_path.clone(),
                 companion_id: Some(companion_id),
             });
@@ -1119,12 +1149,18 @@ impl ProjectService {
         let lease = self
             .store
             .acquire_execution_lease(&operation.operation_id)?;
+        let repository = operation.plan.repository.clone().ok_or_else(|| {
+            InspectionError::new(
+                "reconciliation_requires_inspection",
+                "a borrowed directory has no Git inventory; inspect its unknown workspace outcome before retrying",
+            )
+        })?;
         let fresh_repository = RepositoryCatalog::new(self.configuration.clone())
-            .resolve(&operation.plan.repository.repository_id)
+            .resolve(&repository.repository_id)
             .await?;
-        if fresh_repository.root != operation.plan.repository.root
-            || fresh_repository.common_dir != operation.plan.repository.common_dir
-            || fresh_repository.checkout_path != operation.plan.repository.checkout_path
+        if fresh_repository.root != repository.root
+            || fresh_repository.common_dir != repository.common_dir
+            || fresh_repository.checkout_path != repository.checkout_path
         {
             return Err(InspectionError::new(
                 "repository_identity_stale",
@@ -1143,9 +1179,9 @@ impl ProjectService {
                 }
                 let inventory = self
                     .adapter
-                    .project_inventory(session, &operation.plan.repository.checkout_path)
+                    .project_inventory(session, &repository.checkout_path)
                     .await?;
-                verify_inventory(&inventory, &operation.plan.repository)?;
+                verify_inventory(&inventory, &repository)?;
                 if inventory.endpoint_identity != operation.plan.endpoint_identity {
                     return Err(InspectionError::new(
                         "stale_identity",
@@ -1189,22 +1225,23 @@ impl ProjectService {
                             &ProjectWorktreeRequest {
                                 endpoint_identity: operation.plan.endpoint_identity.clone(),
                                 mode: WorkspaceSetupMode::Open,
-                                source_cwd: operation.plan.repository.checkout_path.clone(),
+                                source_cwd: repository.checkout_path.clone(),
                                 branch: None,
                                 base: None,
                                 checkout_path: operation.plan.checkout_path.clone(),
                                 label: operation.plan.label.clone(),
                                 focus: operation.plan.focus,
-                                trust_repository: operation.plan.trust_repository,
+                                env: BTreeMap::new(),
+                                open_existing_worktree: true,
                             },
                         )
                         .await?;
                     verify_worktree_result(&opened, &operation.plan)?;
                     let reopened = self
                         .adapter
-                        .project_inventory(session, &operation.plan.repository.checkout_path)
+                        .project_inventory(session, &repository.checkout_path)
                         .await?;
-                    verify_inventory(&reopened, &operation.plan.repository)?;
+                    verify_inventory(&reopened, &repository)?;
                     if reopened.endpoint_identity != operation.plan.endpoint_identity
                         || !reopened.worktrees.iter().any(|candidate| {
                             candidate.checkout_path == operation.plan.checkout_path
@@ -1264,9 +1301,9 @@ impl ProjectService {
                 }
                 let inventory = self
                     .adapter
-                    .project_inventory(session, &operation.plan.repository.checkout_path)
+                    .project_inventory(session, &repository.checkout_path)
                     .await?;
-                verify_inventory(&inventory, &operation.plan.repository)?;
+                verify_inventory(&inventory, &repository)?;
                 if inventory.endpoint_identity != operation.plan.endpoint_identity
                     || !inventory.worktrees.iter().any(|entry| {
                         entry.checkout_path == operation.plan.checkout_path
@@ -1351,31 +1388,45 @@ impl ProjectService {
         self.boundary(id).await?;
         let mut operation = self.store.load(id)?;
         let plan = operation.plan.clone();
+        let repository = plan.repository.as_ref();
         validate_project_root(Path::new(&self.configuration.worktree_root))?;
         validate_project_root(Path::new(&self.configuration.companion_root))?;
-        let fresh_repository = RepositoryCatalog::new(self.configuration.clone())
-            .resolve(&plan.repository.repository_id)
-            .await?;
-        if fresh_repository.root != plan.repository.root
-            || fresh_repository.common_dir != plan.repository.common_dir
-            || fresh_repository.checkout_path != plan.repository.checkout_path
-        {
-            return Err(InspectionError::new(
-                "repository_identity_stale",
-                "repository changed since operation planning",
-            ));
-        }
-        let before = self
-            .adapter
-            .project_inventory(session, &plan.repository.checkout_path)
-            .await?;
-        verify_inventory(&before, &plan.repository)?;
-        if before.endpoint_identity != plan.endpoint_identity {
-            return Err(InspectionError::new(
-                "stale_identity",
-                "Herdr endpoint identity differs from reviewed plan",
-            ));
-        }
+        let before = if plan.mode == WorkspaceSetupMode::Create {
+            let repository = repository.expect("Create plan has repository");
+            let fresh_repository = RepositoryCatalog::new(self.configuration.clone())
+                .resolve(&repository.repository_id)
+                .await?;
+            if fresh_repository.root != repository.root
+                || fresh_repository.common_dir != repository.common_dir
+                || fresh_repository.checkout_path != repository.checkout_path
+            {
+                return Err(InspectionError::new(
+                    "repository_identity_stale",
+                    "repository changed since operation planning",
+                ));
+            }
+            let before = self
+                .adapter
+                .project_inventory(session, &repository.checkout_path)
+                .await?;
+            verify_inventory(&before, repository)?;
+            if before.endpoint_identity != plan.endpoint_identity {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "Herdr endpoint identity differs from reviewed plan",
+                ));
+            }
+            Some(before)
+        } else {
+            accessible_directory(&plan.checkout_path)?;
+            if self.adapter.project_endpoint_identity(session).await? != plan.endpoint_identity {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "Herdr endpoint identity differs from reviewed plan",
+                ));
+            }
+            None
+        };
         let borrowed = operation
             .owned_resources
             .iter()
@@ -1393,13 +1444,16 @@ impl ProjectService {
                         &ProjectWorktreeRequest {
                             endpoint_identity: plan.endpoint_identity.clone(),
                             mode: WorkspaceSetupMode::Open,
-                            source_cwd: plan.repository.checkout_path.clone(),
+                            source_cwd: repository
+                                .map(|repository| repository.checkout_path.clone())
+                                .unwrap_or_else(|| plan.checkout_path.clone()),
                             branch: None,
                             base: None,
                             checkout_path: plan.checkout_path.clone(),
                             label: plan.label.clone(),
                             focus: plan.focus,
-                            trust_repository: plan.trust_repository,
+                            env: BTreeMap::new(),
+                            open_existing_worktree: false,
                         },
                     )
                     .await?;
@@ -1429,7 +1483,14 @@ impl ProjectService {
                     &ProjectWorktreeRequest {
                         endpoint_identity: plan.endpoint_identity.clone(),
                         mode: plan.mode,
-                        source_cwd: plan.repository.checkout_path.clone(),
+                        source_cwd: if plan.mode == WorkspaceSetupMode::Open {
+                            plan.checkout_path.clone()
+                        } else {
+                            repository
+                                .expect("Create plan has repository")
+                                .checkout_path
+                                .clone()
+                        },
                         branch: if plan.mode == WorkspaceSetupMode::Open {
                             None
                         } else {
@@ -1439,7 +1500,8 @@ impl ProjectService {
                         checkout_path: plan.checkout_path.clone(),
                         label: plan.label.clone(),
                         focus: plan.focus,
-                        trust_repository: plan.trust_repository,
+                        env: BTreeMap::new(),
+                        open_existing_worktree: false,
                     },
                 )
                 .await?;
@@ -1462,64 +1524,51 @@ impl ProjectService {
             operation.error = None;
             Ok(())
         })?;
-        let after = self
-            .adapter
-            .project_inventory(session, &plan.repository.checkout_path)
-            .await?;
-        verify_inventory(&after, &plan.repository)?;
-        if after.endpoint_identity != before.endpoint_identity {
-            return Err(InspectionError::new(
-                "stale_identity",
-                "Herdr endpoint identity changed during operation",
-            ));
-        }
-        let entry = after
-            .worktrees
-            .iter()
-            .find(|w| {
-                w.checkout_path == plan.checkout_path
-                    && w.open_workspace_id.as_deref() == Some(result.workspace_id.as_str())
-            })
-            .ok_or_else(|| {
-                InspectionError::new(
+        if plan.mode == WorkspaceSetupMode::Create {
+            let before = before.as_ref().expect("Create plan has inventory");
+            let repository = repository.expect("Create plan has repository");
+            let after = self
+                .adapter
+                .project_inventory(session, &repository.checkout_path)
+                .await?;
+            verify_inventory(&after, repository)?;
+            if after.endpoint_identity != before.endpoint_identity {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "Herdr endpoint identity changed during operation",
+                ));
+            }
+            let entry = after
+                .worktrees
+                .iter()
+                .find(|w| {
+                    w.checkout_path == plan.checkout_path
+                        && w.open_workspace_id.as_deref() == Some(result.workspace_id.as_str())
+                })
+                .ok_or_else(|| {
+                    InspectionError::new(
+                        "workspace_conflict",
+                        "fresh inventory did not prove the exact worktree",
+                    )
+                })?;
+            if plan.mode == WorkspaceSetupMode::Create
+                && plan.branch.is_some()
+                && entry.branch != plan.branch
+            {
+                return Err(InspectionError::new(
                     "workspace_conflict",
-                    "fresh inventory did not prove the exact worktree",
-                )
-            })?;
-        if plan.mode == WorkspaceSetupMode::Create
-            && plan.branch.is_some()
-            && entry.branch != plan.branch
-        {
-            return Err(InspectionError::new(
-                "workspace_conflict",
-                "authoritative branch differs from reviewed plan",
-            ));
+                    "authoritative branch differs from reviewed plan",
+                ));
+            }
         }
         let companion_id = plan.companion_id.as_str();
-        let _association_lock =
-            if plan.mode == WorkspaceSetupMode::Open {
-                Some(self.store.acquire_named_lock(
-                    &companion_association_lock_name(&plan),
-                    "association_lock",
-                )?)
-            } else {
-                None
-            };
-        if plan.mode == WorkspaceSetupMode::Open {
-            validate_open_companion_association(
-                &self
-                    .store
-                    .list_companions(&self.configuration.companion_root)?,
-                &plan,
-            )?;
-        }
         let companion = match self
             .store
             .read_companion(&self.configuration.companion_root, companion_id)
         {
             Ok(existing) => {
                 verify_manifest_identity(&existing, &plan, companion_id)?;
-                let existing = if existing.herdr_session_identity == before.endpoint_identity
+                let existing = if existing.herdr_session_identity == plan.endpoint_identity
                     && existing.herdr_workspace_id == result.workspace_id
                 {
                     existing
@@ -1527,7 +1576,7 @@ impl ProjectService {
                     && !plan.companion_created_by_operation
                 {
                     let reattached = CompanionManifest {
-                        herdr_session_identity: before.endpoint_identity.clone(),
+                        herdr_session_identity: plan.endpoint_identity.clone(),
                         herdr_workspace_id: result.workspace_id.clone(),
                         updated_at: now(),
                         ..existing
@@ -1545,7 +1594,7 @@ impl ProjectService {
                     &existing,
                     &plan,
                     &result.workspace_id,
-                    &before.endpoint_identity,
+                    &plan.endpoint_identity,
                     companion_id,
                 )?;
                 Path::new(&self.configuration.companion_root).join(companion_id)
@@ -1560,10 +1609,14 @@ impl ProjectService {
                 let manifest = CompanionManifest {
                     schema_version: 1,
                     cockpit_operation_id: companion_id.to_owned(),
-                    herdr_session_identity: before.endpoint_identity.clone(),
+                    herdr_session_identity: plan.endpoint_identity.clone(),
                     herdr_workspace_id: result.workspace_id.clone(),
-                    repository_key: plan.repository.common_dir.clone(),
-                    repository_root: plan.repository.root.clone(),
+                    repository_key: repository
+                        .map(|repository| repository.common_dir.clone())
+                        .unwrap_or_default(),
+                    repository_root: repository
+                        .map(|repository| repository.root.clone())
+                        .unwrap_or_default(),
                     checkout_path: result.checkout_path.clone(),
                     artifact: plan.artifact.clone(),
                     created_at: now(),
@@ -1601,20 +1654,29 @@ impl ProjectService {
         if operation.state == WorkspaceOperationState::Cancelled {
             return Err(InspectionError::new("cancelled", "operation was cancelled"));
         }
-        let env_inventory = self
-            .adapter
-            .project_inventory(session, &plan.repository.checkout_path)
-            .await?;
-        verify_inventory(&env_inventory, &plan.repository)?;
-        if env_inventory.endpoint_identity != plan.endpoint_identity
-            || !env_inventory.worktrees.iter().any(|worktree| {
-                worktree.checkout_path == plan.checkout_path
-                    && worktree.open_workspace_id.as_deref() == Some(result.workspace_id.as_str())
-            })
-        {
+        if plan.mode == WorkspaceSetupMode::Create {
+            let repository = repository.expect("Create plan has repository");
+            let env_inventory = self
+                .adapter
+                .project_inventory(session, &repository.checkout_path)
+                .await?;
+            verify_inventory(&env_inventory, repository)?;
+            if env_inventory.endpoint_identity != plan.endpoint_identity
+                || !env_inventory.worktrees.iter().any(|worktree| {
+                    worktree.checkout_path == plan.checkout_path
+                        && worktree.open_workspace_id.as_deref()
+                            == Some(result.workspace_id.as_str())
+                })
+            {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "workspace provenance changed before environment dispatch",
+                ));
+            }
+        } else if self.adapter.project_endpoint_identity(session).await? != plan.endpoint_identity {
             return Err(InspectionError::new(
                 "stale_identity",
-                "workspace provenance changed before environment dispatch",
+                "Herdr endpoint changed before environment dispatch",
             ));
         }
         if operation.pane_id.is_none() {
@@ -1627,10 +1689,12 @@ impl ProjectService {
                 "COCKPIT_WORKSPACE_ID".to_owned(),
                 result.workspace_id.clone(),
             );
-            env.insert(
-                "COCKPIT_REPOSITORY_KEY".to_owned(),
-                plan.repository.repository_id.clone(),
-            );
+            if let Some(repository) = repository {
+                env.insert(
+                    "COCKPIT_REPOSITORY_KEY".to_owned(),
+                    repository.repository_id.clone(),
+                );
+            }
             if let Some(artifact) = &plan.artifact {
                 env.insert(
                     "COCKPIT_ARTIFACT_URL".to_owned(),
@@ -1678,7 +1742,7 @@ impl ProjectService {
         }
         let mut context_error = None;
         if !step_at_least(operation.step, WorkspaceOperationStep::ContextReady) {
-            operation = self.store.update(id, None, |operation| {
+            self.store.update(id, None, |operation| {
                 operation.step = WorkspaceOperationStep::ContextPreparing;
                 operation.state = WorkspaceOperationState::Running;
                 operation.resume_allowed = false;
@@ -1697,14 +1761,16 @@ impl ProjectService {
                 })?;
                 let authority = source_authority_for_checkout(
                     &self.configuration,
-                    Path::new(&plan.repository.checkout_path),
+                    Path::new(
+                        &repository
+                            .expect("artifact plans require a repository")
+                            .checkout_path,
+                    ),
                     &artifact.provider_id,
                 )
                 .await?;
-                let (_, companion_root) = prepare_root(
-                    Path::new(&plan.companion_path),
-                    "companion",
-                )?;
+                let (_, companion_root) =
+                    prepare_root(Path::new(&plan.companion_path), "companion")?;
                 let response = sources
                     .fetch_to_companion(
                         SourceFetchRequest {
@@ -1738,7 +1804,7 @@ impl ProjectService {
             .await;
             match materialization {
                 Ok(()) => {
-                    operation = self.store.update(id, None, |operation| {
+                    self.store.update(id, None, |operation| {
                         operation.step = WorkspaceOperationStep::ContextReady;
                         operation.error = None;
                         Ok(())
@@ -1747,7 +1813,7 @@ impl ProjectService {
                 Err(error) => {
                     let response = error_response(&error.code, &error.message);
                     context_error = Some(response.clone());
-                    operation = self.store.update(id, None, |operation| {
+                    self.store.update(id, None, |operation| {
                         operation.step = WorkspaceOperationStep::ContextPreparing;
                         operation.state = WorkspaceOperationState::Partial;
                         operation.resume_allowed = true;
@@ -1823,13 +1889,19 @@ impl ProjectService {
             operation.workspace_id = Some(result.workspace_id.clone());
             // The worktree's root pane is not the context-bearing terminal.
             // Only the environment dispatch may populate tab_id and pane_id.
+            let resource_kind =
+                if operation.plan.ownership == WorkspaceCheckoutOwnership::OwnedWorktree {
+                    "worktree"
+                } else {
+                    "directory"
+                };
             if !operation
                 .owned_resources
                 .iter()
-                .any(|resource| resource.kind == "worktree")
+                .any(|resource| resource.kind == resource_kind)
             {
                 operation.owned_resources.push(WorkspaceOwnedResource {
-                    kind: "worktree".to_owned(),
+                    kind: resource_kind.to_owned(),
                     path: result.checkout_path.clone(),
                     created_by_operation: created,
                 });
@@ -1877,7 +1949,6 @@ impl ProjectService {
                         | "unsupported_capability"
                         | "invalid_project_request"
                         | "invalid_environment"
-                        | "consent_required"
                 ) {
                     operation.state = WorkspaceOperationState::NeedsReview;
                     operation.resume_allowed = false;
@@ -2037,8 +2108,18 @@ fn verify_manifest_identity(
 ) -> Result<(), InspectionError> {
     if manifest.schema_version != 1
         || manifest.cockpit_operation_id != companion_id
-        || manifest.repository_key != plan.repository.common_dir
-        || manifest.repository_root != plan.repository.root
+        || manifest.repository_key
+            != plan
+                .repository
+                .as_ref()
+                .map(|repository| repository.common_dir.as_str())
+                .unwrap_or("")
+        || manifest.repository_root
+            != plan
+                .repository
+                .as_ref()
+                .map(|repository| repository.root.as_str())
+                .unwrap_or("")
         || manifest.checkout_path != plan.checkout_path
         || manifest.artifact != plan.artifact
         || manifest.ownership != "cockpit"
@@ -2068,54 +2149,6 @@ fn verify_manifest(
         ));
     }
     Ok(())
-}
-
-/// Lock names must be filesystem-safe. The association itself is keyed by the
-/// canonical repository provenance and exact checkout, so concurrent Open
-/// operations cannot each publish a different companion for that worktree.
-fn companion_association_lock_name(plan: &WorkspaceSetupPlan) -> String {
-    let mut hasher = Sha256::new();
-    for value in [
-        plan.repository.common_dir.as_str(),
-        plan.repository.root.as_str(),
-        plan.checkout_path.as_str(),
-    ] {
-        hasher.update(value.as_bytes());
-        hasher.update([0]);
-    }
-    let digest = hasher.finalize();
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(encoded, "{byte:02x}");
-    }
-    format!(".association-{encoded}.lock")
-}
-
-fn validate_open_companion_association(
-    companions: &[(String, CompanionManifest)],
-    plan: &WorkspaceSetupPlan,
-) -> Result<(), InspectionError> {
-    let matches = companions
-        .iter()
-        .filter(|(_, manifest)| {
-            manifest.repository_key == plan.repository.common_dir
-                && manifest.repository_root == plan.repository.root
-                && manifest.checkout_path == plan.checkout_path
-        })
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [] => Ok(()),
-        [(id, _)] if id == &plan.companion_id => Ok(()),
-        [(_, _)] => Err(InspectionError::new(
-            "association_conflict",
-            "an exact checkout companion was created after this Open operation was reviewed",
-        )),
-        _ => Err(InspectionError::new(
-            "association_conflict",
-            "multiple companions are associated with the exact checkout",
-        )),
-    }
 }
 
 fn stable_companion_root_id(
@@ -2168,25 +2201,85 @@ fn stable_companion_root_id(
 }
 
 fn validate_setup_request(request: &WorkspaceSetupRequest) -> Result<(), InspectionError> {
-    if request.repository_id.is_empty() {
-        return Err(InspectionError::new(
-            "invalid_repository",
-            "repository selection is required",
-        ));
-    }
-    if let Some(branch) = &request.branch {
-        validate_text(branch, "branch", 256)?;
-    }
-    if let Some(base) = &request.base {
-        validate_text(base, "base", 256)?;
-    }
-    if let Some(path) = &request.checkout_path {
-        validate_text(path, "checkout_path", 4096)?;
-    }
-    if let Some(url) = &request.artifact_url {
-        validate_text(url, "artifact_url", 2048)?;
+    match request {
+        WorkspaceSetupRequest::Create {
+            repository_id,
+            branch,
+            base_ref,
+            checkout_path,
+            label,
+            task_name,
+            artifact_url,
+            ..
+        } => {
+            validate_text(repository_id, "repository_id", 256)?;
+            for (value, field, max) in [
+                (branch.as_deref(), "branch", 256),
+                (base_ref.as_deref(), "base_ref", 256),
+                (checkout_path.as_deref(), "checkout_path", 4096),
+                (label.as_deref(), "label", 256),
+                (task_name.as_deref(), "task_name", 256),
+                (artifact_url.as_deref(), "artifact_url", 2048),
+            ] {
+                if let Some(value) = value {
+                    validate_text(value, field, max)?;
+                }
+            }
+        }
+        WorkspaceSetupRequest::Open {
+            path,
+            label,
+            task_name,
+            ..
+        } => {
+            validate_text(path, "path", 4096)?;
+            for value in [label.as_deref(), task_name.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                validate_text(value, "label", 256)?;
+            }
+        }
     }
     Ok(())
+}
+
+fn accessible_directory(value: &str) -> Result<String, InspectionError> {
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return Err(InspectionError::new(
+            "invalid_path",
+            "directory path must be absolute",
+        ));
+    }
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        InspectionError::new(
+            "directory_unavailable",
+            format!("cannot access directory: {error}"),
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(InspectionError::new(
+            "invalid_path",
+            "directory path is not a directory",
+        ));
+    }
+    std::fs::read_dir(path).map_err(|error| {
+        InspectionError::new(
+            "directory_unavailable",
+            format!("cannot read directory: {error}"),
+        )
+    })?;
+    Ok(value.to_owned())
+}
+
+fn directory_label(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_owned()
 }
 
 fn validate_operation_request(
@@ -2300,13 +2393,11 @@ fn bounded_path(value: &str, root: &Path, field: &str) -> Result<String, Inspect
 fn expand_template(
     template: &str,
     repository: &RepositoryCandidate,
-    request: &WorkspaceSetupRequest,
+    task_name: Option<&str>,
     artifact: Option<&ProjectArtifact>,
 ) -> Result<String, InspectionError> {
     let task = slug(
-        request
-            .task_name
-            .as_deref()
+        task_name
             .or_else(|| artifact.map(|a| a.canonical_id.as_str()))
             .unwrap_or("task"),
     );
@@ -2364,85 +2455,310 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
-    fn open_plan(companion_id: &str) -> WorkspaceSetupPlan {
-        WorkspaceSetupPlan {
-            operation_id: "operation".to_owned(),
-            generation: 1,
-            endpoint_identity: "endpoint".to_owned(),
-            session_id: "session".to_owned(),
-            repository: RepositoryCandidate {
-                repository_id: "repository".to_owned(),
-                name: "repository".to_owned(),
-                root: "/repositories/repository".to_owned(),
-                checkout_path: "/repositories/repository".to_owned(),
-                common_dir: "/repositories/repository/.git".to_owned(),
-                branch: Some("main".to_owned()),
-                is_linked_worktree: false,
-                is_detached: false,
-                provenance: "catalog".to_owned(),
+    use cockpit_protocol::{
+        project_teardown::{
+            WorkspaceTeardownAction, WorkspaceTeardownExecuteRequest,
+            WorkspaceTeardownPreviewRequest,
+        },
+        projects::{ProjectConfiguration, ProjectLimits, WorkspaceSetupRequest},
+        v1::{
+            FocusRequest, FocusResponse, HerdrCompatibility, ResourceMutationRequest,
+            ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
+            TerminalOpenRequest,
+        },
+    };
+
+    use crate::{
+        HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
+        project_adapter::{
+            ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
+            ProjectWorktreeRemoveRequest, ProjectWorktreeRequest, ProjectWorktreeResult,
+        },
+    };
+
+    #[derive(Default)]
+    struct NestedDirectoryAdapter {
+        inventory_calls: AtomicUsize,
+        worktree_requests: StdMutex<Vec<ProjectWorktreeRequest>>,
+        terminal_requests: StdMutex<Vec<ProjectTerminalRequest>>,
+        closed_workspaces: StdMutex<Vec<String>>,
+    }
+
+    fn unused<T>() -> Result<T, InspectionError> {
+        Err(InspectionError::new(
+            "test_adapter_unused",
+            "test adapter method is not expected",
+        ))
+    }
+
+    #[async_trait::async_trait]
+    impl HerdrAdapter for NestedDirectoryAdapter {
+        async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
+            unused()
+        }
+
+        async fn inspect_session(&self, _: &str) -> Result<HerdrCompatibility, InspectionError> {
+            unused()
+        }
+
+        async fn sessions(&self) -> Result<SessionListResponse, InspectionError> {
+            unused()
+        }
+
+        async fn session_snapshot(
+            &self,
+            _: &str,
+        ) -> Result<SessionSnapshotResponse, InspectionError> {
+            unused()
+        }
+
+        async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> {
+            unused()
+        }
+
+        async fn mutate(
+            &self,
+            _: &str,
+            _: &ResourceMutationRequest,
+        ) -> Result<ResourceMutationResponse, InspectionError> {
+            unused()
+        }
+
+        async fn subscribe_session(
+            &self,
+            _: &str,
+            _: &SessionSnapshotResponse,
+        ) -> Result<SessionSubscription, InspectionError> {
+            unused()
+        }
+
+        async fn open_terminal(
+            &self,
+            _: &TerminalOpenRequest,
+        ) -> Result<TerminalSession, InspectionError> {
+            unused()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProjectHerdrAdapter for NestedDirectoryAdapter {
+        async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> {
+            Ok("endpoint".to_owned())
+        }
+
+        async fn project_inventory(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<ProjectInventory, InspectionError> {
+            self.inventory_calls.fetch_add(1, Ordering::Relaxed);
+            unused()
+        }
+
+        async fn project_worktree(
+            &self,
+            _: &str,
+            request: &ProjectWorktreeRequest,
+        ) -> Result<ProjectWorktreeResult, InspectionError> {
+            self.worktree_requests
+                .lock()
+                .expect("worktree requests")
+                .push(request.clone());
+            Ok(ProjectWorktreeResult {
+                workspace_id: "workspace".to_owned(),
+                tab_id: Some("workspace:root".to_owned()),
+                pane_id: Some("workspace:pane".to_owned()),
+                checkout_path: request.checkout_path.clone(),
+                branch: None,
+                already_open: false,
+            })
+        }
+
+        async fn project_terminal(
+            &self,
+            _: &str,
+            request: &ProjectTerminalRequest,
+        ) -> Result<ProjectTerminalResult, InspectionError> {
+            self.terminal_requests
+                .lock()
+                .expect("terminal requests")
+                .push(request.clone());
+            Ok(ProjectTerminalResult {
+                workspace_id: request.workspace_id.clone(),
+                tab_id: "workspace:context".to_owned(),
+                pane_id: "workspace:context-pane".to_owned(),
+            })
+        }
+
+        async fn project_worktree_dirty(
+            &self,
+            _: &str,
+            _: u32,
+            _: u32,
+        ) -> Result<bool, InspectionError> {
+            unused()
+        }
+
+        async fn project_close_workspace(
+            &self,
+            _: &str,
+            _: &str,
+            workspace_id: &str,
+        ) -> Result<(), InspectionError> {
+            self.closed_workspaces
+                .lock()
+                .expect("closed workspaces")
+                .push(workspace_id.to_owned());
+            Ok(())
+        }
+
+        async fn project_remove_worktree(
+            &self,
+            _: &str,
+            _: &ProjectWorktreeRemoveRequest,
+        ) -> Result<(), InspectionError> {
+            unused()
+        }
+    }
+
+    fn configuration(root: &Path) -> ProjectConfiguration {
+        ProjectConfiguration {
+            version: 1,
+            repository_roots: vec![root.to_string_lossy().into_owned()],
+            worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
+            companion_root: root.join("companions").to_string_lossy().into_owned(),
+            state_root: root.join("state").to_string_lossy().into_owned(),
+            branch_template: "{repo}/{task_id}".to_owned(),
+            checkout_template: "{repo}-{task_id}".to_owned(),
+            providers: Vec::new(),
+            limits: ProjectLimits {
+                catalog_depth: 4,
+                catalog_entries: 256,
+                git_timeout_ms: 2_000,
+                git_output_bytes: 2 * 1024 * 1024,
+                operation_timeout_ms: 2_000,
+                context_preview_bytes: 1024 * 1024,
+                context_preview_lines: 2_000,
+                context_directory_entries: 64,
+                context_tree_depth: 8,
             },
-            mode: WorkspaceSetupMode::Open,
-            branch: Some("feature/example".to_owned()),
-            base: None,
-            checkout_path: "/worktrees/example".to_owned(),
-            companion_path: format!("/companions/{companion_id}"),
-            companion_id: companion_id.to_owned(),
-            companion_created_by_operation: false,
-            label: "Example".to_owned(),
-            focus: true,
-            trust_repository: true,
-            artifact: None,
-            effects: Vec::new(),
-            warnings: Vec::new(),
+            origins: BTreeMap::new(),
         }
     }
 
-    fn companion(id: &str) -> CompanionManifest {
-        CompanionManifest {
-            schema_version: 1,
-            cockpit_operation_id: id.to_owned(),
-            herdr_session_identity: "endpoint".to_owned(),
-            herdr_workspace_id: "workspace".to_owned(),
-            repository_key: "/repositories/repository/.git".to_owned(),
-            repository_root: "/repositories/repository".to_owned(),
-            checkout_path: "/worktrees/example".to_owned(),
-            artifact: None,
-            created_at: "0".to_owned(),
-            updated_at: "0".to_owned(),
-            ownership: "cockpit".to_owned(),
-        }
-    }
-
-    #[test]
-    fn open_reuses_only_its_exact_checkout_companion() {
-        let plan = open_plan("current");
+    fn git(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("git starts");
         assert!(
-            validate_open_companion_association(
-                &[("current".to_owned(), companion("current"))],
-                &plan,
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn service_opens_and_closes_nested_git_directory_without_worktree_inventory() {
+        let root = std::env::temp_dir().join(format!("cockpit-project-open-{}", Uuid::new_v4()));
+        let repository = root.join("repository");
+        let nested = repository.join("nested");
+        let nested_path = nested.to_string_lossy().into_owned();
+        std::fs::create_dir_all(&nested).expect("nested directory");
+        git(&repository, &["init"]);
+        std::fs::write(nested.join("keep.txt"), "keep\n").expect("borrowed file");
+        let configuration = configuration(&root);
+        std::fs::create_dir_all(&configuration.worktree_root).expect("worktree root");
+        std::fs::create_dir_all(&configuration.companion_root).expect("companion root");
+        let adapter = Arc::new(NestedDirectoryAdapter::default());
+        let service = ProjectService::new(configuration, adapter.clone()).expect("project service");
+
+        let plan = service
+            .plan(
+                "session",
+                &WorkspaceSetupRequest::Open {
+                    path: nested_path.clone(),
+                    label: None,
+                    task_name: None,
+                    focus: false,
+                },
             )
-            .is_ok()
+            .await
+            .expect("plan nested directory");
+        service
+            .execute_inner("session", &plan.operation_id)
+            .await
+            .expect("open nested directory");
+
+        let operation = service.store.load(&plan.operation_id).expect("operation");
+        assert_eq!(operation.plan.checkout_path, nested_path);
+        assert!(operation.owned_resources.iter().any(|resource| {
+            resource.kind == "directory"
+                && resource.path == nested_path
+                && !resource.created_by_operation
+        }));
+        assert_eq!(adapter.inventory_calls.load(Ordering::Relaxed), 0);
+        let worktree_requests = adapter.worktree_requests.lock().expect("worktree requests");
+        assert_eq!(worktree_requests.len(), 1);
+        assert_eq!(worktree_requests[0].mode, WorkspaceSetupMode::Open);
+        assert_eq!(worktree_requests[0].source_cwd, nested_path);
+        assert_eq!(worktree_requests[0].checkout_path, nested_path);
+        drop(worktree_requests);
+        assert_eq!(
+            adapter.terminal_requests.lock().expect("terminal requests")[0].cwd,
+            nested_path
         );
 
-        let error =
-            validate_open_companion_association(&[("other".to_owned(), companion("other"))], &plan)
-                .expect_err("a second companion must not be published for one checkout");
-        assert_eq!(error.code, "association_conflict");
-    }
-
-    #[test]
-    fn open_rejects_preexisting_duplicate_checkout_companions() {
-        let plan = open_plan("current");
-        let error = validate_open_companion_association(
-            &[
-                ("current".to_owned(), companion("current")),
-                ("other".to_owned(), companion("other")),
-            ],
-            &plan,
-        )
-        .expect_err("ambiguous companion provenance requires review");
-        assert_eq!(error.code, "association_conflict");
+        let preview = service
+            .teardown_preview(
+                "session",
+                &WorkspaceTeardownPreviewRequest {
+                    workspace_id: "workspace".to_owned(),
+                },
+            )
+            .await
+            .expect("borrowed directory preview");
+        assert_eq!(preview.checkout_path, nested_path);
+        assert!(
+            preview
+                .allowed_actions
+                .contains(&WorkspaceTeardownAction::CloseSpace)
+        );
+        service
+            .teardown_execute(
+                "session",
+                &WorkspaceTeardownExecuteRequest {
+                    operation_id: plan.operation_id,
+                    workspace_id: "workspace".to_owned(),
+                    expected_endpoint_identity: preview.endpoint_identity,
+                    expected_checkout_path: preview.checkout_path,
+                    action: WorkspaceTeardownAction::CloseSpace,
+                    confirmation: String::new(),
+                },
+            )
+            .await
+            .expect("close borrowed directory");
+        assert_eq!(adapter.inventory_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            adapter
+                .closed_workspaces
+                .lock()
+                .expect("closed workspaces")
+                .as_slice(),
+            ["workspace"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(nested.join("keep.txt")).expect("borrowed file"),
+            "keep\n"
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

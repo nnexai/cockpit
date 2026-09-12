@@ -13,7 +13,7 @@ The product is optimized for one developer on a trusted workstation. It is not a
 Cockpit follows conventional engineering workflows:
 
 - discover a local repository;
-- create or open a task worktree;
+- create a task worktree or open an existing directory;
 - attach a companion context directory;
 - supervise persistent Herdr sessions and agent terminals;
 - gather static issue, review, wiki, and telemetry context;
@@ -114,7 +114,7 @@ The client selects one Herdr named session at a time.
 
 ### 4.3 Workspace and worktree operations
 
-Cockpit uses Herdr’s worktree API for worktree creation, opening, and removal. Herdr worktree provenance is the mapping between a Herdr workspace and its worktree.
+Cockpit uses Herdr’s worktree API to create and remove owned task worktrees. Opening an existing directory uses `workspace.create` with the exact validated path. It needs no repository selection, accepts plain and nested directories, and never initializes Git or switches branches. Optional Git discovery supplies metadata only. Opened directories are borrowed and cannot be removed by Cockpit teardown.
 
 Repository discovery enumerates supported repositories beneath a configured default root. The root is not hard-coded.
 
@@ -124,17 +124,19 @@ Branch and workspace-location templates are configurable. Task artifact metadata
 - a review artifact can already identify its source branch;
 - explicit user values override derived values.
 
-Workspace creation eventually performs this sequence:
+New worktree setup performs this sequence:
 
 1. enumerate and select a repository;
 2. resolve a typed task/artifact;
-3. ask Herdr to create or open the worktree workspace;
+3. ask Herdr to create the worktree workspace;
 4. create the Cockpit-owned companion context resource;
 5. record the companion association in a Cockpit-owned provenance manifest and pass context environment to explicitly created new Cockpit tabs/panes;
 6. optionally hydrate explicitly requested context;
 7. return the selected Herdr session/resource.
 
-Partial artifacts are allowed. Destruction requires confirmation and removes the owned Herdr worktree/workspace and its associated Cockpit companion context. Central caches and unrelated resources are never removed by workspace destruction.
+Configured repository actions run without a per-operation consent checkbox. Cockpit does not set Herdr's Git `trust_repository` override. Setup retains its operation identity after uncertain dispatch and reconciles before any further mutation.
+
+Partial artifacts are allowed. Destruction requires confirmation and removes only proven owned resources. A borrowed directory can be closed or forgotten; its files remain untouched. Central caches and unrelated resources are never removed by workspace destruction. Legacy journals gain owned-worktree status only from an exact creation receipt.
 
 Independent reflink snapshots are preferred where available. Normal copies preserve correctness and report the fallback. Hardlinks and Git alternates must not couple writable context files to their originals.
 

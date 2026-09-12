@@ -77,6 +77,15 @@ pub struct SourceFetchRequest {
     pub authority: SourceAuthority,
 }
 
+/// Small provider-owned artifact facts used to propose workspace setup values.
+/// They are deliberately separate from source import so setup does not cache or
+/// materialize an artifact merely to read its title or review source branch.
+#[derive(Debug, Clone)]
+pub struct SourceMetadata {
+    pub title: String,
+    pub source_branch: Option<String>,
+}
+
 /// Derive source authority from the primary checkout's origin without trusting
 /// caller-supplied repository or provider identity.
 pub(crate) async fn source_authority_for_checkout(
@@ -283,6 +292,15 @@ fn origin_repository(
 pub trait SourceProvider: Send + Sync {
     fn provider_id(&self) -> &str;
     fn capabilities(&self) -> Vec<SourceCapability>;
+    async fn metadata(
+        &self,
+        _request: &SourceFetchRequest,
+    ) -> Result<SourceMetadata, InspectionError> {
+        Err(InspectionError::new(
+            "source_metadata_unsupported",
+            "selected source provider does not expose workspace defaults",
+        ))
+    }
     async fn fetch(
         &self,
         request: &SourceFetchRequest,
@@ -398,6 +416,44 @@ impl SourceService {
             ));
         }
         Ok(())
+    }
+
+    /// Resolve provider metadata without writing the source cache or companion.
+    pub async fn metadata(
+        &self,
+        request: SourceFetchRequest,
+    ) -> Result<SourceMetadata, InspectionError> {
+        validate_request(&request)?;
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id() == request.provider_id)
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_unsupported",
+                    "selected source provider is unavailable",
+                )
+            })?;
+        let metadata = timeout(self.operation_timeout, provider.metadata(&request))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "source_metadata_timeout",
+                    "source metadata exceeded the configured operation deadline",
+                )
+            })??;
+        if !bounded_text(&metadata.title, 256)
+            || metadata
+                .source_branch
+                .as_deref()
+                .is_some_and(|branch| !bounded_text(branch, 256))
+        {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "source metadata contains invalid title or branch text",
+            ));
+        }
+        Ok(metadata)
     }
 
     /// Reads the bounded current index only. Hash-named immutable records are

@@ -7,6 +7,7 @@ pub mod context;
 pub mod context_assets;
 pub mod context_media;
 pub mod context_search;
+pub mod project_defaults;
 pub mod project_teardown;
 pub mod projects;
 pub mod review;

@@ -3,7 +3,9 @@ use cockpit_protocol::project_teardown::{
     WorkspaceTeardownExecuteRequest, WorkspaceTeardownOwnership, WorkspaceTeardownPreview,
     WorkspaceTeardownPreviewRequest, WorkspaceTeardownWorkspaceState,
 };
-use cockpit_protocol::projects::{WorkspaceOperation, WorkspaceOperationState};
+use cockpit_protocol::projects::{
+    WorkspaceCheckoutOwnership, WorkspaceOperation, WorkspaceOperationState,
+};
 
 use crate::InspectionError;
 use crate::project_store::{CompanionManifest, TeardownReceipt, TeardownReceiptState};
@@ -106,25 +108,38 @@ pub fn preview(
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
     let provenance_confirmed = evidence.endpoint_identity == operation.plan.endpoint_identity
-        && evidence.repository_key == operation.plan.repository.common_dir
-        && evidence.repository_root == operation.plan.repository.root;
+        && if operation.plan.mode == cockpit_protocol::projects::WorkspaceSetupMode::Open {
+            true
+        } else {
+            operation.plan.repository.as_ref().map_or(
+                evidence.repository_key.is_empty() && evidence.repository_root.is_empty(),
+                |repository| {
+                    evidence.repository_key == repository.common_dir
+                        && evidence.repository_root == repository.root
+                },
+            )
+        };
     if !provenance_confirmed {
         blockers.push("fresh Herdr provenance differs from the reviewed operation".to_owned());
     }
-    if workspace_state != WorkspaceTeardownWorkspaceState::Live {
-        blockers.push("the exact worktree is not live in the requested workspace".to_owned());
-    }
-    if !is_linked_worktree {
-        blockers.push("the target is not a linked worktree".to_owned());
-    }
-    match dirty_state {
-        WorkspaceTeardownDirtyState::Dirty => {
-            blockers.push("the worktree has tracked or untracked changes".to_owned())
+    if operation.plan.ownership
+        == cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree
+    {
+        if workspace_state != WorkspaceTeardownWorkspaceState::Live {
+            blockers.push("the exact worktree is not live in the requested workspace".to_owned());
         }
-        WorkspaceTeardownDirtyState::Unknown => {
-            blockers.push("worktree status could not be confirmed".to_owned())
+        if !is_linked_worktree {
+            blockers.push("the target is not a linked worktree".to_owned());
         }
-        WorkspaceTeardownDirtyState::Clean => {}
+        match dirty_state {
+            WorkspaceTeardownDirtyState::Dirty => {
+                blockers.push("the worktree has tracked or untracked changes".to_owned())
+            }
+            WorkspaceTeardownDirtyState::Unknown => {
+                blockers.push("worktree status could not be confirmed".to_owned())
+            }
+            WorkspaceTeardownDirtyState::Clean => {}
+        }
     }
     match ownership {
         WorkspaceTeardownOwnership::OwnedCreated => {}
@@ -206,8 +221,10 @@ pub fn preview(
         operation_id: operation.operation_id.clone(),
         workspace_id: request.workspace_id.clone(),
         endpoint_identity: evidence.endpoint_identity.to_owned(),
-        repository_key: evidence.repository_key.to_owned(),
-        repository_root: evidence.repository_root.to_owned(),
+        repository_key: (!evidence.repository_key.is_empty())
+            .then(|| evidence.repository_key.to_owned()),
+        repository_root: (!evidence.repository_root.is_empty())
+            .then(|| evidence.repository_root.to_owned()),
         checkout_path,
         ownership,
         workspace_state,
@@ -317,8 +334,17 @@ fn receipt_matches(
         && receipt.endpoint_identity == operation.plan.endpoint_identity
         && receipt.checkout_path == operation.plan.checkout_path
         && evidence.endpoint_identity == receipt.endpoint_identity
-        && evidence.repository_key == operation.plan.repository.common_dir
-        && evidence.repository_root == operation.plan.repository.root
+        && if operation.plan.mode == cockpit_protocol::projects::WorkspaceSetupMode::Open {
+            true
+        } else {
+            operation.plan.repository.as_ref().map_or(
+                evidence.repository_key.is_empty() && evidence.repository_root.is_empty(),
+                |repository| {
+                    evidence.repository_key == repository.common_dir
+                        && evidence.repository_root == repository.root
+                },
+            )
+        }
 }
 
 fn companion_state(
@@ -344,8 +370,20 @@ fn companion_state(
         || companion.ownership != "cockpit"
         || companion.herdr_session_identity != endpoint_identity
         || companion.herdr_workspace_id != workspace_id
-        || companion.repository_key != operation.plan.repository.common_dir
-        || companion.repository_root != operation.plan.repository.root
+        || companion.repository_key
+            != operation
+                .plan
+                .repository
+                .as_ref()
+                .map(|repository| repository.common_dir.as_str())
+                .unwrap_or("")
+        || companion.repository_root
+            != operation
+                .plan
+                .repository
+                .as_ref()
+                .map(|repository| repository.root.as_str())
+                .unwrap_or("")
         || companion.checkout_path != operation.plan.checkout_path
     {
         return WorkspaceTeardownCompanionState::Ambiguous;
@@ -362,6 +400,11 @@ fn ownership(
     });
     if operation.state != WorkspaceOperationState::Completed {
         return WorkspaceTeardownOwnership::Unknown;
+    }
+    if operation.plan.mode == cockpit_protocol::projects::WorkspaceSetupMode::Open
+        || operation.plan.ownership != WorkspaceCheckoutOwnership::OwnedWorktree
+    {
+        return WorkspaceTeardownOwnership::BorrowedOpened;
     }
     match worktree {
         Some(resource) if !resource.created_by_operation => {
@@ -414,7 +457,7 @@ mod tests {
                 generation: 1,
                 endpoint_identity: "endpoint".to_owned(),
                 session_id: "session".to_owned(),
-                repository: RepositoryCandidate {
+                repository: Some(RepositoryCandidate {
                     repository_id: "repository".to_owned(),
                     name: "repository".to_owned(),
                     root: "/repository".to_owned(),
@@ -424,11 +467,16 @@ mod tests {
                     is_linked_worktree: false,
                     is_detached: false,
                     provenance: "catalog".to_owned(),
-                },
+                }),
                 mode: if created {
                     WorkspaceSetupMode::Create
                 } else {
                     WorkspaceSetupMode::Open
+                },
+                ownership: if created {
+                    cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree
+                } else {
+                    cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory
                 },
                 branch: Some("task".to_owned()),
                 base: None,
@@ -438,7 +486,6 @@ mod tests {
                 companion_created_by_operation: created,
                 label: "Task".to_owned(),
                 focus: true,
-                trust_repository: true,
                 artifact: None,
                 effects: Vec::new(),
                 warnings: Vec::new(),
@@ -569,6 +616,80 @@ mod tests {
         .expect("preview");
         assert!(
             !dirty_preview
+                .allowed_actions
+                .contains(&WorkspaceTeardownAction::RemoveOwnedWorktree)
+        );
+    }
+
+    #[test]
+    fn borrowed_directory_can_close_or_forget_but_never_remove_files() {
+        let mut operation = operation(false);
+        operation.plan.repository = None;
+        operation.plan.ownership =
+            cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory;
+        operation.owned_resources[0].kind = "directory".to_owned();
+        let mut companion = companion();
+        companion.repository_key.clear();
+        companion.repository_root.clear();
+        let directories = [WorkspaceTeardownWorktree {
+            checkout_path: "/worktrees/task".to_owned(),
+            open_workspace_id: Some("workspace".to_owned()),
+            is_linked_worktree: false,
+            dirty: None,
+        }];
+        let preview = preview(
+            &WorkspaceTeardownPreviewRequest {
+                workspace_id: "workspace".to_owned(),
+            },
+            WorkspaceTeardownEvidence {
+                operation: &operation,
+                companion: Some(&companion),
+                endpoint_identity: "endpoint",
+                repository_key: "",
+                repository_root: "",
+                worktrees: &directories,
+                receipt: None,
+            },
+        )
+        .expect("preview");
+        assert!(
+            preview
+                .allowed_actions
+                .contains(&WorkspaceTeardownAction::CloseSpace)
+        );
+        assert!(
+            preview
+                .allowed_actions
+                .contains(&WorkspaceTeardownAction::ForgetAssociation)
+        );
+        assert!(
+            !preview
+                .allowed_actions
+                .contains(&WorkspaceTeardownAction::RemoveOwnedWorktree)
+        );
+    }
+
+    #[test]
+    fn created_directory_receipt_never_authorizes_worktree_removal() {
+        let mut operation = operation(true);
+        operation.plan.ownership = WorkspaceCheckoutOwnership::BorrowedDirectory;
+        operation.owned_resources[0].kind = "directory".to_owned();
+        let companion = companion();
+        let worktrees = worktrees(Some(false));
+        let preview = preview(
+            &WorkspaceTeardownPreviewRequest {
+                workspace_id: "workspace".to_owned(),
+            },
+            evidence(&operation, &companion, &worktrees),
+        )
+        .expect("preview");
+
+        assert_eq!(
+            preview.ownership,
+            WorkspaceTeardownOwnership::BorrowedOpened
+        );
+        assert!(
+            !preview
                 .allowed_actions
                 .contains(&WorkspaceTeardownAction::RemoveOwnedWorktree)
         );

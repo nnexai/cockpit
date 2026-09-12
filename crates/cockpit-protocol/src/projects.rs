@@ -80,17 +80,40 @@ pub enum WorkspaceSetupMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-pub struct WorkspaceSetupRequest {
-    pub repository_id: String,
-    pub mode: WorkspaceSetupMode,
-    pub branch: Option<String>,
-    pub base: Option<String>,
-    pub checkout_path: Option<String>,
-    pub label: Option<String>,
-    pub task_name: Option<String>,
-    pub artifact_url: Option<String>,
-    pub focus: bool,
-    pub trust_repository: bool,
+#[serde(tag = "operation", rename_all = "snake_case")]
+#[ts(tag = "operation", rename_all = "snake_case")]
+pub enum WorkspaceSetupRequest {
+    Create {
+        repository_id: String,
+        branch: Option<String>,
+        base_ref: Option<String>,
+        checkout_path: Option<String>,
+        label: Option<String>,
+        task_name: Option<String>,
+        artifact_url: Option<String>,
+        focus: bool,
+    },
+    Open {
+        path: String,
+        label: Option<String>,
+        task_name: Option<String>,
+        focus: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCheckoutOwnership {
+    OwnedWorktree,
+    BorrowedDirectory,
+}
+
+impl Default for WorkspaceCheckoutOwnership {
+    fn default() -> Self {
+        // Legacy journals did not record ownership. Borrowed is the only safe
+        // default because it can never authorize a filesystem removal.
+        Self::BorrowedDirectory
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -108,8 +131,10 @@ pub struct WorkspaceSetupPlan {
     pub generation: u32,
     pub endpoint_identity: String,
     pub session_id: String,
-    pub repository: RepositoryCandidate,
+    pub repository: Option<RepositoryCandidate>,
     pub mode: WorkspaceSetupMode,
+    #[serde(default)]
+    pub ownership: WorkspaceCheckoutOwnership,
     pub branch: Option<String>,
     pub base: Option<String>,
     pub checkout_path: String,
@@ -118,7 +143,6 @@ pub struct WorkspaceSetupPlan {
     pub companion_created_by_operation: bool,
     pub label: String,
     pub focus: bool,
-    pub trust_repository: bool,
     pub artifact: Option<ProjectArtifact>,
     pub effects: Vec<String>,
     pub warnings: Vec<String>,

@@ -44,6 +44,9 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [receipt, setReceipt] = useState<WorkspaceTeardownResult | null>(null);
+
+  useEffect(() => { setReceipt(null); }, [open, sessionId, workspaceId]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,9 +80,11 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
         confirmation,
       });
       onCompleted(result);
+      setReceipt(result);
       setConfirmation("");
       setSelectedAction(null);
-      setRefresh((current) => current + 1);
+      if (result.outcome === "completed") setPreview(null);
+      else setRefresh((current) => current + 1);
     } catch (reason: unknown) {
       setError(errorMessage(reason, "Could not complete the reviewed teardown."));
     } finally {
@@ -88,10 +93,11 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
   };
 
   return <div className="setup-overlay" role="presentation">
-    <section className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <section className="setup-dialog setup-dialog-compact" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <header className="setup-header"><div><span className="setup-eyebrow">Task cleanup</span><h2 id={titleId}>Review teardown</h2><p>Close keeps local files. Removal is available only for a freshly verified clean, Cockpit-owned linked worktree.</p></div><button type="button" className="setup-close" onClick={onClose} disabled={busy}>Close</button></header>
       <main className="setup-body"><section className="setup-step-content">
-        {!preview && !error ? <p className="setup-empty">Preparing fresh provenance and Git status…</p> : null}
+        {receipt ? <p className="setup-inline-status" role="status">{receipt.message}</p> : null}
+        {receipt?.outcome === "completed" ? <div className="setup-actions"><button type="button" onClick={onClose}>Done</button></div> : !preview && !error ? <p className="setup-empty">Preparing fresh provenance and Git status…</p> : null}
         {error ? <p className="setup-error" role="alert">{error}</p> : null}
         {preview ? <>
           <div className="setup-plan-summary">
@@ -100,6 +106,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
             <div className="setup-summary-row"><span>Git status</span><span>{preview.dirty_state}</span></div>
             <div className="setup-summary-row"><span>Companion</span><code>{preview.companion_path ?? "No owned companion"}</code></div>
           </div>
+          {preview.ownership === "borrowed_opened" ? <p className="setup-inline-status">This directory is borrowed. Closing its Space and removing an owned companion leave its files in place.</p> : null}
           {preview.blockers.length > 0 ? <div className="setup-diagnostics" role="status"><strong>Removal blocked</strong><ul>{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
           {preview.warnings.length > 0 ? <div className="setup-warnings"><strong>Recovery notes</strong><ul>{preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}
           <div className="setup-progress-actions">{preview.allowed_actions.map((action) => <button key={action} type="button" className={selectedAction === action ? "setup-primary" : ""} aria-pressed={selectedAction === action} onClick={() => { setSelectedAction(action); setConfirmation(""); }} disabled={busy}>{actionLabel(action)}</button>)}</div>

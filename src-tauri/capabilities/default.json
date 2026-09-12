@@ -10,6 +10,7 @@
     "allow-cockpit-sessions",
     "allow-cockpit-project-configuration",
     "allow-cockpit-repositories",
+    "allow-cockpit-resolve-workspace-defaults",
     "allow-cockpit-workspace-plan",
     "allow-cockpit-workspace-start",
     "allow-cockpit-workspace-operation",

@@ -34,7 +34,10 @@ pub struct ProjectWorktreeRequest {
     pub checkout_path: String,
     pub label: String,
     pub focus: bool,
-    pub trust_repository: bool,
+    pub env: BTreeMap<String, String>,
+    /// Recovery-only: reopen an already created Git worktree. Ordinary setup
+    /// Open operations always create a Space for the supplied directory.
+    pub open_existing_worktree: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +78,8 @@ pub struct ProjectWorktreeRemoveRequest {
 /// Typed lifecycle operations, separate from ordinary workbench layout mutations.
 #[async_trait]
 pub trait ProjectHerdrAdapter: HerdrAdapter {
+    async fn project_endpoint_identity(&self, session_id: &str) -> Result<String, InspectionError>;
+
     async fn project_inventory(
         &self,
         session_id: &str,

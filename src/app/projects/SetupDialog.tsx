@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
   ProjectConfiguration,
   RepositoryCandidate,
   RepositoryListResponse,
+  WorkspaceDefaults,
   WorkspaceOperation,
-  WorkspaceOperationRequest,
   WorkspaceOperationState,
   WorkspaceRecoveryAction,
   WorkspaceSetupMode,
@@ -14,8 +22,12 @@ import type {
 } from "../../protocol/generated/v1";
 import "./setup.css";
 
+export type SetupClient = Pick<CockpitClient,
+  "projectConfiguration" | "repositories" | "resolveWorkspaceDefaults" | "planWorkspace" | "startWorkspace" | "workspaceOperation" | "cancelWorkspace" | "resumeWorkspace" | "reconcileWorkspace"
+>;
+
 export type SetupDialogProps = {
-  client: CockpitClient;
+  client: SetupClient;
   sessionId: string;
   open: boolean;
   selectedParent?: SetupParent | null;
@@ -31,22 +43,21 @@ export type SetupParent = {
 
 type FormState = {
   repositoryId: string;
-  query: string;
   mode: WorkspaceSetupMode;
-  openTarget: "branch" | "path";
   branch: string;
   base: string;
   checkoutPath: string;
+  openPath: string;
   label: string;
-  taskName: string;
   artifactUrl: string;
   focus: boolean;
-  repositoryConsent: boolean;
 };
 
+type TextField = "repositoryId" | "branch" | "base" | "checkoutPath" | "openPath" | "label" | "artifactUrl";
 type LoadState = "loading" | "ready" | "empty" | "error";
-type DialogStep = 1 | 2;
 type PlanState = { plan: WorkspaceSetupPlan | null; error: string | null; pending: boolean };
+type SourceState = { defaults: WorkspaceDefaults | null; error: string | null; pending: boolean };
+type ExplicitFields = { repository: boolean; branch: boolean; checkoutPath: boolean; label: boolean };
 
 const POLL_INTERVAL_MS = 700;
 const MAX_POLL_REQUESTS = 180;
@@ -61,6 +72,10 @@ function operationIsTerminal(state: WorkspaceOperationState): boolean {
   return state === "completed" || state === "cancelled" || state === "partial" || state === "outcome_unknown" || state === "needs_review";
 }
 
+function operationCanReset(state: WorkspaceOperationState): boolean {
+  return state === "completed" || state === "cancelled";
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
@@ -68,68 +83,50 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function modeLabel(mode: WorkspaceSetupMode): string {
-  return mode === "create" ? "Create linked worktree" : "Open existing checkout";
+  return mode === "create" ? "Create Space" : "Open Space";
 }
 
-function issueUrlPlaceholder(configuration: ProjectConfiguration | null): string {
-  const github = configuration?.providers.find((provider) => provider.id === "github" && provider.base_url === "https://github.com");
-  return github ? "https://github.com/owner/repository/issues/number" : "https://provider.example/owner/repository/issues/number";
+function directoryName(path: string): string {
+  return path.trim().split("/").filter(Boolean).at(-1) ?? "";
 }
 
-export type ArtifactValidation = { valid: true; providerId: string; identity: string } | { valid: false; message: string } | null;
+function optional(value: string): string | null {
+  return value.trim() || null;
+}
 
-/** Validate the provider boundary while the URL is still a draft. The server remains authoritative. */
-export function validateArtifactUrl(value: string, configuration: ProjectConfiguration | null): ArtifactValidation {
-  const input = value.trim();
-  if (!input) return null;
-  let url: URL;
-  try {
-    url = new URL(input);
-  } catch {
-    return { valid: false, message: "Enter a complete http(s) issue or review URL." };
+function requestLabel(form: FormState): string | null {
+  return optional(form.label) ?? (form.mode === "create" ? optional(form.branch) : optional(directoryName(form.openPath)));
+}
+
+export function makeRequest(form: FormState): WorkspaceSetupRequest {
+  const label = requestLabel(form);
+  if (form.mode === "open") {
+    return { operation: "open", path: form.openPath.trim(), label, task_name: null, focus: form.focus };
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return { valid: false, message: "The source URL must use http or https." };
-  }
-  const provider = configuration?.providers.find((candidate) => {
-    try {
-      const base = new URL(candidate.base_url);
-      return base.origin === url.origin && (base.pathname === "/" || base.pathname === "" || url.pathname.startsWith(`${base.pathname.replace(/\/$/, "")}/`));
-    } catch {
-      return false;
-    }
-  });
-  if (!provider) return { valid: false, message: "No configured provider owns this source URL." };
-  if (provider.id === "github" || provider.base_url === "https://github.com") {
-    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/);
-    if (!match || url.search || url.hash) return { valid: false, message: "GitHub sources must identify one issue, such as owner/repository/issues/42." };
-    return { valid: true, providerId: provider.id, identity: `${match[1]}/${match[2]}#${match[3]}` };
-  }
-  const parts = url.pathname.split("/").filter(Boolean);
-  if (parts.length < 3) return { valid: false, message: "The source URL does not identify a supported provider resource." };
-  return { valid: true, providerId: provider.id, identity: url.pathname };
+  return {
+    operation: "create",
+    repository_id: form.repositoryId,
+    branch: optional(form.branch),
+    base_ref: optional(form.base),
+    checkout_path: optional(form.checkoutPath),
+    label,
+    task_name: null,
+    artifact_url: optional(form.artifactUrl),
+    focus: form.focus,
+  };
 }
 
 export function operationStatusMessage(operation: Pick<WorkspaceOperation, "state" | "step" | "error">): string {
   const sourceFailure = operation.error?.code.startsWith("source_") ?? false;
-  if (operation.state === "partial" && sourceFailure) {
-    return "Source import is partial. Retry the source step to finish Context; the reviewed workspace and companion remain available for review.";
-  }
-  if (operation.state === "partial") {
-    return "Workspace setup is partial. Review the retained effects and retry the recorded failed step.";
-  }
-  if (operation.state === "needs_review") {
-    return "Workspace setup needs review. Inspect the retained effects before choosing a recovery action.";
-  }
+  if (operation.state === "partial" && sourceFailure) return "Source import is partial. Retry the source step to finish Context.";
+  if (operation.state === "partial") return "Workspace setup is partial. Review retained resources and retry the failed step.";
+  if (operation.state === "needs_review") return "Workspace setup needs review. Inspect retained resources before recovery.";
   switch (operation.step) {
-    case "context_preparing":
-      return "Preparing the Context companion and validating source availability.";
-    case "context_ready":
-      return "Context is ready. Preparing the context-aware terminal.";
-    case "completed":
-      return "Workspace, Context, and the context-aware terminal are ready.";
-    default:
-      return `Setup is at ${operation.step.replaceAll("_", " ")}.`;
+    case "context_preparing": return "Preparing Context.";
+    case "context_ready": return "Context is ready. Preparing the terminal.";
+    case "completed": return "Space and terminal are ready.";
+    case "environment_requested": return "Preparing the terminal.";
+    default: return `Setup is at ${operation.step.replaceAll("_", " ")}.`;
   }
 }
 
@@ -137,6 +134,7 @@ function operationStepLabel(step: WorkspaceOperation["step"]): string {
   switch (step) {
     case "context_preparing": return "Preparing Context";
     case "context_ready": return "Context ready";
+    case "environment_requested": return "Preparing terminal";
     default: return step.replaceAll("_", " ");
   }
 }
@@ -160,221 +158,180 @@ function recoveryActionFor(operation: WorkspaceOperation): WorkspaceRecoveryActi
   return null;
 }
 
-
 function initialForm(): FormState {
-  return {
-    repositoryId: "",
-    query: "",
-    mode: "create",
-    openTarget: "branch",
-    branch: "",
-    base: "",
-    checkoutPath: "",
-    label: "",
-    taskName: "",
-    artifactUrl: "",
-    focus: true,
-    repositoryConsent: false,
-  };
-}
-
-function makeRequest(form: FormState): WorkspaceSetupRequest {
-  const optional = (value: string): string | null => value.trim() || null;
-  const branch = optional(form.branch);
-  const checkoutPath = optional(form.checkoutPath);
-  return {
-    repository_id: form.repositoryId,
-    mode: form.mode,
-    branch: form.mode === "open" && form.openTarget === "path" ? null : branch,
-    base: form.mode === "open" ? null : optional(form.base),
-    checkout_path: form.mode === "open" && form.openTarget === "branch" ? null : checkoutPath,
-    label: optional(form.label),
-    task_name: optional(form.taskName),
-    artifact_url: optional(form.artifactUrl),
-    focus: form.focus,
-    trust_repository: form.repositoryConsent,
-  };
-}
-
-function StepButton({ step, current, label, onSelect }: { step: DialogStep; current: DialogStep; label: string; onSelect: (step: DialogStep) => void }) {
-  return (
-    <button
-      className={`setup-step${current === step ? " is-current" : ""}`}
-      type="button"
-      aria-current={current === step ? "step" : undefined}
-      onClick={() => onSelect(step)}
-    >
-      <span className="setup-step-number">{step}</span>
-      <span>{label}</span>
-    </button>
-  );
+  return { repositoryId: "", mode: "create", branch: "", base: "", checkoutPath: "", openPath: "", label: "", artifactUrl: "", focus: true };
 }
 
 function Field({ label, hint, children, htmlFor }: { label: string; hint?: string; children: ReactNode; htmlFor?: string }) {
-  return (
-    <label className="setup-field" htmlFor={htmlFor}>
-      <span className="setup-label">{label}{hint ? <span className="setup-hint"> · {hint}</span> : null}</span>
-      {children}
-    </label>
-  );
+  return <label className="setup-field" htmlFor={htmlFor}>
+    <span className="setup-label">{label}{hint ? <span className="setup-hint"> · {hint}</span> : null}</span>
+    {children}
+  </label>;
 }
 
 function DiagnosticList({ diagnostics }: { diagnostics: Array<{ code: string; message: string; path?: string | null }> }) {
   if (diagnostics.length === 0) return null;
-  return (
-    <div className="setup-diagnostics" role="status">
-      <strong>Configuration diagnostics</strong>
-      <ul>
-        {diagnostics.map((diagnostic, index) => (
-          <li key={`${diagnostic.code}-${diagnostic.path ?? ""}-${index}`}>
-            <code>{diagnostic.code}</code> {diagnostic.message}{diagnostic.path ? <code className="setup-diagnostic-path">{diagnostic.path}</code> : null}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+  return <div className="setup-diagnostics" role="status">
+    <strong>Configuration diagnostics</strong>
+    <ul>{diagnostics.map((diagnostic, index) => <li key={`${diagnostic.code}-${diagnostic.path ?? ""}-${index}`}>
+      <code>{diagnostic.code}</code> {diagnostic.message}
+      {diagnostic.path ? <code className="setup-diagnostic-path">{diagnostic.path}</code> : null}
+    </li>)}</ul>
+  </div>;
 }
 
-function RepositoryChoice({ repository, selected, onSelect }: { repository: RepositoryCandidate; selected: boolean; onSelect: () => void }) {
-  return (
-    <button className={`setup-repository${selected ? " is-selected" : ""}`} type="button" role="option" aria-selected={selected} onClick={onSelect}>
-      <span className="setup-repository-title"><strong>{repository.name}</strong>{repository.is_detached ? <span className="setup-badge">detached</span> : null}{repository.is_linked_worktree ? <span className="setup-badge">linked worktree</span> : null}</span>
-      <code>{repository.root}</code>
-      <span className="setup-repository-meta">{repository.branch ? `branch ${repository.branch}` : "detached HEAD"} · {repository.repository_id}</span>
-    </button>
-  );
-}
-
-function PlanSummary({ plan }: { plan: WorkspaceSetupPlan }) {
-  return (
+function PlanDetails({ plan }: { plan: WorkspaceSetupPlan }) {
+  return <details className="setup-disclosure">
+    <summary>Operation details</summary>
     <div className="setup-plan-summary">
-      <div className="setup-summary-row"><span>Repository</span><code>{plan.repository.root}</code></div>
       <div className="setup-summary-row"><span>Operation</span><strong>{modeLabel(plan.mode)}</strong></div>
+      <div className="setup-summary-row"><span>Ownership</span><span>{plan.ownership.replaceAll("_", " ")}</span></div>
       <div className="setup-summary-row"><span>Checkout</span><code>{plan.checkout_path}</code></div>
       <div className="setup-summary-row"><span>Companion</span><code>{plan.companion_path}</code></div>
-      <div className="setup-summary-row"><span>Branch / base</span><code>{plan.branch ?? "(existing)"}{plan.base ? ` ← ${plan.base}` : ""}</code></div>
-      <div className="setup-summary-row"><span>Label</span><span>{plan.label}</span></div>
-      <div className="setup-summary-row"><span>Artifact</span><span>{plan.artifact ? `${plan.artifact.kind} · ${plan.artifact.canonical_id}` : "No artifact selected"}</span></div>
-      <div className="setup-summary-row"><span>Focus / consent</span><span>{plan.focus ? "Focus new context terminal" : "Keep current focus"} · {plan.trust_repository ? "Consent recorded" : "Consent not recorded"}</span></div>
-      <div className="setup-effects"><strong>Exact effects</strong><ul>{plan.effects.map((effect, index) => <li key={`${effect}-${index}`}>{effect}</li>)}</ul></div>
+      {plan.repository ? <div className="setup-summary-row"><span>Repository</span><code>{plan.repository.root}</code></div> : null}
+      {plan.branch ? <div className="setup-summary-row"><span>Branch</span><code>{plan.branch}{plan.base ? ` ← ${plan.base}` : ""}</code></div> : null}
+      {plan.artifact ? <div className="setup-summary-row"><span>Source</span><span>{plan.artifact.kind} · {plan.artifact.canonical_id}</span></div> : null}
+      <div className="setup-effects"><strong>Effects</strong><ul>{plan.effects.map((effect, index) => <li key={`${effect}-${index}`}>{effect}</li>)}</ul></div>
       {plan.warnings.length > 0 ? <div className="setup-warnings"><strong>Warnings</strong><ul>{plan.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}
-      <p className="setup-terminal-boundary"><strong>Terminal boundary:</strong> the Herdr-created root pane cannot receive environment values retroactively. Cockpit creates a new context-aware terminal for new processes only; start an agent manually there. The root pane remains unchanged.</p>
     </div>
-  );
+  </details>;
 }
 
-function Progress({ operation, readError, busy, onCancel, onResume, onReview }: { operation: WorkspaceOperation; readError: string | null; busy: boolean; onCancel: () => void; onResume: () => void; onReview: (action: WorkspaceRecoveryAction) => void }) {
+function Progress({ operation, readError, busy, onCancel, onResume, onReview }: {
+  operation: WorkspaceOperation;
+  readError: string | null;
+  busy: boolean;
+  onCancel: () => void;
+  onResume: () => void;
+  onReview: (action: WorkspaceRecoveryAction) => void;
+}) {
   const failed = operation.state === "partial" || operation.state === "needs_review";
   const recoveryAction = recoveryActionFor(operation);
-  const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Recover existing checkout" : recoveryAction === "retry_environment" ? "Retry environment" : null;
   const retrySource = sourceRetry(operation);
-  const failedResource = retrySource && operation.plan.artifact
-    ? `Failed resource: ${operation.plan.artifact.provider_id} ${operation.plan.artifact.canonical_id}`
-    : failed ? `Failed step: ${operationStepLabel(operation.step)}` : null;
-  return (
-    <section className="setup-progress" aria-live="polite" aria-busy={busy} aria-label="Workspace setup progress">
-      <div className="setup-progress-heading"><div><h3>{operationStepLabel(operation.step)}</h3></div><span className={`setup-state setup-state-${operation.state}`}>{operation.state.replaceAll("_", " ")}</span></div>
-      <div className="setup-progress-track"><span style={{ width: `${operation.step === "completed" ? 100 : Math.min(94, Math.max(8, (operation.sequence + 1) * 10))}%` }} /></div>
-      <p className="setup-progress-message" role="status">{operationStatusMessage(operation)}</p>
-      {failedResource ? <p className="setup-progress-resource" role="status">{failedResource}</p> : null}
-      {readError ? <p className="setup-transient" role="status">Could not read the latest operation snapshot. Showing the last confirmed progress; no mutation was retried.</p> : null}
-      {operation.error ? <p className="setup-error" role="alert"><strong>{operation.error.code}</strong> {operation.error.message}</p> : null}
-      {operation.owned_resources.length > 0 ? <div className="setup-owned"><strong>Resources retained</strong><ul>{operation.owned_resources.map((resource, index) => <li key={`${resource.kind}-${resource.path}-${index}`}><code>{resource.path}</code> · {resource.created_by_operation ? "created by this operation" : "existing resource"}</li>)}</ul></div> : null}
-      <div className="setup-progress-actions">
-        {operation.state === "running" || operation.state === "planned" ? <button type="button" onClick={onCancel} disabled={busy}>Cancel operation</button> : null}
-        {failed && operation.resume_allowed ? <button type="button" className="setup-primary" onClick={onResume} disabled={busy}>{retrySource ? "Retry source import" : "Resume failed step"}</button> : null}
-        {recoveryAction && recoveryLabel ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>{recoveryLabel}</button> : null}
-      </div>
-      {failed ? <p className="setup-recovery-note">Completed effects remain in place. {retrySource ? "Retry addresses only the source import." : "Resume addresses only the recorded failed step."}</p> : null}
-      {recoveryAction === "accept_existing_worktree" ? <p className="setup-recovery-note">The worktree outcome is uncertain. Cockpit validates the exact checkout and, only when Herdr has no workspace open for it, explicitly opens that checkout once. It never redispatches Create. Review the resulting state, then explicitly resume if offered.</p> : null}
-      {recoveryAction === "retry_environment" ? <p className="setup-recovery-note">The environment outcome is uncertain. A previous request may have opened a tab. Retrying may create a new environment tab; any uncertain old tab or pane remains untouched. Reconcile does not dispatch Herdr mutations. Review the resulting state, then explicitly resume if offered.</p> : null}
-    </section>
-  );
+  const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Recover existing checkout" : recoveryAction === "retry_environment" ? "Retry environment" : null;
+  return <section className="setup-progress" aria-live="polite" aria-busy={busy} aria-label="Workspace setup progress">
+    <div className="setup-progress-heading"><h3>{operationStepLabel(operation.step)}</h3><span className={`setup-state setup-state-${operation.state}`}>{operation.state.replaceAll("_", " ")}</span></div>
+    <div className="setup-progress-track"><span style={{ width: `${operation.step === "completed" ? 100 : Math.min(94, Math.max(8, (operation.sequence + 1) * 10))}%` }} /></div>
+    <p className="setup-progress-message" role="status">{operationStatusMessage(operation)}</p>
+    {readError ? <p className="setup-transient" role="status">Could not read the latest operation status. Showing the last confirmed state.</p> : null}
+    {operation.error && operation.state !== "running" ? <p className="setup-error" role="alert">{operation.error.message}</p> : null}
+    {operation.owned_resources.length > 0 ? <details className="setup-disclosure"><summary>Retained resources</summary><div className="setup-owned"><ul>{operation.owned_resources.map((resource, index) => <li key={`${resource.kind}-${resource.path}-${index}`}><code>{resource.path}</code> · {resource.created_by_operation ? "created by this operation" : "existing resource"}</li>)}</ul></div></details> : null}
+    <div className="setup-progress-actions">
+      {operation.state === "running" || operation.state === "planned" ? <button type="button" onClick={onCancel} disabled={busy}>Cancel operation</button> : null}
+      {failed && operation.resume_allowed ? <button type="button" className="setup-primary" onClick={onResume} disabled={busy}>{retrySource ? "Retry source import" : "Resume failed step"}</button> : null}
+      {recoveryAction && recoveryLabel ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>{recoveryLabel}</button> : null}
+    </div>
+  </section>;
 }
+
 export function SetupDialog({ client, sessionId, open, selectedParent = null, onClose, onCompleted }: SetupDialogProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const loadRequestToken = useRef(0);
+  const defaultsRequestToken = useRef(0);
   const planRequestToken = useRef(0);
   const pollToken = useRef(0);
   const completedOperation = useRef<string | null>(null);
   const operationRef = useRef<WorkspaceOperation | null>(null);
+  const dispatchRef = useRef(false);
   const pollCount = useRef(0);
   const loadedSession = useRef<string | null>(null);
   const openRef = useRef(open);
-  const [step, setStep] = useState<DialogStep>(1);
+  const explicit = useRef<ExplicitFields>({ repository: false, branch: false, checkoutPath: false, label: false });
   const [form, setForm] = useState<FormState>(initialForm);
   const [configuration, setConfiguration] = useState<ProjectConfiguration | null>(null);
   const [repositories, setRepositories] = useState<RepositoryCandidate[]>([]);
   const [diagnostics, setDiagnostics] = useState<RepositoryListResponse["diagnostics"]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sourceState, setSourceState] = useState<SourceState>({ defaults: null, error: null, pending: false });
   const [planState, setPlanState] = useState<PlanState>({ plan: null, error: null, pending: false });
   const [operation, setOperation] = useState<WorkspaceOperation | null>(null);
   const [operationReadError, setOperationReadError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [pathError, setPathError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [requestRefresh, setRequestRefresh] = useState(0);
+  const [lookupRevision, setLookupRevision] = useState(0);
 
   operationRef.current = operation;
   const onCompletedRef = useRef(onCompleted);
   onCompletedRef.current = onCompleted;
 
-  const updateForm = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
-    setForm((current) => ({ ...current, [key]: value }));
-    planRequestToken.current += 1;
-    setPlanState({ plan: null, error: null, pending: false });
-  }, []);
-  const updateOpenTarget = useCallback((target: "branch" | "path", value: string) => {
-    setForm((current) => ({
-      ...current,
-      openTarget: target,
-      branch: target === "branch" ? value : "",
-      checkoutPath: target === "path" ? value : "",
-    }));
+  const invalidatePlan = useCallback(() => {
+    if (dispatchRef.current) return;
     planRequestToken.current += 1;
     setPlanState({ plan: null, error: null, pending: false });
   }, []);
 
-  const setWorktreeMode = useCallback((mode: WorkspaceSetupMode) => {
-    setForm((current) => ({
-      ...current,
-      mode,
-      base: mode === "open" ? "" : current.base,
-      branch: mode === "open" && current.openTarget === "path" ? "" : current.branch,
-      checkoutPath: mode === "open" && current.openTarget === "branch" ? "" : current.checkoutPath,
-    }));
-    planRequestToken.current += 1;
+  const updateText = useCallback((key: TextField, value: string, manuallyEdited = false) => {
+    if (dispatchRef.current) return;
+    if (manuallyEdited) {
+      if (key === "repositoryId") explicit.current.repository = true;
+      if (key === "branch") explicit.current.branch = true;
+      if (key === "checkoutPath") explicit.current.checkoutPath = true;
+      if (key === "label") explicit.current.label = true;
+    }
+    if (key === "artifactUrl" || key === "repositoryId") {
+      defaultsRequestToken.current += 1;
+      if (key === "artifactUrl") setSourceState({ defaults: null, error: null, pending: false });
+    }
+    if (key === "repositoryId" && manuallyEdited) setLookupRevision((current) => current + 1);
+    setForm((current) => {
+      if (key !== "artifactUrl") return { ...current, [key]: value };
+      return {
+        ...current,
+        artifactUrl: value,
+        repositoryId: explicit.current.repository ? current.repositoryId : "",
+        branch: explicit.current.branch ? current.branch : "",
+        checkoutPath: explicit.current.checkoutPath ? current.checkoutPath : "",
+        label: explicit.current.label ? current.label : "",
+      };
+    });
+    if (key === "checkoutPath" || key === "openPath") setPathError(null);
+    invalidatePlan();
+  }, [invalidatePlan]);
+
+  const updateFocus = useCallback((focus: boolean) => {
+    if (dispatchRef.current) return;
+    setForm((current) => ({ ...current, focus }));
+    invalidatePlan();
+  }, [invalidatePlan]);
+
+  const setMode = useCallback((mode: WorkspaceSetupMode) => {
+    if (dispatchRef.current) return;
+    defaultsRequestToken.current += 1;
+    setSourceState({ defaults: null, error: null, pending: false });
+    setForm((current) => ({ ...current, mode }));
+    setPathError(null);
+    invalidatePlan();
+  }, [invalidatePlan]);
+
+  const resetCompletedOperation = useCallback(() => {
+    dispatchRef.current = false;
+    completedOperation.current = null;
+    explicit.current = { repository: false, branch: false, checkoutPath: false, label: false };
+    setForm(initialForm());
     setPlanState({ plan: null, error: null, pending: false });
+    setOperation(null);
+    setOperationError(null);
+    setOperationReadError(null);
   }, []);
 
   const handleClose = useCallback(() => {
-    planRequestToken.current += 1;
+    defaultsRequestToken.current += 1;
+    if (!dispatchRef.current) invalidatePlan();
     pollToken.current += 1;
-    setPlanState({ plan: null, error: null, pending: false });
-    setActionPending(false);
     onClose();
-  }, [onClose]);
+  }, [invalidatePlan, onClose]);
 
   useEffect(() => {
     const wasOpen = openRef.current;
     openRef.current = open;
-    planRequestToken.current += 1;
-    if (open) {
-      if (!wasOpen && operationRef.current && (operationRef.current.state === "completed" || operationRef.current.state === "cancelled")) {
-        operationRef.current = null;
-        completedOperation.current = null;
-        setOperation(null);
-        setOperationError(null);
-        setOperationReadError(null);
-        setForm(initialForm());
-        setStep(1);
-      }
-      return;
-    }
-    pollToken.current += 1;
-    setPlanState({ plan: null, error: null, pending: false });
-  }, [open]);
+    defaultsRequestToken.current += 1;
+    if (open && !wasOpen && operationRef.current && operationCanReset(operationRef.current.state)) resetCompletedOperation();
+    if (!open) pollToken.current += 1;
+  }, [open, resetCompletedOperation]);
 
   useEffect(() => {
     if (!open) return;
@@ -382,21 +339,12 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     const sessionChanged = loadedSession.current !== null && loadedSession.current !== sessionId;
     loadedSession.current = sessionId;
     const token = ++loadRequestToken.current;
-    planRequestToken.current += 1;
     setLoadState("loading");
     setLoadError(null);
     setConfiguration(null);
     setRepositories([]);
     setDiagnostics([]);
-    if (sessionChanged) {
-      pollToken.current += 1;
-      setForm(initialForm());
-      setStep(1);
-      setPlanState({ plan: null, error: null, pending: false });
-      setOperation(null);
-      setOperationError(null);
-      setOperationReadError(null);
-    }
+    if (sessionChanged && !dispatchRef.current) resetCompletedOperation();
     void Promise.all([client.projectConfiguration(), client.repositories()]).then(([nextConfiguration, response]) => {
       if (!active || token !== loadRequestToken.current) return;
       setConfiguration(nextConfiguration);
@@ -404,25 +352,51 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
       setDiagnostics(response.diagnostics);
       setLoadState(response.repositories.length === 0 ? "empty" : "ready");
       const parentRepository = selectedParent ? resolveParentRepository(response.repositories, selectedParent) : null;
-      setForm((current) => ({
-        ...current,
-        repositoryId: current.repositoryId || parentRepository?.repository_id || (selectedParent ? "" : response.repositories[0]?.repository_id || ""),
-      }));
+      if (!dispatchRef.current) setForm((current) => ({ ...current, repositoryId: current.repositoryId || parentRepository?.repository_id || (selectedParent ? "" : response.repositories[0]?.repository_id || "") }));
     }).catch((error: unknown) => {
       if (!active || token !== loadRequestToken.current) return;
       setLoadState("error");
-      setLoadError(errorMessage(error, "Could not load project configuration and repositories."));
+      setLoadError(errorMessage(error, "Could not load project setup."));
     });
     return () => { active = false; };
-  }, [client, open, requestRefresh, sessionId, selectedParent?.checkoutPath, selectedParent?.repositoryKey]);
+  }, [client, open, requestRefresh, resetCompletedOperation, selectedParent?.checkoutPath, selectedParent?.repositoryKey, sessionId]);
 
+  useEffect(() => {
+    if (!open || form.mode !== "create" || dispatchRef.current) return;
+    const artifactUrl = form.artifactUrl.trim();
+    if (!artifactUrl) {
+      defaultsRequestToken.current += 1;
+      setSourceState({ defaults: null, error: null, pending: false });
+      return;
+    }
+    const token = ++defaultsRequestToken.current;
+    setSourceState({ defaults: null, error: null, pending: true });
+    const timeout = window.setTimeout(() => {
+      void client.resolveWorkspaceDefaults({
+        artifact_url: artifactUrl,
+        repository_id: explicit.current.repository ? form.repositoryId || null : null,
+      }).then((defaults) => {
+        if (token !== defaultsRequestToken.current || dispatchRef.current) return;
+        setSourceState({ defaults, error: null, pending: false });
+        invalidatePlan();
+        setForm((current) => ({
+          ...current,
+          repositoryId: explicit.current.repository ? current.repositoryId : defaults.repository_id ?? current.repositoryId,
+          branch: explicit.current.branch ? current.branch : defaults.branch ?? current.branch,
+          checkoutPath: explicit.current.checkoutPath ? current.checkoutPath : defaults.checkout_path ?? current.checkoutPath,
+          label: explicit.current.label ? current.label : defaults.label ?? current.label,
+        }));
+      }).catch((error: unknown) => {
+        if (token !== defaultsRequestToken.current || dispatchRef.current) return;
+        setSourceState({ defaults: null, error: errorMessage(error, "Could not resolve this source. Enter repository and branch manually."), pending: false });
+      });
+    }, 300);
+    return () => window.clearTimeout(timeout);
+  }, [client, form.artifactUrl, form.mode, invalidatePlan, lookupRevision, open]);
 
   useEffect(() => {
     if (!open) return;
-    const root = dialogRef.current;
-    if (!root) return;
-    const first = root.querySelector<HTMLElement>("input, select, button");
-    first?.focus();
+    dialogRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
   }, [open]);
 
   useEffect(() => {
@@ -438,7 +412,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
       if (event.key !== "Tab") return;
       const focusable = [...root.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])")];
       if (focusable.length === 0) return;
-      const current = focusable.indexOf(document.activeElement as HTMLElement);
+      const current = focusable.findIndex((item) => item === document.activeElement);
       const next = event.shiftKey ? (current <= 0 ? focusable.length - 1 : current - 1) : (current + 1) % focusable.length;
       if (current < 0 || next !== current + (event.shiftKey ? -1 : 1)) {
         event.preventDefault();
@@ -449,59 +423,6 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     return () => root.removeEventListener("keydown", onKeyDown);
   }, [handleClose, open]);
 
-  const visibleRepositories = repositories.filter((repository) => {
-    const query = form.query.trim().toLowerCase();
-    return !query || `${repository.name} ${repository.root} ${repository.repository_id}`.toLowerCase().includes(query);
-  });
-  const selectedRepository = repositories.find((repository) => repository.repository_id === form.repositoryId) ?? null;
-  const parentRepository = selectedParent ? resolveParentRepository(repositories, selectedParent) : null;
-  const parentRepositoryMatched = parentRepository !== null;
-  const artifactValidation = validateArtifactUrl(form.artifactUrl, configuration);
-
-  const createPlan = useCallback(async () => {
-    if (!form.repositoryId) {
-      setPlanState({ plan: null, error: "Choose a local repository before continuing.", pending: false });
-      setStep(1);
-      return;
-    }
-    if (!form.repositoryConsent) {
-      setPlanState({ plan: null, error: "Before Review, explicitly consent to the configured repository actions. Stock Herdr cannot suppress those actions.", pending: false });
-      return;
-    }
-    if (artifactValidation?.valid === false) {
-      setPlanState({ plan: null, error: artifactValidation.message, pending: false });
-      setStep(1);
-      return;
-    }
-    if (form.mode === "open") {
-      const branch = form.branch.trim();
-      const checkoutPath = form.checkoutPath.trim();
-      if (form.base.trim()) {
-        setPlanState({ plan: null, error: "Base ref is only available when creating a linked worktree. Remove it before opening an existing checkout.", pending: false });
-        return;
-      }
-      if ((branch.length > 0) === (checkoutPath.length > 0)) {
-        setPlanState({ plan: null, error: "Open requires exactly one target: enter a branch or an existing checkout path, not both.", pending: false });
-        return;
-      }
-    }
-    const token = ++planRequestToken.current;
-    setPlanState({ plan: null, error: null, pending: true });
-    try {
-      const plan = await client.planWorkspace(sessionId, makeRequest(form));
-      if (token !== planRequestToken.current) return;
-      if (plan.session_id !== sessionId || plan.repository.repository_id !== form.repositoryId) {
-        setPlanState({ plan: null, error: "The setup plan did not match the selected session or repository. Review your selection and try again.", pending: false });
-        return;
-      }
-      setPlanState({ plan, error: null, pending: false });
-      setStep(2);
-    } catch (error: unknown) {
-      if (token !== planRequestToken.current) return;
-      setPlanState({ plan: null, error: errorMessage(error, "Could not create a setup plan."), pending: false });
-    }
-  }, [artifactValidation, form, client, sessionId]);
-
   const acceptOperation = useCallback((next: WorkspaceOperation) => {
     const current = operationRef.current;
     if (current && (current.operation_id !== next.operation_id || !operationSnapshotIsNewer(current, next))) return;
@@ -510,27 +431,86 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     setOperationError(null);
     if (next.state === "completed" && completedOperation.current !== next.operation_id) {
       completedOperation.current = next.operation_id;
-      onCompleted(next);
+      onCompletedRef.current(next);
     }
-  }, [onCompleted]);
-  const start = useCallback(async () => {
+  }, []);
+
+  const inspectReceipt = useCallback(async () => {
     const plan = planState.plan;
-    if (!plan || planState.pending || actionPending) return;
-    setOperationError(null);
+    if (!plan || actionPending) return;
     setActionPending(true);
+    setOperationError(null);
     try {
-      const next = await client.startWorkspace(sessionId, { operation_id: plan.operation_id, expected_generation: plan.generation });
+      const next = await client.workspaceOperation(plan.session_id, plan.operation_id);
       if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
-        setOperationError("The workspace operation response did not match the reviewed plan. No result was adopted.");
+        setOperationError("The operation status did not match the retained setup receipt.");
         return;
       }
       acceptOperation(next);
+      setOperationReadError(null);
     } catch (error: unknown) {
-      setOperationError(errorMessage(error, "Could not start the workspace operation."));
+      setOperationError(errorMessage(error, "Could not read the retained operation. Its outcome is still unknown."));
     } finally {
       setActionPending(false);
     }
-  }, [acceptOperation, actionPending, planState, client, sessionId]);
+  }, [acceptOperation, actionPending, client, planState.plan, sessionId]);
+
+  const submit = useCallback(async () => {
+    if (planState.pending || actionPending || dispatchRef.current) return;
+    if (form.mode === "open" && !form.openPath.trim()) {
+      setPathError("Enter the directory to open.");
+      return;
+    }
+    if (form.mode === "create" && !form.repositoryId) {
+      setPlanState({ plan: null, error: "Choose a local repository.", pending: false });
+      return;
+    }
+    const token = ++planRequestToken.current;
+    setPlanState({ plan: null, error: null, pending: true });
+    setOperationError(null);
+    try {
+      const plan = await client.planWorkspace(sessionId, makeRequest(form));
+      if (token !== planRequestToken.current || dispatchRef.current) return;
+      if (plan.session_id !== sessionId || plan.mode !== form.mode || (form.mode === "create" && plan.repository?.repository_id !== form.repositoryId)) {
+        setPlanState({ plan: null, error: "The setup plan did not match the current form. Check the fields and try again.", pending: false });
+        return;
+      }
+      dispatchRef.current = true;
+      setPlanState({ plan, error: null, pending: false });
+      setActionPending(true);
+      try {
+        const next = await client.startWorkspace(sessionId, { operation_id: plan.operation_id, expected_generation: plan.generation });
+        if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
+          setOperationError("The workspace operation response did not match the retained setup receipt.");
+          return;
+        }
+        acceptOperation(next);
+      } catch (error: unknown) {
+        setOperationError(errorMessage(error, "Start request outcome is unknown. Cockpit retained the operation receipt and is checking its status."));
+        try {
+          const next = await client.workspaceOperation(sessionId, plan.operation_id);
+          if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
+            setOperationError("Start request outcome is unknown. The returned operation did not match the retained receipt.");
+            return;
+          }
+          acceptOperation(next);
+        } catch (inspectionError: unknown) {
+          setOperationError(`${errorMessage(error, "Start request outcome is unknown.")} ${errorMessage(inspectionError, "The operation receipt is retained. Use Check operation before any further action.")}`);
+        }
+      }
+    } catch (error: unknown) {
+      if (token !== planRequestToken.current || dispatchRef.current) return;
+      const message = errorMessage(error, "Could not set up this workspace.");
+      if (form.mode === "open") {
+        setPathError(message);
+        setPlanState((current) => ({ ...current, pending: false }));
+      } else {
+        setPlanState((current) => ({ ...current, error: message, pending: false }));
+      }
+    } finally {
+      setActionPending(false);
+    }
+  }, [acceptOperation, actionPending, client, form, planState.pending, sessionId]);
 
   const pollOperation = useCallback(async (operationId: string, generation: number) => {
     const token = ++pollToken.current;
@@ -539,27 +519,21 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     while (pollToken.current === token && pollCount.current < MAX_POLL_REQUESTS && last && !operationIsTerminal(last.state)) {
       pollCount.current += 1;
       try {
-        const next = await client.workspaceOperation(sessionId, operationId);
+        const next = await client.workspaceOperation(last.session_id, operationId);
         if (pollToken.current !== token) return;
-        if (next.generation < generation || (last && !operationSnapshotIsNewer(last, next))) {
-          await new Promise<void>((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
-          continue;
-        }
-        last = next;
-        setOperation((current) => current && operationSnapshotIsNewer(current, next) ? next : current);
-        setOperationReadError(null);
-        if (next.state === "completed" && completedOperation.current !== next.operation_id) {
-          completedOperation.current = next.operation_id;
-          onCompletedRef.current(next);
+        if (next.generation >= generation && operationSnapshotIsNewer(last, next)) {
+          last = next;
+          acceptOperation(next);
+          setOperationReadError(null);
         }
       } catch (error: unknown) {
         if (pollToken.current !== token) return;
-        setOperationReadError(errorMessage(error, "Operation snapshot unavailable."));
+        setOperationReadError(errorMessage(error, "Operation status unavailable."));
       }
       if (pollToken.current !== token || !last || operationIsTerminal(last.state)) return;
       await new Promise<void>((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
     }
-  }, [client, sessionId]);
+  }, [acceptOperation, client, sessionId]);
 
   useEffect(() => {
     if (!open || !operation || operationIsTerminal(operation.state)) return;
@@ -570,102 +544,71 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
   const cancel = useCallback(async () => {
     if (!operation || (operation.state !== "running" && operation.state !== "planned") || actionPending) return;
     setActionPending(true);
-    try {
-      const next = await client.cancelWorkspace(sessionId, { operation_id: operation.operation_id, expected_generation: operation.generation });
-      acceptOperation(next);
-    } catch (error: unknown) {
-      setOperationError(errorMessage(error, "Could not cancel the operation."));
-    } finally {
-      setActionPending(false);
-    }
-  }, [acceptOperation, actionPending, operation, client, sessionId]);
+    try { acceptOperation(await client.cancelWorkspace(operation.session_id, { operation_id: operation.operation_id, expected_generation: operation.generation })); }
+    catch (error: unknown) { setOperationError(errorMessage(error, "Could not cancel the operation.")); }
+    finally { setActionPending(false); }
+  }, [acceptOperation, actionPending, client, operation, sessionId]);
 
   const resume = useCallback(async () => {
     if (!operation || !operation.resume_allowed || actionPending) return;
-    setOperationError(null);
     setActionPending(true);
-    try {
-      const next = await client.resumeWorkspace(sessionId, { operation_id: operation.operation_id, expected_generation: operation.generation });
-      acceptOperation(next);
-    } catch (error: unknown) {
-      setOperationError(errorMessage(error, "Could not resume the operation."));
-    } finally {
-      setActionPending(false);
-    }
-  }, [acceptOperation, actionPending, operation, client, sessionId]);
-  const reconcile = useCallback(async (action: WorkspaceRecoveryAction) => {
-    if (!operation || recoveryActionFor(operation) !== action || actionPending) return;
-    setStep(2);
-    setOperationError(null);
-    setActionPending(true);
-    try {
-      const next = await client.reconcileWorkspace(sessionId, {
-        operation_id: operation.operation_id,
-        expected_generation: operation.generation,
-        action,
-      });
-      acceptOperation(next);
-      setOperationReadError(null);
-    } catch (error: unknown) {
-      setOperationError(errorMessage(error, "Could not reconcile the uncertain operation."));
-    } finally {
-      setActionPending(false);
-    }
+    try { acceptOperation(await client.resumeWorkspace(operation.session_id, { operation_id: operation.operation_id, expected_generation: operation.generation })); }
+    catch (error: unknown) { setOperationError(errorMessage(error, "Could not resume the operation.")); }
+    finally { setActionPending(false); }
   }, [acceptOperation, actionPending, client, operation, sessionId]);
 
+  const reconcile = useCallback(async (action: WorkspaceRecoveryAction) => {
+    if (!operation || recoveryActionFor(operation) !== action || actionPending) return;
+    setActionPending(true);
+    try { acceptOperation(await client.reconcileWorkspace(operation.session_id, { operation_id: operation.operation_id, expected_generation: operation.generation, action })); }
+    catch (error: unknown) { setOperationError(errorMessage(error, "Could not reconcile the operation.")); }
+    finally { setActionPending(false); }
+  }, [acceptOperation, actionPending, client, operation, sessionId]);
 
-  const selectStep = (next: DialogStep) => {
-    setStep(next);
-  };
-
-  const onField = (key: keyof FormState) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const value = event.target.type === "checkbox" ? (event.target as HTMLInputElement).checked : event.target.value;
-    updateForm(key, value as never);
-  };
-
+  const onTextField = (key: TextField, manuallyEdited = false) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => updateText(key, event.currentTarget.value, manuallyEdited);
+  const onFocusChange = (event: ChangeEvent<HTMLInputElement>) => updateFocus(event.currentTarget.checked);
+  const sourceRepositories = sourceState.defaults?.repositories ?? repositories;
+  const parentRepository = selectedParent ? resolveParentRepository(repositories, selectedParent) : null;
   const diagnosticsWithLoad = loadError ? [{ code: "configuration_unavailable", message: loadError, path: null }] : diagnostics;
-  const operationDone = operation !== null && operation.state === "completed";
-  if (!open) return null;
+  const editingLocked = dispatchRef.current;
 
-  return (
-    <div className="setup-overlay" role="presentation">
-      <section className="setup-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        <header className="setup-header"><div><span className="setup-eyebrow">New task Space</span><h2 id={titleId}>Set up a workspace</h2><p>Choose a configured local repository, review exact effects, then create or open through Herdr.</p></div><button type="button" className="setup-close" onClick={handleClose} aria-label="Close setup dialog">Close</button></header>
-        <nav className="setup-stepper" aria-label="Setup steps">
-          <StepButton step={1} current={step} label="Repository" onSelect={selectStep} />
-          <StepButton step={2} current={step} label="Workspace & review" onSelect={selectStep} />
-        </nav>
+  if (!open) return null;
+  return <div className="setup-overlay" role="presentation">
+    <section className="setup-dialog setup-dialog-compact" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <header className="setup-header"><div><span className="setup-eyebrow">New task Space</span><h2 id={titleId}>Set up a workspace</h2></div><button type="button" className="setup-close" onClick={handleClose} aria-label="Close setup dialog">Close</button></header>
+      <main className="setup-body"><section className="setup-step-content setup-compact-form">
+        <div className="setup-choice-grid setup-operation-choice">
+          <button type="button" className={form.mode === "create" ? "is-selected" : ""} aria-pressed={form.mode === "create"} onClick={() => setMode("create")} disabled={editingLocked}><strong>New worktree</strong><span>Create a linked task checkout.</span></button>
+          <button type="button" className={form.mode === "open" ? "is-selected" : ""} aria-pressed={form.mode === "open"} onClick={() => setMode("open")} disabled={editingLocked}><strong>Existing directory</strong><span>Open a directory as it is.</span></button>
+        </div>
+        {form.mode === "open" ? <>
+          <Field label="Directory" htmlFor="setup-checkout"><input id="setup-checkout" value={form.openPath} onChange={onTextField("openPath", true)} placeholder="/absolute/path/to/directory" aria-invalid={Boolean(pathError)} aria-describedby={pathError ? "setup-path-error" : undefined} disabled={editingLocked} /></Field>
+          {pathError ? <p id="setup-path-error" className="setup-error" role="alert">{pathError}</p> : null}
+          <Field label="Space name" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder="Defaults to directory name" disabled={editingLocked} /></Field>
+          <p className="setup-inline-status">Uses this directory as-is.</p>
+        </> : <>
+          {loadState === "loading" ? <p className="setup-empty">Loading local repositories…</p> : null}
+          {loadState === "error" ? <div className="setup-empty setup-empty-error"><strong>Could not load project setup</strong><p>{loadError}</p><button type="button" onClick={() => setRequestRefresh((value) => value + 1)} disabled={editingLocked}>Reload</button></div> : null}
+          {loadState === "empty" ? <p className="setup-empty">No configured local repositories are available.</p> : null}
+          {loadState === "ready" ? <Field label="Repository" htmlFor="setup-repository"><select id="setup-repository" value={form.repositoryId} onChange={onTextField("repositoryId", true)} disabled={editingLocked}><option value="">Choose a repository</option>{sourceRepositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.name} · {repository.root}</option>)}</select></Field> : null}
+          {selectedParent && loadState === "ready" ? <p className={`setup-selected-note${parentRepository ? "" : " setup-parent-warning"}`}>{parentRepository ? `Opened from ${selectedParent.label}.` : `No configured repository matches ${selectedParent.label}.`}</p> : null}
+          <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onTextField("artifactUrl")} placeholder="https://provider.example/owner/repository/issues/42" disabled={editingLocked} /></Field>
+          {sourceState.pending ? <p className="setup-inline-status">Resolving source defaults…</p> : null}
+          {sourceState.error ? <p className="setup-error" role="alert">{sourceState.error}</p> : null}
+          {sourceState.defaults?.artifact ? <p className="setup-inline-status is-valid">Resolved {sourceState.defaults.artifact.kind} · {sourceState.defaults.artifact.canonical_id}</p> : null}
+          <Field label="Branch" hint="optional" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onTextField("branch", true)} placeholder="Configured default" disabled={editingLocked} /></Field>
+          <Field label="Space name" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder={form.branch || "Defaults to branch"} disabled={editingLocked} /></Field>
+          <details className="setup-disclosure"><summary>Advanced</summary><Field label="Base revision" hint="optional" htmlFor="setup-base"><input id="setup-base" value={form.base} onChange={onTextField("base")} placeholder="Configured default" disabled={editingLocked} /></Field><Field label="Destination" hint="optional" htmlFor="setup-destination"><input id="setup-destination" value={form.checkoutPath} onChange={onTextField("checkoutPath", true)} placeholder="Automatic backend default" disabled={editingLocked} /></Field></details>
+        </>}
+        <label className="setup-focus"><input type="checkbox" checked={form.focus} onChange={onFocusChange} disabled={editingLocked} /> Focus the resulting Space and terminal</label>
+        {configuration || diagnosticsWithLoad.length > 0 ? <details className="setup-disclosure"><summary>Configuration</summary>{configuration ? <div className="setup-config">Worktrees <code>{configuration.worktree_root}</code></div> : null}<DiagnosticList diagnostics={diagnosticsWithLoad} /></details> : null}
+        {planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}
+        {planState.plan ? <PlanDetails plan={planState.plan} /> : null}
         {operation ? <Progress operation={operation} readError={operationReadError} busy={actionPending} onCancel={cancel} onResume={resume} onReview={reconcile} /> : null}
-        {operationError ? <p className="setup-error setup-dialog-error" role="alert">{operationError}</p> : null}
-        {!operationDone ? <main className="setup-body">
-          {step === 1 ? <section className="setup-step-content" aria-labelledby="repository-heading">
-            <div className="setup-section-heading"><div><h3 id="repository-heading">Repository and task</h3><p>Choose the local repository first. The issue or review source is validated before any workspace effect.</p></div>{configuration ? <span className="setup-config-badge">Config v{configuration.version}</span> : null}</div>
-            {selectedParent ? <p className={`setup-selected-note${loadState === "ready" && !parentRepositoryMatched ? " setup-parent-warning" : ""}`} role={loadState === "ready" && !parentRepositoryMatched ? "alert" : "status"}>{loadState === "loading" ? <>Opened from <strong>{selectedParent.label}</strong>; checking its checkout.</> : parentRepositoryMatched ? <>Opened from <strong>{selectedParent.label}</strong>; matched <code>{parentRepository?.root}</code>.</> : <>Opened from <strong>{selectedParent.label}</strong>, but no unambiguous repository matches its checkout. Choose one explicitly.</>}</p> : null}
-            {loadState === "loading" ? <p className="setup-empty">Loading configured repositories…</p> : null}
-            {loadState === "error" ? <div className="setup-empty setup-empty-error"><strong>Could not load project setup</strong><p>{loadError}</p><button type="button" onClick={() => setRequestRefresh((value) => value + 1)}>Reload repositories</button></div> : null}
-            {loadState === "empty" ? <div className="setup-empty"><strong>No configured local repositories</strong><p>Add a repository root to the startup configuration, then reload.</p></div> : null}
-            {loadState === "ready" ? <><Field label="Repository" htmlFor="setup-repository-search"><input id="setup-repository-search" type="search" value={form.query} onChange={onField("query")} placeholder="Name, path, or repository ID" autoComplete="off" /></Field><div className="setup-repository-list" role="listbox" aria-label="Configured local repositories">{visibleRepositories.length > 0 ? visibleRepositories.map((repository) => <RepositoryChoice key={repository.repository_id} repository={repository} selected={repository.repository_id === form.repositoryId} onSelect={() => updateForm("repositoryId", repository.repository_id)} />) : <p className="setup-empty">No repositories match this search.</p>}</div>{selectedRepository ? <p className="setup-selected-note">Selected <code>{selectedRepository.root}</code>{selectedRepository.is_detached ? " · detached source requires review" : ""}</p> : null}</> : null}
-            <Field label="Task name" hint="optional" htmlFor="setup-task-name"><input id="setup-task-name" value={form.taskName} onChange={onField("taskName")} placeholder="Short task description" /></Field>
-            <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onField("artifactUrl")} placeholder={issueUrlPlaceholder(configuration)} aria-invalid={artifactValidation?.valid === false} aria-describedby="setup-artifact-status" /></Field>
-            {artifactValidation ? <p id="setup-artifact-status" className={`setup-inline-status ${artifactValidation.valid ? "is-valid" : "is-invalid"}`} role={artifactValidation.valid ? "status" : "alert"}>{artifactValidation.valid ? `Validated ${artifactValidation.providerId} source ${artifactValidation.identity}; the server will recheck it before effects.` : artifactValidation.message}</p> : null}
-            <details className="setup-disclosure"><summary>Configuration and diagnostics</summary>{configuration ? <div className="setup-config"><strong>Configured roots</strong><ul><li>Repositories: <code>{configuration.repository_roots.length > 0 ? configuration.repository_roots.join(", ") : "(none)"}</code></li><li>Worktrees: <code>{configuration.worktree_root}</code></li><li>Companions: <code>{configuration.companion_root}</code></li></ul></div> : null}<DiagnosticList diagnostics={diagnosticsWithLoad} /></details>
-            <div className="setup-actions"><button type="button" className="setup-primary" disabled={!form.repositoryId || loadState !== "ready" || artifactValidation?.valid === false} onClick={() => setStep(2)}>Continue to workspace</button></div>
-          </section> : null}
-          {step === 2 ? <section className="setup-step-content" aria-labelledby="workspace-heading">
-            <div className="setup-section-heading"><div><h3 id="workspace-heading">Workspace and review</h3><p>Choose create or open, then review exact paths and effects before Herdr is changed.</p></div></div>
-            <div className="setup-choice-grid"><button type="button" className={form.mode === "create" ? "is-selected" : ""} aria-pressed={form.mode === "create"} onClick={() => setWorktreeMode("create")}><strong>Create linked worktree</strong><span>New checkout below the configured worktree root.</span></button><button type="button" className={form.mode === "open" ? "is-selected" : ""} aria-pressed={form.mode === "open"} onClick={() => setWorktreeMode("open")}><strong>Open existing checkout</strong><span>Use one already-discovered local checkout.</span></button></div>
-            {form.mode === "open" ? <><p className="setup-label">Open target</p><div className="setup-choice-grid"><button type="button" className={form.openTarget === "branch" ? "is-selected" : ""} aria-pressed={form.openTarget === "branch"} onClick={() => updateOpenTarget("branch", form.branch)}><strong>Branch</strong><span>Resolve one existing checkout.</span></button><button type="button" className={form.openTarget === "path" ? "is-selected" : ""} aria-pressed={form.openTarget === "path"} onClick={() => updateOpenTarget("path", form.checkoutPath)}><strong>Checkout path</strong><span>Use one exact path.</span></button></div>{form.openTarget === "branch" ? <Field label="Branch" hint="required for Open" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={(event) => updateOpenTarget("branch", event.target.value)} placeholder="feature/task-name" /></Field> : <Field label="Checkout path" hint="required for Open" htmlFor="setup-checkout"><input id="setup-checkout" value={form.checkoutPath} onChange={(event) => updateOpenTarget("path", event.target.value)} placeholder="/absolute/path/to/checkout" /></Field>}</> : <><Field label="Branch" hint="required" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onField("branch")} placeholder="feature/task-name" /></Field><Field label="Base ref" hint="optional" htmlFor="setup-base"><input id="setup-base" value={form.base} onChange={onField("base")} placeholder="main" /></Field><Field label="Destination" hint="optional" htmlFor="setup-checkout"><input id="setup-checkout" value={form.checkoutPath} onChange={onField("checkoutPath")} placeholder="Configured worktree root default" /></Field></>}
-            <Field label="Space label" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onField("label")} placeholder={form.taskName || "Task workspace"} /></Field>
-            <div className="setup-checkboxes"><label><input type="checkbox" checked={form.focus} onChange={onField("focus")} /> Focus the resulting Space and context terminal</label></div>
-            <details className="setup-disclosure"><summary>Context readiness and additional sources</summary><div className="setup-context-card"><strong>Companion</strong><p>The reviewed operation creates a Cockpit-owned companion bound to this repository and optional source.</p></div><div className="setup-context-card"><strong>Viewer prerequisite</strong><p>A missing Context viewer leaves the workspace available and exposes recovery after setup; it does not erase the draft or retained worktree.</p></div><div className="setup-context-card"><strong>Terminal handoff</strong><p>New processes receive allowlisted <code>COCKPIT_*</code> values. The original Herdr root pane is unchanged.</p></div></details>
-            <div className="setup-consent"><strong>Repository consent</strong><label><input type="checkbox" checked={form.repositoryConsent} onChange={onField("repositoryConsent")} /> I understand and consent to the configured repository actions for this operation.</label></div>
-            {planState.pending ? <p className="setup-empty">Preparing exact paths and effects…</p> : null}{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}{planState.plan ? <PlanSummary plan={planState.plan} /> : null}
-            <div className="setup-actions"><button type="button" onClick={() => setStep(1)}>Back</button>{planState.plan ? <button type="button" className="setup-primary" onClick={() => void start()} disabled={Boolean(operation) || actionPending || !planState.plan.trust_repository}>Start {modeLabel(planState.plan.mode)}</button> : <button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryId || !form.repositoryConsent || artifactValidation?.valid === false}>{planState.pending ? "Reviewing…" : "Review exact effects"}</button>}</div>
-          </section> : null}
-        </main> : null}
-        {operationDone ? <section className="setup-complete" aria-live="polite"><h3>Workspace setup completed</h3><p>The Herdr workspace, companion association, and context-aware terminal are ready. Start an agent manually in the new terminal; the original root pane was left unchanged.</p><PlanSummary plan={operation.plan} /><div className="setup-actions"><button type="button" className="setup-primary" onClick={handleClose}>Done</button></div></section> : null}
-        <footer className="setup-footer"><span>Session <code>{sessionId}</code></span><span>Closing hides this dialog; it does not cancel or remove resources.</span></footer>
-      </section>
-    </div>
-  );
+        {!operation && planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Close</button><button type="button" className="setup-primary" onClick={() => void inspectReceipt()} disabled={actionPending}>{actionPending ? "Checking…" : "Check operation"}</button></div> : null}
+        {!operation && !planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Cancel</button><button type="button" className="setup-primary" disabled={planState.pending || actionPending || (form.mode === "create" && (!form.repositoryId || loadState !== "ready"))} onClick={() => void submit()}>{planState.pending || actionPending ? "Preparing…" : modeLabel(form.mode)}</button></div> : null}
+        {operationError ? <p className="setup-error" role="alert">{operationError}</p> : null}
+      </section></main>
+    </section>
+  </div>;
 }

@@ -1,5 +1,5 @@
 import type {
-  ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse,
+  ProjectArtifact, ProjectConfiguration, RepositoryCandidate, RepositoryListResponse, WorkspaceDefaults, WorkspaceDefaultsRequest,
   WorkspaceOperation, WorkspaceOperationRequest, WorkspaceSetupPlan, WorkspaceSetupRequest,
   WorkspaceReconcileRequest,
 } from "../protocol/generated/v1";
@@ -57,12 +57,28 @@ export function parseRepositoryList(value: unknown): RepositoryListResponse {
   return value as unknown as RepositoryListResponse;
 }
 
+export function parseWorkspaceDefaultsRequest(value: unknown): WorkspaceDefaultsRequest {
+  if (!record(value) || !text(value.artifact_url) || !value.artifact_url.trim() || value.artifact_url.length > 2048 || !nullableText(value.repository_id)) malformed("workspace defaults request");
+  return { artifact_url: value.artifact_url, repository_id: value.repository_id };
+}
+
+export function parseWorkspaceDefaults(value: unknown): WorkspaceDefaults {
+  if (!record(value) || !isArtifact(value.artifact) || !Array.isArray(value.repositories) || !value.repositories.every(isRepository)
+    || !nullableText(value.repository_id) || !nullableText(value.branch) || !nullableText(value.label) || !nullableText(value.checkout_path)) malformed("workspace defaults");
+  if (value.repository_id !== null && !value.repositories.some(repository => repository.repository_id === value.repository_id)) malformed("workspace defaults repository identity");
+  return { artifact: value.artifact, repositories: value.repositories, repository_id: value.repository_id, branch: value.branch, label: value.label, checkout_path: value.checkout_path };
+}
+
 export function parseWorkspaceSetupRequest(value: unknown): WorkspaceSetupRequest {
-  if (!record(value) || !text(value.repository_id) || value.repository_id.length === 0 || !mode(value.mode)
-    || !nullableText(value.branch) || !nullableText(value.base) || !nullableText(value.checkout_path)
-    || !nullableText(value.label) || !nullableText(value.task_name) || !nullableText(value.artifact_url)
-    || !bool(value.focus) || !bool(value.trust_repository)) malformed("workspace setup request");
-  return value as unknown as WorkspaceSetupRequest;
+  if (!record(value) || !nullableText(value.label) || !nullableText(value.task_name) || !bool(value.focus)) malformed("workspace setup request");
+  if (value.operation === "open") {
+    if (!text(value.path) || !value.path.trim() || Object.keys(value).some(key => !["operation", "path", "label", "task_name", "focus"].includes(key))) malformed("directory setup request");
+    return { operation: "open", path: value.path, label: value.label, task_name: value.task_name, focus: value.focus };
+  }
+  if (value.operation !== "create" || !text(value.repository_id) || !value.repository_id || !nullableText(value.branch) || !nullableText(value.base_ref)
+    || !nullableText(value.checkout_path) || !nullableText(value.artifact_url)
+    || Object.keys(value).some(key => !["operation", "repository_id", "branch", "base_ref", "checkout_path", "label", "task_name", "artifact_url", "focus"].includes(key))) malformed("worktree setup request");
+  return { operation: "create", repository_id: value.repository_id, branch: value.branch, base_ref: value.base_ref, checkout_path: value.checkout_path, label: value.label, task_name: value.task_name, artifact_url: value.artifact_url, focus: value.focus };
 }
 
 export function parseWorkspaceOperationRequest(value: unknown): WorkspaceOperationRequest {
@@ -82,10 +98,10 @@ export function parseWorkspaceReconcileRequest(value: unknown): WorkspaceReconci
 export function parseWorkspaceSetupPlan(value: unknown): WorkspaceSetupPlan {
   if (!record(value) || !text(value.operation_id) || !u32(value.generation) || !text(value.session_id)
     || !text(value.endpoint_identity) || value.endpoint_identity.length === 0
-    || !isRepository(value.repository) || !mode(value.mode) || !nullableText(value.branch) || !nullableText(value.base)
+    || !(value.repository === null || isRepository(value.repository)) || !mode(value.mode) || !nullableText(value.branch) || !nullableText(value.base)
     || !text(value.checkout_path) || !text(value.companion_path) || !text(value.label)
     || !text(value.companion_id) || value.companion_id.length === 0 || !bool(value.companion_created_by_operation)
-    || !bool(value.focus) || !bool(value.trust_repository)
+    || !bool(value.focus) || !["owned_worktree", "borrowed_directory"].includes(String(value.ownership))
     || !(value.artifact === null || isArtifact(value.artifact)) || !texts(value.effects) || !texts(value.warnings)) {
     malformed("workspace setup plan");
   }

@@ -72,6 +72,50 @@ struct StoredOperation {
     operation: WorkspaceOperation,
 }
 
+fn migrate_legacy_operation(operation: &mut WorkspaceOperation) -> bool {
+    use cockpit_protocol::{
+        projects::{WorkspaceCheckoutOwnership, WorkspaceOperationState, WorkspaceSetupMode},
+        v1::ErrorResponse,
+    };
+
+    // `ownership` was absent before path-only setup. Serde defaults it to
+    // borrowed so incomplete history can never gain delete authority. An
+    // exact created-worktree receipt is the only proof that can promote a
+    // legacy Create. Open has always borrowed its checkout.
+    if operation.plan.mode == WorkspaceSetupMode::Open {
+        if operation.plan.ownership != WorkspaceCheckoutOwnership::BorrowedDirectory {
+            operation.plan.ownership = WorkspaceCheckoutOwnership::BorrowedDirectory;
+            return true;
+        }
+        return false;
+    }
+    if operation.plan.ownership != WorkspaceCheckoutOwnership::BorrowedDirectory {
+        return false;
+    }
+    if operation.owned_resources.iter().any(|resource| {
+        resource.kind == "worktree"
+            && resource.path == operation.plan.checkout_path
+            && resource.created_by_operation
+    }) {
+        operation.plan.ownership = WorkspaceCheckoutOwnership::OwnedWorktree;
+        return true;
+    }
+    let error = ErrorResponse {
+        code: "needs_review".to_owned(),
+        message: "legacy Create operation lacks a recorded created-worktree receipt".to_owned(),
+    };
+    if operation.state == WorkspaceOperationState::NeedsReview
+        && !operation.resume_allowed
+        && operation.error.as_ref() == Some(&error)
+    {
+        return false;
+    }
+    operation.state = WorkspaceOperationState::NeedsReview;
+    operation.resume_allowed = false;
+    operation.error = Some(error);
+    true
+}
+
 /// A short journal compare-and-swap lock. The lock file is retained forever;
 /// ownership is the kernel lock on its open descriptor, not its age.
 #[derive(Debug)]
@@ -176,8 +220,13 @@ impl ProjectStore {
     pub fn load(&self, operation_id: &str) -> Result<WorkspaceOperation, InspectionError> {
         validate_operation_id(operation_id)?;
         let _lock = self.acquire_lock(operation_id)?;
-        read_json(&self.root_dir, &record_name(operation_id))
-            .map(|stored: StoredOperation| stored.operation)
+        let name = record_name(operation_id);
+        let mut stored: StoredOperation = read_json(&self.root_dir, &name)?;
+        if migrate_legacy_operation(&mut stored.operation) {
+            atomic_write_json(&self.root_dir, &name, &stored)
+                .map_err(|error| map_io(error, "state_write"))?;
+        }
+        Ok(stored.operation)
     }
 
     /// Apply one serialized change to the latest operation.
@@ -198,6 +247,7 @@ impl ProjectStore {
         let name = record_name(operation_id);
         let stored: StoredOperation = read_json(&self.root_dir, &name)?;
         let mut operation = stored.operation;
+        migrate_legacy_operation(&mut operation);
         if let Some(expected) = expected_generation {
             if operation.generation != expected {
                 return Err(InspectionError::new(
@@ -268,7 +318,11 @@ impl ProjectStore {
                 ));
             }
             let _lock = self.acquire_lock(stem)?;
-            let stored = read_json::<StoredOperation>(&self.root_dir, name)?;
+            let mut stored = read_json::<StoredOperation>(&self.root_dir, name)?;
+            if migrate_legacy_operation(&mut stored.operation) {
+                atomic_write_json(&self.root_dir, name, &stored)
+                    .map_err(|error| map_io(error, "state_write"))?;
+            }
             result.push(stored.operation);
         }
         result.sort_by(|a, b| {
@@ -990,7 +1044,10 @@ fn map_io(error: io::Error, code: &str) -> InspectionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cockpit_protocol::projects::WorkspaceSetupMode;
+    use cockpit_protocol::projects::{
+        WorkspaceCheckoutOwnership, WorkspaceOperationState, WorkspaceOwnedResource,
+        WorkspaceSetupMode,
+    };
     use std::fs;
     use std::sync::Arc;
 
@@ -1007,7 +1064,7 @@ mod tests {
             generation: 1,
             endpoint_identity: "endpoint-a".to_owned(),
             session_id: "setup-fixture".to_owned(),
-            repository: cockpit_protocol::projects::RepositoryCandidate {
+            repository: Some(cockpit_protocol::projects::RepositoryCandidate {
                 repository_id: "repo-a".to_owned(),
                 name: "repo".to_owned(),
                 root: "/repo".to_owned(),
@@ -1017,8 +1074,9 @@ mod tests {
                 is_linked_worktree: false,
                 is_detached: false,
                 provenance: "p".to_owned(),
-            },
+            }),
             mode: WorkspaceSetupMode::Create,
+            ownership: cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree,
             branch: Some("task".to_owned()),
             base: Some("main".to_owned()),
             checkout_path: "/work/task".to_owned(),
@@ -1027,7 +1085,6 @@ mod tests {
             companion_created_by_operation: true,
             label: "Task".to_owned(),
             focus: false,
-            trust_repository: false,
             artifact: None,
             effects: vec!["create".to_owned()],
             warnings: vec![],
@@ -1063,6 +1120,94 @@ mod tests {
             state,
             updated_at: "1".to_owned(),
         }
+    }
+
+    fn omit_legacy_ownership(root: &Path, id: &str) {
+        let record = root.join(format!("{id}.json"));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&record).expect("read operation record"))
+                .expect("parse operation record");
+        value["operation"]["plan"]
+            .as_object_mut()
+            .expect("plan object")
+            .remove("ownership");
+        fs::write(
+            record,
+            serde_json::to_vec(&value).expect("serialize legacy operation"),
+        )
+        .expect("write legacy operation");
+    }
+
+    #[test]
+    fn legacy_create_with_exact_worktree_receipt_migrates_to_owned_worktree() {
+        let root = temp_root("legacy-created-worktree");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&id)).expect("persist plan");
+        store
+            .update(&id, None, |operation| {
+                operation.owned_resources.push(WorkspaceOwnedResource {
+                    kind: "worktree".to_owned(),
+                    path: operation.plan.checkout_path.clone(),
+                    created_by_operation: true,
+                });
+                Ok(())
+            })
+            .expect("record created worktree");
+        omit_legacy_ownership(&root, &id);
+
+        let migrated = store.load(&id).expect("migrate legacy Create");
+        assert_eq!(
+            migrated.plan.ownership,
+            WorkspaceCheckoutOwnership::OwnedWorktree
+        );
+        assert_eq!(migrated.state, WorkspaceOperationState::Planned);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn legacy_create_without_worktree_receipt_requires_review() {
+        let root = temp_root("legacy-unproven-create");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&id)).expect("persist plan");
+        omit_legacy_ownership(&root, &id);
+
+        let migrated = store.load(&id).expect("read legacy Create");
+        assert_eq!(migrated.state, WorkspaceOperationState::NeedsReview);
+        assert!(!migrated.resume_allowed);
+        assert_eq!(
+            migrated.error.as_ref().map(|error| error.code.as_str()),
+            Some("needs_review")
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn open_operations_always_migrate_to_borrowed_directory() {
+        let root = temp_root("legacy-open");
+        let store = ProjectStore::new(&root).expect("store");
+        let id = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&id)).expect("persist plan");
+        store
+            .update(&id, None, |operation| {
+                operation.plan.mode = WorkspaceSetupMode::Open;
+                operation.plan.ownership = WorkspaceCheckoutOwnership::OwnedWorktree;
+                operation.owned_resources.push(WorkspaceOwnedResource {
+                    kind: "worktree".to_owned(),
+                    path: operation.plan.checkout_path.clone(),
+                    created_by_operation: true,
+                });
+                Ok(())
+            })
+            .expect("record legacy Open");
+
+        let migrated = store.load(&id).expect("migrate Open");
+        assert_eq!(
+            migrated.plan.ownership,
+            WorkspaceCheckoutOwnership::BorrowedDirectory
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

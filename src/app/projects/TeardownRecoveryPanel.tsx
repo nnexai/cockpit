@@ -64,7 +64,7 @@ export function TeardownRecoveryPanel({ client, sessionId, open, onClose }: Tear
     />;
   }
   return <div className="setup-overlay" role="presentation">
-    <section className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <section className="setup-dialog setup-dialog-compact" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <header className="setup-header"><div><span className="setup-eyebrow">Task cleanup</span><h2 id={titleId}>Pending cleanup</h2><p>These records remain available after a Space closes or the app restarts.</p></div><button type="button" className="setup-close" onClick={onClose}>Close</button></header>
       <main className="setup-body"><section className="setup-step-content">
         {!list && !error ? <p className="setup-empty">Loading durable cleanup records…</p> : null}

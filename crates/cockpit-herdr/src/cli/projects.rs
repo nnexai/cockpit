@@ -19,14 +19,6 @@ use super::{
     schema_fields, valid_pane_id,
 };
 
-const PROJECT_METHODS: [&str; 6] = [
-    "worktree.list",
-    "worktree.create",
-    "worktree.open",
-    "worktree.remove",
-    "workspace.close",
-    "tab.create",
-];
 const MAX_PROJECT_TEXT: usize = 4096;
 const MAX_ENV_ENTRIES: usize = 16;
 
@@ -70,17 +62,6 @@ impl HerdrCliAdapter {
             .run_json_for(Some(session_id), &["api", "schema", "--json"])
             .await?;
         let (_, methods) = schema_methods(&schema)?;
-        let missing: Vec<&str> = PROJECT_METHODS
-            .iter()
-            .copied()
-            .filter(|method| !methods.contains(*method))
-            .collect();
-        if !missing.is_empty() {
-            return Err(unsupported(format!(
-                "required project methods are missing: {}",
-                missing.join(", ")
-            )));
-        }
         Ok(methods)
     }
 }
@@ -214,11 +195,6 @@ fn worktree_params(
     if let Some(base) = request.base.as_deref() {
         ensure_text(base, "base")?;
     }
-    if !request.trust_repository {
-        return Err(unsupported(
-            "repository action consent is required for Herdr worktree operations",
-        ));
-    }
     let mut params = Map::new();
     params.insert("cwd".to_owned(), json!(request.source_cwd));
     params.insert("focus".to_owned(), json!(request.focus));
@@ -235,16 +211,75 @@ fn worktree_params(
             Ok(("worktree.create", Value::Object(params)))
         }
         WorkspaceSetupMode::Open => {
-            // Herdr's open selector is exactly one of branch or path. The
-            // source cwd remains the only repository selector in both modes.
-            if let Some(branch) = &request.branch {
-                params.insert("branch".to_owned(), json!(branch));
-            } else {
+            if request.open_existing_worktree {
                 params.insert("path".to_owned(), json!(request.checkout_path));
+                Ok(("worktree.open", Value::Object(params)))
+            } else {
+                params.insert("cwd".to_owned(), json!(request.checkout_path));
+                params.insert("env".to_owned(), sanitized_env(&request.env)?);
+                Ok(("workspace.create", Value::Object(params)))
             }
-            Ok(("worktree.open", Value::Object(params)))
         }
     }
+}
+
+fn parse_workspace_result(
+    value: &Value,
+    checkout_path: &str,
+) -> Result<ProjectWorktreeResult, InspectionError> {
+    let result = object(value, "workspace result")?;
+    if required_string(result, "type", "workspace result")? != "workspace_created" {
+        return Err(InspectionError::new(
+            "malformed_workspace_response",
+            "workspace.create returned an unexpected result type",
+        ));
+    }
+    let workspace = object(
+        result.get("workspace").ok_or_else(|| {
+            InspectionError::new("malformed_workspace_response", "workspace is required")
+        })?,
+        "workspace result.workspace",
+    )?;
+    let workspace_id = required_string(workspace, "workspace_id", "workspace result.workspace")?;
+    let tab = object(
+        result.get("tab").ok_or_else(|| {
+            InspectionError::new("malformed_workspace_response", "tab is required")
+        })?,
+        "workspace result.tab",
+    )?;
+    let tab_id = required_string(tab, "tab_id", "workspace result.tab")?;
+    let tab_workspace = required_string(tab, "workspace_id", "workspace result.tab")?;
+    let root_pane = object(
+        result.get("root_pane").ok_or_else(|| {
+            InspectionError::new("malformed_workspace_response", "root_pane is required")
+        })?,
+        "workspace result.root_pane",
+    )?;
+    let pane_id = required_string(root_pane, "pane_id", "workspace result.root_pane")?;
+    let pane_workspace = required_string(root_pane, "workspace_id", "workspace result.root_pane")?;
+    let pane_tab = required_string(root_pane, "tab_id", "workspace result.root_pane")?;
+    let cwd = required_string(root_pane, "cwd", "workspace result.root_pane")?;
+    if !valid_pane_id(&workspace_id)
+        || !valid_pane_id(&tab_id)
+        || !valid_pane_id(&pane_id)
+        || tab_workspace != workspace_id
+        || pane_workspace != workspace_id
+        || pane_tab != tab_id
+        || cwd != checkout_path
+    {
+        return Err(InspectionError::new(
+            "malformed_identity",
+            "workspace.create returned resources or cwd that differ from the request",
+        ));
+    }
+    Ok(ProjectWorktreeResult {
+        workspace_id,
+        tab_id: Some(tab_id),
+        pane_id: Some(pane_id),
+        checkout_path: checkout_path.to_owned(),
+        branch: None,
+        already_open: false,
+    })
 }
 
 fn parse_worktree_result(
@@ -434,6 +469,15 @@ fn parse_worktree_removed(
 
 #[async_trait]
 impl ProjectHerdrAdapter for HerdrCliAdapter {
+    async fn project_endpoint_identity(&self, session_id: &str) -> Result<String, InspectionError> {
+        ensure_compatible(self.inspect_session(session_id).await?)?;
+        let (_, endpoint_identity) = self
+            .socket_request_with_identity(session_id, "session.snapshot", json!({}), None)
+            .await?;
+        ensure_endpoint_identity(&endpoint_identity)?;
+        Ok(endpoint_identity)
+    }
+
     async fn project_inventory(
         &self,
         session_id: &str,
@@ -444,6 +488,9 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
             return Err(invalid("source_cwd"));
         }
         let methods = self.project_methods(session_id).await?;
+        if !methods.contains("worktree.list") {
+            return Err(unsupported("Herdr method worktree.list is unavailable"));
+        }
         let (result, endpoint_identity) = self
             .socket_request_with_identity(
                 session_id,
@@ -454,10 +501,7 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
             .await?;
         let (repository_key, repository_root, worktrees) =
             parse_worktree_list(&result, source_cwd)?;
-        let supported_methods = methods
-            .into_iter()
-            .filter(|method| PROJECT_METHODS.contains(&method.as_str()))
-            .collect();
+        let supported_methods = methods.into_iter().collect();
         Ok(ProjectInventory {
             endpoint_identity,
             repository_key,
@@ -486,12 +530,21 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
                 Some(&request.endpoint_identity),
             )
             .await?;
-        parse_worktree_result(
-            &result,
-            request.mode,
-            &request.checkout_path,
-            request.branch.as_deref(),
-        )
+        match request.mode {
+            WorkspaceSetupMode::Create => parse_worktree_result(
+                &result,
+                request.mode,
+                &request.checkout_path,
+                request.branch.as_deref(),
+            ),
+            WorkspaceSetupMode::Open if request.open_existing_worktree => parse_worktree_result(
+                &result,
+                request.mode,
+                &request.checkout_path,
+                request.branch.as_deref(),
+            ),
+            WorkspaceSetupMode::Open => parse_workspace_result(&result, &request.checkout_path),
+        }
     }
 
     async fn project_terminal(
@@ -688,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_create_and_open_without_workspace_id() {
+    fn maps_create_and_directory_open_without_workspace_id() {
         let request = ProjectWorktreeRequest {
             endpoint_identity: "unix-socket:/tmp/herdr.sock:pid=1:uid=1:gid=1:start=1".into(),
             mode: WorkspaceSetupMode::Create,
@@ -698,7 +751,8 @@ mod tests {
             checkout_path: "/task".into(),
             label: "Task".into(),
             focus: true,
-            trust_repository: true,
+            env: BTreeMap::new(),
+            open_existing_worktree: false,
         };
         let (method, params) = worktree_params(&request).unwrap();
         assert_eq!(method, "worktree.create");
@@ -708,7 +762,10 @@ mod tests {
             mode: WorkspaceSetupMode::Open,
             ..request
         };
-        let (_, params) = worktree_params(&open).unwrap();
+        let (method, params) = worktree_params(&open).unwrap();
+        assert_eq!(method, "workspace.create");
+        assert_eq!(params.get("cwd").and_then(Value::as_str), Some("/task"));
+        assert!(params.get("env").is_some());
         assert!(params.get("workspace_id").is_none());
     }
 

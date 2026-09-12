@@ -1,5 +1,6 @@
 use cockpit_core::CockpitService;
 use cockpit_protocol::{
+    project_defaults::{WorkspaceDefaults, WorkspaceDefaultsRequest},
     project_teardown::{
         WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreview, WorkspaceTeardownPreviewRequest,
         WorkspaceTeardownRecoveryList, WorkspaceTeardownResult,
@@ -34,6 +35,20 @@ pub async fn cockpit_repositories(
         .projects()
         .map_err(inspection_error_response)?
         .repositories()
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_resolve_workspace_defaults(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<WorkspaceDefaults, ErrorResponse> {
+    let request: WorkspaceDefaultsRequest = decode_request(request, "workspace defaults")?;
+    service
+        .projects()
+        .map_err(inspection_error_response)?
+        .resolve_defaults(&request)
         .await
         .map_err(inspection_error_response)
 }

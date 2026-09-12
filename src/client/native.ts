@@ -21,6 +21,7 @@ import {
 } from "./commentProtocol";
 import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
+  parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
   parseWorkspaceReconcileRequest,
   parseWorkspaceSetupRequest, validateProjectOperationId,
@@ -256,6 +257,10 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
   return {
     projectConfiguration() { return invokeAndParse(invoke, "cockpit_project_configuration", undefined, "project configuration", parseProjectConfiguration); },
     repositories() { return invokeAndParse(invoke, "cockpit_repositories", undefined, "repositories", parseRepositoryList); },
+    resolveWorkspaceDefaults(value) {
+      const request = parseWorkspaceDefaultsRequest(value);
+      return invokeAndParse(invoke, "cockpit_resolve_workspace_defaults", { request }, "workspace defaults", parseWorkspaceDefaults);
+    },
     async planWorkspace(sessionId, value) {
       validateSessionId(sessionId);
       const request = parseWorkspaceSetupRequest(value);

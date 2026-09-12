@@ -138,13 +138,19 @@ export type ProjectDiagnostic = { code: string, message: string, path: string | 
 
 export type RepositoryListResponse = { repositories: Array<RepositoryCandidate>, diagnostics: Array<ProjectDiagnostic>, };
 
+export type WorkspaceDefaultsRequest = { artifact_url: string, repository_id: string | null, };
+
+export type WorkspaceDefaults = { artifact: ProjectArtifact, repositories: Array<RepositoryCandidate>, repository_id: string | null, branch: string | null, label: string | null, checkout_path: string | null, };
+
 export type WorkspaceSetupMode = "create" | "open";
 
-export type WorkspaceSetupRequest = { repository_id: string, mode: WorkspaceSetupMode, branch: string | null, base: string | null, checkout_path: string | null, label: string | null, task_name: string | null, artifact_url: string | null, focus: boolean, trust_repository: boolean, };
+export type WorkspaceCheckoutOwnership = "owned_worktree" | "borrowed_directory";
+
+export type WorkspaceSetupRequest = { "operation": "create", repository_id: string, branch: string | null, base_ref: string | null, checkout_path: string | null, label: string | null, task_name: string | null, artifact_url: string | null, focus: boolean, } | { "operation": "open", path: string, label: string | null, task_name: string | null, focus: boolean, };
 
 export type ProjectArtifact = { provider_id: string, kind: string, canonical_id: string, original_url: string, canonical_url: string, };
 
-export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate, mode: WorkspaceSetupMode, branch: string | null, base: string | null, checkout_path: string, companion_path: string, companion_id: string, companion_created_by_operation: boolean, label: string, focus: boolean, trust_repository: boolean, artifact: ProjectArtifact | null, effects: Array<string>, warnings: Array<string>, };
+export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate | null, mode: WorkspaceSetupMode, ownership: WorkspaceCheckoutOwnership, branch: string | null, base: string | null, checkout_path: string, companion_path: string, companion_id: string, companion_created_by_operation: boolean, label: string, focus: boolean, artifact: ProjectArtifact | null, effects: Array<string>, warnings: Array<string>, };
 
 export type WorkspaceOperationRequest = { operation_id: string, expected_generation: number, };
 
@@ -334,7 +340,7 @@ export type WorkspaceTeardownPreviewRequest = { workspace_id: string, };
 
 export type WorkspaceTeardownExecuteRequest = { operation_id: string, workspace_id: string, expected_endpoint_identity: string, expected_checkout_path: string, action: WorkspaceTeardownAction, confirmation: string, };
 
-export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string, repository_root: string, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, companion_state: WorkspaceTeardownCompanionState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, companion_path: string | null, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
+export type WorkspaceTeardownPreview = { operation_id: string, workspace_id: string, endpoint_identity: string, repository_key: string | null, repository_root: string | null, checkout_path: string, ownership: WorkspaceTeardownOwnership, workspace_state: WorkspaceTeardownWorkspaceState, companion_state: WorkspaceTeardownCompanionState, is_linked_worktree: boolean, dirty_state: WorkspaceTeardownDirtyState, companion_path: string | null, allowed_actions: Array<WorkspaceTeardownAction>, blockers: Array<string>, warnings: Array<string>, required_confirmation: string | null, };
 
 export type WorkspaceTeardownOutcome = "completed" | "outcome_unknown" | "orphaned_companion" | "retained";
 

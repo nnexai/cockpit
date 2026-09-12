@@ -9,6 +9,7 @@ use cockpit_core::CockpitService;
 use cockpit_protocol::project_teardown::{
     WorkspaceTeardownExecuteRequest, WorkspaceTeardownPreviewRequest,
 };
+use cockpit_protocol::project_defaults::WorkspaceDefaultsRequest;
 use cockpit_protocol::projects::{
     WorkspaceOperationRequest, WorkspaceReconcileRequest, WorkspaceSetupRequest,
 };
@@ -22,6 +23,7 @@ pub(super) fn routes() -> Router<CockpitService> {
     Router::new()
         .route("/api/v1/project/configuration", get(configuration))
         .route("/api/v1/project/repositories", get(repositories))
+        .route("/api/v1/project/defaults", post(defaults))
         .route("/api/v1/sessions/{session_id}/workspace-plans", post(plan))
         .route(
             "/api/v1/sessions/{session_id}/workspace-operations",
@@ -81,6 +83,24 @@ async fn repositories(State(service): State<CockpitService>) -> Response {
         Err(error) => return inspection_error(error),
     };
     match projects.repositories().await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn defaults(
+    State(service): State<CockpitService>,
+    body: Result<Json<WorkspaceDefaultsRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let projects = match service.projects() {
+        Ok(projects) => projects,
+        Err(error) => return inspection_error(error),
+    };
+    match projects.resolve_defaults(&request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

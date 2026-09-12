@@ -21,6 +21,7 @@ import {
 } from "./commentProtocol";
 import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList,
+  parseWorkspaceDefaults, parseWorkspaceDefaultsRequest,
   parseWorkspaceOperation, parseWorkspaceOperationRequest, parseWorkspaceSetupPlan,
   parseWorkspaceReconcileRequest,
   parseWorkspaceSetupRequest, validateProjectOperationId,
@@ -291,6 +292,10 @@ export function createBrowserClient(
   return {
     projectConfiguration() { return getJson(request, "/api/v1/project/configuration", "project configuration", parseProjectConfiguration); },
     repositories() { return getJson(request, "/api/v1/project/repositories", "repositories", parseRepositoryList); },
+    async resolveWorkspaceDefaults(value) {
+      const body = parseWorkspaceDefaultsRequest(value);
+      return getJson(request, "/api/v1/project/defaults", "workspace defaults", parseWorkspaceDefaults, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    },
     async planWorkspace(sessionId, value) {
       validateSessionId(sessionId);
       const body = parseWorkspaceSetupRequest(value);
