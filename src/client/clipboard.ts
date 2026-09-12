@@ -17,5 +17,8 @@ function nativeClipboard(): ClipboardAccess {
 
 /** Select the platform clipboard at the user gesture that invokes the operation. */
 export function createClipboardAccess(): ClipboardAccess {
-  return isTauri() ? nativeClipboard() : webClipboard();
+  // Keep the existing WebView clipboard on macOS/Windows. Linux Tauri uses
+  // the explicit OS adapter because WebKit clipboard permissions are flaky.
+  const isLinux = /Linux/i.test(globalThis.navigator?.userAgent ?? "");
+  return isTauri() && isLinux ? nativeClipboard() : webClipboard();
 }

@@ -44,6 +44,7 @@ const MAX_STREAMS: usize = 256;
 const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 const MAX_TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
+const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[tauri::command]
 async fn cockpit_clipboard_write(text: String) -> Result<(), ErrorResponse> {
@@ -67,19 +68,29 @@ async fn write_linux_clipboard(text: &str) -> Result<(), ErrorResponse> {
         .stdin(std::process::Stdio::piped())
         .spawn()
         .map_err(|error| stream_error("clipboard_unavailable", format!("Could not start wl-copy: {error}")))?;
-    let mut stdin = process.stdin.take().ok_or_else(|| stream_error("clipboard_unavailable", "wl-copy stdin was unavailable"))?;
-    stdin.write_all(text.as_bytes()).await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not write the clipboard: {error}")))?;
-    drop(stdin);
-    let status = process.wait().await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not finish the clipboard write: {error}")))?;
-    if status.success() { Ok(()) } else { Err(stream_error("clipboard_write_failed", format!("wl-copy exited with {status}"))) }
+    let result = tokio::time::timeout(CLIPBOARD_TIMEOUT, async {
+        let mut stdin = process.stdin.take().ok_or_else(|| stream_error("clipboard_unavailable", "wl-copy stdin was unavailable"))?;
+        stdin.write_all(text.as_bytes()).await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not write the clipboard: {error}")))?;
+        drop(stdin);
+        let status = process.wait().await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not finish the clipboard write: {error}")))?;
+        if status.success() { Ok(()) } else { Err(stream_error("clipboard_write_failed", format!("wl-copy exited with {status}"))) }
+    }).await;
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            let _ = process.kill().await;
+            Err(stream_error("clipboard_write_timeout", "The native clipboard write exceeded 2 seconds"))
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
 async fn read_linux_clipboard() -> Result<String, ErrorResponse> {
-    let output = TokioCommand::new("wl-paste")
+    let output = tokio::time::timeout(CLIPBOARD_TIMEOUT, TokioCommand::new("wl-paste")
         .args(["--no-newline", "--type", "text/plain"])
-        .output()
+        .output())
         .await
+        .map_err(|_| stream_error("clipboard_read_timeout", "The native clipboard read exceeded 2 seconds"))?
         .map_err(|error| stream_error("clipboard_unavailable", format!("Could not start wl-paste: {error}")))?;
     if output.status.success() {
         String::from_utf8(output.stdout).map_err(|error| stream_error("clipboard_read_failed", format!("The clipboard was not valid UTF-8: {error}")))
@@ -247,6 +258,7 @@ mod clipboard_tests {
     use super::{read_linux_clipboard, write_linux_clipboard};
 
     #[tokio::test]
+    #[ignore = "requires a run-owned Wayland display; run explicitly for native integration proof"]
     async fn native_clipboard_roundtrip_preserves_unicode_and_newlines() {
         let expected = "Cockpit αβγ\nline two\n✓ 终端";
         write_linux_clipboard(expected).await.expect("wl-copy should accept text");
