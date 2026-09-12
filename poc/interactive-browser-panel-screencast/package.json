@@ -1,0 +1,15 @@
+{
+  "name": "interactive-browser-panel-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "bun install --frozen-lockfile && bunx playwright install chromium",
+    "dev": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "build": "cargo build --manifest-path src-tauri/Cargo.toml",
+    "smoke": "node helper/smoke.mjs",
+    "screencast-smoke": "node helper/screencast-smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
