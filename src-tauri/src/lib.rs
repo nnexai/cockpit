@@ -872,9 +872,18 @@ pub fn run() {
     let startup_inspector = Arc::clone(&inspector);
     let project_config = cockpit_core::config::load_project_configuration(None, None)
         .expect("failed to load project configuration");
+    let sources = Arc::new(
+        cockpit_core::sources::SourceService::new(
+            &project_config,
+            cockpit_providers::configured_providers(&project_config)
+                .expect("invalid configured source providers"),
+        )
+        .expect("failed to initialize source cache"),
+    );
     let project_service =
         cockpit_core::projects::ProjectService::new(project_config.clone(), inspector.clone())
-            .expect("failed to initialize project operations");
+            .expect("failed to initialize project operations")
+            .with_sources(sources.clone());
     let browser_config = cockpit_core::config::load_browser_configuration(None)
         .expect("failed to load browser configuration");
     let paste_adapter = inspector.paste_adapter();
@@ -905,13 +914,7 @@ pub fn run() {
         inspector.extension_adapter(),
         shutdown_projects.clone(),
     );
-    let sources = cockpit_core::sources::SourceService::new(
-        &project_config,
-        cockpit_providers::configured_providers(&project_config)
-            .expect("invalid configured source providers"),
-    )
-    .expect("failed to initialize source cache");
-    let contexts = contexts.with_sources(Arc::new(sources));
+    let contexts = contexts.with_sources(sources);
     let service = service.with_contexts(contexts);
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),

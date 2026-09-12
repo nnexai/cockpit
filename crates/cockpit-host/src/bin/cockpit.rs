@@ -142,8 +142,17 @@ fn make_service(
     let service = CockpitService::new(mode, adapter.clone());
     match projects {
         Some(config) => {
+            let sources = Arc::new(
+                cockpit_core::sources::SourceService::new(
+                    &config,
+                    cockpit_providers::configured_providers(&config)
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?,
+            );
             let projects = ProjectService::new(config.clone(), adapter.clone())
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.to_string())?
+                .with_sources(sources.clone());
             let service = service.with_projects(projects);
             let contexts = cockpit_core::context::ContextService::new(
                 config.clone(),
@@ -153,13 +162,7 @@ fn make_service(
                     .map_err(|error| error.to_string())?
                     .clone(),
             );
-            let sources = cockpit_core::sources::SourceService::new(
-                &config,
-                cockpit_providers::configured_providers(&config)
-                    .map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-            let contexts = contexts.with_sources(Arc::new(sources));
+            let contexts = contexts.with_sources(sources);
             let service = service.with_contexts(contexts);
             let reviews = cockpit_core::review::ReviewService::new(
                 config.clone(),

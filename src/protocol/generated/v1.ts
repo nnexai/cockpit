@@ -154,7 +154,7 @@ export type WorkspaceReconcileRequest = { operation_id: string, expected_generat
 
 export type WorkspaceOperationState = "planned" | "running" | "completed" | "partial" | "outcome_unknown" | "cancelled" | "needs_review";
 
-export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "companion_ready" | "environment_requested" | "environment_ready" | "completed";
+export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "companion_ready" | "context_preparing" | "context_ready" | "environment_requested" | "environment_ready" | "completed";
 
 export type WorkspaceOwnedResource = { kind: string, path: string, created_by_operation: boolean, };
 

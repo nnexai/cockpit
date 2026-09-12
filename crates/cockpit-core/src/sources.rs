@@ -15,6 +15,7 @@ use cockpit_protocol::sources::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::InspectionError;
@@ -74,6 +75,208 @@ pub struct SourceFetchRequest {
     pub provider_id: String,
     pub artifact_url: String,
     pub authority: SourceAuthority,
+}
+
+/// Derive source authority from the primary checkout's origin without trusting
+/// caller-supplied repository or provider identity.
+pub(crate) async fn source_authority_for_checkout(
+    configuration: &ProjectConfiguration,
+    checkout: &Path,
+    provider_id: &str,
+) -> Result<SourceAuthority, InspectionError> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(checkout)
+        .args(["-c", "core.hooksPath=/dev/null", "remote", "get-url", "origin"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE");
+    let output = crate::process::run_bounded_command(
+        command,
+        configuration.limits.git_output_bytes as usize,
+        configuration.limits.git_output_bytes as usize,
+        Duration::from_millis(configuration.limits.git_timeout_ms as u64),
+        "source origin",
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(InspectionError::new(
+            "source_primary_origin_unavailable",
+            "the companion primary checkout has no readable origin remote",
+        ));
+    }
+    let provider = configuration
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_unsupported",
+                "selected source provider is not configured",
+            )
+        })?;
+    let instance = normalized_provider_instance(&provider.base_url)?;
+    let value = std::str::from_utf8(&output.stdout)
+        .map_err(|_| {
+            InspectionError::new(
+                "source_primary_origin_invalid",
+                "origin remote is not UTF-8",
+            )
+        })?
+        .trim();
+    let (owner, repository) = origin_repository(value, &instance)?;
+    Ok(SourceAuthority {
+        provider_instance: instance.render(),
+        origin_host: instance.host,
+        origin_port: instance.port,
+        origin_base_path: instance.base_path,
+        owner,
+        repository,
+    })
+}
+
+#[derive(Debug)]
+struct ProviderInstance {
+    scheme: String,
+    host: String,
+    port: Option<u16>,
+    base_path: String,
+}
+
+impl ProviderInstance {
+    fn render(&self) -> String {
+        format!(
+            "{}://{}{}{}",
+            self.scheme,
+            self.host,
+            self.port.map(|port| format!(":{port}")).unwrap_or_default(),
+            self.base_path
+        )
+    }
+}
+
+fn normalized_provider_instance(value: &str) -> Result<ProviderInstance, InspectionError> {
+    let url = url::Url::parse(value).map_err(|_| {
+        InspectionError::new(
+            "source_provider_invalid",
+            "configured provider URL is invalid",
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(InspectionError::new(
+            "source_provider_invalid",
+            "configured provider URL must be credential-free HTTP(S)",
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_invalid",
+                "configured provider URL lacks a host",
+            )
+        })?
+        .to_ascii_lowercase();
+    let default_port = match url.scheme() {
+        "http" => 80,
+        "https" => 443,
+        _ => unreachable!(),
+    };
+    let port = url.port().filter(|port| *port != default_port);
+    let path = url.path().trim_end_matches('/');
+    let base_path = if path.is_empty() {
+        String::new()
+    } else {
+        path.to_owned()
+    };
+    Ok(ProviderInstance {
+        scheme: url.scheme().to_ascii_lowercase(),
+        host,
+        port,
+        base_path,
+    })
+}
+
+fn origin_repository(
+    value: &str,
+    instance: &ProviderInstance,
+) -> Result<(String, String), InspectionError> {
+    let (host, port, path, scheme) = if value.contains("://") {
+        let url = url::Url::parse(value).map_err(|_| {
+            InspectionError::new("source_primary_origin_invalid", "origin remote is invalid")
+        })?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "source_primary_origin_invalid",
+                    "origin remote lacks a host",
+                )
+            })?
+            .to_ascii_lowercase();
+        (
+            host,
+            url.port(),
+            url.path().to_owned(),
+            Some(url.scheme().to_ascii_lowercase()),
+        )
+    } else {
+        let (_, tail) = value.rsplit_once('@').unwrap_or(("", value));
+        let (host, path) = tail.split_once(':').ok_or_else(|| {
+            InspectionError::new(
+                "source_primary_origin_invalid",
+                "origin remote does not identify owner/repository",
+            )
+        })?;
+        (host.to_ascii_lowercase(), None, format!("/{path}"), None)
+    };
+    if host != instance.host
+        || scheme
+            .as_deref()
+            .is_some_and(|scheme| scheme != instance.scheme)
+        || (scheme.is_some()
+            && port.filter(|port| *port != if instance.scheme == "https" { 443 } else { 80 })
+                != instance.port)
+    {
+        return Err(InspectionError::new(
+            "source_primary_origin_mismatch",
+            "primary origin does not match the selected configured provider instance",
+        ));
+    }
+    let prefix = if instance.base_path.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("{}/", instance.base_path)
+    };
+    let remainder = path
+        .strip_prefix(&prefix)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_primary_origin_mismatch",
+                "primary origin does not match the configured provider base path",
+            )
+        })?
+        .trim_end_matches(".git");
+    let mut parts = remainder.split('/');
+    let owner = parts.next().unwrap_or("");
+    let repository = parts.next().unwrap_or("");
+    if owner.is_empty()
+        || repository.is_empty()
+        || parts.next().is_some()
+        || owner.chars().any(char::is_control)
+        || repository.chars().any(char::is_control)
+    {
+        return Err(InspectionError::new(
+            "source_primary_origin_invalid",
+            "origin remote does not identify owner/repository",
+        ));
+    }
+    Ok((owner.to_owned(), repository.to_owned()))
 }
 
 #[async_trait]
@@ -178,6 +381,23 @@ impl SourceService {
         request: SourceFetchRequest,
     ) -> Result<SourceImportResponse, InspectionError> {
         self.fetch_to_companion(request, None).await
+    }
+
+    /// Validate and cache a reviewed artifact before workspace creation. The
+    /// provider fetch is bounded by the same lock, output, and timeout rules
+    /// as materialization, but no companion is touched.
+    pub async fn validate_artifact(
+        &self,
+        request: SourceFetchRequest,
+    ) -> Result<(), InspectionError> {
+        let response = self.fetch_to_companion(request, None).await?;
+        if response.entries.is_empty() {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "source provider returned no primary artifact",
+            ));
+        }
+        Ok(())
     }
 
     /// Reads the bounded current index only. Hash-named immutable records are

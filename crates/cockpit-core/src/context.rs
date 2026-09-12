@@ -24,7 +24,9 @@ use crate::InspectionError;
 use crate::extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 use crate::projects::ProjectService;
 use crate::repositories::RepositoryCatalog;
-use crate::sources::{SourceAuthority, SourceFetchRequest, SourceService};
+use crate::sources::{
+    SourceAuthority, SourceFetchRequest, SourceService, source_authority_for_checkout,
+};
 
 #[derive(Clone)]
 pub struct ContextService {
@@ -98,7 +100,7 @@ impl ContextService {
                 "source import is not configured",
             )
         })?;
-        let authority = verified_origin(
+        let authority = source_authority_for_checkout(
             &self.configuration,
             Path::new(&authorized.root.checkout_path),
             &request.provider_id,
@@ -141,7 +143,7 @@ impl ContextService {
             )
         })?;
         let cached = service.find_provider_id(&request.source_id)?;
-        let authority = verified_origin(
+        let authority = source_authority_for_checkout(
             &self.configuration,
             Path::new(&authorized.root.checkout_path),
             &cached,
@@ -682,9 +684,13 @@ impl ContextService {
             )
         })?;
         let root = find_root(&presentation.roots, &request.root_id)?;
-        match root.root.kind {
+        let launch_cwd = match root.root.kind {
             ContextRootKind::Companion
-                if presentation.can_open_context && root.canonical == actual_cwd => {}
+                if presentation.can_open_context
+                    && companion_matches_checkout(&root, &actual_cwd) =>
+            {
+                actual_cwd.clone()
+            }
             ContextRootKind::Folder
                 if presentation.can_open_files
                     && presentation.files_root_id.as_deref() == Some(request.root_id.as_str()) =>
@@ -703,6 +709,7 @@ impl ContextService {
                         "the source pane folder changed before files could open",
                     ));
                 }
+                root.canonical.clone()
             }
             _ => {
                 return Err(InspectionError::new(
@@ -710,7 +717,7 @@ impl ContextService {
                     "the requested root is not available from the current source pane",
                 ));
             }
-        }
+        };
         revalidate_root(&root.dir, &root.root.root_id)?;
         let launched = self
             .adapter
@@ -721,7 +728,7 @@ impl ContextService {
                     pane_id: source.pane_id,
                     terminal_id: source.terminal_id,
                     workspace_id: source.workspace_id,
-                    cwd: root.canonical.to_string_lossy().into_owned(),
+                    cwd: launch_cwd.to_string_lossy().into_owned(),
                     direction: request.direction,
                 },
             )
@@ -881,12 +888,10 @@ impl ContextService {
         });
         let actual_cwd = evidence_cwd(evidence);
         let can_open_context = evidence.can_open_context
-            && actual_cwd.as_ref().is_some_and(|cwd| {
-                roots.iter().any(|root| {
-                    root.root.kind == ContextRootKind::Companion
-                        && Path::new(&root.root.path) == cwd.as_path()
-                })
-            });
+            && actual_cwd
+                .as_ref()
+                .and_then(|cwd| resolve_companion_for_checkout(cwd, &roots))
+                .is_some();
         let can_open_files = evidence.can_open_context && files_root_id.is_some();
         let can_open_review = evidence.can_open_review
             && roots.iter().any(|root| {
@@ -907,10 +912,38 @@ impl ContextService {
             }
             _ => None,
         };
+        let source_companion_id = actual_cwd
+            .as_deref()
+            .and_then(|cwd| resolve_companion_for_checkout(cwd, &roots))
+            .map(|root| root.root.root_id.clone());
+        let source_repository_id = actual_cwd.as_deref().and_then(|cwd| {
+            roots
+                .iter()
+                .find(|root| {
+                    root.root.kind == ContextRootKind::Repository
+                        && is_within(cwd, &root.canonical)
+                })
+                .map(|root| root.root.root_id.clone())
+        });
         let default_root_id = if renderer == Some(ExtensionKind::Context) {
             viewer_companion_id.clone().or(viewer_folder_id)
+        } else if can_open_context && renderer != Some(ExtensionKind::Review) {
+            source_companion_id
+                .or_else(|| {
+                    current_repository_id.as_deref().and_then(|repository_id| {
+                        roots
+                            .iter()
+                            .find(|root| {
+                                root.root.kind == ContextRootKind::Repository
+                                    && root.root.repository_id == repository_id
+                            })
+                            .map(|root| root.root.root_id.clone())
+                    })
+                })
+                .or_else(|| roots.first().map(|root| root.root.root_id.clone()))
         } else {
-            current_repository_id
+            source_repository_id
+                .or_else(|| current_repository_id
                 .as_deref()
                 .and_then(|repository_id| {
                     roots
@@ -921,6 +954,7 @@ impl ContextService {
                         })
                         .map(|root| root.root.root_id.clone())
                 })
+                )
                 .or_else(|| roots.first().map(|root| root.root.root_id.clone()))
         };
         let mut reason = evidence.reason.clone();
@@ -930,7 +964,8 @@ impl ContextService {
             reason.push_str("; the viewer browsing root is unavailable or unsafe");
         }
         if evidence.can_open_context && !can_open_context {
-            reason.push_str("; Open Context requires a source pane at its companion directory");
+            reason
+                .push_str("; Open Context requires a source pane at a reviewed companion checkout");
         }
         if evidence.can_open_context && !can_open_files {
             reason.push_str("; Open files requires a safe source pane directory");
@@ -1036,10 +1071,11 @@ impl ContextService {
                 }
             }
         }
-        let verified_viewer = evidence.extension == Some(ExtensionKind::Context)
-            && verified_confidence(evidence.confidence);
         let viewer_root = resolve_verified_viewer_root(&self.configuration, evidence).await;
         let viewer_companion = resolve_viewer_companion(viewer_root.as_deref(), &companion_roots);
+        let verified_viewer = evidence.extension == Some(ExtensionKind::Context)
+            && verified_confidence(evidence.confidence)
+            && viewer_root.is_some();
         let viewer_folder = viewer_root
             .as_ref()
             .filter(|_| viewer_companion.is_none())
@@ -1178,209 +1214,6 @@ impl ContextService {
             current_repository_id,
         ))
     }
-}
-
-async fn verified_origin(
-    configuration: &ProjectConfiguration,
-    checkout: &Path,
-    provider_id: &str,
-) -> Result<SourceAuthority, InspectionError> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(checkout)
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "remote",
-            "get-url",
-            "origin",
-        ])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE");
-    let output = crate::process::run_bounded_command(
-        command,
-        configuration.limits.git_output_bytes as usize,
-        configuration.limits.git_output_bytes as usize,
-        Duration::from_millis(configuration.limits.git_timeout_ms as u64),
-        "source origin",
-    )
-    .await?;
-    if !output.status.success() {
-        return Err(InspectionError::new(
-            "source_primary_origin_unavailable",
-            "the companion primary checkout has no readable origin remote",
-        ));
-    }
-    let provider = configuration
-        .providers
-        .iter()
-        .find(|provider| provider.id == provider_id)
-        .ok_or_else(|| {
-            InspectionError::new(
-                "source_provider_unsupported",
-                "selected source provider is not configured",
-            )
-        })?;
-    let instance = normalized_provider_instance(&provider.base_url)?;
-    let value = std::str::from_utf8(&output.stdout)
-        .map_err(|_| {
-            InspectionError::new(
-                "source_primary_origin_invalid",
-                "origin remote is not UTF-8",
-            )
-        })?
-        .trim();
-    let (owner, repository) = origin_repository(value, &instance)?;
-    Ok(SourceAuthority {
-        provider_instance: instance.render(),
-        origin_host: instance.host,
-        origin_port: instance.port,
-        origin_base_path: instance.base_path,
-        owner,
-        repository,
-    })
-}
-
-#[derive(Debug)]
-struct ProviderInstance {
-    scheme: String,
-    host: String,
-    port: Option<u16>,
-    base_path: String,
-}
-impl ProviderInstance {
-    fn render(&self) -> String {
-        format!(
-            "{}://{}{}{}",
-            self.scheme,
-            self.host,
-            self.port.map(|port| format!(":{port}")).unwrap_or_default(),
-            self.base_path
-        )
-    }
-}
-fn normalized_provider_instance(value: &str) -> Result<ProviderInstance, InspectionError> {
-    let url = url::Url::parse(value).map_err(|_| {
-        InspectionError::new(
-            "source_provider_invalid",
-            "configured provider URL is invalid",
-        )
-    })?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.username() != ""
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(InspectionError::new(
-            "source_provider_invalid",
-            "configured provider URL must be credential-free HTTP(S)",
-        ));
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| {
-            InspectionError::new(
-                "source_provider_invalid",
-                "configured provider URL lacks a host",
-            )
-        })?
-        .to_ascii_lowercase();
-    let default_port = match url.scheme() {
-        "http" => 80,
-        "https" => 443,
-        _ => unreachable!(),
-    };
-    let port = url.port().filter(|port| *port != default_port);
-    let path = url.path().trim_end_matches('/');
-    let base_path = if path.is_empty() {
-        String::new()
-    } else {
-        path.to_owned()
-    };
-    Ok(ProviderInstance {
-        scheme: url.scheme().to_ascii_lowercase(),
-        host,
-        port,
-        base_path,
-    })
-}
-fn origin_repository(
-    value: &str,
-    instance: &ProviderInstance,
-) -> Result<(String, String), InspectionError> {
-    let (host, port, path, scheme) = if value.contains("://") {
-        let url = url::Url::parse(value).map_err(|_| {
-            InspectionError::new("source_primary_origin_invalid", "origin remote is invalid")
-        })?;
-        let host = url
-            .host_str()
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "source_primary_origin_invalid",
-                    "origin remote lacks a host",
-                )
-            })?
-            .to_ascii_lowercase();
-        (
-            host,
-            url.port(),
-            url.path().to_owned(),
-            Some(url.scheme().to_ascii_lowercase()),
-        )
-    } else {
-        let (_, tail) = value.rsplit_once('@').unwrap_or(("", value));
-        let (host, path) = tail.split_once(':').ok_or_else(|| {
-            InspectionError::new(
-                "source_primary_origin_invalid",
-                "origin remote does not identify owner/repository",
-            )
-        })?;
-        (host.to_ascii_lowercase(), None, format!("/{path}"), None)
-    };
-    if host != instance.host
-        || scheme
-            .as_deref()
-            .is_some_and(|scheme| scheme != instance.scheme)
-        || (scheme.is_some()
-            && port.filter(|port| *port != if instance.scheme == "https" { 443 } else { 80 })
-                != instance.port)
-    {
-        return Err(InspectionError::new(
-            "source_primary_origin_mismatch",
-            "primary origin does not match the selected configured provider instance",
-        ));
-    }
-    let prefix = if instance.base_path.is_empty() {
-        "/".to_owned()
-    } else {
-        format!("{}/", instance.base_path)
-    };
-    let remainder = path
-        .strip_prefix(&prefix)
-        .ok_or_else(|| {
-            InspectionError::new(
-                "source_primary_origin_mismatch",
-                "primary origin does not match the configured provider base path",
-            )
-        })?
-        .trim_end_matches(".git");
-    let mut parts = remainder.split('/');
-    let owner = parts.next().unwrap_or("");
-    let repository = parts.next().unwrap_or("");
-    if owner.is_empty()
-        || repository.is_empty()
-        || parts.next().is_some()
-        || owner.chars().any(char::is_control)
-        || repository.chars().any(char::is_control)
-    {
-        return Err(InspectionError::new(
-            "source_primary_origin_invalid",
-            "origin remote does not identify owner/repository",
-        ));
-    }
-    Ok((owner.to_owned(), repository.to_owned()))
 }
 
 fn require_binding(presentation: &PanePresentation, binding: &str) -> Result<(), InspectionError> {
@@ -1656,16 +1489,39 @@ fn resolve_viewer_companion(
     companions: &[AuthorizedRoot],
 ) -> Option<(String, PathBuf)> {
     let viewer_root = viewer_root?;
-    for companion in companions {
-        if !is_within(viewer_root, &companion.canonical) {
-            continue;
-        }
-        if viewer_root == companion.canonical {
-            return Some((companion.root.root_id.clone(), companion.canonical.clone()));
-        }
+    let mut matches = companions.iter().filter(|companion| {
+        companion.canonical == viewer_root
+            || companion_checkout(companion).as_deref() == Some(viewer_root)
+    });
+    let companion = matches.next()?;
+    if matches.next().is_some() {
         return None;
     }
-    None
+    Some((companion.root.root_id.clone(), companion.canonical.clone()))
+}
+
+fn companion_checkout(companion: &AuthorizedRoot) -> Option<PathBuf> {
+    absolute_context_path(Path::new(&companion.root.checkout_path)).ok()
+}
+
+fn companion_matches_checkout(companion: &AuthorizedRoot, checkout: &Path) -> bool {
+    companion.root.kind == ContextRootKind::Companion
+        && (companion.canonical == checkout
+            || companion_checkout(companion).as_deref() == Some(checkout))
+}
+
+fn resolve_companion_for_checkout<'a>(
+    checkout: &Path,
+    roots: &'a [AuthorizedRoot],
+) -> Option<&'a AuthorizedRoot> {
+    let mut matches = roots
+        .iter()
+        .filter(|companion| companion_matches_checkout(companion, checkout));
+    let companion = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(companion)
 }
 
 async fn resolve_verified_viewer_root(
@@ -1969,34 +1825,6 @@ fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnosti
 
 fn is_within(path: &Path, root: &Path) -> bool {
     path == root || path.strip_prefix(root).is_ok()
-}
-
-#[cfg(test)]
-mod source_authority_tests {
-    use super::*;
-
-    #[test]
-    fn provider_origin_requires_exact_host_port_and_base_path_but_maps_ssh() {
-        let instance =
-            normalized_provider_instance("https://forge.test:8443/gitea/").expect("instance");
-        assert_eq!(instance.render(), "https://forge.test:8443/gitea");
-        assert_eq!(
-            origin_repository("git@forge.test:gitea/acme/repo.git", &instance).expect("ssh"),
-            ("acme".to_owned(), "repo".to_owned())
-        );
-        assert_eq!(
-            origin_repository("https://forge.test:8443/other/acme/repo.git", &instance)
-                .expect_err("base mismatch")
-                .code,
-            "source_primary_origin_mismatch"
-        );
-        assert_eq!(
-            origin_repository("https://other.test:8443/gitea/acme/repo.git", &instance)
-                .expect_err("host mismatch")
-                .code,
-            "source_primary_origin_mismatch"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2714,6 +2542,66 @@ mod review_checkout_tests {
             Err(error) => error,
         };
         assert_eq!(error.code, "context_stale_root");
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[test]
+    fn companion_checkout_match_is_exact_and_unambiguous() {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-context-association-{}", Uuid::new_v4()));
+        let checkout = workspace.join("checkout");
+        let companion_path = workspace.join("companion");
+        std::fs::create_dir_all(&checkout).expect("checkout directory");
+        std::fs::create_dir_all(&companion_path).expect("companion directory");
+        let (canonical, dir, _) = canonical_directory(&companion_path).expect("companion root");
+        let companion = AuthorizedRoot {
+            root: ContextRoot {
+                root_id: "companion:one".to_owned(),
+                kind: ContextRootKind::Companion,
+                label: "Context".to_owned(),
+                path: canonical.to_string_lossy().into_owned(),
+                repository_id: "repository".to_owned(),
+                checkout_path: checkout.to_string_lossy().into_owned(),
+                companion_id: Some("one".to_owned()),
+            },
+            canonical,
+            dir,
+            max_depth: 8,
+        };
+        assert!(companion_matches_checkout(&companion, &checkout));
+        assert_eq!(
+            resolve_companion_for_checkout(&checkout, std::slice::from_ref(&companion))
+                .map(|root| root.root.root_id.as_str()),
+            Some("companion:one")
+        );
+        assert_eq!(
+            resolve_viewer_companion(Some(&checkout), std::slice::from_ref(&companion))
+                .map(|(root_id, _)| root_id),
+            Some("companion:one".to_owned())
+        );
+
+        let second_path = workspace.join("second-companion");
+        std::fs::create_dir_all(&second_path).expect("second companion directory");
+        let (second_canonical, second_dir, _) =
+            canonical_directory(&second_path).expect("second companion root");
+        let second = AuthorizedRoot {
+            root: ContextRoot {
+                root_id: "companion:two".to_owned(),
+                kind: ContextRootKind::Companion,
+                label: "Context".to_owned(),
+                path: second_canonical.to_string_lossy().into_owned(),
+                repository_id: "repository".to_owned(),
+                checkout_path: checkout.to_string_lossy().into_owned(),
+                companion_id: Some("two".to_owned()),
+            },
+            canonical: second_canonical,
+            dir: second_dir,
+            max_depth: 8,
+        };
+        assert!(
+            resolve_companion_for_checkout(&checkout, &[companion, second]).is_none(),
+            "ambiguous checkout associations must not authorize Context"
+        );
         std::fs::remove_dir_all(workspace).expect("cleanup");
     }
 }

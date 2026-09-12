@@ -28,12 +28,13 @@ use crate::project_adapter::{
 };
 use crate::project_store::{
     CompanionManifest, ProjectStore, TeardownReceipt, TeardownReceiptState, prepare_project_root,
-    timestamp, validate_project_root,
+    prepare_root, timestamp, validate_project_root,
 };
 use crate::project_teardown::{
     self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree,
 };
 use crate::repositories::{self, RepositoryCatalog};
+use crate::sources::{SourceFetchRequest, SourceService, source_authority_for_checkout};
 use crate::{InspectionError, ProjectHerdrAdapter};
 /// sessions, workspaces, tabs, panes, and worktrees; this service only journals
 /// its own effects and the companion association.
@@ -41,6 +42,7 @@ pub struct ProjectService {
     configuration: ProjectConfiguration,
     adapter: Arc<dyn ProjectHerdrAdapter>,
     store: ProjectStore,
+    sources: Option<Arc<SourceService>>,
     shutting_down: AtomicBool,
     cancelled: Mutex<HashSet<String>>,
     workers: Mutex<HashSet<String>>,
@@ -85,6 +87,7 @@ impl ProjectService {
             configuration,
             adapter,
             store,
+            sources: None,
             shutting_down: AtomicBool::new(false),
             cancelled: Mutex::new(HashSet::new()),
             workers: Mutex::new(HashSet::new()),
@@ -93,6 +96,11 @@ impl ProjectService {
 
     pub fn configuration(&self) -> ProjectConfiguration {
         self.configuration.clone()
+    }
+
+    pub fn with_sources(mut self, sources: Arc<SourceService>) -> Self {
+        self.sources = Some(sources);
+        self
     }
 
     pub async fn repositories(&self) -> Result<RepositoryListResponse, InspectionError> {
@@ -142,6 +150,27 @@ impl ProjectService {
             }
             None => None,
         };
+        if let Some(artifact) = artifact.as_ref() {
+            let sources = self.sources.as_ref().ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_unsupported",
+                    "source validation is not configured in this host",
+                )
+            })?;
+            let authority = source_authority_for_checkout(
+                &self.configuration,
+                Path::new(&repository.checkout_path),
+                &artifact.provider_id,
+            )
+            .await?;
+            sources
+                .validate_artifact(SourceFetchRequest {
+                    provider_id: artifact.provider_id.clone(),
+                    artifact_url: artifact.canonical_url.clone(),
+                    authority,
+                })
+                .await?;
+        }
         let operation_id = Uuid::new_v4().to_string();
         let (checkout_path, branch) = if request.mode == WorkspaceSetupMode::Open {
             let found = if let Some(branch) = request.branch.as_deref() {
@@ -1647,11 +1676,96 @@ impl ProjectService {
                 return Err(InspectionError::new("cancelled", "operation was cancelled"));
             }
         }
+        let mut context_error = None;
+        if !step_at_least(operation.step, WorkspaceOperationStep::ContextReady) {
+            operation = self.store.update(id, None, |operation| {
+                operation.step = WorkspaceOperationStep::ContextPreparing;
+                operation.state = WorkspaceOperationState::Running;
+                operation.resume_allowed = false;
+                operation.error = None;
+                Ok(())
+            })?;
+            let materialization = async {
+                let Some(artifact) = plan.artifact.as_ref() else {
+                    return Ok::<(), InspectionError>(());
+                };
+                let sources = self.sources.as_ref().ok_or_else(|| {
+                    InspectionError::new(
+                        "source_provider_unsupported",
+                        "source materialization is not configured in this host",
+                    )
+                })?;
+                let authority = source_authority_for_checkout(
+                    &self.configuration,
+                    Path::new(&plan.repository.checkout_path),
+                    &artifact.provider_id,
+                )
+                .await?;
+                let (_, companion_root) = prepare_root(
+                    Path::new(&plan.companion_path),
+                    "companion",
+                )?;
+                let response = sources
+                    .fetch_to_companion(
+                        SourceFetchRequest {
+                            provider_id: artifact.provider_id.clone(),
+                            artifact_url: artifact.canonical_url.clone(),
+                            authority,
+                        },
+                        Some((&companion_root, companion_id)),
+                    )
+                    .await?;
+                if response.entries.iter().any(|entry| {
+                    matches!(
+                        entry.status,
+                        cockpit_protocol::sources::SourceMaterializationStatus::Conflict
+                            | cockpit_protocol::sources::SourceMaterializationStatus::Failed
+                    )
+                }) {
+                    return Err(InspectionError::new(
+                        "source_sync_conflict",
+                        "source materialization preserved companion edits and needs retry",
+                    ));
+                }
+                if response.entries.is_empty() {
+                    return Err(InspectionError::new(
+                        "source_provider_contract",
+                        "source provider returned no primary artifact",
+                    ));
+                }
+                Ok::<(), InspectionError>(())
+            }
+            .await;
+            match materialization {
+                Ok(()) => {
+                    operation = self.store.update(id, None, |operation| {
+                        operation.step = WorkspaceOperationStep::ContextReady;
+                        operation.error = None;
+                        Ok(())
+                    })?;
+                }
+                Err(error) => {
+                    let response = error_response(&error.code, &error.message);
+                    context_error = Some(response.clone());
+                    operation = self.store.update(id, None, |operation| {
+                        operation.step = WorkspaceOperationStep::ContextPreparing;
+                        operation.state = WorkspaceOperationState::Partial;
+                        operation.resume_allowed = true;
+                        operation.error = Some(response.clone());
+                        Ok(())
+                    })?;
+                }
+            }
+        }
         self.boundary(id).await?;
         let completed = self.store.update(id, None, |operation| {
             if operation.cancel_requested {
                 operation.state = WorkspaceOperationState::Cancelled;
                 operation.resume_allowed = false;
+            } else if let Some(error) = context_error.clone() {
+                operation.state = WorkspaceOperationState::Partial;
+                operation.resume_allowed = true;
+                operation.error = Some(error);
             } else {
                 operation.state = WorkspaceOperationState::Completed;
                 operation.step = WorkspaceOperationStep::Completed;
@@ -1873,7 +1987,9 @@ fn step_at_least(current: WorkspaceOperationStep, wanted: WorkspaceOperationStep
         CompanionReady => 6,
         EnvironmentRequested => 7,
         EnvironmentReady => 8,
-        Completed => 9,
+        ContextPreparing => 9,
+        ContextReady => 10,
+        Completed => 11,
     };
     rank(current) >= rank(wanted)
 }

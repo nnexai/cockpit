@@ -168,6 +168,8 @@ pub enum WorkspaceOperationStep {
     WorktreeReady,
     WorkspaceVerified,
     CompanionReady,
+    ContextPreparing,
+    ContextReady,
     EnvironmentRequested,
     EnvironmentReady,
     Completed,
