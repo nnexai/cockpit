@@ -819,9 +819,17 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           let offset: number | undefined;
           let revision: string | undefined;
           do {
+            const pageOffset = offset;
             const data = await client.contextDirectory(sessionId, paneId, { binding_id: bindingId, root_id: root.root_id, path, offset, revision }, controller.signal);
             if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) return;
-            setDirectories((current) => retainDirectoryState(current, keyFor(root.root_id, path), { status: "ready", data }, protectedDirectoryKeysRef.current));
+            setDirectories((current) => {
+              const key = keyFor(root.root_id, path);
+              const previous = current[key]?.data;
+              const merged = pageOffset !== undefined && previous?.revision === data.revision
+                ? { ...data, entries: [...previous.entries, ...data.entries] }
+                : data;
+              return retainDirectoryState(current, key, { status: "ready", data: merged }, protectedDirectoryKeysRef.current);
+            });
             incomplete ||= data.truncated;
             for (const entry of data.entries) {
               if (entry.kind === "directory" && entry.path) pending.push(entry.path);
