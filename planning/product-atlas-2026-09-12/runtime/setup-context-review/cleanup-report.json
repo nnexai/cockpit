@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "runId": "atlas-0912-scr",
+  "capturedAt": "2026-09-12",
+  "result": "PASS",
+  "ownershipVerification": "All retained paths are under planning/product-atlas-2026-09-12/runtime/setup-context-review and owned by this run; protected/default Herdr session was not accessed.",
+  "actions": [
+    {"resource":"atlas-0912-scr-vite","action":"stopped","evidence":"Hub-owned process; bound 127.0.0.1:49172"},
+    {"resource":"fixture-repo, browser profiles, herdr-config, herdr-state","action":"retained","reason":"Evidence capture and review; deletion deferred to explicit owner cleanup"},
+    {"resource":"Herdr disposable session atlas-0912-scr","action":"not-created","reason":"No compatible Herdr executable/provider was safely available"}
+  ],
+  "residuals":["Owned fixture and evidence files remain in lane for review"],
+  "protectedResources":"unchanged"
+}

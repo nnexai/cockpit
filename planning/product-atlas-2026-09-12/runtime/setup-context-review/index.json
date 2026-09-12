@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "atlas": "product-atlas-2026-09-12",
+  "lane": "runtime/setup-context-review",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "capturedAt": "2026-09-12",
+  "result": "INCONCLUSIVE",
+  "summary": "Fresh browser runtime capture reached the real Cockpit surface, which reported HTTP 404 from /api/v1/status. Herdr-backed setup, Context/Files, source snapshot, Review, and recovery flows were therefore unavailable; no unsafe or protected-session mutation was attempted.",
+  "session": "atlas-0912-scr (uniquely named disposable; planned only)",
+  "client": "Google Chrome 140.0.7339.98 headless; Vite 8.2.2; Bun 1.3.14",
+  "viewports": ["1440x900", "1024x640"],
+  "fixture": {"path":"fixture-repo","initialCommit":"a52a09a9070f7af88ee6da2b25d4ce71727d885b","state":"modified example.ts; untracked untracked.txt","content":["Markdown","Mermaid","TypeScript","plain text"]},
+  "artifacts": [
+    {"path":"artifacts/setup-context-review-1440x900.png","kind":"screenshot","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Headless Chrome owned profile at 1440x900","sha256":"833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9"},
+    {"path":"artifacts/setup-context-review-1024x640.png","kind":"screenshot","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Headless Chrome owned profile at 1024x640","sha256":"557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64"},
+    {"path":"artifacts/dom.html","kind":"dom-dump","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Headless Chrome dump-dom","sha256":"de350d494cfbff83a19f137b4992b26cc33e0a52dfce25164bfa1330c466ba15"},
+    {"path":"artifacts/status-headers.txt","kind":"http-receipt","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"curl read-only GET","sha256":"69a094464734b817827698676545f81460f2b0a3c7ee0ae25742612a401712ee"},
+    {"path":"resource-ledger.json","kind":"resource-ledger","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Run-owned paths and explicit protected-resource policy","sha256":"07b0336fef476cc4c93c3ef2473efc76f06942a267c058f5c47e02e2ce4d6ea7"}
+  ],
+  "scenarioFile":"scenarios.json",
+  "receipts":"receipts.json",
+  "cleanup":"cleanup-report.json"
+}

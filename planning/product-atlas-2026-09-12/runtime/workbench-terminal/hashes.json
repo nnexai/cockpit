@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "capturedAt": "2026-09-12",
+  "artifacts": [
+    {
+      "path": "browser-native.json",
+      "sha256": "7c5de4e4f584c3c0ec3ddd97a6510c5b1c3a69394d015ddfb718c86c104284f1",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "cleanup.json",
+      "sha256": "90de024e8899e895da81c3dd60853c29cc62c1643fb852a39c53f10f44406b15",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "commands-actions.log",
+      "sha256": "6164e83d5110c80006fec91968efddd24996378a4391bda1302508518ca65928",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "commands-menu-1440x900.png",
+      "sha256": "68906f964dac86cc2f22531609a8178bdefbac6763b3bd44eeca89b16c63b294",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "coverage.json",
+      "sha256": "fedd32c8ef7acaa1f363dd6af5aed7b093989a0bde717a40e9612eaa198ac9dc",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "disconnected-1024x640.png",
+      "sha256": "877604c95b349f9cf5d31302441c4fc620125081637444dcda16d544dae923a9",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "herdr-snapshot.json",
+      "sha256": "1de0bcd4efd2f6ecbc6cede665bdddbfcc2d6152a320cd359a3c4de91654188d",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "index.json",
+      "sha256": "a6a05a190c1bfc3e43454a421e41526fcfb6a5d74c3e2b504e00dd0b65434a1a",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "live-1024x640.png",
+      "sha256": "134bde9997a84b8a1ea874626c5dc201d519b473886bff9673a8feaf300b6750",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "live-1440x900.png",
+      "sha256": "f72daa545aa2e043a5f8b898d93a07c0ac3fe91cea3e5d157df7f5dd248cb5d2",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "loading-recovery.json",
+      "sha256": "6a29ae54b62e28fa11987e8aa971cdb34b06a2dd268b1015b3e3e3258393811a",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "menus.json",
+      "sha256": "9f4da28f6c897b9280a99a33fe7cf10c542277b3f172df2844eaf3db7e2c95a7",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "pane-menu-1440x900.png",
+      "sha256": "27a8f0a9a1a2dd4d8819eff2919c2420f56c443b9877a8b0d78512d33368efee",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "recovered-1024x640.png",
+      "sha256": "6aa8028cdecf26449e30271532347058a4853adb618a39da37f6b5735487a073",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "resource-ledger.json",
+      "sha256": "7f61e35017e2602eca8987d268c88e4ed5583ef14fc610501f997d232a63d1e7",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "scroll-after-wheel-1024x640.png",
+      "sha256": "0e10157d5d531d460dedab1ad7c1c3497d4195bfb75634973fe0f5e984411c64",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "spaces-agents.json",
+      "sha256": "33cbaf8f12230232b3b79c3195c8261acfc3f1e815405670b90123b4b8c8d206",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "startup-1440x900.png",
+      "sha256": "2a11666bf23c86dd2d157249e155936b120e67c09719a14aa433d458daf6aa62",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "startup-session.json",
+      "sha256": "d56ef11b335d23a436581efe8fb412bdf93711129dd88ccd266c99591084b68c",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "tabs-panes.json",
+      "sha256": "ef9240faf7b91d46effbc4e84ecead1388d7a016658ca2ef799e2e8c6ab513cd",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "terminal-focus.json",
+      "sha256": "422d2b75f4a617265d76f2ab65893cec117b52bbd85afb8234a64756aecaf421",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "terminal-input-1440x900.png",
+      "sha256": "8247252b4864d51e10d1039ab2cfadb20e60234819b8f26e61b4eb55d0d88f7c",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "terminal-ownership.json",
+      "sha256": "fda7009e727693b60eac6bfb28d98cbd0e4b8ad6859dcabea03ab7cf8798d139",
+      "kind": "runtime-evidence"
+    },
+    {
+      "path": "two-tabs-1024x640.png",
+      "sha256": "0e10157d5d531d460dedab1ad7c1c3497d4195bfb75634973fe0f5e984411c64",
+      "kind": "runtime-evidence"
+    }
+  ]
+}

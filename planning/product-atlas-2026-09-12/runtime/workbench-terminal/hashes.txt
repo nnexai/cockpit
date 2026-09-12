@@ -1,0 +1,11 @@
+68906f964dac86cc2f22531609a8178bdefbac6763b3bd44eeca89b16c63b294  planning/product-atlas-2026-09-12/runtime/workbench-terminal/commands-menu-1440x900.png
+877604c95b349f9cf5d31302441c4fc620125081637444dcda16d544dae923a9  planning/product-atlas-2026-09-12/runtime/workbench-terminal/disconnected-1024x640.png
+134bde9997a84b8a1ea874626c5dc201d519b473886bff9673a8feaf300b6750  planning/product-atlas-2026-09-12/runtime/workbench-terminal/live-1024x640.png
+f72daa545aa2e043a5f8b898d93a07c0ac3fe91cea3e5d157df7f5dd248cb5d2  planning/product-atlas-2026-09-12/runtime/workbench-terminal/live-1440x900.png
+27a8f0a9a1a2dd4d8819eff2919c2420f56c443b9877a8b0d78512d33368efee  planning/product-atlas-2026-09-12/runtime/workbench-terminal/pane-menu-1440x900.png
+6aa8028cdecf26449e30271532347058a4853adb618a39da37f6b5735487a073  planning/product-atlas-2026-09-12/runtime/workbench-terminal/recovered-1024x640.png
+0e10157d5d531d460dedab1ad7c1c3497d4195bfb75634973fe0f5e984411c64  planning/product-atlas-2026-09-12/runtime/workbench-terminal/scroll-after-wheel-1024x640.png
+2a11666bf23c86dd2d157249e155936b120e67c09719a14aa433d458daf6aa62  planning/product-atlas-2026-09-12/runtime/workbench-terminal/startup-1440x900.png
+8247252b4864d51e10d1039ab2cfadb20e60234819b8f26e61b4eb55d0d88f7c  planning/product-atlas-2026-09-12/runtime/workbench-terminal/terminal-input-1440x900.png
+0e10157d5d531d460dedab1ad7c1c3497d4195bfb75634973fe0f5e984411c64  planning/product-atlas-2026-09-12/runtime/workbench-terminal/two-tabs-1024x640.png
+1de0bcd4efd2f6ecbc6cede665bdddbfcc2d6152a320cd359a3c4de91654188d  planning/product-atlas-2026-09-12/runtime/workbench-terminal/herdr-snapshot.json

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "runId": "atlas-0912-wb",
+  "session": "atlas-0912-wb",
+  "protectedSession": "default",
+  "ownedResources": ["/tmp/atlas0912-wb", "127.0.0.1:4181", "atlas0912-browser"],
+  "cleanupStatus": "complete",
+  "actions": ["Closed named Playwright browser", "Stopped owned gateway", "Stopped Herdr session via resource_guard", "Removed owned disposable root"],
+  "residuals": [],
+  "protectedResourcesTouched": false
+}

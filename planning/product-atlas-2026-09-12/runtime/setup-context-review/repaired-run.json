@@ -1,0 +1,19 @@
+{
+  "schemaVersion":1,
+  "runId":"atlas-0912-scr-repair-01",
+  "baselineCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "capturedAt":"2026-09-12",
+  "result":"INCONCLUSIVE",
+  "surface":"actual built Cockpit gateway/static frontend",
+  "commands":["bun run build","target/debug/cockpit serve --bind 127.0.0.1:49173 --static-dir dist --herdr /home/linuxbrew/.linuxbrew/bin/herdr --herdr-session atlas-0912-scr --herdr-socket /tmp/atlas0912scr/config/herdr/sessions/atlas-0912-scr/herdr.sock --repository-root <absolute-owned-fixture>","herdr --session atlas-0912-scr with isolated HERDR_CONFIG_PATH and XDG roots","herdr workspace create --cwd <absolute-owned-fixture> --label atlas-fixture --no-focus","Google Chrome headless screenshots at 1440x900 and 1024x640"],
+  "observations":["Gateway launched successfully on 127.0.0.1:49173 with explicit owned Herdr endpoint and served real browser UI.","Initial hydrated view showed spaces sidebar, atlas-fixture workspace after owned workspace creation, and terminal pane surface.","Setup/Context/Files/source/Review controls were not reachable from the rendered empty workspace; no claim made for those flows."],
+  "states":["gateway-ready","workspace-created","terminal-surface","flows-not-reachable"],
+  "environment":{"commit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","client":"Google Chrome 140.0.7339.98 headless; Cockpit target/debug; Herdr /home/linuxbrew/.linuxbrew/bin/herdr","viewport":"1440x900; 1024x640","session":"atlas-0912-scr"},
+  "artifacts":[
+    {"path":"artifacts/repaired-1440x900.png","kind":"screenshot","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Built gateway on owned port 49173; explicit owned Herdr endpoint; isolated Chrome profile","sha256":"c834b948a3dbb188cf7b824eb63147367dd23a449f859c110f637868a0dee3aa"},
+    {"path":"artifacts/repaired-1024x640.png","kind":"screenshot","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Built gateway on owned port 49173; explicit owned Herdr endpoint; isolated Chrome profile","sha256":"70ac108e798584af149aa8715be2569f1d26298f78c0d20fbc524ee50a007242"},
+    {"path":"artifacts/workspace-create.json","kind":"herdr-receipt","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Explicit session atlas-0912-scr socket; owned fixture cwd; workspace w2/tab w2:t1/pane w2:p1","sha256":"af25b585143f2945fdcf090adc4de1f50b2677266ba3121cc727966d5c9f1002"}
+  ],
+  "cleanup":["Stopped owned gateway atlas-0912-scr-gateway3 and Herdr atlas-0912-scr-herdr2; no protected/default session touched; fixture and evidence retained"],
+  "friction":["Native skipped per browser-first direction; deeper project panes require additional UI actions not safely available in headless capture"]
+}

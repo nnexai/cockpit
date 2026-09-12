@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "scenario": "setup-context-review.runtime-capture",
+  "capturedAt": "2026-09-12",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "workingTreeCommit": "ec02fd66fade3ace127b65b64ea983c67227c322",
+  "commands": [
+    "mkdir -p planning/product-atlas-2026-09-12/runtime/setup-context-review/{artifacts,fixture-repo,herdr-config,herdr-state,browser-profile,logs}",
+    "git init fixture-repo; commit synthetic README.md and example.ts",
+    "bun run dev -- --host 127.0.0.1 --port 49172",
+    "google-chrome --headless=new --user-data-dir=<owned browser-profile> --window-size=1440,900 --screenshot=<artifact> http://127.0.0.1:49172/",
+    "google-chrome --headless=new --user-data-dir=<owned browser-profile-1024> --window-size=1024,640 --screenshot=<artifact> http://127.0.0.1:49172/",
+    "curl -D <status-headers> -o <status-body> http://127.0.0.1:49172/api/v1/status"
+  ],
+  "observed": {"httpStatus":404,"surface":"Cockpit unavailable: status endpoint returned HTTP 404","herdr":"not started; unavailable in safe disposable environment"},
+  "client":"Google Chrome 140.0.7339.98 headless; Vite 8.2.2; Bun 1.3.14",
+  "viewports":["1440x900","1024x640"],
+  "session":"atlas-0912-scr (planned, not started)",
+  "artifacts":[
+    {"path":"artifacts/setup-context-review-1440x900.png","kind":"screenshot","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Headless Chrome against local Vite surface; owned browser profile","sha256":"833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9"},
+    {"path":"artifacts/setup-context-review-1024x640.png","kind":"screenshot","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Headless Chrome against local Vite surface; owned browser profile","sha256":"557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64"},
+    {"path":"artifacts/dom.html","kind":"dom-dump","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"Headless Chrome dump-dom","sha256":"de350d494cfbff83a19f137b4992b26cc33e0a52dfce25164bfa1330c466ba15"},
+    {"path":"artifacts/status-headers.txt","kind":"http-receipt","evidenceClass":"runtime","capturedAt":"2026-09-12","sourceCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","provenance":"curl read-only GET localhost fixture","sha256":"69a094464734b817827698676545f81460f2b0a3c7ee0ae25742612a401712ee"}
+  ]
+}

@@ -16,6 +16,16 @@ __pycache__/
 # Local operating-system metadata
 .DS_Store
 # Playwright CLI output (may contain credentials)
-# Product atlas disposable runtime captures
-/planning/product-atlas-2026-09-12/runtime/
 .playwright-cli/
+
+# Product atlas disposable runtime roots
+/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/
+/planning/product-atlas-2026-09-12/runtime/browser-extension/.playwright-cli/
+/planning/product-atlas-2026-09-12/runtime/browser-extension/planning/
+/planning/product-atlas-2026-09-12/runtime/browser-extension/actions.log
+/planning/product-atlas-2026-09-12/runtime/setup-context-review/browser-profile*/
+/planning/product-atlas-2026-09-12/runtime/setup-context-review/herdr-config/
+/planning/product-atlas-2026-09-12/runtime/setup-context-review/herdr-state/
+/planning/product-atlas-2026-09-12/runtime/setup-context-review/logs/
+/planning/product-atlas-2026-09-12/runtime/setup-context-review/fixture-repo/
+/planning/product-atlas-2026-09-12/runtime/workbench-terminal/commands-actions.log

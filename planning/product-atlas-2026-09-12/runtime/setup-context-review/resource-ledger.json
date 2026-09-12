@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "runId": "atlas-0912-scr",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "protectedResources": ["Herdr session default", "user active agent/session", "unrelated browser profiles"],
+  "allowedResources": [
+    {"name":"atlas-0912-scr","kind":"disposable-herdr-session","status":"planned","owner":"atlas-0912-scr","configPath":"planning/product-atlas-2026-09-12/runtime/setup-context-review/herdr-config","statePath":"planning/product-atlas-2026-09-12/runtime/setup-context-review/herdr-state","socketPath":"planning/product-atlas-2026-09-12/runtime/setup-context-review/herdr-config/herdr/sessions/atlas-0912-scr/herdr.sock"},
+    {"name":"fixture-repo","kind":"fixture-git-repository","status":"created","owner":"atlas-0912-scr","path":"planning/product-atlas-2026-09-12/runtime/setup-context-review/fixture-repo"},
+    {"name":"atlas-0912-scr-vite","kind":"localhost-server","status":"running","owner":"atlas-0912-scr","bind":"127.0.0.1:49172"},
+    {"name":"browser-profile","kind":"isolated-browser-profile","status":"created","owner":"atlas-0912-scr","path":"planning/product-atlas-2026-09-12/runtime/setup-context-review/browser-profile*"}
+  ],
+  "ownershipChecks": [
+    "Runtime root created by this run and mode 0700",
+    "Fixture Git repository initialized by this run; commit a52a09a9070f7af88ee6da2b25d4ce71727d885b",
+    "No Herdr executable/session was started; default session was not inspected or mutated",
+    "Vite bound only to 127.0.0.1:49172"
+  ],
+  "forbiddenExecutablePaths": ["/home/nnex/.local/bin/herdr", "/usr/local/bin/herdr"],
+  "cleanupPolicy": "Remove only listed run-owned resources after evidence capture"
+}

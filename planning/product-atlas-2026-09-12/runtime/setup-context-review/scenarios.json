@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "scenarios": [
+    {
+      "id":"setup.repository-artifact-to-workspace","surface":"task setup","implemented":true,
+      "authority":["src/app/projects/SetupDialog.tsx","planning/daily-use-2026-09-06.md"],
+      "preconditions":["Owned fixture repository created; disposable Herdr session planned"],
+      "actions":["Created fixture Git repository with README.md, example.ts, Mermaid content, modified tracked file and untracked file","Started local Cockpit browser surface"],
+      "observations":["Browser reached Cockpit unavailable state because /api/v1/status returned HTTP 404; no setup controls or Herdr workspace could be exercised"],
+      "states":["planned","provider-unavailable"],"artifacts":["receipts.json","artifacts/setup-context-review-1440x900.png","artifacts/setup-context-review-1024x640.png"],"friction":["Herdr-backed setup endpoint unavailable without safely starting a compatible disposable Herdr binary"],"result":"INCONCLUSIVE",
+      "environment":{"commit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","client":"browser (Google Chrome 140.0.7339.98 headless)","viewport":"1440x900; 1024x640","session":"atlas-0912-scr (planned, not started)"},"cleanup":["Owned Vite stopped; fixture and profiles retained until atlas review; no protected resource touched"]
+    },
+    {
+      "id":"setup.recovery-and-teardown","surface":"task recovery/teardown","implemented":true,
+      "authority":["src/app/projects/TeardownRecoveryPanel.tsx","src/app/projects/TeardownDialog.tsx"],
+      "preconditions":["Owned fixture root and ledger available"],"actions":["Verified resource ledger ownership and recorded unavailable Herdr capability","Did not induce timeout or teardown because no owned Herdr session existed"],
+      "observations":["Recovery and destructive teardown controls were not reachable; no unsafe mutation attempted"],"states":["provider-unavailable","not-exercised"],"artifacts":["resource-ledger.json","receipts.json"],"friction":["No compatible disposable Herdr server available"],"result":"INCONCLUSIVE",
+      "environment":{"commit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","client":"browser","viewport":"1440x900","session":"atlas-0912-scr (planned, not started)"},"cleanup":["No teardown mutation performed"]
+    },
+    {
+      "id":"context.files-browse-render-search-comment-paste","surface":"Context/Files","implemented":true,
+      "authority":["src/app/context/ContextViewer.tsx","src/app/context/ContextSearch.tsx","src/app/context/CommentDrafts.tsx"],
+      "preconditions":["Fixture has nested/readable Markdown, source, Mermaid and safe synthetic content"],"actions":["Prepared fixture files and modified Git states","Attempted browser load and read-only status request"],
+      "observations":["Context/Files tree, search, renderer, refusal and comment interactions were not rendered because Cockpit status gate returned 404"],"states":["provider-unavailable","not-exercised"],"artifacts":["artifacts/dom.html","artifacts/status-headers.txt"],"friction":["No live session snapshot to hydrate Context/Files"],"result":"INCONCLUSIVE",
+      "environment":{"commit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","client":"browser","viewport":"1440x900; 1024x640","session":"atlas-0912-scr (planned, not started)"},"cleanup":["Fixture content retained for inspection; no comments submitted"]
+    },
+    {
+      "id":"context.sources-import-and-snapshot","surface":"source imports/snapshots","implemented":true,
+      "authority":["src/app/context/SourceImport.tsx","src/app/context/SnapshotImport.tsx"],
+      "preconditions":["Owned fixture repository and companion root prepared"],"actions":["Prepared local source and Git identity; no import mutation attempted without provider"],
+      "observations":["Source import/snapshot controls unavailable behind HTTP 404 status gate; no repository or provider mutation occurred"],"states":["provider-unavailable","not-exercised"],"artifacts":["resource-ledger.json","receipts.json"],"friction":["Herdr/context protocol unavailable"],"result":"INCONCLUSIVE",
+      "environment":{"commit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","client":"browser","viewport":"1440x900","session":"atlas-0912-scr (planned, not started)"},"cleanup":["Fixture remains owned and isolated"]
+    },
+    {
+      "id":"review.local-scopes-navigation-comments-fallback","surface":"local Review","implemented":true,
+      "authority":["src/app/review/ReviewPane.tsx","src/app/review/ReviewViewer.tsx"],
+      "preconditions":["Fixture includes staged/unstaged/untracked candidate states and stable initial commit"],"actions":["Created modified tracked and untracked files; recorded git status and initial revision","Attempted read-only Cockpit load"],
+      "observations":["Review pane and staged/unstaged/deleted/old-new/comment/stale/terminal fallback paths unavailable because status endpoint returned 404"],"states":["provider-unavailable","not-exercised"],"artifacts":["artifacts/setup-context-review-1440x900.png","artifacts/status-body.txt"],"friction":["No live Review protocol or session attachment"],"result":"INCONCLUSIVE",
+      "environment":{"commit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5","client":"browser","viewport":"1440x900; 1024x640","session":"atlas-0912-scr (planned, not started)"},"cleanup":["No comments pasted or submitted; no terminal fallback attempted"]
+    }
+  ]
+}

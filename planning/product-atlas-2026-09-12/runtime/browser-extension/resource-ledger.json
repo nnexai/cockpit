@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "run_id": "atlas-0912-browser",
+  "protected_session": "default",
+  "resource_root": "/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources",
+  "resources": [
+    {"path":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources","owner":"atlas-0912-browser","kind":"resource-root"},
+    {"path":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/profile","owner":"atlas-0912-browser","kind":"chrome-profile"},
+    {"path":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/config","owner":"atlas-0912-browser","kind":"xdg-config"},
+    {"path":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/state","owner":"atlas-0912-browser","kind":"xdg-state"}
+  ],
+  "allowed_sessions": [{
+    "name":"atlas-0912-browser",
+    "owner":"atlas-0912-browser",
+    "xdg_config_home":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/config",
+    "xdg_state_home":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/state",
+    "config_path":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/config/herdr/config.toml",
+    "socket_path":"/home/nnex/dev/prj/cockpit/planning/product-atlas-2026-09-12/runtime/browser-extension/resources/config/herdr/sessions/atlas-0912-browser/herdr.sock",
+    "status":"planned"
+  }],
+  "executables":{"selected":{"path":"/home/linuxbrew/.linuxbrew/lib/node_modules/@playwright/cli/playwright-cli.js","sha256":"fda252270793401d2856530a5f503adf7fc326fc07bed97e413138f67c50662b","version":"0.1.5"}},
+  "forbidden_executable_paths":["/usr/bin/google-chrome"],
+  "protected_config_path":"/home/nnex/.config/cockpit/herdr.json",
+  "protected_socket_path":"/run/user/1000/herdr-default.sock"
+}

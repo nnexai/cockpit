@@ -1,0 +1,10 @@
+{
+  "run_id": "atlas-0912-wb",
+  "protected_session": "default",
+  "resource_root": "/tmp/atlas0912-wb",
+  "resources": [{"path": "/tmp/atlas0912-wb", "owner": "atlas-0912-wb", "kind": "resource-root"}, {"path": "/tmp/atlas0912-wb/fixture-repo", "owner": "atlas-0912-wb", "kind": "fixture-repository"}],
+  "allowed_sessions": [{"name": "atlas-0912-wb", "owner": "atlas-0912-wb", "xdg_config_home": "/tmp/atlas0912-wb/config", "xdg_state_home": "/tmp/atlas0912-wb/state", "config_path": "/tmp/atlas0912-wb/config/herdr/config.toml", "socket_path": "/tmp/atlas0912-wb/config/herdr/sessions/atlas-0912-wb/herdr.sock", "status": "running"}],
+  "executables": {"selected": {"path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.9.0/bin/herdr", "sha256": "7e33c9aad745317c07ae2264a27d3c0bbce8aa0d8cb0c543db65868a43821182", "version": "herdr 0.9.0"}},
+  "forbidden_executable_paths": [],
+  "protected": {"config_path": "/home/nnex/.config/herdr/config.toml", "socket_path": "/home/nnex/.config/herdr/sessions/default/herdr.sock"}
+}
