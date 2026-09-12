@@ -1,0 +1,13 @@
+[package]
+name = "embedded-webview-panel-poc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = "2.1.0"
+
+[dependencies]
+tauri = "2.11.1"
+
+[workspace]

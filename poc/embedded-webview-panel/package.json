@@ -1,0 +1,9 @@
+{
+  "name": "embedded-webview-panel-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "build": "cargo build --manifest-path src-tauri/Cargo.toml"
+  }
+}

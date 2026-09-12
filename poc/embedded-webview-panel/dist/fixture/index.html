@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Native WebView interaction fixture</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.45 system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f3f6fb; color: #172033; }
+    main { max-width: 720px; margin: 0 auto; padding: 56px 40px; }
+    .card { background: white; border: 1px solid #d9e0ed; border-radius: 16px; padding: 32px; box-shadow: 0 12px 40px #263a5d18; }
+    h1 { margin: 0 0 8px; color: #173a70; }
+    p { margin: 8px 0 24px; color: #52617a; }
+    label { display: block; margin-bottom: 8px; font-weight: 650; }
+    .row { display: flex; gap: 10px; }
+    input { box-sizing: border-box; flex: 1; min-width: 0; border: 2px solid #bac8df; border-radius: 9px; padding: 11px 13px; font: inherit; }
+    input:focus { outline: 3px solid #8bb9ff66; border-color: #3679d8; }
+    button { border: 0; border-radius: 9px; padding: 11px 20px; background: #1769d1; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button:hover { background: #0e56b4; }
+    #result { margin: 24px 0 0; padding: 15px 17px; border-radius: 9px; background: #eef4ff; color: #244d87; min-height: 24px; }
+    .tag { display: inline-block; margin-top: 22px; color: #687792; font-size: 13px; }
+    .reading { min-height: 1000px; margin-top: 28px; padding: 28px 32px; border: 1px solid #d9e0ed; border-radius: 16px; background: #fff; color: #263550; }
+    .reading h2 { margin: 0 0 10px; color: #173a70; font-size: 22px; }
+    .reading p { margin: 12px 0; color: #52617a; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Native WebView fixture</h1>
+      <p>This page is rendered directly by the system WebView embedded in the Tauri panel.</p>
+      <label for="name">Type a name, then activate the button</label>
+      <div class="row">
+        <input id="name" autocomplete="off" placeholder="Ada Lovelace">
+        <button id="greet" type="button">Greet</button>
+      </div>
+      <div id="result" role="status" aria-live="polite">Waiting for a greeting...</div>
+      <span class="tag">Offline static fixture</span>
+    </section>
+    <article class="reading">
+      <h2>Selectable page content</h2>
+      <p id="selection-source">Drag across this sentence to exercise real text selection inside the native WebView pane.</p>
+      <p>Scrolling is also owned by the embedded page. This deliberately long local fixture keeps enough content below the fold to make wheel movement observable.</p>
+      <p>Every interaction remains a normal page event: CSS cursor feedback, text selection, focus, keyboard input, and button activation are owned by the browser engine.</p>
+      <p>The native WebView keeps this panel lightweight, while its rendering and available features follow the host operating system rather than a uniform Chromium distribution.</p>
+      <p>More fixture text keeps the viewport scrollable without changing the coordinates of the name field and greeting button above.</p>
+    </article>
+  </main>
+  <script>
+    const name = document.querySelector('#name');
+    const result = document.querySelector('#result');
+    document.querySelector('#greet').addEventListener('click', () => {
+      const value = name.value.trim();
+      result.textContent = value ? `Hello, ${value}! The native WebView received your input.` : 'Please type a name first.';
+      result.dataset.changed = 'true';
+    });
+    name.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') document.querySelector('#greet').click();
+    });
+  </script>
+</body>
+</html>

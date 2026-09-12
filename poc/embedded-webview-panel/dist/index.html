@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Embedded WebView Panel POC</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">Embedded WebView Panel <span>POC</span></div>
+    <form id="navigation" class="navigation" autocomplete="off">
+      <label class="sr-only" for="url">HTTP(S) URL or domain</label>
+      <input id="url" type="text" spellcheck="false" aria-label="HTTP or HTTPS URL or domain" placeholder="https://example.com">
+      <button type="submit" title="Navigate to an HTTP or HTTPS URL">Go</button>
+      <button id="reload" type="button" class="secondary" title="Reload the embedded WebView page">Refresh</button>
+      <button id="inspect" type="button" class="secondary" title="Inspect same-origin page state">Inspect</button>
+    </form>
+    <div id="status" class="status" data-kind="idle">Loading fixture…</div>
+  </header>
+  <main class="workspace">
+    <section class="panel-shell">
+      <div class="panel-heading">
+        <div><strong>Browser pane</strong><span id="page-title">Loading native WebView</span></div>
+        <span id="dimensions">—</span>
+      </div>
+      <div class="browser-panel" aria-label="Native embedded browser pane">
+        <iframe id="browser-frame" title="Embedded native WebView page" src="fixture/index.html"></iframe>
+        <div id="empty-state">Loading the offline fixture…</div>
+      </div>
+      <p class="note">This pane is a native Tauri/Wry WebView surface: scrolling, focus, keyboard input, pointer events, and text selection belong to the page itself. Unlike CEF, the system WebView engine is used, so rendering and engine features are not uniform across platforms.</p>
+    </section>
+    <aside class="details">
+      <h2>Native WebView state</h2>
+      <dl>
+        <div><dt>URL</dt><dd id="page-url">—</dd></div>
+        <div><dt>Active element</dt><dd id="active-element">—</dd></div>
+        <div><dt>Last action</dt><dd id="last-action">—</dd></div>
+        <div><dt>Fixture status</dt><dd id="fixture-status">—</dd></div>
+        <div><dt>Greeting result</dt><dd id="greeting-result">—</dd></div>
+        <div><dt>Scroll Y</dt><dd id="scroll-y">0</dd></div>
+        <div><dt>Selected text</dt><dd id="selected-text">—</dd></div>
+      </dl>
+    </aside>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
