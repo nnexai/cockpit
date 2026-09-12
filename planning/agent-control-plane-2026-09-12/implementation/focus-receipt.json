@@ -1,0 +1,44 @@
+{
+  "increment": "packet-02-focus-handoff",
+  "status": "PASS",
+  "base": "c85f3aa",
+  "run_root": "/tmp/cockpit-focus-20260912",
+  "herdr": {
+    "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.9.0/bin/herdr",
+    "version": "0.9.0",
+    "protocol": 22,
+    "schema": 1,
+    "session": "cockpit-focus-20260912",
+    "socket": "/tmp/cockpit-focus-20260912/xdg-config/herdr/sessions/cockpit-focus-20260912/herdr.sock"
+  },
+  "gateway": "http://127.0.0.1:4189/",
+  "browser_session": "cockpit-focus-baseline-20260912",
+  "baseline": {
+    "scenario": "select Space and fill terminal in the same browser turn before selection settled",
+    "result": "FAIL",
+    "readback": "w1:p1 unchanged; textbox value empty"
+  },
+  "after": {
+    "scenario": "click FocusFixture and type immediately",
+    "result": "PASS",
+    "readback": "w2:p1 contained printf FOCUS_TYPE_OK and FOCUS_TYPE_OK",
+    "rapid_target_result": "PASS",
+    "rapid_target_readback": "w1:p1 contained RAPID_A1_OK; w2:p1 contained RAPID_B3_OK; no wrong-pane or duplicate markers"
+  },
+  "commands": [
+    {
+      "command": "bun run test -- src/app/TerminalPane.test.tsx",
+      "result": "PASS",
+      "counts": "1 file, 9 tests passed"
+    },
+    {
+      "command": "bun run build",
+      "result": "PASS",
+      "counts": "tsc --noEmit and vite build passed"
+    }
+  ],
+  "screenshots": ["focus-after-1440.png", "focus-after-480.png"],
+  "native_tauri": "INCONCLUSIVE",
+  "deferred": ["delayed acknowledgement and multi-pane matrix", "full packet matrix", "native runtime"],
+  "ownership": "runtime_delivery owns run_root resources and proof scripts; resources remain alive for the next increment"
+}

@@ -148,6 +148,8 @@ function paneProps(client: CockpitClient, terminalMouseInput: boolean, overrides
     selected: true,
     controlAllowed: true,
     controlPending: false,
+    focusEpoch: 1,
+    focusToken: 0,
     terminalMouseInput,
     ...overrides,
   };
@@ -457,6 +459,34 @@ describe("TerminalPane fitting and pointer ownership", () => {
       await act(async () => { host.querySelector(".terminal-host")!.dispatchEvent(pointer("pointerdown", 10)); });
       expect(openTerminal.mock.calls.at(-1)![0]).toMatchObject({ mode: "control", takeover: true });
       expect(sent).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("keeps the first character typed during focus confirmation for that pane intent", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false, controlPending: true, focusToken: 7 })} />);
+        await settle();
+      });
+      const onData = mocks.terminals.at(-1)!.onData.mock.calls[0][0] as (data: string) => void;
+      onData("A");
+
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: true, controlPending: false, focusToken: 7 })} />);
+        await settle();
+      });
+      await act(async () => { messages.at(-1)!(message("owned")); });
+      expect(sent.filter((command) => command.type === "terminal.input")).toEqual([{ type: "terminal.input", text: "A", bytes: null }]);
     } finally {
       await act(async () => root.unmount());
       host.remove();

@@ -17,6 +17,8 @@ export type TerminalPaneProps = {
   selected: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
+  focusEpoch: number;
+  focusToken: number;
   terminalMouseInput: boolean;
   onRequestControl?: () => void;
   onSelect?: () => void;
@@ -138,7 +140,7 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
 type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
 
 
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const lastResizeRef = useRef<TerminalResize | null>(null);
@@ -153,19 +155,48 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const lastSequence = useRef<bigint | null>(null);
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
+  const pendingIntentRef = useRef<{ epoch: number; paneId: string; token: number } | null>(null);
   const [controlRequested, setControlRequested] = useState(controlAllowed);
   const controlRequestedRef = useRef(controlAllowed);
   const controlRequestPendingRef = useRef(false);
   const takeoverRequestedRef = useRef(false);
   const controlAllowedRef = useRef(controlAllowed);
   controlAllowedRef.current = controlAllowed;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const onRequestControlRef = useRef(onRequestControl);
+  onRequestControlRef.current = onRequestControl;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const controlPendingRef = useRef(controlPending);
+  controlPendingRef.current = controlPending;
+  const focusEpochRef = useRef(focusEpoch);
+  focusEpochRef.current = focusEpoch;
+  const focusTokenRef = useRef(focusToken);
+  focusTokenRef.current = focusToken;
   const activeMousePointer = useRef<{ button: TerminalMouseButton; pointerId: number } | null>(null);
   const mouseModeRef = useRef(false);
   const lastMouseMotionAt = useRef(0);
+  const currentIntent = () => ({ epoch: focusEpochRef.current, paneId: request.pane_id, token: focusTokenRef.current });
+  const clearPendingCommands = () => {
+    pendingCommands.current = [];
+    pendingIntentRef.current = null;
+  };
   const sendInput = (command: TerminalCommand) => {
-    if (!controlAllowedRef.current && !controlRequestPendingRef.current) return;
+    const hasSelectedFocusIntent = selectedRef.current && focusTokenRef.current > 0;
+    if (!controlAllowedRef.current && !controlRequestPendingRef.current && !controlPendingRef.current && !hasSelectedFocusIntent) return;
     if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) streamRef.current.send(command);
-    else pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
+    else {
+      const intent = currentIntent();
+      if (pendingIntentRef.current
+        && (pendingIntentRef.current.epoch !== intent.epoch
+          || pendingIntentRef.current.paneId !== intent.paneId
+          || pendingIntentRef.current.token !== intent.token)) {
+        pendingCommands.current = [];
+      }
+      pendingIntentRef.current = intent;
+      pendingCommands.current = appendPendingControlCommand(pendingCommands.current, command);
+    }
   };
   const releaseCapturedPointer = () => {
     const active = activeMousePointer.current;
@@ -182,14 +213,17 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   };
   const flushPending = () => {
     const stream = streamRef.current;
-    if (!controlAllowedRef.current || !controlRequestedRef.current || ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0) return;
+    const intent = pendingIntentRef.current;
+    const current = currentIntent();
+    if (!controlAllowedRef.current || !controlRequestedRef.current || ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0
+      || !intent || intent.epoch !== current.epoch || intent.paneId !== current.paneId || intent.token !== current.token) return;
     pendingCommands.current.forEach((command) => stream.send(command));
-    pendingCommands.current = [];
+    clearPendingCommands();
   };
   const requestControl = () => {
     terminalRef.current?.focus();
-    onRequestControl?.();
-    if (!selected) onSelect?.();
+    onRequestControlRef.current?.();
+    if (!selectedRef.current) onSelectRef.current?.();
     if (controlAllowedRef.current && controlRequestedRef.current && ownershipRef.current === "owned") return;
     takeoverRequestedRef.current = true;
     controlRequestPendingRef.current = true;
@@ -227,6 +261,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (selected && terminalReady) terminalRef.current?.focus();
+  }, [selected, terminalReady]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -288,7 +326,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       terminal.attachCustomWheelEventHandler(() => true);
       terminal.attachCustomKeyEventHandler(() => true);
     };
-  }, [selected, onSelect]);
+  }, []);
   useEffect(() => {
     if (controlAllowed) {
       controlRequestPendingRef.current = false;
@@ -300,7 +338,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     }
     if (!controlPending) {
       controlRequestPendingRef.current = false;
-      pendingCommands.current = [];
+      if (!controlAllowed) clearPendingCommands();
       clearMouseMode();
     }
     if (controlRequestedRef.current) {
@@ -308,6 +346,12 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       setControlRequested(false);
     }
   }, [controlAllowed, controlPending]);
+
+  useEffect(() => {
+    const intent = pendingIntentRef.current;
+    if (!intent) return;
+    if (intent.epoch !== focusEpoch || intent.paneId !== request.pane_id || intent.token !== focusToken) clearPendingCommands();
+  }, [focusEpoch, focusToken, request.pane_id]);
 
   useEffect(() => {
     if (!terminalMouseInput) clearMouseMode();
@@ -351,7 +395,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     ownershipRef.current = controlRequested ? "pending" : "observing";
     setOwnership(ownershipRef.current);
     const fail = (code: string, message: string) => {
-      pendingCommands.current = [];
+      clearPendingCommands();
       clearMouseMode();
       cancelled = true;
       controller.abort();
@@ -381,7 +425,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       }
       if (message.type === "ownership") {
         if (message.state === "lost" || message.state === "conflict") {
-          pendingCommands.current = [];
+          clearPendingCommands();
           clearMouseMode();
           controlRequestPendingRef.current = false;
           controlRequestedRef.current = false;

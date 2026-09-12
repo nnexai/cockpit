@@ -1089,19 +1089,17 @@ summary:focus-visible {
   height: 2px;
 }
 
-.focus-feedback {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 20;
-  max-width: 320px;
-  padding: 6px 10px;
+.pane-focus-pending {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 2;
+  padding: 2px 5px;
   border: 1px solid var(--working);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--working);
-  box-shadow: 0 4px 18px rgb(0 0 0 / 35%);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   pointer-events: none;
 }
 

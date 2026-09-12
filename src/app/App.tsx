@@ -427,13 +427,15 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, hasSelectedPane, onEdi
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, terminalMouseInput, onRequestControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style, renderer, onRendererViewChange, onTerminalView, onRefreshRenderer }: {
+function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style, renderer, onRendererViewChange, onTerminalView, onRefreshRenderer }: {
   pane: Pane;
   label: string;
   selected: boolean;
   showLabel: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
+  focusEpoch: number;
+  focusToken: number;
   terminalMouseInput: boolean;
   onRequestControl: () => void;
   onSelect: () => void;
@@ -467,6 +469,7 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
   }, [graphical, controlAllowed, controlPending]);
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
+    {controlPending ? <span className="pane-focus-pending" role="status" aria-label="Waiting for Herdr focus confirmation">Waiting for focus…</span> : null}
     {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
     {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
       onPointerDownCapture={(event) => {
@@ -485,7 +488,7 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
       {isGraphicalReview(renderer) ? <ReviewViewer client={client} presentation={renderer.presentation} value={renderer.view} onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)} onRequestControl={onRequestControl} onTerminalView={onTerminalView} /> : <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
         onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)}
         controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} />}
-    </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} terminalMouseInput={terminalMouseInput} onRequestControl={onRequestControl} onSelect={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
+    </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} focusEpoch={focusEpoch} focusToken={focusToken} terminalMouseInput={terminalMouseInput} onRequestControl={onRequestControl} onSelect={onSelect} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
     {renderer?.actionError || (graphical && renderer?.inspectionError) ? <div className="pane-presentation-error" role="status"><span>{renderer.actionError ?? renderer.inspectionError}</span><button type="button" onClick={onRefreshRenderer}>Refresh</button>{graphical ? <button type="button" onClick={onTerminalView}>Terminal</button> : null}</div> : null}
   </section>;
 }
@@ -695,8 +698,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const streamRegistry = useRef(new Set<TerminalStream>());
   const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
   useEffect(() => () => { streamRegistry.current.forEach((stream) => stream.close()); streamRegistry.current.clear(); }, []);
-  const focusSpace = (space: Space) => { if (!modalOpen) onFocus({ kind: "space", target_id: space.id }, { spaceId: space.id, tabId: allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null, paneId: null }); };
-  const focusTab = (tab: Tab) => { if (!modalOpen) onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId: snapshot?.panes.find((pane) => pane.tab_id === tab.id && pane.focused)?.id ?? null }); };
+  const focusSpace = (space: Space) => {
+    if (modalOpen) return;
+    const tabId = allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null;
+    const paneId = snapshot?.panes.find((pane) => pane.space_id === space.id && pane.focused)?.id ?? null;
+    onFocus({ kind: "space", target_id: space.id }, { spaceId: space.id, tabId, paneId });
+  };
+  const focusTab = (tab: Tab) => {
+    if (modalOpen) return;
+    const paneId = snapshot?.panes.find((pane) => pane.tab_id === tab.id && pane.focused)?.id ?? null;
+    onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId });
+  };
   const focusPane = (pane: Pane) => { if (!modalOpen) onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); };
   const beginRename = (target: ContextTarget | null): boolean => {
     if (!target || mutationBusy) return false;
@@ -959,7 +971,13 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };
         const renderer = renderers.panes[pane.id];
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={state.focusPending?.kind === "pane" && state.focusPending.target_id === pane.id} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
+        const controlPendingForPane = state.focusPending !== null
+          && (state.focusPending.kind === "pane" || state.focusPending.kind === "agent"
+            ? state.focusPending.target_id === pane.id
+            : state.focusPending.kind === "tab"
+              ? state.focusPending.target_id === pane.tab_id
+              : state.focusPending.kind === "space" && state.focusPending.target_id === pane.space_id);
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={controlPendingForPane} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -1024,7 +1042,7 @@ export function App({ client }: { client: CockpitClient }) {
     recoveryResyncRef.current = true;
     setResyncAttempt((value) => value + 1);
   }, []);
-  const { focus, focusDelayed, reconcile: reconcileFocus, reset: resetFocus, retryFocus, tokenRef: focusTokenRef } = useFocusCoordinator({
+  const { focus, reconcile: reconcileFocus, reset: resetFocus, retryFocus, tokenRef: focusTokenRef } = useFocusCoordinator({
     client,
     stateRef,
     mountedRef,
@@ -1032,6 +1050,11 @@ export function App({ client }: { client: CockpitClient }) {
     describeError,
     onTimeout: requestResync,
   });
+  const focusAndSelect = useCallback((request: FocusRequest, location: Selection) => {
+    setSelection(location);
+    setControlPaneId(location.paneId);
+    focus(request, location);
+  }, [focus]);
   const { consumeFocusedPane, mutate, reset: resetMutations, retry: retryMutation, state: mutations, tokenRef: mutationTokenRef } = useMutationCoordinator({
     client,
     stateRef,
@@ -1194,7 +1217,7 @@ export function App({ client }: { client: CockpitClient }) {
   useEffect(() => {
     if (!state.snapshot) return;
     const next = authoritativeSelection(state.snapshot);
-    setSelection(next);
+    if (!state.focusPending) setSelection(next);
     const nextControlPaneId = reconcileFocus(state, next, controlPaneId);
     if (nextControlPaneId !== undefined) setControlPaneId(nextControlPaneId);
   }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId, reconcileFocus]);
@@ -1208,5 +1231,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} onSession={switchSession} onFocus={focus} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} />{focusDelayed ? <div className="focus-feedback" role="status">Waiting for Herdr focus confirmation...</div> : null}</div>;
+  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} onSession={switchSession} onFocus={focusAndSelect} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
 }
