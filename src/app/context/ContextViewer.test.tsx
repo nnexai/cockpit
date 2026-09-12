@@ -269,3 +269,39 @@ it("renders a PNG from a verified Folder root through the safe media command", a
     vi.unstubAllGlobals();
   }
 });
+
+it("retains the visible source when a continuation crosses a revision change", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const directory = vi.fn(async (): Promise<ContextDirectory> => ({
+    binding_id: "binding", root_id: "folder", path: "", truncated: false, diagnostics: [],
+    entries: [{ entry_id: "large", name: "large.txt", path: "large.txt", kind: "file", bytes: 6, revision: "r1", refusal: null }],
+  }));
+  const documentRead = vi.fn()
+    .mockResolvedValueOnce({ binding_id: "binding", root_id: "folder", path: "large.txt", revision: "r1", content_hash: null, bytes: 6, media_type: "text/plain", text: "old\n", truncated: true, offset: 0, next_offset: 4, total_bytes: 6, line_offset: 0, diagnostics: [] })
+    .mockResolvedValueOnce({ binding_id: "binding", root_id: "folder", path: "large.txt", revision: "r2", content_hash: null, bytes: 6, media_type: "text/plain", text: "new\n", truncated: false, offset: 4, next_offset: undefined, total_bytes: 6, line_offset: undefined, diagnostics: [] });
+  const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-context-path="large.txt"]')?.click());
+    await settle();
+    expect(host.textContent).toContain("old");
+    const continuation = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Load next source page"));
+    expect(continuation).toBeDefined();
+    await act(async () => continuation?.click());
+    await settle();
+    expect(host.textContent).toContain("old");
+    expect(host.textContent).toContain("Stale source");
+    expect(documentRead).toHaveBeenLastCalledWith("session", "pane", expect.objectContaining({ path: "large.txt", offset: 4, expected_revision: "r1" }), expect.any(AbortSignal));
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
