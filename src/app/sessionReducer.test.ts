@@ -132,6 +132,28 @@ describe("sessionReducer", () => {
     expect(state.focusPending).toEqual(request);
   });
 
+  it("keeps the newest focus intent through a delayed older confirmation", () => {
+    let state = ready("one");
+    const first = { kind: "tab", target_id: "tab-2" } as const;
+    const newest = { kind: "tab", target_id: "tab-3" } as const;
+    state = sessionReducer(state, { type: "focus/request", epoch: state.epoch, sessionId: "one", request: first, token: 1 });
+    state = sessionReducer(state, { type: "focus/request", epoch: state.epoch, sessionId: "one", request: newest, token: 2 });
+    const olderConfirmation = sessionReducer(state, {
+      type: "stream/message",
+      epoch: state.epoch,
+      sessionId: "one",
+      message: stream("one", 1, 2, snapshot("one", "pane-1")),
+    });
+    expect(olderConfirmation.focusPending).toEqual(newest);
+    const newestConfirmation = sessionReducer(olderConfirmation, {
+      type: "stream/message",
+      epoch: state.epoch,
+      sessionId: "one",
+      message: stream("one", 1, 3, { ...snapshot("one", "pane-3"), focused_tab_id: "tab-3" }),
+    });
+    expect(newestConfirmation.focusPending).toBeNull();
+  });
+
   it("clears a stale focus error after the retried focus is authoritatively confirmed", () => {
     let state = ready("one");
     const request = { kind: "pane", target_id: "pane-2" } as const;

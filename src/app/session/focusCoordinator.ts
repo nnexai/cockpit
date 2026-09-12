@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, type Dispatch, type MutableRefObject } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { FocusRequest, SessionSnapshotResponse } from "../../protocol/generated/v1";
+import type { FocusRequest } from "../../protocol/generated/v1";
 import type { SessionAction, SessionState } from "./sessionStore";
 
 export const FOCUS_FALLBACK_MS = 500;
@@ -126,11 +126,4 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
   }, []);
 
   return { focus, focusDelayed, reconcile, reset, retryFocus, tokenRef };
-}
-
-export function focusRequestForSnapshot(snapshot: SessionSnapshotResponse): FocusRequest | null {
-  if (snapshot.focused_pane_id) return { kind: "pane", target_id: snapshot.focused_pane_id };
-  if (snapshot.focused_tab_id) return { kind: "tab", target_id: snapshot.focused_tab_id };
-  if (snapshot.focused_space_id) return { kind: "space", target_id: snapshot.focused_space_id };
-  return null;
 }

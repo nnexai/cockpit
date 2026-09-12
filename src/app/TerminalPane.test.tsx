@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
-import { createCockpitTerminal, TerminalPane } from "./TerminalPane";
+import { copyTerminalSelection, createCockpitTerminal, readTerminalClipboard, TerminalPane } from "./TerminalPane";
 const mocks = vi.hoisted(() => {
   const terminals: MockTerminal[] = [];
   const fits: MockFitAddon[] = [];
@@ -21,13 +21,17 @@ const mocks = vi.hoisted(() => {
     readonly focus = vi.fn();
     readonly dispose = vi.fn();
     readonly write = vi.fn((_data: Uint8Array) => {});
+    readonly paste = vi.fn((_data: string) => {});
+    readonly hasSelection = vi.fn(() => true);
+    readonly getSelection = vi.fn(() => "selected");
     readonly onData = vi.fn((_listener: (data: string) => void) => ({ dispose: vi.fn() }));
     readonly onBinary = vi.fn(() => ({ dispose: vi.fn() }));
     readonly onResize = vi.fn((listener: (size: { cols: number; rows: number }) => void) => {
       this.resizeListeners.push(listener);
       return { dispose: vi.fn(() => { this.resizeListeners = this.resizeListeners.filter((entry) => entry !== listener); }) };
     });
-    readonly attachCustomKeyEventHandler = vi.fn();
+    keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
+    readonly attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => { this.keyHandler = handler; });
     readonly attachCustomWheelEventHandler = vi.fn();
 
     constructor(options: Record<string, unknown> = {}) {
@@ -165,13 +169,68 @@ afterEach(() => {
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {
+  it("copies the selected terminal text through the user clipboard gesture", async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    expect(await copyTerminalSelection({ getSelection: () => "α\tline\n二" }, { readText: vi.fn(), writeText })).toBe(true);
+    expect(writeText).toHaveBeenCalledWith("α\tline\n二");
+    expect(await copyTerminalSelection({ getSelection: () => "" }, { readText: vi.fn(), writeText })).toBe(false);
+  });
+
+  it("reads paste text only through the explicit clipboard operation", async () => {
+    const readText = vi.fn(async () => "line one\nline two\n✓");
+    expect(await readTerminalClipboard({ readText, writeText: vi.fn() })).toBe("line one\nline two\n✓");
+    expect(readText).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds paste until the requested pane owns control", async () => {
+    const readText = vi.fn(async () => "line one\nline two\n✓");
+    vi.stubGlobal("navigator", { clipboard: { readText, writeText: vi.fn() } });
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { selected: false, controlAllowed: false })} />);
+        await settle();
+      });
+      const terminal = mocks.terminals[0];
+      expect(terminal?.keyHandler).not.toBeNull();
+      await act(async () => {
+        terminal?.keyHandler?.(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, shiftKey: true, cancelable: true }));
+        await settle();
+      });
+      expect(terminal?.paste).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { selected: true, controlAllowed: false, controlPending: true, focusToken: 1 })} />);
+        await settle();
+      });
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { selected: true, controlAllowed: true, controlPending: false, focusToken: 1 })} />);
+        await settle();
+      });
+      await act(async () => {
+        messages.at(-1)?.(message("owned"));
+        await settle();
+      });
+      expect(terminal?.paste).toHaveBeenCalledOnce();
+      expect(terminal?.paste).toHaveBeenCalledWith("line one\nline two\n✓");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("uses the final DOM renderer metrics and visible scrollbar options", () => {
     const terminal = createCockpitTerminal(16);
     expect(terminal.options).toMatchObject({
       fontFamily: 'ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
       fontSize: 16,
       lineHeight: 1,
-      scrollbar: { showScrollbar: true, width: 8 },
+      scrollbar: { showScrollbar: false, width: 8 },
     });
   });
 

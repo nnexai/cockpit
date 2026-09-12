@@ -20,7 +20,7 @@ import type {
   TerminalOpenRequest,
 } from "../protocol/generated/v1";
 import { initialSessionState, sessionReducer, type SessionState } from "./session/sessionStore";
-import { focusRequestForSnapshot, useFocusCoordinator } from "./session/focusCoordinator";
+import { useFocusCoordinator } from "./session/focusCoordinator";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
 import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
@@ -386,17 +386,15 @@ function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]
   })}</div></section>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, hasSelectedPane, onEdit, onSelect, onContext, onCreate, onPaneMenu, onCommands, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onContext, onCreate, onCommands, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
   busy: boolean;
-  hasSelectedPane: boolean;
   onEdit: (id: string | null) => void;
   onSelect: (tab: Tab) => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
   onCreate: () => void;
-  onPaneMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   onCommands: () => void;
   mutate: Mutate;
 }) {
@@ -423,23 +421,26 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, hasSelectedPane, onEdi
         : <button type="button" disabled={busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div><div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={busy || !hasSelectedPane} onClick={onPaneMenu}>Pane</button><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div><div className="tab-strip-actions"><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
-function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, request, client, registerStream, onResync, mutate, style, renderer, onRendererViewChange, onTerminalView, onRefreshRenderer }: {
+function PaneView({ pane, label, selected, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onMenu, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, onRendererViewChange, onTerminalView, onRefreshRenderer }: {
   pane: Pane;
   label: string;
   selected: boolean;
-  showLabel: boolean;
+  busy: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
+  focusError: { code: string; message: string } | null;
   focusEpoch: number;
   focusToken: number;
   terminalMouseInput: boolean;
   onRequestControl: () => void;
   onSelect: () => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
+  onMenu: (event: MouseEvent<HTMLButtonElement>) => void;
+  onRetryFocus: () => void;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px">;
   client: CockpitClient;
   registerStream: (stream: TerminalStream, active: boolean) => void;
@@ -469,8 +470,13 @@ function PaneView({ pane, label, selected, showLabel, controlAllowed, controlPen
   }, [graphical, controlAllowed, controlPending]);
   return <section className={`pane-view${selected ? " is-selected" : ""}`} style={style} aria-label={title}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
-    {controlPending ? <span className="pane-focus-pending" role="status" aria-label="Waiting for Herdr focus confirmation">Waiting for focus…</span> : null}
-    {showLabel ? <div className="pane-border-label" title={title}>{title}</div> : null}
+    <header className="pane-header">
+      <button type="button" className="pane-header-select" onClick={onSelect} title={title}>
+        <span className="pane-icon" aria-hidden="true">›</span><span className="pane-title">{title}</span>
+      </button>
+      {controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null}
+      <button type="button" disabled={busy} className="pane-overflow" aria-label={`Pane actions for ${title}`} title="Pane actions" onClick={onMenu}>⋯</button>
+    </header>
     {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
       onPointerDownCapture={(event) => {
         if (!controlAllowed) {
@@ -581,12 +587,11 @@ export function mutationFailureCanRetry(request: ResourceMutationRequest, code: 
   return request.type === "pane_zoom" && request.mode !== "toggle";
 }
 
-function RecoveryPanel({ state, mutations, onReconnect, onRetry, onRetryMutation }: { state: SessionState; mutations: MutationCoordinatorState; onReconnect: () => void; onRetry: () => void; onRetryMutation: (operation: MutationOperation) => void }) {
+function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { state: SessionState; mutations: MutationCoordinatorState; onReconnect: () => void; onRetryMutation: (operation: MutationOperation) => void }) {
   const failures = Object.values(mutations.errors);
-  if (!state.syncError && !state.focusError && failures.length === 0) return null;
+  if (!state.syncError && failures.length === 0) return null;
   return <aside className="recovery-panel" aria-label="Recovery" role="alert">
     {state.syncError ? <div><span>{state.syncError.message}</span><button type="button" onClick={onReconnect}>Resync</button></div> : null}
-    {state.focusError ? <div><span>{state.focusError.message}</span><button type="button" onClick={onRetry}>Retry focus</button></div> : null}
     {failures.map((failure) => <div key={`${failure.operation.key}:${failure.operation.token}`}><span>{failure.message}</span>{failure.code ? <code>{failure.code}</code> : null}{mutationFailureCanRetry(failure.operation.request, failure.code) ? <button type="button" onClick={() => onRetryMutation(failure.operation)}>Retry</button> : null}<button type="button" onClick={onReconnect}>Resync</button></div>)}
 
   </aside>;
@@ -926,9 +931,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     return () => window.removeEventListener("keydown", keydown, true);
   }, [prefixActive, runCommand, modalOpen]);
   const openContext = (event: MouseEvent, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
-  const openSelectedPaneMenu = (event: MouseEvent<HTMLButtonElement>) => {
-    const pane = byId(panes, selection.paneId);
-    if (!pane || mutationBusy || modalOpen) return;
+  const openPaneMenu = (event: MouseEvent<HTMLButtonElement>, pane: Pane) => {
+    if (mutationBusy || modalOpen) return;
+    event.preventDefault();
+    event.stopPropagation();
     const bounds = event.currentTarget.getBoundingClientRect();
     setMenu({ target: { kind: "pane", id: pane.id }, x: bounds.left, y: bounds.bottom });
   };
@@ -971,7 +977,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   return <div className="workbench">
     <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} /><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
     <main className="main-workarea">
-      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} hasSelectedPane={Boolean(byId(panes, selection.paneId))} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={openSelectedPaneMenu} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
@@ -983,7 +989,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
             : state.focusPending.kind === "tab"
               ? state.focusPending.target_id === pane.tab_id
               : state.focusPending.kind === "space" && state.focusPending.target_id === pane.space_id);
-        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} showLabel={panes.length > 1} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={controlPendingForPane} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
+        const currentPaneStatus = pane.id === selection.paneId && state.focusPending !== null && !controlPendingForPane;
+        const paneFocusError = state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
+        return <PaneView key={pane.id} pane={pane} label={pane.title ?? `Pane ${panes.indexOf(pane) + 1}`} selected={pane.id === selection.paneId} busy={mutationBusy} controlAllowed={state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={controlPendingForPane || currentPaneStatus} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (!modalOpen && state.sync === "live") { if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} onMenu={(event) => openPaneMenu(event, pane)} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onRefreshRenderer={renderers.refresh} />;
       })}{mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}</div>
     </main>
     {renderMenu()}
@@ -1011,7 +1019,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
     {feedbackOpen && (feedbackSpaceId === selection.spaceId || feedbackLookup === null) ? <FeedbackPanel lookup={feedbackLookup} images={feedbackImages} busy={feedbackBusy} error={feedbackError} sendResult={feedbackResult} riskPending={feedbackRisk !== null} onRefresh={refreshFeedback} onAcknowledge={() => { void acknowledgeFeedback(); }} onSend={sendDisplayedFeedback} onRetryRisk={retryUnknownFeedback} onDismiss={() => setFeedbackOpen(false)} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}
-    <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetry={onRetry} onRetryMutation={onRetryMutation} />
+    <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
   </div>;
 }
 
@@ -1057,7 +1065,6 @@ export function App({ client }: { client: CockpitClient }) {
     onTimeout: requestResync,
   });
   const focusAndSelect = useCallback((request: FocusRequest, location: Selection) => {
-    setSelection(location);
     setControlPaneId(location.paneId);
     focus(request, location);
   }, [focus]);
@@ -1143,11 +1150,9 @@ export function App({ client }: { client: CockpitClient }) {
         const stream = await client.subscribeSession(sessionId, (message: SessionStreamMessage) => {
           if (!active || sessionObservation.current !== observation) return;
           if (recovering && message.type === "snapshot" && message.sequence === 1 && recoveryFocusToken === focusTokenRef.current && stateRef.current.focusError) {
-            const confirmedFocus = focusRequestForSnapshot(message.snapshot);
-            if (confirmedFocus) {
-              const token = ++focusTokenRef.current;
-              dispatch({ type: "focus/request", epoch, sessionId, request: confirmedFocus, token });
-            }
+            // Reissue the coordinator's retained intent. The bootstrap snapshot
+            // is a stale observation and must not become a new user request.
+            retryFocus();
           }
           dispatch({ type: "stream/message", epoch, sessionId, message });
           if (message.type !== "snapshot" || message.sequence !== 1) return;

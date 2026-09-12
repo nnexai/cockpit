@@ -173,6 +173,15 @@ summary:focus-visible {
   height: 100%;
 }
 
+.terminal-host .xterm .xterm-viewport {
+  background-color: transparent;
+  scrollbar-width: none;
+}
+
+.terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
 .terminal-host .xterm-image-layer-top {
   z-index: 4 !important;
 }
@@ -206,9 +215,71 @@ summary:focus-visible {
   font-size: var(--font-size-xs);
 }
 
-.focus-pending {
+.terminal-status {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 3;
+  display: inline-flex;
+  min-width: 16px;
+  min-height: 16px;
+  align-items: center;
+  justify-content: center;
   color: var(--working);
+  font-size: var(--font-size-xs);
+  pointer-events: auto;
 }
+
+.terminal-status-error {
+  color: var(--blocked);
+}
+
+.terminal-status-retry {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+}
+
+.terminal-context-menu {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  display: grid;
+  min-width: 96px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 36%);
+}
+
+.terminal-context-menu button {
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-context-menu button:hover,
+.terminal-context-menu button:focus-visible {
+  background: var(--surface-hover);
+}
+
+.terminal-context-menu button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
 .connection-strip {
   display: flex;
   min-height: 28px;
@@ -1090,18 +1161,50 @@ summary:focus-visible {
   height: 2px;
 }
 
-.pane-focus-pending {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  z-index: 2;
-  padding: 2px 5px;
-  border: 1px solid var(--working);
-  border-radius: var(--radius-control);
-  background: var(--surface-raised);
+.pane-focus-status {
+  display: inline-flex;
+  min-width: 16px;
+  min-height: 16px;
+  align-items: center;
+  justify-content: center;
   color: var(--working);
   font-size: var(--font-size-xs);
-  pointer-events: none;
+}
+
+.pane-focus-status-error {
+  color: var(--blocked);
+}
+
+.pane-focus-retry {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+}
+
+.pane-overflow {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-lg);
+  line-height: 20px;
+}
+
+.pane-overflow:hover,
+.pane-overflow:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 
@@ -1442,26 +1545,6 @@ summary:focus-visible {
   border-width: 1px;
   border-color: var(--focus-strong);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--focus-strong) 42%, transparent);
-}
-
-.pane-border-label {
-  height: 16px;
-  min-width: 0;
-  flex: 0 0 16px;
-  padding: 0 7px;
-  overflow: hidden;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-muted);
-  font-size: var(--font-size-xs);
-  line-height: var(--line-height-relaxed);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.pane-view.is-selected .pane-border-label {
-  color: var(--text-secondary);
 }
 
 .terminal-surface {
