@@ -1,0 +1,62 @@
+{
+  "captured_at": "2026-09-12T20:01:30+02:00",
+  "source_head": "a089ffa3d3a00b8ac8c1ee57b970c14d26a6415f",
+  "install_command": "python3 scripts/install-native.py --debug",
+  "build": {
+    "frontend": "bun run build passed, 318 modules",
+    "native": "Tauri debug build passed",
+    "host_cli": "cargo build -p cockpit-host --bin cockpit passed"
+  },
+  "artifacts": {
+    "target_debug_cockpit_tauri": {
+      "path": "target/debug/cockpit-tauri",
+      "sha256": "96efdd64f19d5cbc771c9f17162fa69a57b7a621685644cd24ef424027b4d352"
+    },
+    "installed_application": {
+      "path": "/home/nnex/.local/share/cockpit/bin/cockpit",
+      "sha256": "96efdd64f19d5cbc771c9f17162fa69a57b7a621685644cd24ef424027b4d352"
+    },
+    "target_debug_cockpit_cli": {
+      "path": "target/debug/cockpit",
+      "sha256": "a1fe318ee1c1b4c12e4d87f16387fa31dd36f80d37f57925752c0b7f05846031"
+    },
+    "installed_cli": {
+      "path": "/home/nnex/.local/share/cockpit/bin/cockpit-cli",
+      "sha256": "a1fe318ee1c1b4c12e4d87f16387fa31dd36f80d37f57925752c0b7f05846031"
+    }
+  },
+  "receipt": "/home/nnex/.local/share/cockpit/install.json",
+  "desktop": {
+    "path": "/home/nnex/.local/share/applications/dev.cockpit.app.desktop",
+    "exec": "/home/nnex/.local/bin/cockpit",
+    "cli_launcher": "/home/nnex/.local/bin/cockpit-cli"
+  },
+  "github_provider": {
+    "backup": "/tmp/csu12-evidence/cockpit-config.before-github.toml",
+    "config": "/home/nnex/.config/cockpit/config.toml",
+    "addition": {
+      "id": "github",
+      "base_url": "https://github.com",
+      "executable": "gh"
+    },
+    "existing_gitea_preserved": true,
+    "gh_auth_readonly_issue4": "PASS; issue #4 returned with 3 comments; no token logged"
+  },
+  "running_processes": {
+    "user_cockpit": {
+      "pid": 2523753,
+      "exe": "/home/nnex/.local/share/cockpit/bin/cockpit (deleted)",
+      "state": "stale pre-install image; ordinary relaunch required"
+    },
+    "user_gateway": {
+      "pid": 191105,
+      "address": "127.0.0.1:37952",
+      "touched": false
+    }
+  },
+  "native_runtime": {
+    "startup": "INCONCLUSIVE_LAUNCH_NO_WINDOW",
+    "reason": "run-owned installed binary stayed alive for 8 seconds with WebKit children but niri exposed no second window; timeout sent SIGTERM, stderr was empty; no input injected"
+  },
+  "scope": "All install writes were atomic and user-local; protected process, gateway, Herdr default, and unrelated worktree dirt were preserved."
+}
