@@ -388,7 +388,7 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
         {row.kind === "child" ? <span className={`space-connector${rows[index - 1]?.kind === "parent" ? " is-first" : ""}${row.connector === "└─" ? " is-last" : ""}`} aria-hidden="true" /> : null}
         {editingId === space.id
           ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
-          : <button type="button" disabled={busy} className="resource-select" title={displayLabel} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
+          : <button type="button" disabled={busy} draggable={!busy} className="resource-select" title={displayLabel} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
             <span className="resource-icon" aria-hidden="true">{status.glyph}</span>
             <span className="space-details"><span className="resource-label">{displayLabel}</span>{row.kind !== "child" && row.branch ? <span className="space-branch">{row.branch}</span> : null}</span>
           </button>}
@@ -450,7 +450,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
       onContextMenu={(event) => onContext(event, { kind: "tab", id: tab.id })}>
       {editingId === tab.id
         ? <InlineRename label={tab.label} ariaLabel={`Rename tab ${tab.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`tab:${tab.id}`, { type: "tab_rename", tab_id: tab.id, label }); if (accepted) onEdit(null); return accepted; }} />
-        : <button type="button" disabled={busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
+        : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
     <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
@@ -834,7 +834,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const closeDrawer = useCallback((restoreFocus = true) => {
     setDrawerOpen(false);
     drawerFocusTarget.current = null;
-    if (restoreFocus) window.setTimeout(() => sidebarReturnFocus.current?.focus({ preventScroll: true }), 0);
+    if (restoreFocus) window.setTimeout(() => {
+      const target = sidebarReturnFocus.current ?? document.querySelector<HTMLElement>(".drawer-toggle");
+      target?.focus({ preventScroll: true });
+      sidebarReturnFocus.current = null;
+    }, 0);
   }, []);
   const openDrawer = useCallback(() => {
     if (!narrowViewport) return;
