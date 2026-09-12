@@ -434,7 +434,7 @@ fn parse_tab_result(value: &Value, workspace_id: &str) -> Result<String, Inspect
 
 fn parse_workspace_closed(value: &Value) -> Result<(), InspectionError> {
     let result = object(value, "workspace.close result")?;
-    if required_string(result, "type", "workspace.close result")? != "workspace_closed" {
+    if !matches!(required_string(result, "type", "workspace.close result")?.as_str(), "workspace_closed" | "ok") {
         return Err(InspectionError::new(
             "malformed_workspace_response",
             "workspace.close returned an unexpected result",
@@ -702,6 +702,13 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_stock_workspace_close_acknowledgement() {
+        assert!(parse_workspace_closed(&json!({"type": "ok"})).is_ok());
+        assert!(parse_workspace_closed(&json!({"type": "workspace_closed"})).is_ok());
+        assert!(parse_workspace_closed(&json!({"type": "workspace_created"})).is_err());
+    }
 
     fn worktree(path: &str, branch: Option<&str>, linked: bool, open: Option<&str>) -> Value {
         json!({
