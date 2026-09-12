@@ -305,3 +305,50 @@ it("retains the visible source when a continuation crosses a revision change", a
     host.remove();
   }
 });
+
+it("releases continuation loading when navigation aborts the pending page", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  let resolvePage: (() => void) | undefined;
+  const pendingPage = new Promise<void>((resolve) => { resolvePage = resolve; });
+  const directory = vi.fn(async (): Promise<ContextDirectory> => ({
+    binding_id: "binding", root_id: "folder", path: "", truncated: false, diagnostics: [], entries: [
+      { entry_id: "one", name: "one.txt", path: "one.txt", kind: "file", bytes: 6, revision: "r1", refusal: null },
+      { entry_id: "two", name: "two.txt", path: "two.txt", kind: "file", bytes: 6, revision: "r2", refusal: null },
+    ],
+  }));
+  const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string; offset?: number }, signal?: AbortSignal) => {
+    if (request.path === "one.txt" && request.offset !== undefined) {
+      await pendingPage;
+      if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+      return { binding_id: "binding", root_id: "folder", path: "one.txt", revision: "r1", content_hash: null, bytes: 6, media_type: "text/plain", text: "tail", truncated: false, offset: 4, next_offset: undefined, total_bytes: 6, line_offset: undefined, diagnostics: [] };
+    }
+    const path = request.path;
+    return { binding_id: "binding", root_id: "folder", path, revision: path === "one.txt" ? "r1" : "r2", content_hash: null, bytes: 6, media_type: "text/plain", text: path === "one.txt" ? "head" : "two", truncated: true, offset: 0, next_offset: 4, total_bytes: 6, line_offset: 0, diagnostics: [] };
+  });
+  const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-context-path="one.txt"]')?.click());
+    await settle();
+    const continuation = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Load next source page"));
+    expect(continuation).toBeDefined();
+    await act(async () => continuation?.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-context-path="two.txt"]')?.click());
+    await settle();
+    const next = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Load next source page"));
+    expect(next).toBeDefined();
+    expect(next?.disabled).toBe(false);
+    resolvePage?.();
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
