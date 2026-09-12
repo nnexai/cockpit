@@ -1,15 +1,70 @@
 {
-  "increment": "terminal-focus-under-output-cn12",
+  "increment": "terminal-focus-under-output-cn12-gated",
   "status": "PASS",
   "run_root": "/tmp/cn12",
-  "herdr": {"executable": "/home/linuxbrew/.linuxbrew/bin/herdr", "version": "0.9.0", "session": "cn12", "socket": "/tmp/cn12/config/herdr/sessions/cn12/herdr.sock", "busy_pane": "w1:p1", "busy_command": "while true; printf BUSY_A\\n; sleep 0.1; end", "stable_pane": "w1:p2"},
+  "herdr": {
+    "executable": "/home/linuxbrew/.linuxbrew/bin/herdr",
+    "version": "0.9.0",
+    "session": "cn12",
+    "socket": "/tmp/cn12/config/herdr/sessions/cn12/herdr.sock",
+    "busy_pane": "w1:p1",
+    "busy_command": "yes BUSY_A &",
+    "stable_pane": "w1:p2"
+  },
   "gateway": "http://127.0.0.1:4192/",
   "browser_session": "cn12",
-  "switch_proof": {"iterations": 10, "targets": ["w1:t1", "w1:t2"], "authoritative_confirmation_ms": {"min": 115.7, "max": 155.7}, "all_intended_tabs_confirmed": true, "stale_intent_overwrite": false},
+  "switch_proof": {
+    "iterations": 10,
+    "targets": [
+      "w1:t1",
+      "w1:t2"
+    ],
+    "authoritative_confirmation_ms": {
+      "min": 115.7,
+      "max": 353.6
+    },
+    "all_intended_tabs_confirmed": true,
+    "stale_intent_overwrite": false
+  },
   "immediate_dom_behavior": "The selected tab remains on the prior confirmed target until Herdr confirms the new target. This matches the user contract.",
-  "rapid_input_attempt": {"marker": "RAPID_B_OK", "intended_pane": "w1:p2", "readback": "marker not observed", "status": "INCONCLUSIVE", "reason": "The current browser bundle logged repeated terminal WebSocket 503/closed-before-establishment responses while rapidly switching pane streams. This is retained as a runtime issue rather than a false PASS."},
-  "console": {"errors": "terminal WebSocket handshake returned 503 during rapid stream switching", "favicon_404": true},
-  "clipboard_browser": {"value": "Cockpit αβγ\\nline two\\n✓ 终端", "secure_context": true, "navigator_clipboard": true, "write": true, "read": true, "exact": true},
-  "native_clipboard": {"status": "INCONCLUSIVE", "reason": "No separate native clipboard adapter exists; Tauri uses the same WebView navigator.clipboard path. Native app launch requires a stable Herdr server."},
-  "cleanup_owner": "native_delivery"
+  "rapid_input_attempt": {
+    "marker": "gated2-confirmed-p2",
+    "intended_pane": "w1:p2",
+    "confirmed_tab": "w1:t2",
+    "confirmed_dom_terminal": "w1:p2",
+    "readback": "/tmp/cn12/gated2-confirmed-p2 created",
+    "status": "PASS",
+    "input_stream": "w1:p2 terminal control WebSocket",
+    "exactly_once_marker": true
+  },
+  "console": {
+    "errors": false,
+    "http_503": false,
+    "cancelled_handshake_warnings": true,
+    "warning_reason": "Rapid tab changes cancel obsolete terminal handshakes before establishment; the authoritative final target opens and accepts input."
+  },
+  "clipboard_browser": {
+    "value": "Cockpit \u03b1\u03b2\u03b3\\nline two\\n\u2713 \u7ec8\u7aef",
+    "secure_context": true,
+    "navigator_clipboard": true,
+    "write": true,
+    "read": true,
+    "exact": true
+  },
+  "native_clipboard": {
+    "status": "INCONCLUSIVE",
+    "reason": "Native launch succeeded against cn12. Clipboard adapter is the WebView navigator.clipboard path; exact clipboard roundtrip was proven in the browser WebView, while no separate native adapter boundary exists."
+  },
+  "cleanup_owner": "native_delivery",
+  "native_launch": {
+    "binary": "/home/nnex/.local/share/cockpit/bin/cockpit",
+    "session": "cn12",
+    "status": "PASS",
+    "evidence": "run-owned native window title Cockpit observed via niri with PID 3262589 during an 8-second launch; process exited with timeout 124 and was not retained",
+    "current_user_app": "not touched",
+    "install_source_hashes": {
+      "tauri": "fdfc7c3da0382222d5af3a1bc5a1bf8b67ef9294b4aecbcedf07f4ae03508308",
+      "cli": "baeaa04fb3521b90d6c8a3b29fcf9530518217e04b404d465ff2cdb6ea4fb7fc"
+    }
+  }
 }

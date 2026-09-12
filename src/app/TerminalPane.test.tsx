@@ -152,6 +152,7 @@ function paneProps(client: CockpitClient, terminalMouseInput: boolean, overrides
     selected: true,
     controlAllowed: true,
     controlPending: false,
+    focusTransitionPending: false,
     focusEpoch: 1,
     focusToken: 0,
     terminalMouseInput,
@@ -169,6 +170,30 @@ afterEach(() => {
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {
+  it("waits for authoritative focus before opening a terminal stream", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { focusTransitionPending: true })} />);
+        await settle();
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { focusTransitionPending: false })} />);
+        await settle();
+      });
+      expect(openTerminal).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("copies the selected terminal text through the user clipboard gesture", async () => {
     const writeText = vi.fn(async (_text: string) => undefined);
     expect(await copyTerminalSelection({ getSelection: () => "α\tline\n二" }, { readText: vi.fn(), writeText })).toBe(true);

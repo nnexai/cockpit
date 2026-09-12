@@ -27,14 +27,16 @@
   "source_artifacts_at_capture": {
     "target_release_cockpit_tauri_sha256": "acef1f24d79b1034572068aa50a04896d958e79387dd1a9b3ffd0209b665663c",
     "target_release_cockpit_cli_sha256": "7dae942db1849b778f0ad0050c383dd99e6a88e1f37badaff9b873ea34c491a5",
-    "target_debug_cockpit_tauri_sha256": "c238b25e35d54742d45ae5a01498917d74cd7433dd6096241f3ff8b778a17845",
-    "target_debug_cockpit_cli_sha256": "baeaa04fb3521b90d6c8a3b29fcf9530518217e04b404d465ff2cdb6ea4fb7fc"
+    "target_debug_cockpit_tauri_sha256": "fdfc7c3da0382222d5af3a1bc5a1bf8b67ef9294b4aecbcedf07f4ae03508308",
+    "target_debug_cockpit_cli_sha256": "baeaa04fb3521b90d6c8a3b29fcf9530518217e04b404d465ff2cdb6ea4fb7fc",
+    "installed_application_sha256": null,
+    "installed_cli_sha256": null
   },
   "wave_install": {
     "command": "python3 scripts/install-native.py --debug",
     "result": "PASS",
-    "tauri_build": "Finished dev profile in 3.40s; target/debug/cockpit-tauri (source-ready tree)",
-    "installed_application_sha256": "c238b25e35d54742d45ae5a01498917d74cd7433dd6096241f3ff8b778a17845",
+    "tauri_build": "Finished dev profile in 4.18s; target/debug/cockpit-tauri",
+    "installed_application_sha256": "fdfc7c3da0382222d5af3a1bc5a1bf8b67ef9294b4aecbcedf07f4ae03508308",
     "installed_cli_sha256": "baeaa04fb3521b90d6c8a3b29fcf9530518217e04b404d465ff2cdb6ea4fb7fc",
     "artifact_hashes_equal": true,
     "receipt_status": "installed",
@@ -59,13 +61,28 @@
     "status": "INCONCLUSIVE",
     "reason": "A disposable launch created the named server and startup workspace, then the headless startup pane shell exited with SIGHUP and Herdr shut down before a stable socket could be used. No inherited session or default resources were touched."
   },
-  "native_runtime": "INCONCLUSIVE",
+  "native_runtime": "PASS_LAUNCH_ONLY",
   "native_launch_attempt": {
-    "command": "timeout 8 env COCKPIT_CONFIG=/tmp/cockpit-native-delivery-20260912/cockpit.toml COCKPIT_HERDR_SESSION=cockpit-native-delivery-20260912 COCKPIT_HERDR_SOCKET=/tmp/cockpit-native-delivery-20260912/config/herdr/sessions/cockpit-native-delivery-20260912/herdr.sock /home/nnex/.local/share/cockpit/bin/cockpit",
-    "result": "INCONCLUSIVE",
-    "stderr": "failed to initialize Herdr: server_not_running: Herdr server is not running",
-    "resources": "run-owned config, fixture, XDG paths, session name, and socket only",
-    "current_user_app": "not touched"
+    "command": "run-owned cn12 env with /home/nnex/.local/share/cockpit/bin/cockpit under timeout 8s",
+    "result": "PASS_LAUNCH_ONLY",
+    "evidence": "niri observed a second Cockpit native window, title Cockpit, PID 3262589; process exited only when run-owned timeout elapsed",
+    "herdr_session": "cn12",
+    "current_user_app": "not touched",
+    "clipboard": "shared WebView navigator.clipboard path; exact browser roundtrip PASS, separate native boundary INCONCLUSIVE"
   },
-  "next_gate": "After a completed source wave, hash target/release artifacts, run python3 scripts/install-native.py --reuse, then verify installed hashes and record that PID 2523753 needs an ordinary relaunch to load the update."
+  "next_gate": "After a completed source wave, hash target/release artifacts, run python3 scripts/install-native.py --reuse, then verify installed hashes and record that PID 2523753 needs an ordinary relaunch to load the update.",
+  "current_delivery": {
+    "source_head": "working-tree-after-da301ac",
+    "source_commits": [
+      "552b83c",
+      "7b9eb74",
+      "6b3a8f8",
+      "da301ac",
+      "pending-terminal-gate"
+    ],
+    "runtime_fix": "suspend terminal attachment during pending focus transition and open confirmed control target directly",
+    "browser_build": "bun run build PASS, 316 modules",
+    "focused_gate": "bun run typecheck && bun run test -- src/app/TerminalPane.test.tsx src/app/App.integration.test.tsx src/app/sessionReducer.test.ts PASS, 46 tests",
+    "installed_hashes_equal": true
+  }
 }

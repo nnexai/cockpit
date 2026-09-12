@@ -17,6 +17,7 @@ export type TerminalPaneProps = {
   selected: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
+  focusTransitionPending: boolean;
   focusEpoch: number;
   focusToken: number;
   terminalMouseInput: boolean;
@@ -161,7 +162,7 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
 type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
 
 
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusTransitionPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -482,12 +483,17 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
 
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal || !terminalReady) return;
+    if (!terminal || !terminalReady || focusTransitionPending) return;
     const geometry = terminalCellGeometry(terminal);
+    // The authoritative snapshot can clear a focus transition one render
+    // before the local control request state catches up. Open the confirmed
+    // target directly in control mode so an observe handshake is not started
+    // only to be aborted on the next render.
+    const wantsControl = (controlRequested || controlAllowed) && ownership !== "conflict" && ownership !== "lost";
     const openRequest: TerminalOpenRequest = {
       ...request,
-      mode: controlRequested ? "control" : "observe",
-      takeover: controlRequested && takeoverRequestedRef.current,
+      mode: wantsControl ? "control" : "observe",
+      takeover: wantsControl && takeoverRequestedRef.current,
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
       cell_width_px: geometry.cell_width_px,
@@ -622,7 +628,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, request.session_id, request.pane_id, controlRequested, terminalReady, attempt, registerStream]);
+  }, [client, request.session_id, request.pane_id, controlRequested, focusTransitionPending, terminalReady, attempt, registerStream]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;
