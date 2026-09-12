@@ -33,3 +33,146 @@ VS Code's integrated terminal supports parts of two protocols originated by Kitt
 - Animation frame/control/composition actions remain unimplemented, and only direct inline transmission is accepted; file, temporary-file, and shared-memory media are rejected ([graphics handler](https://github.com/xtermjs/xterm.js/blob/master/addons/addon-image/src/kitty/KittyGraphicsHandler.ts#L308-L371), [transmission limitation](https://github.com/xtermjs/xterm.js/blob/master/addons/addon-image/src/kitty/KittyGraphicsHandler.ts#L392-L408)).
 - VS Code's 1.110 notes also call out missing animations, relative placements, Unicode placeholders, and file-based transmission ([1.110 release notes](https://code.visualstudio.com/updates/v1_110#_kitty-graphics-protocol)).
 - Image behavior remains constrained by xterm.js's text grid: resize reflow can split images, writing characters over image cells erases those cells' image information, and the addon cannot provide arbitrary foreground/background composition or transparency composition ([image-addon terminal interaction notes](https://github.com/xtermjs/xterm.js/blob/master/addons/addon-image/README.md#terminal-interaction)).
+
+## Local Herdr 0.9.0 attachment POC
+
+### Scope and conclusion
+
+This POC tested the exact path under consideration:
+
+```text
+Kitty-producing process → Herdr 0.9.0 terminal attachment → xterm.js browser terminal
+```
+
+The test used Herdr `0.9.0`, protocol `22`, and disposable named sessions. No
+Tauri native wrapper was involved. No Cockpit source was changed.
+
+**Conclusion:** xterm.js can render the Kitty graphics sequence, but Herdr's
+direct terminal attachment path does not transmit the PTY's Kitty APC graphics
+as either `ESC_G...ESC\` bytes inside `TerminalFrame` messages or separate
+`Graphics` messages. The image therefore cannot reach xterm.js on this path.
+
+Herdr's separate pane/client-shell graphics subsystem is a different path and
+must not be conflated with direct terminal attachment.
+
+### Test fixture
+
+The fixture was `scripts/kitty_image_smoke.py`. It generates a dependency-free
+PNG and writes:
+
+```text
+ESC _ G a=T,f=100,t=d,q=2,i=1,c=32,r=8 ; <base64 PNG> ESC \
+```
+
+The fixture output was 930 bytes. It includes a pink/teal checkerboard made of
+colored squares and surrounding diagnostic text.
+
+### Test A — browser attachment through the current Cockpit gateway
+
+An isolated Herdr session was created with workspace `w1`, pane `w1:p1`, and a
+temporary browser page using:
+
+- `@xterm/xterm` `6.1.0-beta.304`;
+- `@xterm/addon-image` `0.10.0-beta.301`;
+- `@xterm/addon-fit`.
+
+The browser opened a control terminal WebSocket attachment and the fixture was
+run through `herdr pane run`.
+
+Observed:
+
+- text from the fixture reached xterm.js;
+- terminal frames were received in order;
+- delivered frame bytes contained no `ESC_G` Kitty APC sequence;
+- no xterm image canvas was created;
+- no checkerboard appeared.
+
+The official Herdr CLI direct-attach capture also contained the fixture text
+but no Kitty APC bytes.
+
+This test established the symptom but was not treated as the decisive
+transport test because the Cockpit gateway intentionally parks graphics
+messages.
+
+### Test B — direct Herdr client socket, bypassing Cockpit
+
+A second isolated session used a temporary bridge connected directly to
+Herdr's `herdr-client.sock`. The bridge implemented the protocol-22 framing
+needed for:
+
+1. `TerminalHello` with `80x24` cells and `8x16` cell metrics;
+2. `ControlTerminal` for the disposable terminal;
+3. decoding `TerminalFrame` and `Graphics` server messages;
+4. forwarding any received bytes directly into xterm.js.
+
+The fixture was run while the browser was attached to this direct bridge.
+
+Observed on the direct Herdr wire:
+
+- ordinary terminal frames arrived;
+- no `Graphics` server messages arrived;
+- no terminal frame contained `ESC_G`;
+- xterm.js displayed the fixture text only;
+- the image addon created no image canvas;
+- no checkerboard appeared.
+
+This is the decisive result for the Herdr → attached terminal → xterm.js
+question: **the current Herdr direct terminal attachment does not forward the
+PTY Kitty graphics command.**
+
+### Test C — xterm.js positive control
+
+The exact 930-byte fixture output was written directly into the same xterm.js
+version and image addon without Herdr.
+
+Observed:
+
+- the `xterm-image-layer-top` canvas was created;
+- the image canvas measured `1159 × 634` in the browser viewport;
+- the pink/teal checkerboard visibly rendered.
+
+This isolates xterm.js and confirms that the missing image in Test B is not an
+xterm.js Kitty parsing or rendering failure.
+
+### Source and documentation evidence
+
+The live result agrees with the Herdr 0.9.0 source and documentation:
+
+- `src/protocol/wire.rs` defines `ServerMessage::Graphics { bytes }` as raw
+  Kitty bytes.
+- `src/server/headless/render.rs` renders `TerminalAttach` and
+  `TerminalObserve` through `render_terminal_virtual`, builds a `FrameData`,
+  and sends it with the ordinary terminal-frame path. The client-shell branch
+  separately builds a pane surface with graphics assets.
+- `src/client/terminal_sessions.rs` explicitly ignores
+  `ServerMessage::Graphics` for terminal-session clients.
+- Herdr's Socket API documents `pane.graphics.*` and
+  `file_frame_transport: "direct-kitty"` for the pane/client-shell graphics
+  subsystem, not for arbitrary Kitty APC output from a process in a direct
+  terminal attachment.
+- Cockpit's current `crates/cockpit-herdr/src/terminal_wire.rs` recognizes a
+  graphics wire tag but consumes the bounded graphics payload as parked data.
+  This explains the earlier Cockpit result but is not the cause of the direct
+  Herdr result in Test B.
+
+### Implication for future implementation
+
+Loading `@xterm/addon-image` is necessary but insufficient. A future
+implementation needs one of these explicit contracts:
+
+1. Herdr extends direct terminal attachment so PTY Kitty graphics are emitted
+   as `ServerMessage::Graphics` and the client forwards their raw Kitty bytes;
+   or
+2. Cockpit consumes Herdr's client-shell/pane-graphics surface instead of
+   treating the pane as a direct ANSI terminal stream.
+
+The current evidence does not support claiming that direct
+`Herdr terminal attach → xterm.js` Kitty rendering is available in Herdr
+0.9.0.
+
+### Cleanup and reproducibility
+
+Both POCs used uniquely named disposable Herdr sessions and temporary files
+outside the repository. The sessions, browser pages, bridges, Herdr servers,
+and temporary roots were stopped or removed after verification. The protected
+default Herdr session and unrelated running services were not touched.
