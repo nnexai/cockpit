@@ -210,6 +210,11 @@ async function sendToPage(tab, message, expectedDocument) {
   if (result?.error) throw new Error(result.error);
   return result;
 }
+async function openToolbar(tab) {
+  if (!tab || !Number.isInteger(tab.id) || !isPageUrl(tab.url)) throw new Error('Select an HTTP(S) page first');
+  const documentId = await ensureContent(tab);
+  return sendToPage(tab, { type: 'mode', mode: 'annotate' }, documentId);
+}
 function validContentSender(sender, message) {
   const tabId = sender?.tab?.id;
   return sender?.id === EXPECTED_EXTENSION_ID && sender.frameId === 0 && Number.isInteger(tabId) && isPageUrl(sender.tab.url) && typeof sender.documentId === 'string' && message.document_id === sender.documentId;
@@ -531,6 +536,10 @@ async function handle(message, sender) {
   throw new Error('Unknown extension action');
 }
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => { enqueueWorker(() => handle(message, sender)).then(sendResponse).catch((error) => sendResponse({ error: publicError(error) })); return true; });
+chrome.commands?.onCommand.addListener((command, tab) => {
+  if (command !== 'open-annotation-toolbar') return;
+  enqueueWorker(() => openToolbar(tab)).catch(() => {});
+});
 chrome.tabs.onActivated.addListener(({ windowId }) => {
   if (!Number.isInteger(windowId)) return;
   ACTIVATION_GENERATIONS.set(windowId, activationGenerationFor(windowId) + 1);

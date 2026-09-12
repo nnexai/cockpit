@@ -5,7 +5,6 @@ const status = $('#status');
 const pending = $('#pending');
 const tabs = $('#tab-select');
 const annotate = $('#annotate');
-const browse = $('#browse');
 const capture = $('#capture');
 const retry = $('#retry');
 const discard = $('#discard');
@@ -30,7 +29,7 @@ function setStatus(text, kind = '') {
   status.className = `status ${kind}`;
 }
 function setBusy(value) {
-  [annotate, browse, capture, retry, discard, reconnect].forEach((button) => { button.disabled = value; });
+  [annotate, capture, retry, discard, reconnect].forEach((button) => { button.disabled = value; });
   document.querySelectorAll('.drafts button').forEach((button) => { button.disabled = value; });
 }
 function selectedTab() { const value = Number(tabs.value); return Number.isInteger(value) ? value : undefined; }
@@ -108,7 +107,6 @@ async function refresh(reload = false) {
   finally { setBusy(false); }
 }
 annotate.addEventListener('click', async () => { try { await send({ type: 'mode', tab_id: selectedTab(), mode: 'annotate' }); setStatus('Annotate mode is active on the page.'); window.close(); } catch (error) { setStatus(error.message, 'error'); } });
-browse.addEventListener('click', async () => { try { await send({ type: 'mode', tab_id: selectedTab(), mode: 'browse' }); setStatus('Browse mode is active.'); window.close(); } catch (error) { setStatus(error.message, 'error'); } });
 capture.addEventListener('click', async () => { setBusy(true); setStatus('Capturing the visible page…'); try { const result = await send({ type: 'capture', tab_id: selectedTab() }); render(await send({ type: 'context' })); setStatus(`Saved ${result.annotation_ids.length} annotation${result.annotation_ids.length === 1 ? '' : 's'}.`); } catch (error) { setStatus(error.message, 'error'); } finally { setBusy(false); } });
 retry.addEventListener('click', async () => { setBusy(true); setStatus('Retrying pending evidence…'); try { const result = await send({ type: 'save-pending' }); render(await send({ type: 'context' })); setStatus(`Saved ${result.annotation_ids.length} annotation${result.annotation_ids.length === 1 ? '' : 's'}.`); } catch (error) { setStatus(error.message, 'error'); } finally { setBusy(false); } });
 discard.addEventListener('click', async () => { setBusy(true); try { await send({ type: 'discard-pending' }); render(await send({ type: 'context' })); setStatus('Pending evidence discarded.'); } catch (error) { setStatus(error.message, 'error'); } finally { setBusy(false); } });
