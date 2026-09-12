@@ -1,0 +1,10 @@
+{
+  "source": "https://github.com/nnexai/cockpit/issues/4",
+  "fetched_at": "2026-09-12T12:31:30.888690+00:00",
+  "method": "manual gh workaround; Cockpit GitHub setup was unsupported",
+  "comments": 3,
+  "files": [
+    "github-cockpit-4.md",
+    "github-cockpit-4.json"
+  ]
+}

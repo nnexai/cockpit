@@ -1,0 +1,16 @@
+diff --git a/CONTEXT.md b/CONTEXT.md
+index 2ee0218..4364302 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -379,0 +380,4 @@ The user downgrades Herdr to stable before implementation begins. Astra runs ins
++
++## Disposable workflow trial
++
++This paragraph exists only to exercise local review comments. It does not implement issue #4.
+diff --git a/planning/agent-control-plane-2026-09-12/README.md b/planning/agent-control-plane-2026-09-12/README.md
+index f7712f3..a93f34b 100644
+--- a/planning/agent-control-plane-2026-09-12/README.md
++++ b/planning/agent-control-plane-2026-09-12/README.md
+@@ -79,0 +80,2 @@ The screenshot output path in the script points to this checkout. Change that on
++
++Temporary workflow probe: review this change, retain a local annotation, then close the task Space.

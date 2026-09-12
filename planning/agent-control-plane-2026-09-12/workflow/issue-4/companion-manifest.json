@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "cockpit_operation_id": "2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+  "herdr_session_identity": "unix-socket:/tmp/cwf12/config/herdr/sessions/cw-issue4/herdr.sock:pid=1232306:uid=1000:gid=1000:start=1322934",
+  "herdr_workspace_id": "w2",
+  "repository_key": "/tmp/cwf12/repos/cockpit/.git",
+  "repository_root": "/tmp/cwf12/repos/cockpit",
+  "checkout_path": "/tmp/cwf12/worktrees/cockpit-issue-4",
+  "artifact": null,
+  "created_at": "1789216115903",
+  "updated_at": "1789216115903",
+  "ownership": "cockpit"
+}

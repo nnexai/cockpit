@@ -1,0 +1,68 @@
+{
+  "batch_id": "1e5d2100-1f1b-4cbe-91e2-bfc518fb518d",
+  "generation": 2,
+  "owner": {
+    "session_id": "cw-issue4",
+    "pane_id": "w2:p5",
+    "terminal_id": "term_65b488c2f7aeb6",
+    "source_kind": "review",
+    "source_id": "review-d5a7684c17a98c53e490defb4dc5bef0f2f17b29850ab097517fea99a37f15d8"
+  },
+  "last_known_location": {
+    "workspace_id": "w2",
+    "tab_id": "w2:t1"
+  },
+  "live_attachment": null,
+  "drafts": [
+    {
+      "draft_id": "21fda470-a8d3-48fa-b190-90c41e350476",
+      "file_ref": {
+        "review": {
+          "review_id": "c8d749e3-4948-4ee6-8827-1b8582a867d3",
+          "generation": 1,
+          "file_id": "file-df236ae76d309ea4d6d07b522e9570692836349641662cb23807d2ea6ba64f4a",
+          "side": "new"
+        },
+        "root_id": "review-d5a7684c17a98c53e490defb4dc5bef0f2f17b29850ab097517fea99a37f15d8",
+        "path": "CONTEXT.md",
+        "absolute_path": "/tmp/cwf12/worktrees/cockpit-issue-4/CONTEXT.md",
+        "revision": "sha256:e88f09b067725cf11d8c81d3565c187f268efe7a9f8f7e667d3340367c422b41",
+        "content_hash": "sha256:62fe6bd900e2d0f1e7e6ebcf05bb3812dfdf0e999fba62214a0fba372f99b1bf"
+      },
+      "anchor": {
+        "kind": "lines",
+        "start_line": 383,
+        "end_line": 383,
+        "selected_lines": [
+          "This paragraph exists only to exercise local review comments. It does not implement issue #4.\n"
+        ]
+      },
+      "comment_text": "Workflow trial: keep this disposable annotation attached to CONTEXT.md, new line 383. This is not an issue fix.",
+      "source_state": "current",
+      "updated_at": "1789217075176"
+    },
+    {
+      "draft_id": "777ef6a1-4a6b-4849-99ef-8dc5a1078151",
+      "file_ref": {
+        "review": {
+          "review_id": "c8d749e3-4948-4ee6-8827-1b8582a867d3",
+          "generation": 1,
+          "file_id": "file-97c310496f47903674b257a076e08efe08d9afee58c0802e7210181f60128bb6",
+          "side": "new"
+        },
+        "root_id": "review-d5a7684c17a98c53e490defb4dc5bef0f2f17b29850ab097517fea99a37f15d8",
+        "path": "planning/agent-control-plane-2026-09-12/README.md",
+        "absolute_path": "/tmp/cwf12/worktrees/cockpit-issue-4/planning/agent-control-plane-2026-09-12/README.md",
+        "revision": "sha256:e88f09b067725cf11d8c81d3565c187f268efe7a9f8f7e667d3340367c422b41",
+        "content_hash": "sha256:b2cf1a2c2097dee50661fc81a98ba0a016e4424d3a25992ec5a55653bef06af8"
+      },
+      "anchor": {
+        "kind": "whole_file"
+      },
+      "comment_text": "Workflow trial: verify whole-file comments survive switching files, refreshing, and returning to this Space.",
+      "source_state": "current",
+      "updated_at": "1789217116490"
+    }
+  ],
+  "updated_at": "1789217117033"
+}

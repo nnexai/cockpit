@@ -1,0 +1,16 @@
+{
+  "child_space": "w2",
+  "child_closed_through": "Cockpit Space context menu and native confirmation",
+  "parent_after_child_close": [
+    "w1"
+  ],
+  "herdr_session": "cw-issue4",
+  "herdr_stopped": true,
+  "herdr_socket_exists": false,
+  "gateway_processes_remaining": [],
+  "retained_root": "/tmp/cwf12",
+  "retained_reason": "Inspect the real linked worktree, downloaded companion context, and saved annotations",
+  "default_session_touched": false,
+  "github_writes": false,
+  "agent_started": false
+}

@@ -1,0 +1,29 @@
+{
+  "source_url": "https://github.com/nnexai/cockpit/issues/4",
+  "title": "Fix OMP terminal cell-width drift in Cockpit xterm",
+  "issue_state": "OPEN",
+  "comments": 3,
+  "body_bytes": 3297,
+  "download_method": "manual gh workaround after Cockpit rejected the GitHub URL",
+  "worktree_git_file": "gitdir: /tmp/cwf12/repos/cockpit/.git/worktrees/cockpit-issue-4",
+  "worktrees_after_close": "worktree /tmp/cwf12/repos/cockpit\nHEAD e51f97eba65685c9b2c515e2727d1791b02056fb\nbranch refs/heads/main\n\nworktree /tmp/cwf12/worktrees/cockpit-issue-4\nHEAD e51f97eba65685c9b2c515e2727d1791b02056fb\nbranch refs/heads/study/issue-4-workflow\n\n",
+  "status_after_close": " M CONTEXT.md\n M planning/agent-control-plane-2026-09-12/README.md\n?? workflow-trial.txt\n",
+  "worktree_source_commit": "e51f97eba65685c9b2c515e2727d1791b02056fb",
+  "context_files": [
+    {
+      "name": "github-cockpit-4.json",
+      "bytes": 9335,
+      "sha256": "fa5abf96fccfdfb6f1bb9d8ed5e6b78139c6faf895bef5c93a11f307d0ad6a7d"
+    },
+    {
+      "name": "github-cockpit-4.md",
+      "bytes": 8538,
+      "sha256": "a5bd4a1839e26f5b31d3c1a43aa4f1dfbb2f480d6e8c272780caac45fcacc16a"
+    },
+    {
+      "name": "import-receipt.json",
+      "bytes": 276,
+      "sha256": "70f6b1f2fb5f3695e28673d72682cb7298cd00feee2fb86ca7c0ff673db772d8"
+    }
+  ]
+}

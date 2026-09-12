@@ -1,0 +1,50 @@
+{
+  "kind": "recorded real-browser observations",
+  "source_commit": "e51f97eba65685c9b2c515e2727d1791b02056fb",
+  "session": "cw-issue4",
+  "samples_per_timing": 1,
+  "timings_ms": {
+    "unsupported_github_validation_including_capture": 365,
+    "repository_only_plan_including_capture": 264,
+    "start_to_setup_completed_heading": 2302,
+    "open_review_to_changed_file_list": 5828,
+    "select_readme_to_diff_text": 798,
+    "save_line_comment_to_saved_count": 1832
+  },
+  "first_useful_diff_timed": false,
+  "comparative_herdr_reviewr_benchmark": false,
+  "workarounds": [
+    "Removed unsupported GitHub URL to continue repository-only setup",
+    "Enabled already-installed Files and Review plugins in the fresh isolated session",
+    "Downloaded the issue body and three comments with gh into the created companion",
+    "Changed the source terminal foreground directory into the companion to enable Open Context"
+  ],
+  "immediate_input": {
+    "gesture": "Click visible Terminal w2:p2, type at 30 ms per character, press Enter",
+    "requested_command": "cd \"$COCKPIT_CONTEXT_PATH\"",
+    "observed_remaining_command": "PIT_CONTEXT_PATH\"",
+    "confirmed_by": "herdr pane read w2:p2 --source recent-unwrapped --lines 16",
+    "retry_after_focus_settled": "worked after clearing the partial input",
+    "root_cause_confirmed": false,
+    "excluded_automation_error": "Clicking the hidden xterm helper textarea instead of the visible terminal surface"
+  },
+  "review_state": {
+    "files": 3,
+    "saved_annotations": 2,
+    "preview_generated": true,
+    "paste_disabled_without_agent": true,
+    "file_before_refresh": "planning/agent-control-plane-2026-09-12/README.md",
+    "file_after_refresh": "CONTEXT.md",
+    "file_after_tab_return": "CONTEXT.md",
+    "comments_during_refresh": 0,
+    "comments_after_reload": 2,
+    "comments_after_terminal_renderer_roundtrip": 2,
+    "saved_annotations_retained_on_disk_after_close": true
+  },
+  "production_typography": {
+    "context_source": {"font_size_px":13,"line_height_px":19,"family":"IBM Plex Mono, Noto Sans Mono, monospace"},
+    "review_diff": {"font_size_px":13,"line_height_px":19,"family":"IBM Plex Mono, monospace"},
+    "review_file_labels": {"font_size_px":12,"line_height_px":20,"family":"IBM Plex Mono, monospace"}
+  },
+  "coverage_limits": ["browser only", "small corpus", "no issue implementation", "no agent delivery", "no large-file benchmark", "no clipboard or drag-and-drop reproduction", "no recovery into a reopened Space"]
+}

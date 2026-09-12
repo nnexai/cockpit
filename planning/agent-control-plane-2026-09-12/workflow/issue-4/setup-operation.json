@@ -1,0 +1,64 @@
+{
+  "operation": {
+    "operation_id": "2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+    "generation": 9,
+    "sequence": 8,
+    "session_id": "cw-issue4",
+    "plan": {
+      "operation_id": "2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+      "generation": 1,
+      "endpoint_identity": "unix-socket:/tmp/cwf12/config/herdr/sessions/cw-issue4/herdr.sock:pid=1232306:uid=1000:gid=1000:start=1322934",
+      "session_id": "cw-issue4",
+      "repository": {
+        "repository_id": "repo-9abe2cd751ed9787dc122fd1734b83021dda501fddbe3243af11869bf13b571d",
+        "name": "cockpit",
+        "root": "/tmp/cwf12/repos/cockpit",
+        "checkout_path": "/tmp/cwf12/repos/cockpit",
+        "common_dir": "/tmp/cwf12/repos/cockpit/.git",
+        "branch": "main",
+        "is_linked_worktree": false,
+        "is_detached": false,
+        "provenance": "primary;root=/tmp/cwf12/repos/cockpit;common=/tmp/cwf12/repos/cockpit/.git"
+      },
+      "mode": "create",
+      "branch": "study/issue-4-workflow",
+      "base": "e51f97eba65685c9b2c515e2727d1791b02056fb",
+      "checkout_path": "/tmp/cwf12/worktrees/cockpit-issue-4",
+      "companion_path": "/tmp/cwf12/companions/2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+      "companion_id": "2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+      "companion_created_by_operation": true,
+      "label": "cockpit #4 trial",
+      "focus": true,
+      "trust_repository": true,
+      "artifact": null,
+      "effects": [
+        "Create Herdr worktree at /tmp/cwf12/worktrees/cockpit-issue-4",
+        "Associate Cockpit companion at /tmp/cwf12/companions/2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+        "Create a new context-aware terminal with allowlisted COCKPIT_* environment"
+      ],
+      "warnings": []
+    },
+    "state": "completed",
+    "step": "completed",
+    "workspace_id": "w2",
+    "tab_id": "w2:t2",
+    "pane_id": "w2:p2",
+    "companion_id": "2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+    "owned_resources": [
+      {
+        "kind": "worktree",
+        "path": "/tmp/cwf12/worktrees/cockpit-issue-4",
+        "created_by_operation": true
+      },
+      {
+        "kind": "companion",
+        "path": "/tmp/cwf12/companions/2ed2cdcc-aa76-4055-9173-624805b3f9fb",
+        "created_by_operation": true
+      }
+    ],
+    "error": null,
+    "resume_allowed": false,
+    "cancel_requested": false,
+    "updated_at": "1789216116450"
+  }
+}
