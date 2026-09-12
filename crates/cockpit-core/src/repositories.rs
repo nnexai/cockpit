@@ -5,7 +5,7 @@ use std::process::Output;
 use std::time::{Duration, Instant};
 
 use cockpit_protocol::projects::{
-    ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, RepositoryCandidate,
+    ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectProvider, RepositoryCandidate,
     RepositoryListResponse,
 };
 use sha2::{Digest, Sha256};
@@ -503,7 +503,7 @@ pub fn resolve_artifact(
         .ok_or_else(|| {
             InspectionError::new(
                 "unsupported_artifact",
-                "artifact host is not a configured Gitea provider",
+                "artifact host is not a configured source provider",
             )
         })?;
     let base = Url::parse(&provider.base_url).map_err(|_| {
@@ -512,6 +512,9 @@ pub fn resolve_artifact(
             "configured provider URL is invalid",
         )
     })?;
+    if is_github_executable(&provider.executable) {
+        return resolve_github_artifact(provider, &base, &parsed, original_url);
+    }
     let relative = parsed
         .path()
         .strip_prefix(base.path().trim_end_matches('/'))
@@ -559,6 +562,73 @@ pub fn resolve_artifact(
         provider_id: provider.id.clone(),
         kind: kind.into(),
         canonical_id,
+        original_url: original_url.into(),
+        canonical_url: parsed.to_string(),
+    })
+}
+
+fn is_github_executable(executable: &str) -> bool {
+    Path::new(executable)
+        .file_name()
+        .is_some_and(|name| name == "gh")
+}
+
+fn resolve_github_artifact(
+    provider: &ProjectProvider,
+    base: &Url,
+    parsed: &Url,
+    original_url: &str,
+) -> Result<ProjectArtifact, InspectionError> {
+    if base.scheme() != "https"
+        || base.host_str() != Some("github.com")
+        || base.port().is_some()
+        || !base.username().is_empty()
+        || base.password().is_some()
+        || base.query().is_some()
+        || base.fragment().is_some()
+        || !matches!(base.path(), "" | "/")
+    {
+        return Err(InspectionError::new(
+            "invalid_provider_base_url",
+            "GitHub provider base URL must be https://github.com",
+        ));
+    }
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("github.com")
+        || parsed.port().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitHub artifact must use the configured https://github.com host",
+        ));
+    }
+    let pieces: Vec<&str> = parsed.path().trim_matches('/').split('/').collect();
+    if pieces.len() != 4
+        || pieces[..2]
+            .iter()
+            .any(|piece| piece.is_empty() || *piece == "." || *piece == ".." || piece.contains('%'))
+        || pieces[2] != "issues"
+        || pieces[3].is_empty()
+        || !pieces[3].bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitHub artifact path must identify owner, repository, and numeric issue ID",
+        ));
+    }
+    let issue_number = pieces[3].parse::<u64>().map_err(|_| {
+        InspectionError::new(
+            "unsupported_artifact",
+            "GitHub issue ID is outside the supported numeric range",
+        )
+    })?;
+    let repository = format!("{}/{}", pieces[0], pieces[1]);
+    Ok(ProjectArtifact {
+        provider_id: provider.id.clone(),
+        kind: "issue".into(),
+        canonical_id: format!("{repository}#{issue_number}"),
         original_url: original_url.into(),
         canonical_url: parsed.to_string(),
     })
@@ -759,5 +829,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn github_provider_resolves_only_public_issue_paths() {
+        let mut config = config();
+        config.providers = vec![ProjectProvider {
+            id: "github".into(),
+            base_url: "https://github.com/".into(),
+            executable: "gh".into(),
+            login: None,
+        }];
+        let artifact =
+            resolve_artifact(&config, "https://github.com/nnexai/cockpit/issues/4").unwrap();
+        assert_eq!(artifact.provider_id, "github");
+        assert_eq!(artifact.kind, "issue");
+        assert_eq!(artifact.canonical_id, "nnexai/cockpit#4");
+        assert_eq!(
+            resolve_artifact(&config, "https://github.com/nnexai/cockpit/pulls/4")
+                .unwrap_err()
+                .code,
+            "unsupported_artifact"
+        );
+        assert!(
+            resolve_artifact(
+                &config,
+                "https://github.example.com/nnexai/cockpit/issues/4"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn github_executable_rejects_enterprise_provider_base() {
+        let mut config = config();
+        config.providers = vec![ProjectProvider {
+            id: "github".into(),
+            base_url: "https://github.example.com/".into(),
+            executable: "/usr/local/bin/gh".into(),
+            login: None,
+        }];
+        let error = resolve_artifact(
+            &config,
+            "https://github.example.com/nnexai/cockpit/issues/4",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_provider_base_url");
     }
 }

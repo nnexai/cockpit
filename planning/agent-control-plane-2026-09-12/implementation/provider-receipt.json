@@ -1,0 +1,41 @@
+{
+  "increment": "github-provider",
+  "status": "PASS",
+  "base": "adaf417",
+  "run_root": "/tmp/cockpit-focus-20260912",
+  "provider": {
+    "id": "github",
+    "base_url": "https://github.com",
+    "executable": "/home/linuxbrew/.linuxbrew/bin/gh",
+    "auth_probe": "PASS",
+    "comment_pagination": "bounded five-page requests with Link continuation detection"
+  },
+  "herdr": {
+    "version": "0.9.0",
+    "protocol": 22,
+    "schema": 1,
+    "session": "cockpit-focus-20260912",
+    "socket": "/tmp/cockpit-focus-20260912/xdg-config/herdr/sessions/cockpit-focus-20260912/herdr.sock",
+    "plugins": ["herdr-file-viewer", "persiyanov.reviewr"]
+  },
+  "gateway": "http://127.0.0.1:4189/",
+  "browser_session": "cockpit-focus-baseline-20260912",
+  "companion": "/tmp/cockpit-focus-20260912/companions/bbb18ee9-30cc-45fe-bbfa-25aa512c24a4",
+  "source": {
+    "url": "https://github.com/nnexai/cockpit/issues/4",
+    "canonical_id": "nnexai/cockpit#4",
+    "revision": "2026-09-10T13:01:16Z",
+    "comments": 3,
+    "bytes": 8993,
+    "content_hash": "sha256:817ad895f73e6f284d9185cbd98593794c381fc6d3d55b27862f67c617ab4b4a",
+    "status": "materialized"
+  },
+  "commands": [
+    {"command": "cargo test -p cockpit-providers", "result": "PASS", "counts": "18 passed"},
+    {"command": "cargo test -p cockpit-core repositories::tests::github", "result": "PASS", "counts": "2 passed, 105 filtered"},
+    {"command": "cargo build -p cockpit-host", "result": "PASS"}
+  ],
+  "initial_probe": "FAIL: duplicate field url from GitHub url and html_url; repaired before final gate",
+  "screenshot": "provider-import-1440.png",
+  "deferred": ["direct issue URL setup readiness", "direct prepared Context opening", "native runtime"]
+}

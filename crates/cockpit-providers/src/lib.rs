@@ -7,6 +7,7 @@ use cockpit_core::sources::{SourceAsset, SourceFetchRequest, SourceProvider};
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 
+pub mod github;
 pub mod tea;
 
 pub fn configured_providers(
@@ -15,16 +16,27 @@ pub fn configured_providers(
     configuration
         .providers
         .iter()
-        .filter(|provider| tea_executable(&provider.executable))
-        .map(|provider| match provider.login.as_ref() {
-            Some(login) => Ok(Arc::new(tea::TeaSourceProvider::configured(
-                configuration,
-                &provider.id,
-                login.clone(),
-            )?) as Arc<dyn SourceProvider>),
-            None => Ok(Arc::new(UnconfiguredTeaProvider {
-                provider_id: provider.id.clone(),
-            }) as Arc<dyn SourceProvider>),
+        .filter_map(|provider| {
+            if tea_executable(&provider.executable) {
+                Some(match provider.login.as_ref() {
+                    Some(login) => tea::TeaSourceProvider::configured(
+                        configuration,
+                        &provider.id,
+                        login.clone(),
+                    )
+                    .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                    None => Ok(Arc::new(UnconfiguredTeaProvider {
+                        provider_id: provider.id.clone(),
+                    }) as Arc<dyn SourceProvider>),
+                })
+            } else if github::executable(&provider.executable) {
+                Some(
+                    github::GithubSourceProvider::configured(configuration, &provider.id)
+                        .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                )
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -67,7 +79,7 @@ impl SourceProvider for UnconfiguredTeaProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_providers, tea_executable};
+    use super::{configured_providers, github, tea_executable};
     use cockpit_core::sources::{SourceAuthority, SourceFetchRequest};
     use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
 
@@ -76,6 +88,13 @@ mod tests {
         assert!(tea_executable("tea"));
         assert!(tea_executable("/usr/local/bin/tea"));
         assert!(!tea_executable("gitea"));
+    }
+
+    #[test]
+    fn detects_github_cli_by_executable_basename() {
+        assert!(github::executable("gh"));
+        assert!(github::executable("/usr/local/bin/gh"));
+        assert!(!github::executable("github"));
     }
 
     #[test]
