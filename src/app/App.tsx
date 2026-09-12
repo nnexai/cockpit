@@ -994,7 +994,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const token = ++feedbackRequest.current;
     feedbackBusyRef.current = true;
     if (!quiet) { setFeedbackBusy(true); setFeedbackError(null); }
-    const target = { session_id: sessionId, space_id: spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
+    const target = { session_id: sessionId, space_id: feedbackTargetPaneRef.current ? null : spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
     const current = () => feedbackRequest.current === token && feedbackTargetRef.current?.sessionId === sessionId && feedbackTargetRef.current.spaceId === spaceId;
     try {
       const lookup = await client.browserFeedback({ target });
@@ -1049,7 +1049,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     feedbackBusyRef.current = true;
     setFeedbackBusy(true);
     setFeedbackError(null);
-    const target = { session_id: sessionId, space_id: spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
+    const target = { session_id: sessionId, space_id: feedbackTargetPaneRef.current ? null : spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
     let outcomeUnknown = false;
     try {
       const response = await client.sendBrowserFeedback({ target, ids, operation_id: operationId, acknowledge_duplicate_risk: acknowledgeDuplicateRisk });
@@ -1077,7 +1077,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setFeedbackBusy(true);
     setFeedbackError(null);
     try {
-      await client.acknowledgeBrowserFeedback({ target: { session_id: sessionId, space_id: spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null }, ids });
+      await client.acknowledgeBrowserFeedback({ target: { session_id: sessionId, space_id: feedbackTargetPaneRef.current ? null : spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null }, ids });
     } catch (error) {
       if (feedbackRequest.current === token) setFeedbackError(describeError(error, "Could not acknowledge browser feedback"));
     } finally {
