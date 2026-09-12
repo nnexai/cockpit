@@ -1,0 +1,71 @@
+{
+  "captured_at": "2026-09-12T17:50:30+02:00",
+  "repository": {
+    "head": "35355c3c8f04271bbd35200ccc5a81cf95f004cf",
+    "status": "main ahead 15; unrelated dirty paths preserved"
+  },
+  "running_process": {
+    "pid": 2523753,
+    "argv0": "/home/nnex/.local/bin/cockpit",
+    "proc_exe": "/home/nnex/.local/share/cockpit/bin/cockpit",
+    "sha256": "acef1f24d79b1034572068aa50a04896d958e79387dd1a9b3ffd0209b665663c",
+    "note": "Existing user process. It was not stopped or restarted. /proc/exe reports size 0 by procfs; the installed target was hashed separately."
+  },
+  "installed": {
+    "application": "/home/nnex/.local/share/cockpit/bin/cockpit",
+    "application_sha256": "acef1f24d79b1034572068aa50a04896d958e79387dd1a9b3ffd0209b665663c",
+    "application_mtime": "2026-09-12T17:37:39+02:00",
+    "cli": "/home/nnex/.local/share/cockpit/bin/cockpit-cli",
+    "cli_sha256": "7dae942db1849b778f0ad0050c383dd99e6a88e1f37badaff9b873ea34c491a5",
+    "launcher": "/home/nnex/.local/bin/cockpit",
+    "cli_launcher": "/home/nnex/.local/bin/cockpit-cli",
+    "receipt": "/home/nnex/.local/share/cockpit/install.json",
+    "receipt_status": "installed",
+    "desktop_entry": "/home/nnex/.local/share/applications/dev.cockpit.app.desktop",
+    "desktop_entry_exec": "/home/nnex/.local/bin/cockpit"
+  },
+  "source_artifacts_at_capture": {
+    "target_release_cockpit_tauri_sha256": "acef1f24d79b1034572068aa50a04896d958e79387dd1a9b3ffd0209b665663c",
+    "target_release_cockpit_cli_sha256": "7dae942db1849b778f0ad0050c383dd99e6a88e1f37badaff9b873ea34c491a5",
+    "target_debug_cockpit_tauri_sha256": "e5e40db2e2f3fc9a1df285d7962af9725d517edb46f792c44923daf45c7f9e06",
+    "target_debug_cockpit_cli_sha256": "baeaa04fb3521b90d6c8a3b29fcf9530518217e04b404d465ff2cdb6ea4fb7fc"
+  },
+  "wave_install": {
+    "command": "python3 scripts/install-native.py --debug",
+    "result": "PASS",
+    "tauri_build": "Finished dev profile in 21.31s; target/debug/cockpit-tauri",
+    "installed_application_sha256": "e5e40db2e2f3fc9a1df285d7962af9725d517edb46f792c44923daf45c7f9e06",
+    "installed_cli_sha256": "baeaa04fb3521b90d6c8a3b29fcf9530518217e04b404d465ff2cdb6ea4fb7fc",
+    "artifact_hashes_equal": true,
+    "receipt_status": "installed",
+    "running_pid_after_install": 2523753,
+    "running_pid_image_sha256": "acef1f24d79b1034572068aa50a04896d958e79387dd1a9b3ffd0209b665663c",
+    "running_pid_exe": "/home/nnex/.local/share/cockpit/bin/cockpit (deleted)",
+    "relaunch_required": true
+  },
+  "other_processes": [
+    {
+      "pid": 191105,
+      "argv": "target/debug/cockpit serve --bind 127.0.0.1:37952",
+      "exe": "/home/nnex/dev/prj/cockpit/target/debug/cockpit (deleted)",
+      "note": "Unrelated user gateway. It was not contacted, stopped, or restarted."
+    }
+  ],
+  "herdr": {
+    "version": "0.9.0",
+    "run_root": "/tmp/cockpit-native-delivery-20260912",
+    "session": "cockpit-native-delivery-20260912",
+    "socket": "/tmp/cockpit-native-delivery-20260912/config/herdr/sessions/cockpit-native-delivery-20260912/herdr.sock",
+    "status": "INCONCLUSIVE",
+    "reason": "A disposable launch created the named server and startup workspace, then the headless startup pane shell exited with SIGHUP and Herdr shut down before a stable socket could be used. No inherited session or default resources were touched."
+  },
+  "native_runtime": "INCONCLUSIVE",
+  "native_launch_attempt": {
+    "command": "timeout 8 env COCKPIT_CONFIG=/tmp/cockpit-native-delivery-20260912/cockpit.toml COCKPIT_HERDR_SESSION=cockpit-native-delivery-20260912 COCKPIT_HERDR_SOCKET=/tmp/cockpit-native-delivery-20260912/config/herdr/sessions/cockpit-native-delivery-20260912/herdr.sock /home/nnex/.local/share/cockpit/bin/cockpit",
+    "result": "INCONCLUSIVE",
+    "stderr": "failed to initialize Herdr: server_not_running: Herdr server is not running",
+    "resources": "run-owned config, fixture, XDG paths, session name, and socket only",
+    "current_user_app": "not touched"
+  },
+  "next_gate": "After a completed source wave, hash target/release artifacts, run python3 scripts/install-native.py --reuse, then verify installed hashes and record that PID 2523753 needs an ordinary relaunch to load the update."
+}

@@ -1,0 +1,15 @@
+{
+  "increment": "terminal-focus-under-output-cn12",
+  "status": "PASS",
+  "run_root": "/tmp/cn12",
+  "herdr": {"executable": "/home/linuxbrew/.linuxbrew/bin/herdr", "version": "0.9.0", "session": "cn12", "socket": "/tmp/cn12/config/herdr/sessions/cn12/herdr.sock", "busy_pane": "w1:p1", "busy_command": "while true; printf BUSY_A\\n; sleep 0.1; end", "stable_pane": "w1:p2"},
+  "gateway": "http://127.0.0.1:4192/",
+  "browser_session": "cn12",
+  "switch_proof": {"iterations": 10, "targets": ["w1:t1", "w1:t2"], "authoritative_confirmation_ms": {"min": 115.7, "max": 155.7}, "all_intended_tabs_confirmed": true, "stale_intent_overwrite": false},
+  "immediate_dom_behavior": "The selected tab remains on the prior confirmed target until Herdr confirms the new target. This matches the user contract.",
+  "rapid_input_attempt": {"marker": "RAPID_B_OK", "intended_pane": "w1:p2", "readback": "marker not observed", "status": "INCONCLUSIVE", "reason": "The current browser bundle logged repeated terminal WebSocket 503/closed-before-establishment responses while rapidly switching pane streams. This is retained as a runtime issue rather than a false PASS."},
+  "console": {"errors": "terminal WebSocket handshake returned 503 during rapid stream switching", "favicon_404": true},
+  "clipboard_browser": {"value": "Cockpit αβγ\\nline two\\n✓ 终端", "secure_context": true, "navigator_clipboard": true, "write": true, "read": true, "exact": true},
+  "native_clipboard": {"status": "INCONCLUSIVE", "reason": "No separate native clipboard adapter exists; Tauri uses the same WebView navigator.clipboard path. Native app launch requires a stable Herdr server."},
+  "cleanup_owner": "native_delivery"
+}
