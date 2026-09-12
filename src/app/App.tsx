@@ -1,5 +1,5 @@
 import { ReviewViewer } from "./review/ReviewViewer";
-import { useCallback, useEffect, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import {
   parseResourceMutationResponse,
   type CockpitClient,
@@ -380,9 +380,10 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
 }
 function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]; spaces: Space[]; tabs: Tab[]; selection: Selection; onSelect: (agent: Agent) => void }) {
   const orderedAgents = orderAgentsByHerdrPriority(agents);
-  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">agents</h2></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
+  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">agents</h2><span className="section-count">{orderedAgents.length}</span></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
     const location = [spaces.find((space) => space.id === agent.space_id)?.label, tabs.find((tab) => tab.id === agent.tab_id)?.label].filter(Boolean).join(" · ");
-    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(agent.status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name].filter(Boolean).join(" · ")}><span className="agent-state" aria-hidden="true">{stateGlyph(agent.status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span></span></button>;
+    const status = agent.status || "unknown";
+    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span><span className="agent-status">{status}</span></span></button>;
   })}</div></section>;
 }
 
@@ -599,6 +600,60 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { sta
 }
 type FeedbackImageState = Record<string, BrowserFeedbackImage | null>;
 
+const SIDEBAR_MIN_WIDTH = 224;
+const SIDEBAR_MAX_WIDTH = 360;
+const SIDEBAR_DEFAULT_WIDTH = 224;
+const SIDEBAR_WIDTH_KEY = "cockpit.sidebar.width";
+const SIDEBAR_COLLAPSED_KEY = "cockpit.sidebar.collapsed";
+
+function isNarrowViewport(): boolean {
+  return typeof window !== "undefined" && window.innerWidth <= 800;
+}
+
+function readSidebarWidth(): number {
+  if (typeof window === "undefined") return SIDEBAR_DEFAULT_WIDTH;
+  try {
+    const value = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(value) ? Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value)) : SIDEBAR_DEFAULT_WIDTH;
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH;
+  }
+}
+
+function readSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function SidebarHeader({ session, sync, collapsed, narrow, onSession, onCollapse, onClose, closeRef }: {
+  session: SessionSummary | undefined;
+  sync: SessionState["sync"];
+  collapsed: boolean;
+  narrow: boolean;
+  onSession: () => void;
+  onCollapse: () => void;
+  onClose: () => void;
+  closeRef?: RefObject<HTMLButtonElement | null>;
+}) {
+  const stateLabel = sync === "live" ? "live" : sync;
+  return <header className="sidebar-header">
+    <button type="button" className="session-selector" onClick={onSession} aria-label={`Switch session${session ? `, current ${session.label}` : ""}`} title={session?.label ?? "Switch session"}>
+      <span className={`connection-mark ${sync === "live" ? "" : "is-disconnected"}`} aria-hidden="true">●</span>
+      <span className="session-name">{session?.label ?? "No session"}</span>
+      <span className="session-state">{stateLabel}</span>
+      <span className="session-chevron" aria-hidden="true">⌄</span>
+    </button>
+    <div className="sidebar-header-actions">
+      <button type="button" className="sidebar-collapse" onClick={onCollapse} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button>
+      {narrow ? <button ref={closeRef} type="button" className="sidebar-close" onClick={onClose} aria-label="Close sidebar">×</button> : null}
+    </div>
+  </header>;
+}
+
 function FeedbackPanel({ lookup, images, busy, error, sendResult, riskPending, onRefresh, onAcknowledge, onSend, onRetryRisk, onDismiss }: {
   lookup: BrowserFeedbackLookup | null;
   images: FeedbackImageState;
@@ -656,9 +711,9 @@ function FeedbackPanel({ lookup, images, busy, error, sendResult, riskPending, o
   </div>;
 }
 
-function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, onSession, onFocus, onRequestControl, onReconnect, onRetry, onRefreshSessions, onMutate, onRetryMutation }: {
+function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, onSession, onFocus, onRequestControl, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
-  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onRequestControl: (paneId: string) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
+  onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onRequestControl: (paneId: string) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onOpenSession: () => void; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
 }) {
   const snapshot = state.snapshot;
   const spaces = snapshot?.spaces ?? [];
@@ -685,8 +740,77 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [teardownSpaceId, setTeardownSpaceId] = useState<string | null>(null);
   const [prefixActive, setPrefixActive] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const [narrowViewport, setNarrowViewport] = useState(isNarrowViewport);
+  const [drawerOpen, setDrawerOpen] = useState(() => !isNarrowViewport());
+  const sidebarReturnFocus = useRef<HTMLElement | null>(null);
+  const sidebarCloseRef = useRef<HTMLButtonElement | null>(null);
+  const drawerFocusTarget = useRef<{ spaceId: string; paneId: string | null } | null>(null);
   const mutationBusy = mutations.pending !== null || renderers.busy;
   const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null;
+  const sidebarSession = sessions.find((session) => session.id === state.sessionId);
+  const openSessionChooser = useCallback(() => {
+    setSessionChooserOpen(true);
+    onOpenSession();
+  }, [onOpenSession]);
+  const closeDrawer = useCallback((restoreFocus = true) => {
+    setDrawerOpen(false);
+    drawerFocusTarget.current = null;
+    if (restoreFocus) window.setTimeout(() => sidebarReturnFocus.current?.focus({ preventScroll: true }), 0);
+  }, []);
+  const openDrawer = useCallback(() => {
+    if (!narrowViewport) return;
+    sidebarReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setDrawerOpen(true);
+  }, [narrowViewport]);
+  const updateSidebarWidth = useCallback((next: number) => {
+    const width = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, next));
+    setSidebarWidth(width);
+    try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* local preferences are optional */ }
+  }, []);
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch { /* local preferences are optional */ }
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    const update = () => {
+      const narrow = isNarrowViewport();
+      setNarrowViewport(narrow);
+      if (!narrow) setDrawerOpen(true);
+    };
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  useEffect(() => {
+    if (!narrowViewport || !drawerOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDrawer();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = [...document.querySelectorAll<HTMLElement>(".sidebar:not([hidden]) button:not(:disabled), .sidebar:not([hidden]) input:not(:disabled), .sidebar:not([hidden]) select:not(:disabled), .sidebar:not([hidden]) [tabindex]:not([tabindex='-1'])")];
+      if (controls.length === 0) return;
+      event.preventDefault();
+      const current = controls.indexOf(document.activeElement as HTMLElement);
+      controls[(current + (event.shiftKey ? controls.length - 1 : 1)) % controls.length]?.focus();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.setTimeout(() => sidebarCloseRef.current?.focus({ preventScroll: true }), 0);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [closeDrawer, drawerOpen, narrowViewport]);
+  useEffect(() => {
+    const target = drawerFocusTarget.current;
+    if (!target || !narrowViewport || !drawerOpen || state.focusPending || state.focusError) return;
+    if (selection.spaceId !== target.spaceId) return;
+    if (target.paneId && selection.paneId !== target.paneId) return;
+    closeDrawer();
+  }, [closeDrawer, drawerOpen, narrowViewport, selection.paneId, selection.spaceId, state.focusError, state.focusPending]);
   const [browserError, setBrowserError] = useState<(StatusError & { action: string }) | null>(null);
   const [browserBusy, setBrowserBusy] = useState(false);
   const browserBusyRef = useRef(false);
@@ -714,6 +838,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (modalOpen) return;
     const tabId = allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null;
     const paneId = snapshot?.panes.find((pane) => pane.space_id === space.id && pane.focused)?.id ?? null;
+    if (narrowViewport) drawerFocusTarget.current = { spaceId: space.id, paneId };
     onFocus({ kind: "space", target_id: space.id }, { spaceId: space.id, tabId, paneId });
   };
   const focusTab = (tab: Tab) => {
@@ -722,6 +847,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId });
   };
   const focusPane = (pane: Pane) => { if (!modalOpen) onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); };
+  const focusAgent = (agent: Agent) => {
+    if (modalOpen) return;
+    if (narrowViewport) drawerFocusTarget.current = { spaceId: agent.space_id, paneId: agent.pane_id };
+    onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id });
+  };
   const beginRename = (target: ContextTarget | null): boolean => {
     if (!target || mutationBusy) return false;
     if (target.kind === "pane") setDialog({ kind: "rename", paneId: target.id });
@@ -975,9 +1105,20 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}>Close</button>
     </ContextMenu>;
   };
-  return <div className="workbench">
-    <aside className="sidebar"><Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} /><Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={(agent) => { if (!modalOpen) onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id }); }} /></aside>
+  const workbenchStyle: CSSProperties = { gridTemplateColumns: `${sidebarCollapsed ? 48 : sidebarWidth}px 5px minmax(0, 1fr)` };
+  const sidebarClass = `sidebar${sidebarCollapsed ? " is-collapsed" : ""}`;
+  return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
+    {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
+    <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport && !drawerOpen}>
+      <SidebarHeader session={sidebarSession} sync={state.sync} collapsed={sidebarCollapsed} narrow={narrowViewport} onSession={openSessionChooser} onCollapse={toggleSidebarCollapsed} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} />
+      <Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} />
+      <Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={focusAgent} />
+    </aside>
+    {!narrowViewport ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}
+      onKeyDown={(event) => { if (sidebarCollapsed) return; if (event.key === "Home") { event.preventDefault(); updateSidebarWidth(SIDEBAR_DEFAULT_WIDTH); } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateSidebarWidth(sidebarWidth + (event.key === "ArrowLeft" ? -8 : 8)); } }}
+      onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
+      {narrowViewport ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={openDrawer}>☰ <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
         const rectangle = projectedPaneRect(layout, pane.id);
@@ -1243,5 +1384,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} onSession={switchSession} onFocus={focusAndSelect} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
+  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} onSession={switchSession} onFocus={focusAndSelect} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
 }
