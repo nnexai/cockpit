@@ -155,16 +155,24 @@ fn search_blocking(
     request: ContextSearchRequest,
 ) -> Result<ContextSearchResponse, InspectionError> {
     root.revalidate()?;
-    let root_revision = root.directory_revision()?;
-    let mut corpus_hasher = Sha256::new();
-    update_corpus_revision(&mut corpus_hasher, "", &root_revision);
+    let (revision, inventory_truncated) = corpus_revision(&root)?;
+    if request
+        .revision
+        .as_deref()
+        .is_some_and(|expected| expected != revision)
+    {
+        return Err(InspectionError::new(
+            "context_stale_revision",
+            "Context files changed since search continued",
+        ));
+    }
     let deadline = Instant::now() + SEARCH_TIMEOUT;
     let mut pending = vec![(root.resolve_directory(Path::new(""))?, PathBuf::new())];
     let mut results = Vec::new();
     let mut scanned_entries = 0usize;
     let mut scanned_files = 0u32;
-    let mut truncated = false;
-    let mut partial_reason = None;
+    let mut truncated = inventory_truncated;
+    let mut partial_reason = inventory_truncated.then_some("directory scan limit".to_owned());
     let mut skipped_matches = request.offset.unwrap_or(0) as usize;
 
     while let Some((directory, relative)) = pending.pop() {
@@ -245,11 +253,6 @@ fn search_blocking(
             if metadata.file_type().is_symlink() {
                 continue;
             }
-            update_corpus_revision(
-                &mut corpus_hasher,
-                &candidate.to_string_lossy(),
-                &metadata_revision(&metadata),
-            );
             if metadata.is_dir() {
                 match directory.open_dir_nofollow(Path::new(&name)) {
                     Ok(child) => pending.push((child, candidate)),
@@ -296,23 +299,13 @@ fn search_blocking(
         truncated = true;
     } else {
         root.revalidate()?;
-        if root.directory_revision()? != root_revision {
+        let (after_revision, _) = corpus_revision(&root)?;
+        if after_revision != revision {
             return Err(InspectionError::new(
                 "context_changed_during_read",
                 "Context root changed while searching",
             ));
         }
-    }
-    let revision = finish_corpus_revision(corpus_hasher);
-    if request
-        .revision
-        .as_deref()
-        .is_some_and(|expected| expected != revision)
-    {
-        return Err(InspectionError::new(
-            "context_stale_revision",
-            "Context files changed since search continued",
-        ));
     }
     let next_offset = (truncated && !results.is_empty()).then_some(
         request
@@ -339,6 +332,66 @@ fn update_corpus_revision(hasher: &mut Sha256, path: &str, revision: &str) {
     hasher.update([0]);
     hasher.update(revision.as_bytes());
     hasher.update([0xff]);
+}
+
+fn corpus_revision(root: &AuthorizedRoot) -> Result<(String, bool), InspectionError> {
+    let root_revision = root.directory_revision()?;
+    let mut hasher = Sha256::new();
+    update_corpus_revision(&mut hasher, "", &root_revision);
+    let mut pending = vec![(root.resolve_directory(Path::new(""))?, PathBuf::new())];
+    let mut scanned_entries = 0usize;
+    let mut truncated = false;
+    while let Some((directory, relative)) = pending.pop() {
+        let mut names = Vec::new();
+        for entry in directory.entries().map_err(|error| {
+            InspectionError::new("context_search_unavailable", error.to_string())
+        })? {
+            if scanned_entries >= MAX_SCANNED_ENTRIES {
+                truncated = true;
+                break;
+            }
+            scanned_entries += 1;
+            let Ok(entry) = entry else {
+                truncated = true;
+                continue;
+            };
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                truncated = true;
+                continue;
+            };
+            names.push(name);
+        }
+        names.sort();
+        for name in names {
+            let candidate = if relative.as_os_str().is_empty() {
+                PathBuf::from(&name)
+            } else {
+                relative.join(&name)
+            };
+            let Ok(candidate) = root.relative_path(&candidate.to_string_lossy()) else {
+                continue;
+            };
+            let Ok(metadata) = directory.symlink_metadata(Path::new(&name)) else {
+                truncated = true;
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            update_corpus_revision(
+                &mut hasher,
+                &candidate.to_string_lossy(),
+                &metadata_revision(&metadata),
+            );
+            if metadata.is_dir() {
+                match directory.open_dir_nofollow(Path::new(&name)) {
+                    Ok(child) => pending.push((child, candidate)),
+                    Err(_) => truncated = true,
+                }
+            }
+        }
+    }
+    Ok((finish_corpus_revision(hasher), truncated))
 }
 
 fn finish_corpus_revision(hasher: Sha256) -> String {
