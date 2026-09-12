@@ -279,12 +279,9 @@ function mutationResponse(sessionId: string, next = snapshot(sessionId)): Resour
 }
 
 function selectSession(sessionId: string): void {
-  const select = container.querySelector<HTMLSelectElement>('select[aria-label="Session"]');
-  if (!select) throw new Error("Missing session selector");
-  act(() => {
-    select.value = sessionId;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  const choice = container.querySelector<HTMLButtonElement>(`[data-session-id="${sessionId}"]`);
+  if (!choice) throw new Error("Missing session choice");
+  click(choice);
 }
 async function advanceTimers(milliseconds: number): Promise<void> {
   await act(async () => {
@@ -350,9 +347,10 @@ describe("mounted App mutation and session ordering", () => {
     expect(container.querySelector(".sidebar-divider")).toBeNull();
     expect(button("Commands").closest(".tab-strip")).toBeNull();
     expect(button("Commands").closest(".tab-strip-actions")).not.toBeNull();
+    expect(button("Pane").closest(".tab-strip-actions")).not.toBeNull();
     expect(button("Pane actions for Alpha pane").disabled).toBe(false);
     expect(button("Pane actions for Alpha pane").closest(".pane-header")).not.toBeNull();
-    click(button("Pane actions for Alpha pane"));
+    click(button("Pane"));
     expect(container.querySelector('[role="menu"][aria-label="pane actions"]')).not.toBeNull();
     click(button("Commands"));
     expect(container.querySelector(".command-overlay")).not.toBeNull();

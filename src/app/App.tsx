@@ -408,15 +408,17 @@ function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]
   })}</div></section>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onContext, onCreate, onCommands, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, onEdit, onSelect, onContext, onCreate, onPaneMenu, onCommands, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
   busy: boolean;
+  paneAvailable: boolean;
   onEdit: (id: string | null) => void;
   onSelect: (tab: Tab) => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
   onCreate: () => void;
+  onPaneMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   onCommands: () => void;
   mutate: Mutate;
 }) {
@@ -453,7 +455,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
         : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={busy || !paneAvailable} onClick={onPaneMenu}>Pane</button><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
@@ -591,11 +593,15 @@ const prefixCommandActions: Array<{ command: PrefixCommand; label: string; short
 
 function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: { actions: CommandAction[]; statusContent?: ReactNode; onSwitchSession: () => void; onDismiss: () => void }) {
   const ref = useModalFocus<HTMLElement>(onDismiss);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const normalized = query.trim().toLocaleLowerCase();
   const filtered = actions.filter((action) => !normalized || `${action.label} ${action.shortcut ?? ""} ${action.group}`.toLocaleLowerCase().includes(normalized));
   useEffect(() => setActive((current) => Math.min(current, Math.max(0, filtered.length - 1))), [filtered.length]);
+  useEffect(() => { searchRef.current?.focus(); }, []);
+  useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [active, normalized]);
   const runActive = () => {
     const action = filtered[active];
     if (action && !action.disabled) action.run();
@@ -605,11 +611,11 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => filtered.length === 0 ? 0 : (current + (event.key === "ArrowDown" ? 1 : filtered.length - 1)) % filtered.length); return; }
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
-  }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><input className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
+  }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
     const groupActions = filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
-    return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => { const index = filtered.indexOf(action); return <button type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><span className="command-row-label"><span>{action.label}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>; })}</section>;
-  })}</div><details className="shortcut-help"><summary>Keyboard help</summary><p>Commands opens with Ctrl+B ?. The Herdr prefix remains active for terminal input and normal typing.</p></details><button type="button" className="command-switch-session" onClick={onSwitchSession}>Switch session…</button></section></div>;
+    return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => { const index = filtered.indexOf(action); return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><span className="command-row-label"><span>{action.label}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>; })}</section>;
+  })}</div><footer className="command-footer"><span>↑↓ move · Enter run · Esc close</span><button type="button" onClick={onSwitchSession}>Switch session…</button></footer></section></div>;
 }
 
 export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
@@ -647,11 +653,22 @@ export function reconcileSessionChoice(sessions: SessionSummary[], selected: str
 
 function SessionDialogOverlay({ sessions, currentSessionId, onRefresh, onDismiss, onSession }: { sessions: SessionSummary[]; currentSessionId: string | null; onRefresh: () => Promise<void>; onDismiss: () => void; onSession: (sessionId: string) => void }) {
   const [sessionId, setSessionId] = useState(() => reconcileSessionChoice(sessions, "", currentSessionId));
+  const [query, setQuery] = useState("");
+  const selectedSessionRef = useRef<HTMLButtonElement | null>(null);
   const ref = useModalFocus<HTMLFormElement>(onDismiss);
   useEffect(() => setSessionId((selected) => reconcileSessionChoice(sessions, selected, currentSessionId)), [sessions, currentSessionId]);
-  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay" role="dialog" aria-modal="true" aria-labelledby="session-chooser-title" onSubmit={(event) => { event.preventDefault(); if (sessionId && sessionId !== currentSessionId) onSession(sessionId); onDismiss(); }} onKeyDown={(event) => trapModalTab(event, ref.current)}>
+  const normalized = query.trim().toLocaleLowerCase();
+  const filteredSessions = sessions.filter((session) => !normalized || `${session.label} ${session.id} ${session.running ? "running" : "stopped"}`.toLocaleLowerCase().includes(normalized));
+  useEffect(() => { selectedSessionRef.current?.scrollIntoView?.({ block: "nearest" }); }, [sessionId, normalized]);
+  const selectRelativeSession = (direction: 1 | -1) => {
+    if (filteredSessions.length === 0) return;
+    const current = filteredSessions.findIndex((session) => session.id === sessionId);
+    const next = current < 0 ? (direction === 1 ? 0 : filteredSessions.length - 1) : (current + direction + filteredSessions.length) % filteredSessions.length;
+    setSessionId(filteredSessions[next].id);
+  };
+  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay session-chooser" role="dialog" aria-modal="true" aria-labelledby="session-chooser-title" onSubmit={(event) => { event.preventDefault(); if (sessionId && sessionId !== currentSessionId) onSession(sessionId); onDismiss(); }} onKeyDown={(event) => trapModalTab(event, ref.current)}>
     <h2 id="session-chooser-title">switch session</h2>
-    {sessions.length === 0 ? <div className="empty-choice" role="status">No sessions are available.</div> : <select aria-label="Session" value={sessionId} onChange={(event) => setSessionId(event.target.value)}>{sessions.map((session) => <option key={session.id} value={session.id}>{session.label}{session.running ? "" : " (stopped)"}</option>)}</select>}
+    {sessions.length === 0 ? <div className="empty-choice" role="status">No sessions are available.</div> : <><input className="session-search" aria-label="Find a session" placeholder="Find a session…" autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); selectRelativeSession(event.key === "ArrowDown" ? 1 : -1); } }} /><div className="session-list" role="listbox" aria-label="Session">{filteredSessions.length === 0 ? <p className="empty-choice" role="status">No sessions match.</p> : filteredSessions.map((session) => <button ref={session.id === sessionId ? selectedSessionRef : null} key={session.id} type="button" role="option" aria-selected={session.id === sessionId} data-session-id={session.id} className={`session-choice${session.id === sessionId ? " is-selected" : ""}`} onClick={() => setSessionId(session.id)}><span>{session.label}</span><small>{session.running ? "running" : "stopped"}</small></button>)}</div></>}
     <footer>{sessions.length === 0 ? <button type="button" onClick={() => { void onRefresh().catch(() => undefined); }}>Refresh</button> : null}<button type="button" onClick={onDismiss}>Cancel</button><button type="submit" disabled={!sessionId || sessionId === currentSessionId}>Switch</button></footer>
   </form></div>;
 }
@@ -858,10 +875,12 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     });
   }, []);
   useEffect(() => {
+    let previous = isNarrowViewport();
     const update = () => {
       const narrow = isNarrowViewport();
       setNarrowViewport(narrow);
-      if (!narrow) setDrawerOpen(true);
+      if (narrow !== previous) setDrawerOpen(!narrow);
+      previous = narrow;
     };
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
@@ -1185,18 +1204,22 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     if (!pane) return null;
     const renderer = renderers.panes[pane.id];
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
+      <p className="context-menu-heading" role="presentation">Pane</p>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button>
+      <p className="context-menu-heading" role="presentation">Open view</p>
       {rendererActionDefinitions.map(({ id, label, direction, kind }) => {
         const capability = kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context;
         return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? "Select a pane with the required capability"} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}>{label}</button>;
       })}
+      <p className="context-menu-heading" role="presentation">Advanced</p>
       <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}>{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : renderer?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
       <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}>Refresh renderer detection</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button>
       <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}>Swap...</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}>Move...</button>
+      <div className="context-menu-separator" role="presentation" />
       <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}>Close</button>
     </ContextMenu>;
   };
@@ -1237,7 +1260,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {narrowViewport ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={openDrawer}>☰ <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;

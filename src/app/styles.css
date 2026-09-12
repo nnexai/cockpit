@@ -9,18 +9,18 @@
   color-scheme: dark;
   font-family: "IBM Plex Sans", "Noto Sans", sans-serif;
   font-synthesis: none;
-  --app-bg: #0b0e13;
-  --sidebar-bg: #11151c;
-  --surface: #151a22;
-  --surface-raised: #1b222d;
-  --surface-hover: #202936;
-  --surface-selected: #243144;
-  --border: #2a3340;
+  --app-bg: #0b0e12;
+  --sidebar-bg: #11161e;
+  --surface: #161d27;
+  --surface-raised: #1b2431;
+  --surface-hover: #222e3d;
+  --surface-selected: #23354c;
+  --border: #2b3543;
   --border-strong: #3b4758;
-  --text-primary: #e6eaf0;
-  --text-secondary: #a7b0be;
-  --text-muted: #737e8e;
-  --accent: #70a7ff;
+  --text-primary: #e5eaf1;
+  --text-secondary: #a6b3c3;
+  --text-muted: #8996a8;
+  --accent: #8bb9ff;
   --focus-strong: #8db8ff;
   --blocked: #ff6b78;
   --working: #e7b14a;
@@ -45,6 +45,9 @@
   --space-tree-child-indent: 47px;
   --tab-strip-height: 31px;
   --radius-control: 4px;
+  --compact-control-size: 28px;
+  --control-height: 32px;
+  --menu-control-height: 29px;
 }
 
 * {
@@ -153,7 +156,7 @@ summary:focus-visible {
 
 .sidebar-header .session-selector {
   min-width: 0;
-  height: 32px;
+  height: var(--control-height);
   margin: 0;
   padding: 0 4px;
   border: 0;
@@ -181,8 +184,8 @@ summary:focus-visible {
 
 .sidebar-collapse,
 .sidebar-close {
-  width: 26px;
-  height: 26px;
+  width: var(--compact-control-size);
+  height: var(--compact-control-size);
   padding: 0;
   border: 0;
   background: transparent;
@@ -233,7 +236,7 @@ summary:focus-visible {
   left: 8px;
   z-index: 8;
   display: none;
-  min-height: 28px;
+  min-height: var(--compact-control-size);
   padding: 3px 8px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
@@ -1342,7 +1345,7 @@ summary:focus-visible {
 }
 
 .session-selector {
-  height: 32px;
+  height: var(--control-height);
   margin: 0;
   padding: 0 4px;
   border: 0;
@@ -1697,9 +1700,11 @@ summary:focus-visible {
 .tab-strip-actions {
   display: flex;
   flex: 0 0 auto;
+  min-width: 0;
 }
 
 .tab-strip-action {
+  height: calc(var(--tab-strip-height) - 1px);
   min-width: 0;
   padding: 0 8px;
   border: 0;
@@ -1797,7 +1802,7 @@ summary:focus-visible {
 }
 
 .context-menu button {
-  min-height: 29px;
+  min-height: var(--menu-control-height);
   padding: 4px 8px;
   border: 0;
   border-radius: 3px;
@@ -1821,6 +1826,21 @@ summary:focus-visible {
   color: var(--blocked);
 }
 
+.context-menu-heading {
+  margin: 5px 7px 1px;
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 3px;
+  background: var(--border);
+}
+
 .overlay-scrim {
   position: fixed;
   inset: 0;
@@ -1834,13 +1854,19 @@ summary:focus-visible {
 
 .command-overlay,
 .chooser-overlay {
-  width: min(480px, calc(100vw - 32px));
-  max-height: min(680px, calc(100vh - 32px));
+  width: min(480px, 100%);
+  max-height: min(680px, 100%);
   overflow: auto;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--surface-raised);
   box-shadow: 0 18px 64px rgb(0 0 0 / 55%);
+}
+
+.command-overlay {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .command-overlay header {
@@ -1871,7 +1897,7 @@ summary:focus-visible {
 .command-search {
   display: block;
   width: calc(100% - 16px);
-  min-height: 32px;
+  min-height: var(--control-height);
   margin: 8px;
   padding: 4px 8px;
   border: 1px solid var(--border-strong);
@@ -1897,9 +1923,11 @@ summary:focus-visible {
 }
 
 .command-list {
-  max-height: min(510px, calc(100vh - 220px));
+  min-height: 0;
   padding: 0 8px 8px;
   overflow: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 8px;
 }
 
 .command-group {
@@ -1967,38 +1995,38 @@ summary:focus-visible {
   color: var(--text-secondary);
 }
 
-.shortcut-help {
-  margin: 0 8px 8px;
+.command-footer {
+  display: flex;
+  min-height: var(--control-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
   border-top: 1px solid var(--border);
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: var(--font-size-xs);
 }
 
-.shortcut-help summary {
-  padding: 8px 0 4px;
-  color: var(--text-primary);
-  cursor: pointer;
+.command-footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.shortcut-help p {
-  margin: 0 0 4px;
-}
-
-.command-switch-session {
-  width: calc(100% - 16px);
-  min-height: 32px;
-  margin: 0 8px 8px;
-  padding: 5px 7px;
+.command-footer button {
+  min-height: var(--compact-control-size);
+  flex: 0 0 auto;
+  padding: 3px 7px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text-primary);
-  text-align: left;
   cursor: pointer;
 }
 
-.command-switch-session:hover,
-.command-switch-session:focus-visible {
+.command-footer button:hover,
+.command-footer button:focus-visible {
   background: var(--surface-selected);
 }
 
@@ -2010,7 +2038,7 @@ kbd {
 
 .chooser-overlay {
   display: grid;
-  width: min(360px, calc(100vw - 32px));
+  width: min(360px, 100%);
   gap: 12px;
   padding: 14px;
 }
@@ -2018,7 +2046,7 @@ kbd {
 .chooser-overlay input,
 .chooser-overlay select {
   min-width: 0;
-  height: 30px;
+  min-height: var(--control-height);
   padding: 3px 7px;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
@@ -2040,7 +2068,7 @@ kbd {
 }
 
 .chooser-overlay footer button {
-  min-height: 27px;
+  min-height: var(--compact-control-size);
   padding: 3px 9px;
   border: 1px solid var(--border);
 }
@@ -2319,6 +2347,53 @@ kbd {
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
   font-size: var(--font-size-xs);
   overflow-wrap: anywhere;
+}
+
+.session-chooser {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  max-height: min(440px, 100%);
+  overflow: hidden;
+}
+
+.session-search {
+  width: 100%;
+}
+
+.session-list {
+  display: grid;
+  min-height: 0;
+  gap: 2px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 4px;
+}
+
+.session-choice {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.session-choice:hover,
+.session-choice:focus-visible,
+.session-choice.is-selected {
+  border-color: var(--border-strong);
+  background: var(--surface-selected);
+}
+
+.session-choice small {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
 }
 
 .feedback-footer {
