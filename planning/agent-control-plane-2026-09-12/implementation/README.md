@@ -41,12 +41,20 @@ The UI created two harmless tracked edits (`docs/discovery-limits.md`, `src/app/
 
 A second real operation (`7d615383-5607-4526-8e8f-2dace14a766e`) held the run-owned source import lock after creating its workspace/companion. It stopped at `partial/context_preparing` with `source_import_busy`; after releasing the lock, `Retry source import` completed with the same workspace and resource paths and materialized the 8,993-byte issue asset. This is a source-lock recovery proof, not a provider outage claim.
 
-The corrected viewport receipt covers 1440×900, 800×1000, 600×900, 480×900, and 360×900. Each has a nonzero Review diff and Context document area, with source and diff roles present. Representative evidence is [packet12-real-review-1440.png](packet12-real-review-1440.png), [packet12-real-review-480.png](packet12-real-review-480.png), and `packet12-style-receipt.json`.
+The corrected actual-content receipt is `retry-runtime-audit.json`, with the rerunnable checker in `check-viewer-widths.js`. The checker ran against the selected real issue asset and selected `docs/discovery-limits.md` diff, and passed at 1440×900, 800×1000, 600×900, and 480×900. It measured nonzero rendered document text, 13px/19px Plex Mono source/diff lines, 13px/20px Plex Sans controls, collapsed narrow navigation, and an enabled Files trigger.
+
+At a 1440×900 browser viewport, the existing Herdr `Resize pane w3:p8 horizontally` control produced a 358px Context pane. The selected issue asset rendered 9,057 characters with a 13px/19px source line; the adjacent Review pane rendered the selected real diff with a 13px/19px diff line and `review-diff-marker` gutters. The Context Files picker opened and closed without changing the selected asset. Representative evidence is [packet12-real-context-360.png](packet12-real-context-360.png).
+
+At a 480×900 viewport, Herdr `Ctrl+B z toggle zoom` gave the selected Context pane 478px of usable width. The same real issue asset rendered 9,066 characters with 13px/19px source lines, and the Files trigger remained reachable. This is a zoomed selected-viewer proof; it makes no claim that a 120px three-way split is readable. Evidence is [packet12-real-context-480-zoomed.png](packet12-real-context-480-zoomed.png).
 
 Validation:
 
 - `bunx vitest run src/app/context/ContextViewer.test.tsx src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx` — 3 files, 20 tests passed.
 - `bun run build` — `tsc --noEmit` and Vite 316 modules passed; existing large-chunk warning emitted.
 - `cargo test -p cockpit-core companion_checkout_match_is_exact_and_unambiguous` — 1 passed, 106 filtered; integration target 0 run, 20 filtered.
+
+The focused viewer command was run once after the actual-content correction:
+
+- `playwright-cli -s=cockpit-focus-baseline-20260912 run-code --filename planning/agent-control-plane-2026-09-12/implementation/check-viewer-widths.js` — **PASS**, four viewport observations plus the real 358px pane and 478px zoomed Context receipts; the Context Files identity check also passed.
 
 Native constructor coverage, the full packet matrix, and automatic zero-click draft rebinding remain **INCONCLUSIVE/deferred**. Run-owned Herdr, gateway, browser, clone, worktrees, companions, and proof receipts remain under `/tmp/cockpit-real-20260912`.

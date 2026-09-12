@@ -1,0 +1,20 @@
+{
+  "owner": "runtime_delivery",
+  "cleaned_at": "2026-09-12T17:22:25+02:00",
+  "stopped_run_owned_processes": [
+    {"pid": 1617204, "kind": "herdr", "session": "cockpit-focus-20260912"},
+    {"pid": 2046090, "kind": "cockpit gateway", "bind": "127.0.0.1:4189", "root": "/tmp/cockpit-focus-20260912"},
+    {"pid": 2109548, "kind": "herdr", "session": "cockpit-real-20260912"},
+    {"pid": 2111886, "kind": "cockpit gateway", "bind": "127.0.0.1:4190", "root": "/tmp/cockpit-real-20260912"}
+  ],
+  "closed_browser_sessions": ["cockpit-focus-baseline-20260912"],
+  "retained_for_inspection": [
+    "/tmp/cockpit-focus-20260912",
+    "/tmp/cockpit-real-20260912/cockpit-repo",
+    "/tmp/cockpit-real-20260912/worktrees",
+    "/tmp/cockpit-real-20260912/companions",
+    "/tmp/cockpit-real-20260912/evidence"
+  ],
+  "default_session_touched": false,
+  "user_browser_sessions_touched": false
+}

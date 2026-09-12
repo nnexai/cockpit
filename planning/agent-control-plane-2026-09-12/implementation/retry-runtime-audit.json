@@ -1,0 +1,394 @@
+{
+  "increment": "issue4-source-retry",
+  "status": "PASS_WITH_ABSENCE_CAVEAT",
+  "evidence_source": "reused runtime_delivery run; no concurrent session started",
+  "run_root": "/tmp/cockpit-real-20260912",
+  "browser": {
+    "failed_snapshot": "/tmp/cockpit-real-20260912/retry-failed.yml",
+    "success_snapshot": "/tmp/cockpit-real-20260912/retry-success.yml",
+    "failed_gesture": "Retry source import",
+    "failed_ui_state": "partial / Preparing Context / source_import_busy",
+    "success_ui_state": "completed / Workspace setup completed",
+    "terminal_visible_after_retry": "Terminal w4:p3 with fish prompt"
+  },
+  "operation": {
+    "operation_id": "7d615383-5607-4526-8e8f-2dace14a766e",
+    "before": {
+      "state": "partial",
+      "step": "context_preparing",
+      "workspace_id": "w4",
+      "tab_id": "w4:t2",
+      "pane_id": "w4:p3",
+      "companion_id": "7d615383-5607-4526-8e8f-2dace14a766e",
+      "error_code": "source_import_busy",
+      "resume_allowed": true
+    },
+    "after": {
+      "state": "completed",
+      "step": "completed",
+      "workspace_id": "w4",
+      "tab_id": "w4:t2",
+      "pane_id": "w4:p3",
+      "companion_id": "7d615383-5607-4526-8e8f-2dace14a766e",
+      "error": null,
+      "resume_allowed": false
+    },
+    "same_ids": {
+      "workspace": true,
+      "tab": true,
+      "pane": true,
+      "companion": true
+    }
+  },
+  "resources": {
+    "before": [
+      {
+        "kind": "worktree",
+        "path": "/tmp/cockpit-real-20260912/worktrees/cockpit-repo-7d615383-5607-4526-8e8f-2dace14a766e",
+        "created_by_operation": true
+      },
+      {
+        "kind": "companion",
+        "path": "/tmp/cockpit-real-20260912/companions/7d615383-5607-4526-8e8f-2dace14a766e",
+        "created_by_operation": true
+      }
+    ],
+    "after": [
+      {
+        "kind": "worktree",
+        "path": "/tmp/cockpit-real-20260912/worktrees/cockpit-repo-7d615383-5607-4526-8e8f-2dace14a766e",
+        "created_by_operation": true
+      },
+      {
+        "kind": "companion",
+        "path": "/tmp/cockpit-real-20260912/companions/7d615383-5607-4526-8e8f-2dace14a766e",
+        "created_by_operation": true
+      }
+    ],
+    "same_resource_paths": true,
+    "resource_count_after": 2
+  },
+  "source": {
+    "canonical_id": "nnexai/cockpit#4",
+    "provider_id": "github",
+    "kind": "issue",
+    "asset_path": "/tmp/cockpit-real-20260912/companions/7d615383-5607-4526-8e8f-2dace14a766e/sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md",
+    "asset_bytes": 8993,
+    "asset_sha256": "sha256:7611f2aac6ea7a3597df8780cbb15d8f7c2e95942c8263a9461c0b38c4e819cc",
+    "manifest_bytes": 8993,
+    "manifest_content_hash": "sha256:7611f2aac6ea7a3597df8780cbb15d8f7c2e95942c8263a9461c0b38c4e819cc",
+    "manifest_status": "complete",
+    "hash_matches_manifest": true,
+    "comment_count": 3,
+    "comment_ids": [
+      "5617094901",
+      "5617254169",
+      "5619089402"
+    ],
+    "body_heading": "# Fix OMP terminal cell-width drift in Cockpit xterm",
+    "repository_root": "/tmp/cockpit-real-20260912/cockpit-repo",
+    "operation_checkout_path": "/tmp/cockpit-real-20260912/worktrees/cockpit-repo-7d615383-5607-4526-8e8f-2dace14a766e"
+  },
+  "absence_evidence": {
+    "partial_capture_mtime": 1789225461.2486045,
+    "context_manifest_mtime": 1789225471.337124,
+    "asset_mtime": 1789225471.337124,
+    "claim": "The materialized manifest and asset were written after retry-before capture; no direct pre-retry directory listing was recorded."
+  },
+  "evidence_checks": {
+    "retry_error_is_named_source_lock_contention": true,
+    "body_and_three_comments_present": true,
+    "terminal_remains_usable": true
+  },
+  "viewer_width_proof": {
+    "status": "PASS",
+    "checker_script": "planning/agent-control-plane-2026-09-12/implementation/check-viewer-widths.js",
+    "checker_command": "playwright-cli -s=cockpit-focus-baseline-20260912 run-code --filename planning/agent-control-plane-2026-09-12/implementation/check-viewer-widths.js",
+    "checker_status": "PASS",
+    "checker_observed_surface": "review",
+    "checker_viewports": [
+      {
+        "label": "1440x900",
+        "surface": "review",
+        "pane": {
+          "width": 425.84375,
+          "height": 851
+        },
+        "document": {
+          "width": 425.84375,
+          "height": 680,
+          "textLength": 883
+        },
+        "line": {
+          "className": "review-line is-context",
+          "width": 425.84375,
+          "height": 154,
+          "style": {
+            "family": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+            "size": "13px",
+            "lineHeight": "19px"
+          }
+        },
+        "control": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "13px",
+          "lineHeight": "20px"
+        },
+        "metadata": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "12px",
+          "lineHeight": "16px"
+        },
+        "list": {
+          "display": "none",
+          "width": 0,
+          "visible": false
+        },
+        "trigger": {
+          "visible": true,
+          "enabled": true
+        },
+        "status": "PASS"
+      },
+      {
+        "label": "800x1000",
+        "surface": "review",
+        "pane": {
+          "width": 200.65625,
+          "height": 951
+        },
+        "document": {
+          "width": 200.65625,
+          "height": 878,
+          "textLength": 883
+        },
+        "line": {
+          "className": "review-line is-context",
+          "width": 200.65625,
+          "height": 477,
+          "style": {
+            "family": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+            "size": "13px",
+            "lineHeight": "19px"
+          }
+        },
+        "control": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "13px",
+          "lineHeight": "20px"
+        },
+        "metadata": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "12px",
+          "lineHeight": "16px"
+        },
+        "list": {
+          "display": "none",
+          "width": 0,
+          "visible": false
+        },
+        "trigger": {
+          "visible": true,
+          "enabled": true
+        },
+        "status": "PASS"
+      },
+      {
+        "label": "600x900",
+        "surface": "review",
+        "pane": {
+          "width": 133.109375,
+          "height": 851
+        },
+        "document": {
+          "width": 133.109375,
+          "height": 778,
+          "textLength": 883
+        },
+        "line": {
+          "className": "review-line is-context",
+          "width": 133.109375,
+          "height": 1142,
+          "style": {
+            "family": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+            "size": "13px",
+            "lineHeight": "19px"
+          }
+        },
+        "control": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "13px",
+          "lineHeight": "20px"
+        },
+        "metadata": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "12px",
+          "lineHeight": "16px"
+        },
+        "list": {
+          "display": "none",
+          "width": 0,
+          "visible": false
+        },
+        "trigger": {
+          "visible": true,
+          "enabled": true
+        },
+        "status": "PASS"
+      },
+      {
+        "label": "480x900",
+        "surface": "review",
+        "pane": {
+          "width": 166.875,
+          "height": 473
+        },
+        "document": {
+          "width": 166.875,
+          "height": 400,
+          "textLength": 883
+        },
+        "line": {
+          "className": "review-line is-context",
+          "width": 166.875,
+          "height": 648,
+          "style": {
+            "family": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+            "size": "13px",
+            "lineHeight": "19px"
+          }
+        },
+        "control": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "13px",
+          "lineHeight": "20px"
+        },
+        "metadata": {
+          "family": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif",
+          "size": "12px",
+          "lineHeight": "16px"
+        },
+        "list": {
+          "display": "none",
+          "width": 0,
+          "visible": false
+        },
+        "trigger": {
+          "visible": true,
+          "enabled": true
+        },
+        "status": "PASS"
+      }
+    ],
+    "checker_picker": {
+      "status": "PASS",
+      "surface": "review",
+      "selected": "file-b3fc60314d6920108ef6aee58c7998438b3f2730450cdd3350969b255045e93f",
+      "action": "open Files trigger and close with Escape"
+    },
+    "wide_desktop_context": {
+      "method": "Herdr pane resize via Resize pane w3:p8 horizontally drag",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pane": {
+        "x": 1080.703125,
+        "y": 48,
+        "width": 358.28125,
+        "height": 851,
+        "top": 48,
+        "right": 1438.984375,
+        "bottom": 899,
+        "left": 1080.703125
+      },
+      "document": {
+        "x": 1080.703125,
+        "y": 84,
+        "width": 358.28125,
+        "height": 815,
+        "top": 84,
+        "right": 1438.984375,
+        "bottom": 899,
+        "left": 1080.703125
+      },
+      "document_text_length": 9057,
+      "selected_asset": "sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md",
+      "source_line_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+      "source_line_size": "13px",
+      "source_line_height": "19px",
+      "files_trigger": "visible and enabled",
+      "review_diff_document": {
+        "x": 652.84375,
+        "y": 84,
+        "width": 425.84375,
+        "height": 680,
+        "top": 84,
+        "right": 1078.6875,
+        "bottom": 764,
+        "left": 652.84375
+      },
+      "review_diff_text_length": 849,
+      "review_line_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+      "review_line_size": "13px",
+      "review_line_height": "19px",
+      "review_gutter_class_observed": "review-diff-marker",
+      "screenshot": "packet12-real-context-360.png"
+    },
+    "viewport_480_zoomed_context": {
+      "method": "Herdr Ctrl+B z toggle zoom on selected Context pane",
+      "viewport": {
+        "width": 480,
+        "height": 900
+      },
+      "pane": {
+        "x": 1,
+        "y": 285.5625,
+        "width": 478,
+        "height": 473,
+        "top": 285.5625,
+        "right": 479,
+        "bottom": 758.5625,
+        "left": 1
+      },
+      "document": {
+        "x": 1,
+        "y": 321.5625,
+        "width": 478,
+        "height": 437,
+        "top": 321.5625,
+        "right": 479,
+        "bottom": 758.5625,
+        "left": 1
+      },
+      "document_text_length": 9066,
+      "selected_asset": "sources/provider-996e1f714b08e971ec79e3bea686287e66441f043177999a13dbc546d8fe402a/issue/asset-e9f032c2478dea3b6b472815130d4e1efa3ae3656a18d02f4f086c788a83a478.md",
+      "source_line_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace",
+      "source_line_size": "13px",
+      "source_line_height": "19px",
+      "files_trigger": {
+        "x": 137.921875,
+        "y": 289.0625,
+        "width": 45.53125,
+        "height": 28,
+        "top": 289.0625,
+        "right": 183.453125,
+        "bottom": 317.0625,
+        "left": 137.921875
+      },
+      "review_visible": false,
+      "screenshot": "packet12-real-context-480-zoomed.png"
+    },
+    "context_files_picker": {
+      "command": "playwright-cli -s=cockpit-focus-baseline-20260912 run-code --filename /tmp/cockpit-real-20260912/context-picker-proof.js",
+      "status": "PASS",
+      "selected_identity_preserved": true
+    },
+    "limitations": [
+      "The checker observes the widest visible viewer at each viewport; the dedicated wide desktop measurement proves the real Context source and Review diff together at a 358px Context pane.",
+      "The 480px receipt uses Herdr pane zoom for a usable selected Context viewer; it does not claim a 120px triple split.",
+      "Native Tauri and exhaustive packet matrices remain INCONCLUSIVE/deferred.",
+      "Automatic zero-click draft rebinding remains INCONCLUSIVE; explicit Reattach recovery passed."
+    ]
+  }
+}
