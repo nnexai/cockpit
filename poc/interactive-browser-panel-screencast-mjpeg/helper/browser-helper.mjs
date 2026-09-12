@@ -13,6 +13,7 @@ const FIXTURE_PATH = path.join(ROOT, 'fixture', 'index.html');
 const DEFAULT_VIEWPORT = { width: 1024, height: 720 };
 const TARGET_FPS = 30;
 const FRAME_INTERVAL_MS = Math.round(1_000 / TARGET_FPS);
+const RESOURCE_TEST = process.env.POC_RESOURCE_TEST === '1';
 const MAX_LINE = 8 * 1024;
 const MAX_FRAME_BYTES = 6 * 1024 * 1024;
 const CLIENT_WRITE_TIMEOUT_MS = 2_000;
@@ -313,7 +314,7 @@ async function startFixture() {
   await new Promise((resolve, reject) => { fixtureServer.once('error', reject); fixtureServer.listen(0, '127.0.0.1', resolve); });
   const address = fixtureServer.address();
   if (!address || typeof address === 'string') throw new Error('Unable to determine fixture port');
-  fixtureUrl = `http://127.0.0.1:${address.port}/`;
+  fixtureUrl = `http://127.0.0.1:${address.port}/${RESOURCE_TEST ? '?resource-test=1' : ''}`;
 }
 
 async function startBrowser() {

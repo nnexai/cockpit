@@ -22,9 +22,16 @@
     .reading { min-height: 1000px; margin-top: 28px; padding: 28px 32px; border: 1px solid #d9e0ed; border-radius: 16px; background: #fff; color: #263550; }
     .reading h2 { margin: 0 0 10px; color: #173a70; font-size: 22px; }
     .reading p { margin: 12px 0; color: #52617a; }
+    .resource-test-square { display: none; position: fixed; top: 24px; right: 24px; width: 24px; height: 24px; background: #e34f37; pointer-events: none; z-index: 1; will-change: transform; }
+    :root[data-resource-test] .resource-test-square { display: block; animation: resource-test-square-motion 2s linear infinite alternate; }
+    @keyframes resource-test-square-motion {
+      from { transform: translate3d(0, 0, 0); }
+      to { transform: translate3d(-48px, 48px, 0); }
+    }
   </style>
 </head>
 <body>
+  <div class="resource-test-square" aria-hidden="true"></div>
   <main>
     <section class="card">
       <h1>CDP interaction fixture</h1>
@@ -46,6 +53,11 @@
       <p>More fixture text keeps the viewport scrollable without changing the coordinates of the name field and greeting button above.</p>
     </article>
   </main>
+  <script>
+    if (new URLSearchParams(location.search).get('resource-test') === '1') {
+      document.documentElement.dataset.resourceTest = 'true';
+    }
+  </script>
   <script>
     const name = document.querySelector('#name');
     const result = document.querySelector('#result');

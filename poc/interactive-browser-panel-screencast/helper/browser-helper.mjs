@@ -13,6 +13,7 @@ const WIDTH = 1024;
 const HEIGHT = 720;
 // Screenshots are bounded to a practical IPC frame size; requests remain tiny.
 const MAX_LINE = 8 * 1024 * 1024;
+const RESOURCE_TEST = process.env.POC_RESOURCE_TEST === '1';
 
 let playwright;
 let server;
@@ -83,7 +84,7 @@ async function startFixture() {
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Unable to determine fixture port');
-  fixtureUrl = `http://127.0.0.1:${address.port}/`;
+  fixtureUrl = `http://127.0.0.1:${address.port}/${RESOURCE_TEST ? '?resource-test=1' : ''}`;
 }
 
 async function startBrowser() {

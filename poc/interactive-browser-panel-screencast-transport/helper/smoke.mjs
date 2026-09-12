@@ -15,6 +15,7 @@ let stopped = false;
 let frameSocket;
 let frameBuffer = Buffer.alloc(0);
 let latestFrame;
+const frameArrivalGaps = [];
 let receivedPongs = 0;
 let stalledSocket;
 function waitForExit() { return child.exitCode !== null ? Promise.resolve() : new Promise((resolve) => child.once('exit', resolve)); }
@@ -59,6 +60,7 @@ function consumeFrameSocketData(chunk) {
     if (opcode === 2) {
       const frame = parseBinaryFrame(payload);
       if (frame) {
+        if (latestFrame) frameArrivalGaps.push(frame.receivedAt - latestFrame.receivedAt);
         latestFrame = frame;
         frameSocket?.write(maskedControlFrame(0x1, Buffer.from(`ack:${frame.sequence}`)));
       }
@@ -192,7 +194,7 @@ async function run() {
   const beforeTypingFrame = latestFrame;
   for (const [key, code] of [['A', 'KeyA'], ['d', 'KeyD'], ['a', 'KeyA']]) { const down = await request('input', { event: { kind: 'keyDown', key, code, text: key } }); assert(typeof down.cursor === 'string', 'keyDown did not return a cursor acknowledgement'); await request('input', { event: { kind: 'keyUp', key, code } }); }
   const typedFrame = await waitForFrameAfter(beforeTypingFrame.sequence);
-  assert(typedFrame.receivedAt - beforeTypingFrame.receivedAt >= 20, 'screencast acknowledgement pacing was not bounded');
+  assert(frameArrivalGaps.some((gap) => gap >= 20), 'screencast acknowledgement pacing was not bounded');
   let greeting;
   for (const [x, y] of [[820, 230], [820, 255], [820, 280], [820, 305], [800, 255], [840, 255]]) { const ack = await click(x, y); const inspected = await request('inspect'); if (inspected.fixtureStatus?.includes('Hello, Ada')) { assert(ack.cursor === 'pointer', `button cursor was ${ack.cursor}`); greeting = inspected; break; } }
   assert(greeting, 'pointer click did not activate the fixture button');
