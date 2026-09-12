@@ -7,7 +7,7 @@ const id = (v: unknown): string => { const s = text(v); return s.length > 0 && !
 const nullable = (v: unknown, max = 4096): string | null => v === null ? null : text(v, max);
 const integer = (v: unknown): number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 0xffffffff ? v : fail();
 const maybeNumber = (v: unknown): number | null => v === null ? null : integer(v);
-const defaultInteger = (v: unknown, fallback = 0): number => v === undefined ? fallback : integer(v);
+const defaultInteger = (v: unknown, fallback = 0): number => v === undefined || v === null ? fallback : integer(v);
 const bool = (v: unknown): boolean => typeof v === "boolean" ? v : fail();
 const array = (v: unknown, max: number): unknown[] => Array.isArray(v) && v.length <= max ? v : fail();
 const comparison = (v: unknown): ReviewComparison => ["all_local", "staged", "unstaged", "branch", "untracked"].includes(String(v)) ? v as ReviewComparison : fail();
