@@ -7,6 +7,7 @@ const frame = $('#workbench-frame');
 const scenes = ['workbench', 'review', 'setup', 'browser'];
 let currentScene = 'workbench';
 let savedComment = '';
+const comments = { workbench: '', review: '' };
 let toastTimer;
 
 function closeTransientUI() {
@@ -19,6 +20,17 @@ function showScene(name) {
   if (!scenes.includes(name)) return;
   closeTransientUI();
   currentScene = name;
+  if (name === 'workbench' || name === 'review') {
+    savedComment = comments[name];
+    const files = name === 'workbench';
+    const slot = $(files ? '#file-annotations' : '#review-annotations');
+    slot.append($('#comment-editor'), $('#saved-comment'));
+    $('#comment-title').textContent = files ? 'Comment on Summary' : 'Comment on line 381';
+    $('.comment-location').textContent = files ? 'cockpit #4 · Summary · local draft' : 'CONTEXT.md · new side · local draft';
+    $('#saved-comment strong').textContent = files ? 'Summary' : 'Line 381';
+    $('#comment-text').value = savedComment;
+    renderDraft();
+  }
   $$('.scene').forEach((scene) => {
     const active = scene.id === `scene-${name}`;
     scene.hidden = !active;
@@ -98,9 +110,12 @@ function filterFiles() {
   $('#no-files').hidden = matches;
 }
 
-function openComment() {
+function openComment({ preserveDraft = false } = {}) {
   const dialog = $('#comment-editor');
   if (dialog.open) return $('#comment-text').focus();
+  if (currentScene === 'workbench') $('#preview-button').click();
+  if (!preserveDraft) $('#comment-text').value = savedComment;
+  $('#comment-text').setCustomValidity('');
   if (matchMedia('(max-width: 600px)').matches) dialog.showModal();
   else dialog.show();
   $('#comment-text').focus();
@@ -110,8 +125,10 @@ function openComment() {
 function renderDraft() {
   $('#saved-comment').hidden = !savedComment;
   $('#saved-comment-text').textContent = savedComment;
-  $('#draft-count').textContent = savedComment ? '1' : '0';
-  $('#open-comment').innerHTML = `<svg aria-hidden="true"><use href="#i-comment"/></svg> ${savedComment ? 'Edit comment' : 'Add comment'} <kbd>C</kbd>`;
+  $('#draft-count').textContent = comments.review ? '1' : '0';
+  for (const [scene, selector] of [['review', '#open-comment'], ['workbench', '#open-file-comment']]) {
+    $(selector).innerHTML = `<svg aria-hidden="true"><use href="#i-comment"/></svg> ${comments[scene] ? 'Edit comment' : 'Add comment'} <kbd>C</kbd>`;
+  }
 }
 
 function saveComment() {
@@ -122,6 +139,7 @@ function saveComment() {
     return;
   }
   savedComment = value;
+  comments[currentScene] = savedComment;
   renderDraft();
   $('#comment-editor').close();
   $('#saved-comment').scrollIntoView({ block: 'nearest' });
@@ -205,12 +223,17 @@ let customSpaceName = false;
 let customDestination = false;
 let resolvedSetupSource = '';
 
+function setupNameDefault() {
+  if ($('#setup-existing').getAttribute('aria-pressed') === 'true') return $('#setup-checkout').value.split('/').filter(Boolean).at(-1) || '';
+  return $('#setup-branch').value.trim();
+}
+
 function syncSetupName() {
   const existing = $('#setup-existing').getAttribute('aria-pressed') === 'true';
   const value = $('#setup-branch').value.trim();
-  const defaultName = existing ? value.split('/').filter(Boolean).at(-1) || '' : value;
-  if (!customSpaceName) $('#setup-name').value = defaultName;
+  if (!customSpaceName) $('#setup-name').value = setupNameDefault();
   if (!existing && !customDestination) $('#setup-destination').value = `/tmp/ca12/worktrees/${value.replaceAll('/', '-')}`;
+  $('#setup-plan-path').textContent = existing ? $('#setup-checkout').value : '/tmp/ca12/repos/cockpit';
 }
 
 function applySetupSource() {
@@ -233,10 +256,26 @@ function applySetupSource() {
 function setupOperation(existing) {
   $('#setup-new').setAttribute('aria-pressed', String(!existing));
   $('#setup-existing').setAttribute('aria-pressed', String(existing));
-  $('#setup-branch-label').textContent = existing ? 'Checkout' : 'Branch';
-  $('#setup-branch').value = existing ? '/tmp/ca12/repos/cockpit' : setupBranch;
+  for (const id of ['setup-source', 'setup-repository']) {
+    $(`[for="${id}"]`).hidden = existing;
+    $(`#${id}`).hidden = existing;
+    $(`#${id}`).disabled = existing;
+  }
+  $('#setup-branch-label').hidden = existing;
+  $('#setup-branch').hidden = existing;
+  $('#setup-branch').disabled = existing;
+  $('#setup-checkout-label').hidden = !existing;
+  $('#setup-checkout').hidden = !existing;
+  $('#setup-checkout').disabled = !existing;
+  $('.quick-advanced').hidden = existing;
+  $('#setup-base').disabled = existing;
+  $('#setup-destination').disabled = existing;
+  $('#setup-name').placeholder = existing ? 'Defaults to directory name' : 'Defaults to branch';
+  if (!existing) $('#setup-branch').value = setupBranch;
   $('#setup-create').textContent = existing ? 'Open Space' : 'Create Space';
-  $('#setup-effects').textContent = existing ? 'Open the existing checkout; create associated context and a separate context terminal.' : 'Linked worktree, Herdr Space, companion context, separate context terminal.';
+  $('#setup-plan-kind').textContent = existing ? 'Path' : 'Repository';
+  $('#setup-effects').textContent = existing ? 'Use the directory as-is. Detect Git metadata if present; never initialize a repository. Create its Space, associated context, and separate context terminal.' : 'Linked worktree, Herdr Space, companion context, separate context terminal.';
+  $('#setup-actions').textContent = existing ? 'If a repository is present, run its configured actions automatically.' : 'Run configured actions automatically.';
   syncSetupName();
 }
 $('#setup-new').addEventListener('click', () => setupOperation(false));
@@ -249,8 +288,9 @@ $('#setup-branch').addEventListener('input', () => {
   if ($('#setup-new').getAttribute('aria-pressed') === 'true') setupBranch = $('#setup-branch').value;
   syncSetupName();
 });
+$('#setup-checkout').addEventListener('input', syncSetupName);
 $('#setup-name').addEventListener('input', () => {
-  customSpaceName = $('#setup-name').value.trim() !== '' && $('#setup-name').value !== $('#setup-branch').value;
+  customSpaceName = $('#setup-name').value.trim() !== '' && $('#setup-name').value !== setupNameDefault();
 });
 $('#setup-destination').addEventListener('input', () => { customDestination = true; });
 applySetupSource();
@@ -264,10 +304,9 @@ $('#full-source-button').addEventListener('click', () => {
   $('#unified-button').setAttribute('aria-pressed', 'false');
   $('#full-source-button').setAttribute('aria-pressed', 'true');
 });
-$('#open-comment').addEventListener('click', () => {
-  if (savedComment) $('#comment-text').value = savedComment;
-  openComment();
-});
+$('#open-comment').addEventListener('click', openComment);
+$('#open-file-comment').addEventListener('click', openComment);
+$('#selected-file-block').addEventListener('click', openComment);
 $('#selected-code-line').addEventListener('click', openComment);
 $('#save-comment').addEventListener('click', saveComment);
 $('#comment-text').addEventListener('input', () => $('#comment-text').setCustomValidity(''));
@@ -277,12 +316,10 @@ $('#comment-text').addEventListener('keydown', (event) => {
     saveComment();
   }
 });
-$('#edit-comment').addEventListener('click', () => {
-  $('#comment-text').value = savedComment;
-  openComment();
-});
+$('#edit-comment').addEventListener('click', openComment);
 $('#delete-comment').addEventListener('click', () => {
   savedComment = '';
+  comments[currentScene] = '';
   $('#comment-text').value = '';
   renderDraft();
   notify('Removed the local study draft. No product data was changed.');
@@ -410,13 +447,41 @@ function drawingPoint(event) {
   };
 }
 
+// Match browser-extension/content.js without loading its extension runtime.
+function simplifyFreehand(points, tolerance) {
+  if (points.length <= 2) return points;
+  const keep = new Uint8Array(points.length); keep[0] = 1; keep[points.length - 1] = 1;
+  const squaredTolerance = tolerance * tolerance;
+  const ranges = [[0, points.length - 1]];
+  while (ranges.length) {
+    const [start, end] = ranges.pop();
+    const first = points[start]; const last = points[end];
+    const dx = last.x - first.x; const dy = last.y - first.y; const lengthSquared = dx * dx + dy * dy;
+    let index = -1; let maximum = squaredTolerance;
+    for (let current = start + 1; current < end; current += 1) {
+      const candidate = points[current];
+      let distanceSquared;
+      if (lengthSquared === 0) {
+        const offsetX = candidate.x - first.x; const offsetY = candidate.y - first.y;
+        distanceSquared = offsetX * offsetX + offsetY * offsetY;
+      } else {
+        const projection = Math.max(0, Math.min(1, ((candidate.x - first.x) * dx + (candidate.y - first.y) * dy) / lengthSquared)); const projectedX = first.x + projection * dx; const projectedY = first.y + projection * dy;
+        const offsetX = candidate.x - projectedX; const offsetY = candidate.y - projectedY; distanceSquared = offsetX * offsetX + offsetY * offsetY;
+      }
+      if (distanceSquared > maximum) { maximum = distanceSquared; index = current; }
+    }
+    if (index !== -1) { keep[index] = 1; ranges.push([start, index], [index, end]); }
+  }
+  return points.filter((_, index) => keep[index]);
+}
+
 drawingLayer.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 || !['freehand', 'region'].includes(annotationMode)) return;
   event.preventDefault();
   drawingLayer.setPointerCapture(event.pointerId);
   const point = drawingPoint(event);
   const node = document.createElementNS('http://www.w3.org/2000/svg', annotationMode === 'freehand' ? 'path' : 'rect');
-  drawing = { node, start: point, path: `M${point.x} ${point.y}`, mode: annotationMode };
+  drawing = { node, start: point, points: annotationMode === 'freehand' ? [point] : null, path: `M${point.x} ${point.y}`, mode: annotationMode };
   if (annotationMode === 'freehand') node.setAttribute('d', drawing.path);
   else {
     node.setAttribute('x', point.x);
@@ -429,6 +494,7 @@ drawingLayer.addEventListener('pointermove', (event) => {
   if (!drawing) return;
   const point = drawingPoint(event);
   if (drawing.mode === 'freehand') {
+    drawing.points.push(point);
     drawing.path += ` L${point.x} ${point.y}`;
     drawing.node.setAttribute('d', drawing.path);
   } else {
@@ -443,6 +509,12 @@ drawingLayer.addEventListener('pointerup', (event) => {
   const completed = drawing;
   drawing = null;
   if (drawingLayer.hasPointerCapture(event.pointerId)) drawingLayer.releasePointerCapture(event.pointerId);
+  if (completed.mode === 'freehand') {
+    // Extension tolerance is 1.5 CSS pixels; this overlay uses image coordinates.
+    const tolerance = 1.5 * 1040 / drawingLayer.getBoundingClientRect().width;
+    const points = simplifyFreehand(completed.points, tolerance);
+    completed.node.setAttribute('d', points.map((point, index) => `${index ? 'L' : 'M'}${point.x} ${point.y}`).join(' '));
+  }
   if (completed.mode === 'region') {
     const point = drawingPoint(event);
     const left = Math.min(point.x, completed.start.x) / 1040 * 100;
@@ -494,7 +566,7 @@ document.addEventListener('keydown', (event) => {
     }
   }
   const editing = event.target.closest('input, textarea, [contenteditable="true"]');
-  if (currentScene === 'review' && !editing && !event.ctrlKey && !event.metaKey && event.key === 'c') {
+  if (['workbench', 'review'].includes(currentScene) && !editing && !event.ctrlKey && !event.metaKey && event.key === 'c') {
     event.preventDefault();
     openComment();
   }
@@ -509,7 +581,7 @@ matchMedia('(max-width: 800px)').addEventListener('change', () => {
 matchMedia('(max-width: 600px)').addEventListener('change', () => {
   if ($('#comment-editor').open) {
     $('#comment-editor').close();
-    openComment();
+    openComment({ preserveDraft: true });
   }
 });
 showScene(scenes.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'workbench');

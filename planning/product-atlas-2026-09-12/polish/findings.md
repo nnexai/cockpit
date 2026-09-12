@@ -2,7 +2,9 @@
 
 2026-09-12 · Design artifacts only. No application implementation.
 
-[Mock](index.html) · [Original atlas](../current/index.html) · [Verification](verification.md)
+[Implementation plan](implementation-plan.md) · [Mock](index.html) · [Original atlas](../current/index.html) · [Verification](verification.md)
+
+Use the implementation plan as the clean agent handoff. This file records screenshot evidence and the selected refinements.
 
 ## User decisions
 
@@ -10,6 +12,7 @@ These supersede earlier suggestions in the review:
 
 - Do not change terminal content.
 - Keep the existing small browser annotation toolbar and inline/overlay notes. Preserve **freehand drawing**.
+- Use a slightly heavier freehand stroke and preserve the existing extension's post-draw path simplification.
 - The annotation toolbar becomes translucent when idle; hover or keyboard-visible focus restores full opacity. Notes and drawings do not fade.
 - Do not add an “Add idea” action, descriptive slogans, explanatory subtitles, or a new capture/persistence workflow. Select an element or region and write the note there; draw directly with freehand.
 - A Notes sidebar is optional, for finding and revisiting notes. It is closed by default and is not required for authoring.
@@ -17,6 +20,8 @@ These supersede earlier suggestions in the review:
 - Issue/MR URLs fill repository, branch, and default Space name. A manually entered branch also becomes the default Space name; an explicitly edited name is preserved.
 - Repository actions are always allowed for this personal IDE. Remove the consent checkbox; do not replace it with another confirmation.
 - Files and Review both need a collapsible file overview and a file picker. Removing the Files overview was inconsistent.
+- Preserve inline annotations in Files as well as Review; the Files comment action must not navigate to Review.
+- Existing directory means using the supplied path as-is. No repository selection, branch, base revision, or worktree destination is required. Detect Git if present; never turn a plain folder into a repository.
 - Do this work directly, without delegation. No subagent performed this work.
 
 ## Changes shown in the mock
@@ -35,6 +40,7 @@ Proposed:
 - Reduce metadata to one compact row, with Preview/Source and Details controls. Remove instructional prose from the content area.
 - Use restrained headings and readable body text. Do not shrink terminal or source text to make more columns fit.
 - Keep Files/Review comment controls and counts at the bottom, rather than adding a duplicate top toolbar.
+- Files keeps comments next to the annotated content, using the same editor, save/edit/cancel/delete behavior, and narrow-screen sheet as Review. The mock targets its example Summary block and keeps Files and Review drafts separate. Its shortened Source example is not a real line-addressable document; the Files action returns to the annotated preview block rather than pretending to attach to fabricated source lines.
 
 Terminal preservation: `assets/terminal-original.png` is an exact 598×840 crop of `../current/app-files-source.png`, rectangle `(236, 59, 834, 899)`. The mock renders it at natural dimensions inside a scrollable viewport. No terminal text, colors, spacing, or glyphs were reconstructed.
 
@@ -63,6 +69,7 @@ Revised proposal for frequent use:
 - Selecting a project and entering a branch needs no separate naming step. Updating that branch continues to update the default name; a custom name is retained. Advanced destination defaults also track the branch unless edited.
 - No stepper, welcome copy, or repeated explanation of what a worktree is.
 - Put base revision and destination in collapsed Advanced settings.
+- Existing directory instead shows direct path entry and a default Space name from the directory. Hide and disable repository, URL, branch, base, and worktree-destination controls. Git is optional; keep the path and any current branch untouched. Preserve an explicit Space-name override.
 - Put exact effects and configured repository actions in collapsed Operation details. Safety information remains available; it does not require rereading a tutorial each time.
 - No actions-consent checkbox. The user explicitly selected automatic repository actions for this personal tool. This revises the earlier design recommendation; application/backend behavior is not changed by this mock.
 - Use a stable, specific Create Space/Open Space action. In this mock it is disabled because no operation exists.
@@ -88,6 +95,8 @@ The revised mock keeps:
 The toolbar is a compact overlay, not a separate workflow panel. The screenshot/capture-position control opens original evidence in this mock; it does not create or save a capture.
 
 Idle toolbar opacity is 45%; hover and keyboard-visible focus use 100%. Transparency applies only to toolbar chrome, not the page, annotations, or terminal content.
+
+Freehand strokes use 3 CSS pixels, with rounded joins and caps; region outlines remain 2 pixels. On pointer release, simplify the captured path using the iterative algorithm already present in `browser-extension/content.js`, preserving endpoints and meaningful corners. Convert its 1.5 CSS-pixel tolerance to the mock's image-coordinate system so zoomed layouts do not change the intended screen-space tolerance. Live drawing remains unsimplified until release.
 
 - Element selection opens an inline textarea. The mock has one example element target on the captured page.
 - Region drag draws a rectangle and opens a comment beside it.

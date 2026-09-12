@@ -50,6 +50,15 @@
 .drawing-layer{position:absolute;inset:0;width:100%;height:100%;stroke:#2869ae;stroke-width:2;fill:none;pointer-events:none;z-index:3;touch-action:none}
 .drawing-layer.is-drawing{pointer-events:auto;cursor:crosshair}
 .drawing-layer path,.drawing-layer rect{vector-effect:non-scaling-stroke}
+.drawing-layer path{stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+#file-annotations .comment-editor:not(:modal){margin:12px 0;width:100%}
+#file-annotations .saved-comment{margin:12px 0}
+#file-annotations .saved-comment>div{flex-wrap:wrap}
+@container(max-width:500px){
+  #file-annotations .comment-footer{flex-direction:column;align-items:stretch}
+  #file-annotations .comment-footer>.tiny{max-width:none}
+  #file-annotations .comment-footer>div{justify-content:flex-end}
+}
 .idea-anchor{position:absolute;left:4.8%;top:30.5%;width:26%;height:6.5%;min-height:12px;border:1px solid #3e7abe;border-radius:1px;padding:0;background:transparent}
 .idea-anchor:hover:not(:disabled){background:#659dee18}
 .annotation-number{display:inline-grid;place-items:center;width:18px;height:18px;flex-shrink:0;border:1px solid #789bc7;color:#284d7e;border-radius:3px;font:10px var(--mono);background:#eaf2fc}
