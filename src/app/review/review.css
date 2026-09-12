@@ -67,7 +67,7 @@
 .review-line:hover { background: var(--surface-hover); }
 .review-line.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
 .review-line > span { color: var(--text-muted); text-align: right; user-select: none; }
-.review-line code { overflow-wrap: anywhere; white-space: pre-wrap; font: inherit; }
+.review-line code { overflow-wrap: normal; white-space: pre; font: inherit; }
 .review-diff-marker { color: var(--text-muted); }
 .review-token.is-comment { color: var(--text-muted); }
 .review-token.is-string { color: var(--idle); }

@@ -35,6 +35,13 @@
     --viewer-document-inset: 8px;
   }
 
+  .context-viewer .context-toolbar,
+  .review-pane .review-toolbar {
+    height: auto;
+    flex-wrap: wrap;
+    overflow: hidden;
+  }
+
   .context-viewer .context-tree,
   .review-pane .review-files {
     display: none;
@@ -55,6 +62,115 @@
   .context-viewer .viewer-file-picker-trigger,
   .review-pane .viewer-file-picker-trigger {
     display: inline-flex;
+  }
+}
+
+@container (max-width: 280px) {
+  .context-viewer .context-toolbar,
+  .review-pane .review-toolbar {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .context-viewer .context-toolbar-spacer,
+  .review-pane .review-toolbar-spacer {
+    display: none;
+  }
+
+  .context-viewer .context-breadcrumb {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 auto;
+  }
+
+  .context-viewer .context-root-select,
+  .review-pane .review-base {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 8rem;
+  }
+
+  .review-pane .review-base input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .context-viewer .context-toolbar > button:not(.viewer-file-picker-trigger) {
+    width: 28px;
+    min-width: 28px;
+    flex: 0 0 28px;
+    overflow: hidden;
+    padding-inline: 3px;
+    font-size: 0;
+  }
+
+  .context-viewer .context-toolbar > button[aria-label="Refresh Context files"]::before {
+    content: "↻";
+    font-size: var(--viewer-control-size);
+  }
+
+  .context-viewer .context-toolbar > button[title="Show terminal"]::before {
+    content: "▸";
+    font-size: var(--viewer-control-size);
+  }
+
+  .review-pane .review-toolbar > select {
+    min-width: 0;
+    flex: 1 1 8rem;
+  }
+
+  .review-pane .review-toolbar > .review-nav {
+    gap: 1px;
+  }
+
+  .review-pane .review-toolbar > .review-nav button {
+    width: 24px;
+    min-width: 24px;
+    flex: 0 0 24px;
+    padding-inline: 2px;
+  }
+
+  .review-pane .review-toolbar > button:last-child {
+    width: 28px;
+    min-width: 28px;
+    flex: 0 0 28px;
+    overflow: hidden;
+    padding-inline: 3px;
+    font-size: 0;
+  }
+
+  .review-pane .review-toolbar > button:last-child::before {
+    content: "↻";
+    font-size: var(--viewer-control-size);
+  }
+}
+
+@container (max-width: 520px) {
+  .review-pane .review-source-controls {
+    height: auto;
+    flex-wrap: wrap;
+    overflow: hidden;
+  }
+
+  .review-pane .review-source-controls span {
+    min-width: 0;
+    flex: 1 1 8rem;
+  }
+
+  .review-pane .review-status {
+    height: auto;
+    flex-wrap: wrap;
+    padding-block: 2px;
+  }
+
+  .review-pane .review-status > span:first-child {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .review-pane .review-status-actions {
+    min-width: 0;
+    flex-wrap: wrap;
   }
 }
 
@@ -148,8 +264,10 @@
   grid-template-columns: var(--viewer-source-gutter) minmax(0, 1fr);
 }
 
-.review-line {
+.review-pane .review-line {
   grid-template-columns: var(--viewer-source-gutter) var(--viewer-source-gutter) minmax(0, 1fr);
+  width: max-content;
+  min-width: 100%;
 }
 
 .context-line-number,
