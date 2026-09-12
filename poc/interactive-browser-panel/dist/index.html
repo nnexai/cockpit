@@ -10,9 +10,9 @@
   <header class="toolbar">
     <div class="brand">Interactive Browser Panel <span>POC</span></div>
     <form id="navigation" class="navigation" autocomplete="off">
-      <label class="sr-only" for="url">Fixture URL</label>
-      <input id="url" type="url" spellcheck="false" aria-label="Fixture URL">
-      <button type="submit" title="Navigate to fixture URL">Go</button>
+      <label class="sr-only" for="url">HTTP(S) URL or domain</label>
+      <input id="url" type="text" spellcheck="false" aria-label="HTTP or HTTPS URL or domain" placeholder="https://example.com">
+      <button type="submit" title="Navigate to an HTTP or HTTPS URL">Go</button>
       <button id="reload" type="button" class="secondary" title="Reload the Chromium page">Refresh</button>
       <button id="inspect" type="button" class="secondary" title="Inspect fixed page state">Inspect</button>
     </form>

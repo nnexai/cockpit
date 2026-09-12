@@ -22,6 +22,7 @@ let page;
 let cdp;
 let fixtureUrl;
 let shuttingDown = false;
+let lastPointer = { x: 0, y: 0 };
 
 function protocolError(message) {
   const error = new Error(message);
@@ -84,7 +85,7 @@ async function startBrowser() {
   try {
     playwright ??= await import('playwright');
   } catch (error) {
-    throw new Error(`Playwright is unavailable; run bun install in this POC directory (${error.message})`);
+    throw new Error(`Playwright is unavailable; run "bun install --frozen-lockfile" then "bunx playwright install chromium" in this POC directory, or set BROWSER_BINARY (${error.message})`);
   }
   const executablePath = process.env.BROWSER_BINARY;
   // chromium.launch creates a unique temporary profile and Playwright-owned local
@@ -104,7 +105,7 @@ async function startBrowser() {
     await cdp.send('Page.setLifecycleEventsEnabled', { enabled: true });
     await page.goto(fixtureUrl, { waitUntil: 'domcontentloaded' });
   } catch (error) {
-    throw new Error(`Could not launch Chromium through Playwright${executablePath ? ` (${executablePath})` : ''}: ${error.message}. Install Chromium with 'bunx playwright install chromium' or set BROWSER_BINARY.`);
+    throw new Error(`Could not launch Chromium through Playwright${executablePath ? ` (${executablePath})` : ''}: ${error.message}. Run "bun install --frozen-lockfile" then "bunx playwright install chromium", or set BROWSER_BINARY.`);
   }
 }
 
@@ -112,38 +113,51 @@ function ensureReady() {
   if (!page || !cdp || !fixtureUrl) throw new Error('Browser is not started');
 }
 
-function assertFixtureUrl(value) {
-  const candidate = assertString(value, 'url', 2048);
+function assertNavigationUrl(value) {
+  let candidate = assertString(value, 'url', 2048).trim();
+  if (!/^[a-z][a-z\d+.-]*:\/\//i.test(candidate)) candidate = `https://${candidate}`;
   let parsed;
   try {
     parsed = new URL(candidate);
   } catch {
-    throw protocolError('url must be an absolute loopback fixture URL');
+    throw protocolError('url must be an absolute http:// or https:// URL (bare domains are normalized to https://)');
   }
-  const expected = new URL(fixtureUrl);
-  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.port !== expected.port || !['/', '/index.html'].includes(parsed.pathname) || parsed.username || parsed.password) {
-    throw protocolError('navigation is restricted to the local fixture origin');
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw protocolError('navigation only supports http:// and https:// URLs');
+  }
+  if (!parsed.hostname || parsed.username || parsed.password) {
+    throw protocolError('navigation URL must not contain credentials');
   }
   return parsed.href;
 }
 
-async function evaluatePageState() {
+async function evaluatePageState(x = lastPointer.x, y = lastPointer.y) {
+  const pointX = Math.max(0, Math.min(WIDTH, Number.isFinite(x) ? x : 0));
+  const pointY = Math.max(0, Math.min(HEIGHT, Number.isFinite(y) ? y : 0));
   const result = await cdp.send('Runtime.evaluate', {
-    expression: `(() => ({
-      title: document.title.slice(0, 200),
-      url: location.href.slice(0, 2048),
-      activeElement: (() => {
-        const element = document.activeElement;
-        if (!element) return 'BODY';
-        const id = element.id ? '#' + element.id.slice(0, 80) : '';
-        return (element.tagName || 'UNKNOWN').slice(0, 40) + id;
-      })(),
-      fixtureStatus: (document.querySelector('#result')?.textContent || '').slice(0, 240)
-    }))()`,
+    expression: `(() => {
+      const element = document.elementFromPoint(${pointX}, ${pointY});
+      const computedCursor = getComputedStyle(element || document.body).cursor;
+      const editable = !!element && (element.matches('input, textarea, [contenteditable="true"]') || !!element.closest?.('[contenteditable="true"]'));
+      const cursor = computedCursor === 'auto' && editable ? 'text' : computedCursor;
+      const safeCursors = new Set(['default', 'auto', 'pointer', 'text', 'crosshair', 'move', 'not-allowed', 'wait', 'grab', 'grabbing', 'cell', 'help', 'progress', 'zoom-in', 'zoom-out', 'col-resize', 'row-resize', 'e-resize', 'w-resize', 'n-resize', 's-resize']);
+      return {
+        title: document.title.slice(0, 200),
+        url: location.href.slice(0, 2048),
+        activeElement: (() => {
+          const active = document.activeElement;
+          if (!active) return 'BODY';
+          const id = active.id ? '#' + active.id.slice(0, 80) : '';
+          return (active.tagName || 'UNKNOWN').slice(0, 40) + id;
+        })(),
+        fixtureStatus: (document.querySelector('#result')?.textContent || '').slice(0, 240),
+        cursor: safeCursors.has(cursor) ? cursor : 'default'
+      };
+    })()`,
     returnByValue: true,
     awaitPromise: false,
   });
-  return result.result?.value || { title: '', url: fixtureUrl, activeElement: 'BODY', fixtureStatus: '' };
+  return result.result?.value || { title: '', url: fixtureUrl, activeElement: 'BODY', fixtureStatus: '', cursor: 'default' };
 }
 
 async function captureScreenshot() {
@@ -174,6 +188,7 @@ async function snapshot() {
     height: HEIGHT,
     title: String(state.title || '').slice(0, 200),
     url: String(state.url || fixtureUrl).slice(0, 2048),
+    cursor: String(state.cursor || 'default'),
   };
 }
 
@@ -186,8 +201,10 @@ async function inspect() {
     title: String(state.title || '').slice(0, 200),
     url: String(state.url || fixtureUrl).slice(0, 2048),
     activeElement: String(state.activeElement || 'BODY').slice(0, 128),
+    cursor: String(state.cursor || 'default'),
   };
 }
+
 
 function validateEvent(event) {
   assertObject(event, 'event');
@@ -225,6 +242,7 @@ async function dispatchInput(event) {
   const kind = validateEvent(event);
   if (kind === 'mouseMove' || kind === 'mouseDown' || kind === 'mouseUp') {
     const type = { mouseMove: 'mouseMoved', mouseDown: 'mousePressed', mouseUp: 'mouseReleased' }[kind];
+    lastPointer = { x: event.x, y: event.y };
     await cdp.send('Input.dispatchMouseEvent', {
       type,
       x: event.x,
@@ -234,6 +252,7 @@ async function dispatchInput(event) {
       modifiers: event.modifiers || 0,
     });
   } else if (kind === 'wheel') {
+    lastPointer = { x: event.x, y: event.y };
     await cdp.send('Input.dispatchMouseEvent', {
       type: 'mouseWheel', x: event.x, y: event.y,
       deltaX: event.deltaX || 0, deltaY: event.deltaY || 0,
@@ -248,13 +267,13 @@ async function dispatchInput(event) {
       ...(kind === 'keyDown' && event.text ? { text: event.text, unmodifiedText: event.text } : {}),
     });
   }
-  // A fresh bounded capture makes the effect of a click or keystroke observable to the panel.
-  return snapshot();
+  const state = await evaluatePageState();
+  return { cursor: String(state.cursor || 'default') };
 }
 
 async function navigate(url) {
   ensureReady();
-  await page.goto(assertFixtureUrl(url), { waitUntil: 'domcontentloaded' });
+  await page.goto(assertNavigationUrl(url), { waitUntil: 'domcontentloaded' });
   return snapshot();
 }
 
@@ -289,6 +308,7 @@ async function handle(request) {
     }
     return snapshot();
   }
+  if (method === 'validateUrl') return { url: assertNavigationUrl(request.url) };
   if (method === 'snapshot') return snapshot();
   if (method === 'inspect') return inspect();
   if (method === 'input') return dispatchInput(request.event);

@@ -59,7 +59,23 @@ async function click(x, y) {
   return request('input', { event: { kind: 'mouseUp', x, y, button: 'left' } });
 }
 
+async function expectRejected(method, fields, text) {
+  try {
+    await request(method, fields);
+  } catch (error) {
+    assert(String(error.message).includes(text), `${method} error was not explicit`);
+    return;
+  }
+  throw new Error(`${method} unexpectedly succeeded`);
+}
+
 async function run() {
+  const acceptedHttps = await request('validateUrl', { url: 'https://google.de' });
+  assert(acceptedHttps.url === 'https://google.de/', 'absolute HTTPS URL was not accepted');
+  const acceptedBare = await request('validateUrl', { url: 'google.de' });
+  assert(acceptedBare.url === 'https://google.de/', 'bare domain was not normalized to HTTPS');
+  await expectRejected('validateUrl', { url: 'https://user:pass@google.de' }, 'credentials');
+  await expectRejected('validateUrl', { url: 'ftp://google.de' }, 'http:// and https://');
   const first = await request('start');
   assert(first.width === 1024 && first.height === 720, 'start did not return the fixed viewport');
   assert(first.pngDataUrl.startsWith('data:image/png;base64,'), 'start did not return a PNG data URL');
@@ -68,27 +84,37 @@ async function run() {
   assert(reloaded.url === first.url, 'reload left the local fixture URL');
 
   let focused = false;
-  for (const [x, y] of [[300, 230], [300, 255], [300, 280], [300, 305]]) {
-    await click(x, y);
+  for (const [x, y] of [[300, 255], [300, 280], [300, 230], [300, 305]]) {
+    const ack = await click(x, y);
     const inspected = await request('inspect');
-    if (inspected.activeElement === 'INPUT#name') { focused = true; break; }
+    if (inspected.activeElement === 'INPUT#name') {
+      assert(ack.cursor === 'text', `input cursor was ${ack.cursor}`);
+      focused = true;
+      break;
+    }
   }
   assert(focused, 'mouse input did not focus the fixture input');
+  const beforeTyping = await request('snapshot');
   for (const [key, code] of [['A', 'KeyA'], ['d', 'KeyD'], ['a', 'KeyA']]) {
-    await request('input', { event: { kind: 'keyDown', key, code, text: key } });
+    const down = await request('input', { event: { kind: 'keyDown', key, code, text: key } });
+    assert(typeof down.cursor === 'string', 'keyDown did not return a cursor acknowledgement');
     await request('input', { event: { kind: 'keyUp', key, code } });
   }
 
   let greeting;
   for (const [x, y] of [[820, 230], [820, 255], [820, 280], [820, 305], [800, 255], [840, 255]]) {
-    await click(x, y);
+    const ack = await click(x, y);
     const inspected = await request('inspect');
-    if (inspected.fixtureStatus?.includes('Hello, Ada')) { greeting = inspected; break; }
+    if (inspected.fixtureStatus?.includes('Hello, Ada')) {
+      assert(ack.cursor === 'pointer', `button cursor was ${ack.cursor}`);
+      greeting = inspected;
+      break;
+    }
   }
   assert(greeting, 'pointer click did not activate the fixture button');
 
   const finalSnapshot = await request('snapshot');
-  assert(finalSnapshot.pngDataUrl.length > first.pngDataUrl.length / 2, 'final screenshot was unexpectedly empty');
+  assert(finalSnapshot.pngDataUrl !== beforeTyping.pngDataUrl, 'debounced frame did not change after typing/clicking');
   console.log('interactive-browser-panel smoke passed: pointer focus, typing, button activation, reload, inspect, and snapshot');
 }
 

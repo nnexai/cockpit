@@ -20,6 +20,7 @@ let pendingMove;
 let pollTimer;
 let selfTestStarted = false;
 let selfTestRequested = false;
+const SAFE_CURSORS = new Set(['default', 'auto', 'pointer', 'text', 'crosshair', 'move', 'not-allowed', 'wait', 'grab', 'grabbing', 'cell', 'help', 'progress', 'zoom-in', 'zoom-out', 'col-resize', 'row-resize', 'e-resize', 'w-resize', 'n-resize', 's-resize']);
 
 function setStatus(message, kind = 'idle') {
   status.textContent = message;
@@ -28,6 +29,9 @@ function setStatus(message, kind = 'idle') {
 
 function reportAction(message) {
   lastAction.textContent = message;
+}
+function applyCursor(cursor) {
+  panel.style.cursor = SAFE_CURSORS.has(cursor) ? cursor : 'default';
 }
 
 function applySnapshot(snapshot) {
@@ -39,7 +43,13 @@ function applySnapshot(snapshot) {
   title.textContent = snapshot.title || 'Untitled page';
   dimensions.textContent = `${snapshot.width} × ${snapshot.height}`;
   pageUrl.textContent = snapshot.url;
+  applyCursor(snapshot.cursor);
   if (document.activeElement !== address) address.value = snapshot.url;
+}
+
+function applyInputAck(ack) {
+  if (!ack || typeof ack.cursor !== 'string') throw new Error('Input acknowledgement omitted cursor');
+  applyCursor(ack.cursor);
 }
 
 async function command(name, args = {}) {
@@ -65,16 +75,39 @@ async function start() {
   }
 }
 
+let frameTimer;
+let frameInFlight = false;
+let frameAgain = false;
+
+function scheduleFrame(delay = 90) {
+  clearTimeout(frameTimer);
+  frameTimer = setTimeout(refreshFrame, delay);
+}
+
 function schedulePoll() {
-  clearTimeout(pollTimer);
-  pollTimer = setTimeout(async () => {
-    try {
-      if (!inputQueuePending()) applySnapshot(await command('browser_snapshot'));
-    } catch (error) {
-      setStatus(String(error), 'error');
+  scheduleFrame(900);
+}
+
+async function refreshFrame() {
+  frameTimer = undefined;
+  if (frameInFlight) {
+    frameAgain = true;
+    return;
+  }
+  frameInFlight = true;
+  try {
+    applySnapshot(await command('browser_snapshot'));
+  } catch (error) {
+    setStatus(String(error), 'error');
+  } finally {
+    frameInFlight = false;
+    if (frameAgain) {
+      frameAgain = false;
+      scheduleFrame(70);
+    } else {
+      schedulePoll();
     }
-    schedulePoll();
-  }, 900);
+  }
 }
 
 function inputQueuePending() {
@@ -84,8 +117,9 @@ function inputQueuePending() {
 function queueInput(event, description, quiet = false, strict = false) {
   const operation = inputQueue.then(async () => {
     inputBusy = true;
-    const snapshot = await command('browser_input', { event });
-    applySnapshot(snapshot);
+    const ack = await command('browser_input', { event });
+    applyInputAck(ack);
+    scheduleFrame(90);
     if (!quiet) {
       setStatus('Ready', 'ok');
       reportAction(description);
@@ -113,18 +147,26 @@ async function runSelfTest() {
       await queueInput({ kind: 'mouseDown', x, y, button: 'left', modifiers: 0 }, 'Self-test pointer down', true, true);
       await queueInput({ kind: 'mouseUp', x, y, button: 'left', modifiers: 0 }, 'Self-test pointer up', true, true);
     };
-    await click(300, 255);
-    const focused = await command('browser_inspect');
-    if (focused.activeElement !== 'INPUT#name') throw new Error(`input focus was ${focused.activeElement}`);
+    let focused;
+    for (const [x, y] of [[300, 230], [300, 255], [300, 280], [300, 305]]) {
+      await click(x, y);
+      focused = await command('browser_inspect');
+      if (focused.activeElement === 'INPUT#name') break;
+    }
+    if (focused?.activeElement !== 'INPUT#name') throw new Error(`input focus was ${focused?.activeElement || 'unknown'}`);
     for (const [key, code] of [['A', 'KeyA'], ['d', 'KeyD'], ['a', 'KeyA']]) {
       await queueInput({ kind: 'keyDown', key, code, text: key, modifiers: 0 }, `Self-test key down ${key}`, true, true);
       await queueInput({ kind: 'keyUp', key, code, modifiers: 0 }, `Self-test key up ${key}`, true, true);
     }
-    await click(820, 255);
-    const result = await command('browser_inspect');
-    fixtureStatus.textContent = result.fixtureStatus || '—';
-    activeElement.textContent = result.activeElement;
-    if (!result.fixtureStatus?.includes('Hello, Ada')) throw new Error(`fixture status was ${result.fixtureStatus || 'empty'}`);
+    let result;
+    for (const [x, y] of [[820, 230], [820, 255], [820, 280], [820, 305], [800, 255], [840, 255]]) {
+      await click(x, y);
+      result = await command('browser_inspect');
+      if (result.fixtureStatus?.includes('Hello, Ada')) break;
+    }
+    fixtureStatus.textContent = result?.fixtureStatus || '—';
+    activeElement.textContent = result?.activeElement || '—';
+    if (!result?.fixtureStatus?.includes('Hello, Ada')) throw new Error(`fixture status was ${result?.fixtureStatus || 'empty'}`);
     await command('browser_self_test_report', { success: true, detail: 'pointer focus, typing, and button activation' });
     setStatus('Self-test passed', 'ok');
     reportAction('Native self-test passed');
@@ -229,7 +271,7 @@ document.querySelector('#navigation').addEventListener('submit', async (event) =
   try {
     applySnapshot(await command('browser_navigate', { url: address.value.trim() }));
     setStatus('Ready', 'ok');
-    reportAction('Navigated to local fixture');
+    reportAction('Navigated to URL');
     panel.focus({ preventScroll: true });
   } catch (error) {
     setStatus(String(error), 'error');

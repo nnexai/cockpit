@@ -32,6 +32,7 @@ struct Snapshot {
     height: u32,
     title: String,
     url: String,
+    cursor: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -42,6 +43,13 @@ struct InspectResult {
     title: String,
     url: String,
     active_element: String,
+    cursor: String,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct InputAck {
+    cursor: String,
 }
 
 #[derive(Serialize)]
@@ -203,7 +211,7 @@ fn browser_snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
-fn browser_input(state: State<'_, AppState>, event: Value) -> Result<Snapshot, String> {
+fn browser_input(state: State<'_, AppState>, event: Value) -> Result<InputAck, String> {
     if !event.is_object() || serde_json::to_vec(&event).map_or(true, |bytes| bytes.len() > 8 * 1024) {
         return Err("input event must be a bounded JSON object".to_string());
     }
