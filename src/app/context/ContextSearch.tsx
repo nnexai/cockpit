@@ -44,6 +44,9 @@ export function ContextSearch({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ContextSearchResult[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [searchRevision, setSearchRevision] = useState<string | null>(null);
+  const [partialReason, setPartialReason] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -95,10 +98,15 @@ export function ContextSearch({
         root_id: rootId,
         query: requestQuery,
         request_generation: generation,
+        offset: nextOffset ?? undefined,
+        revision: searchRevision ?? undefined,
       }, controller.signal);
       if (!controller.signal.aborted && validSearchResponse(response, generation, requestQuery)) {
-        setResults(response.results);
+        setResults((current) => nextOffset === null ? response.results : [...current, ...response.results]);
         setTruncated(response.truncated);
+        setNextOffset(response.next_offset ?? null);
+        setSearchRevision(response.revision ?? null);
+        setPartialReason(response.partial_reason ?? null);
       }
     } catch (error) {
       if (!controller.signal.aborted && identityRef.current === identity && generation === searchGenerationRef.current) {
@@ -109,7 +117,7 @@ export function ContextSearch({
         setSearching(false);
       }
     }
-  }, [bindingId, disabled, identity, nextSearchGeneration, query, rootId, search, validSearchResponse]);
+  }, [bindingId, disabled, identity, nextOffset, nextSearchGeneration, query, rootId, search, searchRevision, validSearchResponse]);
 
   useEffect(() => {
     searchAbortRef.current?.abort();
@@ -117,6 +125,9 @@ export function ContextSearch({
     nextSearchGeneration();
     setResults([]);
     setTruncated(false);
+    setNextOffset(null);
+    setSearchRevision(null);
+    setPartialReason(null);
     setSearchError(null);
     setPollError(null);
     setSearching(false);
@@ -184,16 +195,20 @@ export function ContextSearch({
             nextSearchGeneration();
             setSearching(false);
             setQuery(event.target.value);
+            setResults([]);
+            setNextOffset(null);
+            setSearchRevision(null);
+            setPartialReason(null);
           }}
           maxLength={256}
           disabled={disabled}
           placeholder="Find text in companion files"
         />
-        <button type="submit" disabled={disabled || searching || !query.trim()}>{searching ? "Searching…" : "Search"}</button>
+        <button type="submit" disabled={disabled || searching || !query.trim()}>{searching ? "Searching…" : nextOffset !== null ? "Load more" : "Search"}</button>
       </form>
       {searchError ? <p className="context-search-error" role="status">{searchError}</p> : null}
       {pollError ? <p className="context-search-poll" role="status">Visible-file refresh: {pollError}</p> : null}
-      {truncated ? <p className="context-search-truncated" role="status">Search stopped at its bounded result, file, or time limit.</p> : null}
+      {truncated ? <p className="context-search-truncated" role="status">Search is partial{partialReason ? `: ${partialReason}` : ""}{nextOffset !== null ? "; load more to continue" : ""}.</p> : null}
       {results.length > 0 ? <ol className="context-search-results">{results.map((result) => (
         <li key={`${result.path}\u0000${result.line}\u0000${result.revision}`}>
           <button type="button" onClick={() => onSelect(result)}>

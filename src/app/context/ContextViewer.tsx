@@ -514,6 +514,7 @@ function contextTreeRows(root: ContextRoot, directories: Record<string, Director
 export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView }: ContextViewerProps) {
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
+  const [documentPageLoading, setDocumentPageLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const protectedDirectoryKeysRef = useRef<Set<string>>(new Set());
   const [refreshGeneration, setRefreshGeneration] = useState(0);
@@ -521,6 +522,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const [rootId, setRootId] = useState<string | null>(value.rootId ?? presentation.default_root_id ?? presentation.roots[0]?.root_id ?? null);
   const [commentStatus, setCommentStatus] = useState({ count: 0, canCreateLines: false, canCreateWholeFile: false });
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
   const [pickerIndex, setPickerIndex] = useState({ loading: false, incomplete: false, entries: new Map<string, ContextEntry>() });
   const directoriesRef = useRef(directories);
   directoriesRef.current = directories;
@@ -534,6 +536,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const viewerRef = useRef<HTMLElement>(null);
   const documentRef = useRef<HTMLElement>(null);
   const treeRef = useRef<HTMLElement>(null);
+  const commentOverviewRef = useRef<() => void>(() => undefined);
   const treeFocusPathRef = useRef<{ path: string; restoreAfterLoad: boolean } | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -578,6 +581,42 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }
   protectedDirectoryKeysRef.current = protectedDirectoryKeys;
   const document = documentState?.document;
+  const loadDocumentPage = useCallback(async () => {
+    if (!root || !selectedPath || !selectedKey || !document || document.next_offset === undefined) return;
+    const expectedOffset = document.next_offset;
+    const controller = new AbortController();
+    documentController.current?.abort();
+    documentController.current = controller;
+    setDocumentPageLoading(true);
+    try {
+      const data = await client.contextDocument(sessionId, paneId, {
+        binding_id: bindingId,
+        root_id: root.root_id,
+        path: selectedPath,
+        expected_revision: document.revision,
+        offset: expectedOffset,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      const offset = data.offset ?? 0;
+      if (data.revision !== document.revision || offset !== expectedOffset || data.text === null) throw new Error("Source changed while loading the next page; refresh to revalidate it.");
+      setDocuments((current) => retainDocumentState(current, selectedKey, {
+        status: "ready",
+        document: {
+          ...data,
+          text: `${document.text ?? ""}${data.text}`,
+          offset: 0,
+          next_offset: data.next_offset,
+          truncated: data.truncated,
+          content_hash: data.truncated ? null : data.content_hash,
+        },
+      }));
+    } catch (error) {
+      if (!controller.signal.aborted) setDocuments((current) => retainDocumentState(current, selectedKey, { status: "error", document: current[selectedKey]?.document ?? document, error: readableError(error) }));
+    } finally {
+      if (documentController.current === controller) documentController.current = null;
+      if (!controller.signal.aborted) setDocumentPageLoading(false);
+    }
+  }, [bindingId, client, document, paneId, root, selectedKey, selectedPath, sessionId]);
   const knownRevisions = useMemo<ContextKnownRevision[]>(() => Object.values(documents)
     .map((state) => state.document)
     .filter((candidate): candidate is ContextDocument => candidate !== undefined && candidate.root_id === activeRootId)
@@ -636,7 +675,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
 
   const loadDirectory = useCallback(async (directoryRoot: ContextRoot, path: string, force = false) => {
     const key = keyFor(directoryRoot.root_id, path);
-    if (!force && directoriesRef.current[key]?.status === "ready") return;
+    const previous = directoriesRef.current[key]?.data;
+    if (!force && directoriesRef.current[key]?.status === "ready" && previous?.next_offset === undefined) return;
     directoryControllers.current[key]?.abort();
     const requestId = ++directoryRequestSequence.current;
     directoryRequests.current[key] = requestId;
@@ -647,11 +687,20 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const requestBindingId = bindingId;
     const requestRootId = directoryRoot.root_id;
     try {
-      const request: ContextDirectoryRequest = { binding_id: requestBindingId, root_id: requestRootId, path };
+      const request: ContextDirectoryRequest = {
+        binding_id: requestBindingId,
+        root_id: requestRootId,
+        path,
+        offset: force ? undefined : previous?.next_offset,
+        revision: force ? undefined : previous?.revision,
+      };
       const data = await client.contextDirectory(sessionId, paneId, request, controller.signal);
       if (!mountedRef.current || controller.signal.aborted || directoryRequests.current[key] !== requestId
         || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
-      setDirectories((current) => retainDirectoryState(current, key, { status: "ready", data }, protectedDirectoryKeysRef.current));
+      const merged = !force && previous?.revision !== undefined && data.revision === previous.revision
+        ? { ...data, entries: [...previous.entries, ...data.entries] }
+        : data;
+      setDirectories((current) => retainDirectoryState(current, key, { status: "ready", data: merged }, protectedDirectoryKeysRef.current));
     } catch (error) {
       if (!mountedRef.current || controller.signal.aborted || directoryRequests.current[key] !== requestId
         || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
@@ -676,6 +725,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     documentRequestSequence.current += 1;
     pickerController.current?.abort();
     pickerGeneration.current += 1;
+    setResourcesOpen(false);
     setPickerOpen(false);
     setPickerIndex({ loading: false, incomplete: false, entries: new Map() });
     if (root && value.rootId !== root.root_id) {
@@ -767,18 +817,24 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         if (visited.has(path)) continue;
         visited.add(path);
         try {
-          const data = await client.contextDirectory(sessionId, paneId, { binding_id: bindingId, root_id: root.root_id, path }, controller.signal);
-          if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) return;
-          setDirectories((current) => retainDirectoryState(current, keyFor(root.root_id, path), { status: "ready", data }, protectedDirectoryKeysRef.current));
-          incomplete ||= data.truncated;
-          for (const entry of data.entries) {
-            if (entry.kind === "directory" && entry.path) pending.push(entry.path);
-            if (entry.kind === "file" && entry.path && !entry.refusal) {
-              if (entries.has(entry.path) || entries.size < MAX_PICKER_FILES) entries.set(entry.path, entry);
-              else incomplete = true;
+          let offset: number | undefined;
+          let revision: string | undefined;
+          do {
+            const data = await client.contextDirectory(sessionId, paneId, { binding_id: bindingId, root_id: root.root_id, path, offset, revision }, controller.signal);
+            if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) return;
+            setDirectories((current) => retainDirectoryState(current, keyFor(root.root_id, path), { status: "ready", data }, protectedDirectoryKeysRef.current));
+            incomplete ||= data.truncated;
+            for (const entry of data.entries) {
+              if (entry.kind === "directory" && entry.path) pending.push(entry.path);
+              if (entry.kind === "file" && entry.path && !entry.refusal) {
+                if (entries.has(entry.path) || entries.size < MAX_PICKER_FILES) entries.set(entry.path, entry);
+                else incomplete = true;
+              }
             }
-          }
-          setPickerIndex({ loading: true, incomplete, entries: new Map(entries) });
+            offset = data.next_offset;
+            revision = data.revision;
+            setPickerIndex({ loading: true, incomplete, entries: new Map(entries) });
+          } while (offset !== undefined && !controller.signal.aborted && entries.size < MAX_PICKER_FILES);
         } catch {
           if (controller.signal.aborted || pickerGeneration.current !== generation) return;
           incomplete = true;
@@ -948,6 +1004,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       ? { start: fileState.selectionStart, end: fileState.selectionEnd }
       : null;
     const renderDocumentBody = (drafts: CommentDraft[] = [], actions?: CommentDraftActions, inlineEditor?: (line: number) => ReactNode): ReactNode => {
+      commentOverviewRef.current = actions?.openOverview ?? (() => undefined);
       if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
       if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
       if (documentState.status === "error" && !document) {
@@ -968,12 +1025,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               const mode = effectiveMode;
               return <>
                 {renderedMode ? <div className="context-mode-switch"><button type="button" aria-pressed={mode === "source"} onClick={() => updateFile({ mode: mode === "source" ? "auto" : "source" })}>{mode === "source" ? "Rendered preview" : "View source"}</button></div> : null}
+                {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing a bounded source window.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading}>{documentPageLoading ? "Loading…" : "Load next source page"}</button></div> : null}
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
                   {mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={{ ...fileState!, mode: "markdown" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
                 </RenderErrorBoundary>
               </>;
             })()}
-            {actions ? <footer className="context-comment-status" aria-label="Context comment shortcuts"><span>{selectedLines ?? "Select a line"}</span><span className="context-comment-status-actions"><button type="button" onClick={() => { if (fileState!.mode !== "source") updateFile({ mode: "source" }); actions.createLines(); }} disabled={!commentStatus.canCreateLines} title={commentStatus.canCreateLines ? "Comment on selected lines (C)" : "Select source lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={actions.createWholeFile} disabled={!commentStatus.canCreateWholeFile} title={commentStatus.canCreateWholeFile ? "Comment on whole file (Shift+C)" : "Source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={actions.openOverview}>{commentStatus.count} comments</button></span></footer> : null}
+            {actions ? <footer className="context-comment-status" aria-label="Context comment shortcuts"><span>{selectedLines ?? "Select a line"}</span><span className="context-comment-status-actions"><button type="button" onClick={() => { if (fileState!.mode !== "source") updateFile({ mode: "source" }); actions.createLines(); }} disabled={!commentStatus.canCreateLines} title={commentStatus.canCreateLines ? "Comment on selected lines (C)" : "Select source lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={actions.createWholeFile} disabled={!commentStatus.canCreateWholeFile} title={commentStatus.canCreateWholeFile ? "Comment on whole file (Shift+C)" : "Source is not ready"}><kbd>Shift+C</kbd> file</button></span></footer> : null}
           </>}
         </>
       );
@@ -1020,6 +1078,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         <div className="context-breadcrumb" title={root.path}>{root.label}</div>
         {presentation.roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = presentation.roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{presentation.roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
         <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file">Files</button>
+        {root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)} aria-expanded={resourcesOpen}>Resources</button> : null}
+        {commentsEnabled ? <button type="button" onClick={() => commentOverviewRef.current()}>{commentStatus.count} comments</button> : null}
         <span className="context-toolbar-spacer" />
 
         <button type="button" onClick={refresh} aria-label="Refresh Context files">Refresh</button>
@@ -1040,19 +1100,6 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           onInvalidate={invalidateVisibleFiles}
           disabled={!controlAllowed}
         /> : null}
-          {root.kind === "companion" ? <SourceImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onChanged={files => {
-            const paths = files.flatMap(file => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
-            setExpanded(current => new Set([...current, ...paths]));
-            void loadDirectory(root, "", true);
-            for (const path of new Set(paths)) void loadDirectory(root, path, true);
-          }} /> : null}
-          {root.kind === "companion" ? <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={(result) => {
-            const parts = result.snapshot_path.split("/");
-            const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
-            setExpanded(current => new Set([...current, ...paths]));
-            void loadDirectory(root, "", true);
-            for (const path of paths) void loadDirectory(root, path, true);
-          }} /> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}
           {treeRows.map((row) => <div className="context-tree-node" key={row.entry.entry_id}>
@@ -1061,7 +1108,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               <span className="context-tree-icon" aria-hidden="true">{entryIcon(row.entry)}</span>
               <span className="context-tree-name" title={row.path}>{row.label}</span>
               <span className="context-tree-meta">{row.entry.refusal ?? (row.entry.bytes === null || row.entry.bytes === undefined ? "" : `${row.entry.bytes} B`)}</span>
-            </button>
+            </button>{row.entry.kind === "directory" && directories[keyFor(root.root_id, row.path)]?.data?.next_offset !== undefined ? <button type="button" className="context-tree-more" onClick={() => void loadDirectory(root, row.path)} aria-label={`Load more entries in ${row.path}`}>more</button> : null}
             {row.entry.refusal ? <div className="context-tree-refusal">{row.entry.refusal}</div> : null}
           </div>)}
         </aside>
@@ -1069,6 +1116,22 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           {renderDocument()}
         </main>
       </div>
+      {resourcesOpen && root.kind === "companion" ? <div className="context-resources" role="dialog" aria-modal="true" aria-label="Context resources">
+        <header><strong>Context resources</strong><button type="button" onClick={() => setResourcesOpen(false)}>Close</button></header>
+        <SourceImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onChanged={files => {
+          const paths = files.flatMap(file => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
+          setExpanded(current => new Set([...current, ...paths]));
+          void loadDirectory(root, "", true);
+          for (const path of new Set(paths)) void loadDirectory(root, path, true);
+        }} />
+        <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={(result) => {
+          const parts = result.snapshot_path.split("/");
+          const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+          setExpanded(current => new Set([...current, ...paths]));
+          void loadDirectory(root, "", true);
+          for (const path of paths) void loadDirectory(root, path, true);
+        }} />
+      </div> : null}
       {pickerOpen ? <FilePicker candidates={[...pickerIndex.entries.values()].map((entry) => ({ id: entry.entry_id, path: entry.path!, detail: entry.bytes === null ? undefined : `${entry.bytes} B` } satisfies FileNavigationCandidate))} loading={pickerIndex.loading} incomplete={pickerIndex.incomplete} onChoose={(candidate) => { const entry = pickerIndex.entries.get(candidate.path); if (entry) chooseEntry(entry); closeFilePicker(); focusContent(); }} onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
     </section>
   );

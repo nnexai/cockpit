@@ -8,6 +8,12 @@ pub struct ContextSearchRequest {
     pub root_id: String,
     pub query: String,
     pub request_generation: u32,
+    #[serde(default)]
+    #[ts(optional)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -27,6 +33,15 @@ pub struct ContextSearchResponse {
     pub results: Vec<ContextSearchResult>,
     pub scanned_files: u32,
     pub truncated: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub next_offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub partial_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

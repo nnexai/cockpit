@@ -24,9 +24,7 @@ use crate::InspectionError;
 use crate::extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 use crate::projects::ProjectService;
 use crate::repositories::RepositoryCatalog;
-use crate::sources::{
-    SourceAuthority, SourceFetchRequest, SourceService, source_authority_for_checkout,
-};
+use crate::sources::{SourceFetchRequest, SourceService, source_authority_for_checkout};
 const MAX_DIRECTORY_SCAN: usize = 100_000;
 
 #[derive(Clone)]
@@ -593,7 +591,7 @@ impl ContextService {
             offset: Some(request.offset.unwrap_or(0)),
             next_offset: None,
             total_bytes: Some(before.len()),
-            line_offset: Some(0),
+            line_offset: (request.offset.unwrap_or(0) == 0).then_some(0),
             diagnostics: Vec::new(),
         };
         if before.file_type().is_symlink() {
@@ -684,20 +682,12 @@ impl ContextService {
                 "context file changed while reading",
             ));
         }
-        let end = offset.saturating_add(content.len() as u64);
-        result.truncated = end < before.len();
-        result.next_offset = (end < before.len()).then_some(end as u32);
-        if result.truncated {
-            result.diagnostics.push(diagnostic(
-                "context_preview_bytes",
-                "file exceeds the configured preview byte limit; continue reading for more",
-                Some(&result.path),
-            ));
-        }
-        if content.contains(&0) || std::str::from_utf8(&content).is_err() {
-            if !result.truncated {
-                result.content_hash = Some(hash_bytes(&content));
-            }
+        let valid_bytes = match std::str::from_utf8(&content) {
+            Ok(_) => content.len(),
+            Err(error) if error.valid_up_to() > 0 && !content.contains(&0) => error.valid_up_to(),
+            Err(_) => 0,
+        };
+        if valid_bytes == 0 && (!content.is_empty() || before.len() > offset) {
             refuse_document(
                 &mut result,
                 "context_binary",
@@ -705,21 +695,30 @@ impl ContextService {
             );
             return Ok(result);
         }
+        let mut consumed = valid_bytes;
         let max_lines = self.configuration.limits.context_preview_lines as usize;
-        let (text_bytes, line_truncated) = if offset == 0 && !result.truncated {
-            bounded_lines(&content, max_lines)
-        } else {
-            (&content[..], false)
-        };
-        result.truncated = result.truncated || line_truncated;
+        let (text_bytes, line_truncated) = bounded_lines(&content[..valid_bytes], max_lines);
         if line_truncated {
+            consumed = text_bytes.len();
+        }
+        let end = offset.saturating_add(consumed as u64);
+        result.truncated = end < before.len();
+        result.next_offset = (end < before.len()).then_some(end as u32);
+        if result.truncated {
             result.diagnostics.push(diagnostic(
-                "context_preview_lines",
-                "file exceeds the configured preview line limit",
+                if line_truncated { "context_preview_lines" } else { "context_preview_bytes" },
+                if line_truncated {
+                    "file exceeds the configured preview line limit; continue reading for more"
+                } else {
+                    "file exceeds the configured preview byte limit; continue reading for more"
+                },
                 Some(&result.path),
             ));
         }
-        result.content_hash = Some(hash_bytes(&content));
+        result.truncated = result.truncated || line_truncated;
+        if offset == 0 && !result.truncated {
+            result.content_hash = Some(hash_bytes(&content));
+        }
         result.text = Some(String::from_utf8(text_bytes.to_vec()).expect("validated UTF-8"));
         Ok(result)
     }
@@ -1331,6 +1330,13 @@ fn find_root(roots: &[ContextRoot], root_id: &str) -> Result<AuthorizedRoot, Ins
 impl AuthorizedRoot {
     pub(crate) fn root_id(&self) -> &str {
         &self.root.root_id
+    }
+
+    pub(crate) fn directory_revision(&self) -> Result<String, InspectionError> {
+        self.dir
+            .dir_metadata()
+            .map(|metadata| metadata_revision(&metadata))
+            .map_err(|error| InspectionError::new("context_root_unavailable", error.to_string()))
     }
 
     pub(crate) fn relative_path(&self, value: &str) -> Result<PathBuf, InspectionError> {

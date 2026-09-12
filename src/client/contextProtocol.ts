@@ -9,6 +9,7 @@ const text = (value: unknown): value is string => typeof value === "string";
 const nullableText = (value: unknown): value is string | null => value === null || text(value);
 const identity = (value: unknown): value is string => text(value) && value.length > 0 && value.length <= 512 && !value.includes("\0");
 const bytes = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const boundedOffset = (value: unknown): value is number => bytes(value) && value <= 100_000;
 const diagnostics = (value: unknown): boolean => Array.isArray(value) && value.every((item) => record(item) && text(item.code) && text(item.message) && nullableText(item.path));
 
 function malformed(label: string): never {
@@ -53,13 +54,28 @@ export function matchPanePresentation(value: PanePresentation, sessionId: string
 
 export function parseContextDirectoryRequest(value: unknown): ContextDirectoryRequest {
   if (!record(value) || !identity(value.binding_id) || !identity(value.root_id) || !relativePath(value.path, true)) malformed("Context directory request");
-  return value as unknown as ContextDirectoryRequest;
+  if (value.offset !== undefined && value.offset !== null && !boundedOffset(value.offset)) malformed("Context directory continuation");
+  if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) malformed("Context directory revision");
+  return {
+    binding_id: value.binding_id as string,
+    root_id: value.root_id as string,
+    path: value.path as string,
+    offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
+    revision: value.revision === undefined || value.revision === null ? undefined : value.revision,
+  };
 }
 
 export function parseContextDocumentRequest(value: unknown): ContextDocumentRequest {
   const request = parseContextDirectoryRequest(value);
   if (!relativePath(request.path, false) || !record(value) || !nullableText(value.expected_revision)) malformed("Context document request");
-  return value as unknown as ContextDocumentRequest;
+  if (value.offset !== undefined && value.offset !== null && !bytes(value.offset)) malformed("Context document continuation");
+  return {
+    binding_id: value.binding_id as string,
+    root_id: value.root_id as string,
+    path: value.path as string,
+    expected_revision: value.expected_revision as string | null,
+    offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
+  };
 }
 
 function entry(value: unknown): value is ContextEntry {
@@ -76,7 +92,7 @@ export function parseContextDirectory(value: unknown): ContextDirectory {
   const ids = value.entries.map((item) => item.entry_id);
   if (new Set(ids).size !== ids.length) malformed("duplicate Context entry identities");
   if (value.revision !== undefined && !nullableText(value.revision)) malformed("Context directory revision");
-  if (value.next_offset !== undefined && !bytes(value.next_offset)) malformed("Context directory continuation");
+  if (value.next_offset !== undefined && value.next_offset !== null && !boundedOffset(value.next_offset)) malformed("Context directory continuation");
   if (value.total_entries !== undefined && value.total_entries !== null && !bytes(value.total_entries)) malformed("Context directory count");
   return value as unknown as ContextDirectory;
 }

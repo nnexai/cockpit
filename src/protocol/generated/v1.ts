@@ -442,11 +442,11 @@ export type ContextSnapshotMode = "working_tree";
 
 export type ContextSnapshotCopyMode = "reflink" | "copy" | "mixed";
 
-export type ContextSearchRequest = { binding_id: string, root_id: string, query: string, request_generation: number, };
+export type ContextSearchRequest = { binding_id: string, root_id: string, query: string, request_generation: number, offset?: number, revision?: string, };
 
 export type ContextSearchResult = { path: string, line: number, excerpt: string, revision: string, };
 
-export type ContextSearchResponse = { binding_id: string, root_id: string, query: string, request_generation: number, results: Array<ContextSearchResult>, scanned_files: number, truncated: boolean, };
+export type ContextSearchResponse = { binding_id: string, root_id: string, query: string, request_generation: number, results: Array<ContextSearchResult>, scanned_files: number, truncated: boolean, revision?: string, next_offset?: number, partial_reason?: string, };
 
 export type ContextKnownRevision = { path: string, revision: string, };
 

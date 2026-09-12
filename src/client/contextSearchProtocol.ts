@@ -11,8 +11,8 @@ import type {
 import { CockpitClientError } from "./CockpitClient";
 
 const MAX_QUERY_BYTES = 256;
-const MAX_RESULTS = 100;
-const MAX_SCANNED_FILES = 256;
+const MAX_RESULTS = 1_000;
+const MAX_SCANNED_FILES = 100_000;
 const MAX_EXCERPT_BYTES = 512;
 const MAX_KNOWN_REVISIONS = 128;
 const encoder = new TextEncoder();
@@ -41,11 +41,15 @@ export function parseContextSearchRequest(value: unknown): ContextSearchRequest 
     || /[\u0000-\u001f\u007f-\u009f]/.test(value.query) || !positiveU32(value.request_generation)) {
     return malformed("search request");
   }
+  if (value.offset !== undefined && (!Number.isSafeInteger(value.offset) || (value.offset as number) < 0 || (value.offset as number) > 100_000)) return malformed("search continuation");
+  if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) return malformed("search revision");
   return {
     binding_id: value.binding_id,
     root_id: value.root_id,
     query: value.query,
     request_generation: value.request_generation,
+    offset: value.offset === undefined ? undefined : value.offset as number,
+    revision: value.revision === undefined || value.revision === null ? undefined : value.revision as string,
   };
 }
 
@@ -90,6 +94,9 @@ export function parseContextSearchResponse(value: unknown): ContextSearchRespons
     return malformed("search response");
   }
   const results = value.results.map(parseResult);
+  if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) return malformed("search revision");
+  if (value.next_offset !== undefined && value.next_offset !== null && (!Number.isSafeInteger(value.next_offset) || (value.next_offset as number) < 0)) return malformed("search continuation");
+  if (value.partial_reason !== undefined && value.partial_reason !== null && !text(value.partial_reason)) return malformed("search partial reason");
   return {
     binding_id: value.binding_id,
     root_id: value.root_id,
@@ -98,6 +105,9 @@ export function parseContextSearchResponse(value: unknown): ContextSearchRespons
     results,
     scanned_files: value.scanned_files as number,
     truncated: value.truncated,
+    revision: value.revision === undefined || value.revision === null ? undefined : value.revision as string,
+    next_offset: value.next_offset === undefined || value.next_offset === null ? undefined : value.next_offset as number,
+    partial_reason: value.partial_reason === undefined || value.partial_reason === null ? undefined : value.partial_reason as string,
   };
 }
 

@@ -20,6 +20,7 @@ const MAX_SCANNED_ENTRIES: usize = 100_000;
 const MAX_SEARCHED_FILE_BYTES: usize = 1024 * 1024;
 const MAX_EXCERPT_BYTES: usize = 512;
 const MAX_KNOWN_REVISIONS: usize = 128;
+const MAX_SEARCH_OFFSET: usize = 100_000;
 const SEARCH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone)]
@@ -108,6 +109,22 @@ fn validate_search_request(request: &ContextSearchRequest) -> Result<(), Inspect
             "Context search requires a bounded single-line query and generation",
         ));
     }
+    if request.offset.unwrap_or(0) as usize > MAX_SEARCH_OFFSET {
+        return Err(InspectionError::new(
+            "context_search_bounded",
+            "Context search continuation offset exceeds its bounded limit",
+        ));
+    }
+    if request
+        .revision
+        .as_deref()
+        .is_some_and(|revision| revision.len() > 4096)
+    {
+        return Err(InspectionError::new(
+            "context_search_invalid",
+            "Context search revision is too large",
+        ));
+    }
     Ok(())
 }
 
@@ -137,16 +154,37 @@ fn search_blocking(
     request: ContextSearchRequest,
 ) -> Result<ContextSearchResponse, InspectionError> {
     root.revalidate()?;
+    let revision = root.directory_revision()?;
+    if request
+        .revision
+        .as_deref()
+        .is_some_and(|expected| expected != revision)
+    {
+        return Err(InspectionError::new(
+            "context_stale_revision",
+            "Context root changed since search continued",
+        ));
+    }
     let deadline = Instant::now() + SEARCH_TIMEOUT;
     let mut pending = vec![(root.resolve_directory(Path::new(""))?, PathBuf::new())];
     let mut results = Vec::new();
     let mut scanned_entries = 0usize;
     let mut scanned_files = 0u32;
     let mut truncated = false;
+    let mut partial_reason = None;
+    let mut skipped_matches = request.offset.unwrap_or(0) as usize;
 
     while let Some((directory, relative)) = pending.pop() {
         if Instant::now() >= deadline || scanned_entries >= MAX_SCANNED_ENTRIES {
             truncated = true;
+            partial_reason = Some(
+                if Instant::now() >= deadline {
+                    "time limit"
+                } else {
+                    "directory scan limit"
+                }
+                .to_owned(),
+            );
             break;
         }
         let mut names = Vec::new();
@@ -181,6 +219,14 @@ fn search_blocking(
         for name in names {
             if Instant::now() >= deadline || results.len() >= MAX_RESULTS {
                 truncated = true;
+                partial_reason = Some(
+                    if Instant::now() >= deadline {
+                        "time limit"
+                    } else {
+                        "result page limit"
+                    }
+                    .to_owned(),
+                );
                 break;
             }
             let candidate = if relative.as_os_str().is_empty() {
@@ -218,6 +264,8 @@ fn search_blocking(
             }
             if metadata.len() > MAX_SEARCHED_FILE_BYTES as u64 {
                 truncated = true;
+                partial_reason
+                    .get_or_insert_with(|| "file exceeds the 1 MiB search window".to_owned());
                 continue;
             }
             let (text, revision) =
@@ -231,15 +279,17 @@ fn search_blocking(
                     Err(error) => return Err(error),
                 };
             scanned_files = scanned_files.saturating_add(1);
-            append_matches(
+            append_matches_page(
                 &mut results,
                 &candidate.to_string_lossy(),
                 &revision,
                 &text,
                 &request.query,
+                &mut skipped_matches,
             );
             if results.len() >= MAX_RESULTS {
                 truncated = true;
+                partial_reason = Some("result page limit".to_owned());
                 break;
             }
         }
@@ -248,7 +298,19 @@ fn search_blocking(
         truncated = true;
     } else {
         root.revalidate()?;
+        if root.directory_revision()? != revision {
+            return Err(InspectionError::new(
+                "context_changed_during_read",
+                "Context root changed while searching",
+            ));
+        }
     }
+    let next_offset = (truncated && !results.is_empty()).then_some(
+        request
+            .offset
+            .unwrap_or(0)
+            .saturating_add(results.len() as u32),
+    );
     Ok(ContextSearchResponse {
         binding_id: request.binding_id,
         root_id: root.root_id().to_owned(),
@@ -257,6 +319,9 @@ fn search_blocking(
         results,
         scanned_files,
         truncated,
+        revision: Some(revision),
+        next_offset,
+        partial_reason,
     })
 }
 
@@ -453,6 +518,38 @@ fn append_matches(
     }
 }
 
+fn append_matches_page(
+    results: &mut Vec<ContextSearchResult>,
+    path: &str,
+    revision: &str,
+    text: &str,
+    query: &str,
+    skipped_matches: &mut usize,
+) {
+    for (index, raw_line) in text.split_inclusive('\n').enumerate() {
+        if !raw_line.contains(query) {
+            continue;
+        }
+        if *skipped_matches > 0 {
+            *skipped_matches -= 1;
+            continue;
+        }
+        if results.len() >= MAX_RESULTS {
+            return;
+        }
+        let line = raw_line
+            .strip_suffix('\n')
+            .and_then(|line| line.strip_suffix('\r').or(Some(line)))
+            .unwrap_or(raw_line);
+        results.push(ContextSearchResult {
+            path: path.to_owned(),
+            line: (index + 1) as u32,
+            excerpt: truncate_utf8(line, MAX_EXCERPT_BYTES),
+            revision: revision.to_owned(),
+        });
+    }
+}
+
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_owned();
@@ -467,7 +564,8 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_matches, truncate_utf8, validate_invalidation_request, validate_search_request,
+        append_matches, append_matches_page, truncate_utf8, validate_invalidation_request,
+        validate_search_request,
     };
     use cockpit_protocol::context_search::{
         ContextInvalidationRequest, ContextKnownRevision, ContextSearchRequest,
@@ -497,14 +595,52 @@ mod tests {
     }
 
     #[test]
+    fn search_continuation_skips_matches_without_changing_line_anchors() {
+        let mut first = Vec::new();
+        let mut skipped = 0;
+        append_matches_page(
+            &mut first,
+            "notes.md",
+            "revision",
+            "needle\nother\nneedle again\n",
+            "needle",
+            &mut skipped,
+        );
+        assert_eq!(
+            first.iter().map(|result| result.line).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+
+        let mut next = Vec::new();
+        let mut skipped = 1;
+        append_matches_page(
+            &mut next,
+            "notes.md",
+            "revision",
+            "needle\nother\nneedle again\n",
+            "needle",
+            &mut skipped,
+        );
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].line, 3);
+    }
+
+    #[test]
     fn requests_reject_control_queries_and_unbounded_known_files() {
         let invalid_query = ContextSearchRequest {
             binding_id: "binding".to_owned(),
             root_id: "root".to_owned(),
             query: "first\nsecond".to_owned(),
             request_generation: 1,
+            offset: None,
+            revision: None,
         };
         assert!(validate_search_request(&invalid_query).is_err());
+        let invalid_offset = ContextSearchRequest {
+            offset: Some(100_001),
+            ..invalid_query.clone()
+        };
+        assert!(validate_search_request(&invalid_offset).is_err());
         let invalidation = ContextInvalidationRequest {
             binding_id: "binding".to_owned(),
             root_id: "root".to_owned(),
