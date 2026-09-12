@@ -14,7 +14,7 @@ Validation:
 - `bun run build` — `tsc --noEmit && vite build` passed; Vite emitted its existing large-chunk warning.
 - Browser: exact gateway `http://127.0.0.1:4189/`, focused immediate-input proof and rapid-target proof; console errors 0 during the rapid check.
 
-The Herdr 0.9.0 session, gateway, browser profile, fixture, and proof scripts are owned by `runtime_delivery` under `/tmp/cockpit-focus-20260912` and remain alive for the next workflow increment. Clean them only when the workflow is finished. Delayed acknowledgement, multiple panes, full packet matrices, and native runtime behavior remain deferred.
+The Herdr 0.9.0 session, gateway, browser profile, fixture, and proof scripts were owned by `runtime_delivery` under `/tmp/cockpit-focus-20260912`. The session, gateway, and browser were stopped after the workflow. The fixture and proof scripts remain on disk. Delayed acknowledgement, multiple panes, full packet matrices, and native runtime behavior remain deferred.
 
 ## Provider increment
 
@@ -57,4 +57,6 @@ The focused viewer command was run once after the actual-content correction:
 
 - `playwright-cli -s=cockpit-focus-baseline-20260912 run-code --filename planning/agent-control-plane-2026-09-12/implementation/check-viewer-widths.js` — **PASS**, four viewport observations plus the real 358px pane and 478px zoomed Context receipts; the Context Files identity check also passed.
 
-Native constructor coverage, the full packet matrix, and automatic zero-click draft rebinding remain **INCONCLUSIVE/deferred**. Run-owned Herdr, gateway, browser, clone, worktrees, companions, and proof receipts remain under `/tmp/cockpit-real-20260912`.
+Native constructor coverage, the full packet matrix, and automatic zero-click draft rebinding remain **INCONCLUSIVE/deferred**. Run-owned Herdr, gateway, and browser processes were stopped. The clone, worktrees, companions, and proof receipts remain under `/tmp/cockpit-real-20260912`.
+
+The final delivery contains seven implementation commits plus the recorded evidence. It covers the scoped increments above and does not claim completion of all 12 packets.
