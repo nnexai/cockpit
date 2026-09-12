@@ -1022,7 +1022,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const token = ++feedbackRequest.current;
     feedbackBusyRef.current = true;
     if (!quiet) { setFeedbackBusy(true); setFeedbackError(null); }
-    const target = { session_id: sessionId, space_id: feedbackTargetPaneRef.current ? null : spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
+    const target = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
     const current = () => feedbackRequest.current === token && feedbackTargetRef.current?.sessionId === sessionId && feedbackTargetRef.current.spaceId === spaceId;
     try {
       const lookup = await client.browserFeedback({ target });
@@ -1056,13 +1056,14 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const openFeedback = useCallback(() => {
     if (selection.spaceId && state.sync === "live") {
       setFeedbackOpen(true);
-      const selectedAgent = (snapshot?.agents ?? []).find((agent) => agent.pane_id === selection.paneId);
-      const targetPaneId = selectedAgent?.pane_id ?? snapshot?.agents[0]?.pane_id ?? null;
+      const spaceAgents = (snapshot?.agents ?? []).filter((agent) => agent.space_id === selection.spaceId);
+      const selectedAgent = spaceAgents.find((agent) => agent.pane_id === selection.paneId);
+      const targetPaneId = selectedAgent?.pane_id ?? spaceAgents[0]?.pane_id ?? null;
       feedbackTargetPaneRef.current = targetPaneId;
       setFeedbackTargetPaneId(targetPaneId);
       void loadFeedback(selection.spaceId);
     }
-  }, [loadFeedback, selection.spaceId, state.sync]);
+  }, [loadFeedback, selection.spaceId, selection.paneId, snapshot?.agents, state.sync]);
   const refreshFeedback = useCallback(() => {
     if (selection.spaceId) void loadFeedback(selection.spaceId);
   }, [loadFeedback, selection.spaceId]);
@@ -1105,7 +1106,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setFeedbackBusy(true);
     setFeedbackError(null);
     try {
-      await client.acknowledgeBrowserFeedback({ target: { session_id: sessionId, space_id: feedbackTargetPaneRef.current ? null : spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null }, ids });
+      await client.acknowledgeBrowserFeedback({ target: { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null }, ids });
     } catch (error) {
       if (feedbackRequest.current === token) setFeedbackError(describeError(error, "Could not acknowledge browser feedback"));
     } finally {
