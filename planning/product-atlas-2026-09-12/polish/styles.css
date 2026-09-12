@@ -44,7 +44,6 @@
 .page-surface>img{display:block;width:100%;height:auto}
 .idea-toolbar{position:absolute;z-index:8;top:8px;right:8px;display:flex;align-items:center;gap:3px;padding:4px;border:1px solid #a3b1c4;border-radius:4px;background:white;box-shadow:0 2px 7px #14253b20;opacity:.45}
 .idea-toolbar:hover,.idea-toolbar:has(:focus-visible){opacity:1}
-@media(hover:none){.idea-toolbar{opacity:1}}
 .idea-toolbar .icon-button{width:28px;height:28px;min-height:28px;padding:4px;color:#29394f;border:1px solid #aebbd0;border-radius:3px}
 .idea-toolbar .icon-button:hover{background:#edf3fc}
 .idea-toolbar .active-tool{background:#2f67a8;color:white;border-color:#2f67a8}

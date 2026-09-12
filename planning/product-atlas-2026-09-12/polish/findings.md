@@ -10,9 +10,12 @@ These supersede earlier suggestions in the review:
 
 - Do not change terminal content.
 - Keep the existing small browser annotation toolbar and inline/overlay notes. Preserve **freehand drawing**.
+- The annotation toolbar becomes translucent when idle; hover or keyboard-visible focus restores full opacity. Notes and drawings do not fade.
 - Do not add an “Add idea” action, descriptive slogans, explanatory subtitles, or a new capture/persistence workflow. Select an element or region and write the note there; draw directly with freehand.
 - A Notes sidebar is optional, for finding and revisiting notes. It is closed by default and is not required for authoring.
 - Setup is used **5–20 times per day**. Use a compact single-screen form, not a teaching wizard.
+- Issue/MR URLs fill repository, branch, and default Space name. A manually entered branch also becomes the default Space name; an explicitly edited name is preserved.
+- Repository actions are always allowed for this personal IDE. Remove the consent checkbox; do not replace it with another confirmation.
 - Files and Review both need a collapsible file overview and a file picker. Removing the Files overview was inconsistent.
 - Do this work directly, without delegation. No subagent performed this work.
 
@@ -55,14 +58,18 @@ Observed: the current dialog repeats repository identity, configuration details,
 
 Revised proposal for frequent use:
 
-- One form: repository, new worktree/existing checkout, branch or checkout, Space name, optional issue/review URL.
-- Show familiar values directly. No stepper, welcome copy, or repeated explanation of what a worktree is.
+- One form: optional issue/MR URL first, repository, new worktree/existing checkout, branch or checkout, and Space name.
+- URL metadata fills repository and branch. Issue branch names use a derived naming default; MR/PR metadata uses its source branch. Space name follows the branch until explicitly overridden.
+- Selecting a project and entering a branch needs no separate naming step. Updating that branch continues to update the default name; a custom name is retained. Advanced destination defaults also track the branch unless edited.
+- No stepper, welcome copy, or repeated explanation of what a worktree is.
 - Put base revision and destination in collapsed Advanced settings.
 - Put exact effects and configured repository actions in collapsed Operation details. Safety information remains available; it does not require rereading a tutorial each time.
-- Keep required per-operation consent concise and visible. Do not interpret frequent use as permission to remove server-required consent or expand its scope.
+- No actions-consent checkbox. The user explicitly selected automatic repository actions for this personal tool. This revises the earlier design recommendation; application/backend behavior is not changed by this mock.
 - Use a stable, specific Create Space/Open Space action. In this mock it is disabled because no operation exists.
 
 The default desktop and portrait form fit without navigating through multiple steps. Opening advanced details may require scrolling. Example paths and effects are not a validated plan or permission to mutate a repository.
+
+The URL autofill demonstration uses local fixture metadata: `https://github.com/nnexai/cockpit/issues/4` fills `cockpit` / `issue-4-terminal-width`; `https://github.com/nnexai/cockpit/pull/7` fills `cockpit` / `ui-polish`. The PR fixture is illustrative, not fetched or claimed to describe a real PR. Unknown URLs do not fabricate remote metadata. An eventual implementation must resolve the source against configured local repositories and use real provider metadata.
 
 ### Browser annotation
 
@@ -79,6 +86,8 @@ The revised mock keeps:
 7. Close.
 
 The toolbar is a compact overlay, not a separate workflow panel. The screenshot/capture-position control opens original evidence in this mock; it does not create or save a capture.
+
+Idle toolbar opacity is 45%; hover and keyboard-visible focus use 100%. Transparency applies only to toolbar chrome, not the page, annotations, or terminal content.
 
 - Element selection opens an inline textarea. The mock has one example element target on the captured page.
 - Region drag draws a rectangle and opens a comment beside it.
