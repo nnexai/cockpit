@@ -108,6 +108,10 @@ pub struct ReviewFileRequest {
     pub source_side: Option<ReviewSide>,
     #[serde(default)]
     pub source_offset: u32,
+    /// Exact revision identity expected for a continuation. The server
+    /// rejects a page when the selected file no longer has this identity.
+    #[serde(default)]
+    pub source_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

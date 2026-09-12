@@ -403,7 +403,12 @@ export type ReviewFileRequest = { binding_id: string, review_id: string, generat
  * Optional continuation for a large immutable source side. When absent,
  * the response contains the normal bounded preview for both sides.
  */
-source_side: ReviewSide | null, source_offset: number, };
+source_side: ReviewSide | null, source_offset: number,
+/**
+ * Exact revision identity expected for a continuation. The server
+ * rejects a page when the selected file no longer has this identity.
+ */
+source_revision: string | null, };
 
 export type ReviewDiffLine = { kind: ReviewDiffLineKind, old_line: number | null, new_line: number | null,
 /**

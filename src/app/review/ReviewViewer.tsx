@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ContextDocument, ContextRoot, PanePresentation, ReviewComparison, ReviewFileRequest, ReviewSnapshotRequest } from "../../protocol/generated/v1";
+import type { ContextDocument, ContextRoot, PanePresentation, ReviewComparison, ReviewFileDiff, ReviewFileRequest, ReviewSnapshotRequest } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "../context/CommentDrafts";
 import { createReviewViewState, SourceLines, type ContextViewState, type ReviewViewState } from "../context/ContextViewer";
 import { ReviewPane } from "./ReviewPane";
@@ -37,6 +37,22 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     const current = valueRef.current.review ?? createReviewViewState();
     changeRef.current({ ...valueRef.current, review: { ...current, ...patch } });
   }, []);
+  const appendSourcePage = useCallback((sourceKey: string, side: "old" | "new", requestedOffset: number, expectedRevision: string | null, next: ReviewFileDiff) => {
+    const chunk = side === "old" ? next.old_source : next.new_source;
+    const offset = side === "old" ? next.old_source_offset : next.new_source_offset;
+    const total = side === "old" ? next.old_source_total_bytes : next.new_source_total_bytes;
+    const revision = side === "old" ? next.file.old_revision : next.file.new_revision;
+    if (chunk === null || offset !== requestedOffset || (expectedRevision !== null && revision !== expectedRevision)) return;
+    const bytes = new TextEncoder().encode(chunk).byteLength;
+    setSourcePages((current) => ({
+      ...current,
+      [sourceKey]: {
+        text: requestedOffset === 0 ? chunk : `${current[sourceKey]?.text ?? ""}${chunk}`,
+        nextOffset: offset + bytes,
+        totalBytes: total ?? offset + bytes,
+      },
+    }));
+  }, []);
   const handleReviewViewChange = useCallback((next: ReviewViewState) => {
     const comparisonChanged = activeComparisonRef.current !== next.comparison;
     activeComparisonRef.current = next.comparison;
@@ -51,6 +67,9 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
   useEffect(() => {
     updateReviewView({ mode });
   }, [mode, updateReviewView]);
+  useEffect(() => {
+    setSourcePages({});
+  }, [invalidation]);
   useEffect(() => {
     updateReviewView({
       fileId: selection?.fileId ?? reviewViewRef.current.fileId,
@@ -88,6 +107,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
   return <div className="review-viewer" ref={viewerRef} onPointerDown={onRequestControl}>
     <ReviewPane identity={`${session}\0${pane}\0${binding}`} sessionId={session} paneId={pane} bindingId={binding} repositoryId={repositoryId} snapshot={snapshot} file={file} selectedLines={selection}
       viewState={reviewView} onViewStateChange={handleReviewViewChange}
+      onOpenSource={() => setMode("source")}
       onCreateLineComment={() => commentActionsRef.current?.createLines()} onCreateFileComment={() => commentActionsRef.current?.createWholeFile()} onOpenCommentOverview={() => commentActionsRef.current?.openOverview()}
       commentCount={commentStatus.count} canCreateLineComment={commentStatus.canCreateLines} canCreateFileComment={commentStatus.canCreateWholeFile}
       onSelectLines={(file, side, start, end, _lines, shift) => setSelection(previous => ({ fileId: file.file_id, side, start: shift && previous?.fileId === file.file_id && previous.side === side ? previous.start : start, end }))}
@@ -111,7 +131,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
             commentActionsRef.current = actions;
             return <>
             <div className="review-source-controls"><button type="button" onClick={() => setMode(mode === "diff" ? "source" : "diff")}>{mode === "diff" ? "Expand full source" : "Unified diff"}</button><span>{side} side{range ? ` · lines ${Math.min(range.start, range.end)}–${Math.max(range.start, range.end)}` : ""}</span><button type="button" disabled={diff.old_source === null && !diff.old_source_truncated} onClick={() => setSelection({ fileId: diff.file.file_id, side: "old", start: 1, end: 1 })}>Old source</button><button type="button" disabled={diff.new_source === null && !diff.new_source_truncated} onClick={() => setSelection({ fileId: diff.file.file_id, side: "new", start: 1, end: 1 })}>New source</button></div>
-            {mode === "source" && text !== null ? <><SourceLines text={text} state={{ rootId: root.root_id, path, mode: "source", revision, selectionStart: range?.start ?? null, selectionEnd: range?.end ?? null, scrollTop: reviewView.scrollTop }} onSelect={(start, end) => setSelection({ fileId: diff.file.file_id, side, start, end })} onScroll={(scrollTop) => updateReviewView({ scrollTop })} commentDrafts={drafts.filter(draft => draft.file_ref.review?.file_id === diff.file.file_id && draft.file_ref.review.side === side)} commentActions={actions} inlineEditor={renderInlineEditor} />{sourceTruncated ? <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { setSourceLoading(sourceKey); void loadSourcePage(side, page?.nextOffset ?? 0).then((next) => { const chunk = side === "old" ? next.old_source : next.new_source; if (chunk === null) return; const offset = side === "old" ? next.old_source_offset : next.new_source_offset; const total = side === "old" ? next.old_source_total_bytes : next.new_source_total_bytes; setSourcePages((current) => ({ ...current, [sourceKey]: { text: (current[sourceKey]?.text ?? "") + chunk, nextOffset: offset + new TextEncoder().encode(chunk).length, totalBytes: total ?? offset + new TextEncoder().encode(chunk).length } })); }).finally(() => setSourceLoading(null)); }}>{sourceLoading === sourceKey ? "Loading source…" : `Load next source page${totalBytes ? ` (${Math.min((page?.nextOffset ?? 0) + 1, totalBytes)}–${totalBytes} bytes)` : ""}`}</button> : null}</> : mode === "source" ? <p className="review-notice">This source is larger than the initial preview. <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { setSourceLoading(sourceKey); void loadSourcePage(side, 0).then((next) => { const chunk = side === "old" ? next.old_source : next.new_source; if (chunk === null) return; const offset = side === "old" ? next.old_source_offset : next.new_source_offset; const total = side === "old" ? next.old_source_total_bytes : next.new_source_total_bytes; setSourcePages((current) => ({ ...current, [sourceKey]: { text: chunk, nextOffset: offset + new TextEncoder().encode(chunk).length, totalBytes: total ?? offset + new TextEncoder().encode(chunk).length } })); }).finally(() => setSourceLoading(null)); }}>{sourceLoading === sourceKey ? "Loading…" : "Load source"}</button></p> : content((shown, oldLine, newLine) => <>{(["old", "new"] as const).map(anchorSide => {
+            {mode === "source" && text !== null ? <><SourceLines text={text} state={{ rootId: root.root_id, path, mode: "source", revision, selectionStart: range?.start ?? null, selectionEnd: range?.end ?? null, scrollTop: reviewView.scrollTop }} onSelect={(start, end) => setSelection({ fileId: diff.file.file_id, side, start, end })} onScroll={(scrollTop) => updateReviewView({ scrollTop })} commentDrafts={drafts.filter(draft => draft.file_ref.review?.file_id === diff.file.file_id && draft.file_ref.review.side === side)} commentActions={actions} inlineEditor={renderInlineEditor} />{sourceTruncated ? <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { setSourceLoading(sourceKey); void loadSourcePage(side, page?.nextOffset ?? 0).then((next) => appendSourcePage(sourceKey, side, page?.nextOffset ?? 0, side === "old" ? diff.file.old_revision : diff.file.new_revision, next)).finally(() => setSourceLoading(null)); }}>{sourceLoading === sourceKey ? "Loading source…" : `Load next source page${totalBytes ? ` (${Math.min((page?.nextOffset ?? 0) + 1, totalBytes)}–${totalBytes} bytes)` : ""}`}</button> : null}</> : mode === "source" ? <p className="review-notice">This source is larger than the initial preview. <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { setSourceLoading(sourceKey); void loadSourcePage(side, 0).then((next) => appendSourcePage(sourceKey, side, 0, side === "old" ? diff.file.old_revision : diff.file.new_revision, next)).finally(() => setSourceLoading(null)); }}>{sourceLoading === sourceKey ? "Loading…" : "Load source"}</button></p> : content((shown, oldLine, newLine) => <>{(["old", "new"] as const).map(anchorSide => {
               const line = anchorSide === "old" ? oldLine : newLine;
               return line === null ? null : <Fragment key={anchorSide}><InlineCommentDrafts line={line} drafts={drafts.filter(draft => draft.file_ref.review?.file_id === shown.file.file_id && draft.file_ref.review.side === anchorSide)} actions={actions} />{anchorSide === side ? renderInlineEditor?.(line) : null}</Fragment>;
             })}</>)}

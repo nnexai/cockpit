@@ -25,6 +25,7 @@ export type ReviewPaneProps = {
   onCreateLineComment?: () => void;
   onCreateFileComment?: () => void;
   onOpenCommentOverview?: () => void;
+  onOpenSource?: () => void;
   commentCount?: number | null;
   canCreateLineComment?: boolean;
   canCreateFileComment?: boolean;
@@ -122,7 +123,7 @@ function isEditingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
 }
 
-export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
+export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, onOpenSource, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
   const baseId = useId();
   const [comparison, setComparison] = useState<ReviewComparison>(viewState?.comparison ?? "all_local");
   const [baseRef, setBaseRef] = useState(viewState?.baseRef ?? "");
@@ -224,7 +225,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     const generation = generationRef.current;
     if (previousSelectedRef.current !== selected) setDiff(null);
     previousSelectedRef.current = selected;
-    void file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: selected, source_side: null, source_offset: 0 }, controller.signal)
+    void file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: selected, source_side: null, source_offset: 0, source_revision: null }, controller.signal)
       .then((next) => {
         if (!controller.signal.aborted && identityRef.current === identity && generation === generationRef.current
           && next.review_id === review.review_id && next.generation === review.generation && next.binding_id === bindingId) setDiff(next);
@@ -404,7 +405,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       <button type="button" onClick={submitComparison} disabled={pending || (comparison === "branch" && !draftBaseRef.trim())}>{pending ? "Refreshing…" : "Refresh"}</button>
     </header>
     {error ? <p className="review-notice review-error" role="alert">{error}</p> : null}
-    {diff?.truncated ? <p className="review-notice review-warning">This file reached the preview limit. Comments require an available complete source.</p> : null}
+    {diff?.truncated ? <p className="review-notice review-warning">This file's unified diff is partial. <button type="button" onClick={onOpenSource}>Open source</button> or narrow the comparison to inspect it safely.</p> : null}
     {review?.truncated ? <p className="review-notice review-warning">Review output reached a configured limit. Refresh with a narrower scope.</p> : null}
     <div className="review-body">
       <nav className="review-files" aria-label="Changed files" ref={filesRef} onKeyDown={onFilesKeyDown}>
@@ -413,7 +414,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         {review && review.files.length === 0 ? <p>No changes in this scope.</p> : null}
       </nav>
       <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus(); }} onKeyDown={onDiffKeyDown}>
-        {renderFile && review && diff ? renderFile(review, diff, diffContent, (side, offset) => file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, source_side: side, source_offset: offset }, new AbortController().signal)) : diffContent()}
+        {renderFile && review && diff ? renderFile(review, diff, diffContent, (side, offset) => file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, source_side: side, source_offset: offset, source_revision: side === "old" ? diff.file.old_revision : diff.file.new_revision }, new AbortController().signal)) : diffContent()}
       </main>
     </div>
     <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : "Select a line"}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount === null ? "Loading comments…" : `${commentCount} comments`}</button><span><kbd>Alt+↑↓</kbd> hunk</span></span></footer>

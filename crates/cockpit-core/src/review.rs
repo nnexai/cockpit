@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use cockpit_protocol::review::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -22,7 +24,10 @@ use crate::context::ContextService;
 use crate::extension_adapter::ExtensionHerdrAdapter;
 use crate::project_store::{atomic_write_json, read_json_bounded, timestamp, ProjectStore};
 use crate::repositories::RepositoryCatalog;
-use crate::{process::run_bounded_command, InspectionError};
+use crate::{
+    process::{run_bounded_command, OwnedChild},
+    InspectionError,
+};
 
 const MAX_SNAPSHOTS: usize = 8;
 const MAX_FILE_LIST_BYTES: usize = 16 * 1024 * 1024;
@@ -30,7 +35,6 @@ const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FILE_BYTES: usize = 512 * 1024;
 const MAX_HUNKS: usize = 2048;
 const MAX_STORED_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_SNAPSHOT_ENTRIES: usize = MAX_SNAPSHOTS * 4;
 
 #[derive(Clone)]
 pub struct ReviewService {
@@ -61,6 +65,12 @@ struct Change {
     comparison: ReviewComparison,
     old_path: Option<String>,
     new_path: Option<String>,
+    /// Per-file source identities captured with the inventory. Global review
+    /// tokens only invalidate the inventory; these cursors anchor reads.
+    #[serde(default)]
+    old_revision: Option<String>,
+    #[serde(default)]
+    new_revision: Option<String>,
 }
 
 /// Fresh runtime evidence for a Reviewr comment batch. `source_id` identifies
@@ -99,6 +109,9 @@ pub(crate) enum ReviewSourceState {
 struct FrozenSource {
     text: Option<String>,
     hash: Option<String>,
+    /// For worktree pages this is a metadata cursor; for bounded text it is
+    /// the exact content hash. It is checked before every continuation page.
+    identity: Option<String>,
     total_lines: Option<u32>,
     total_bytes: Option<u32>,
     truncated: bool,
@@ -227,6 +240,12 @@ impl ReviewService {
                 "source offset requires a source side",
             ));
         }
+        if request.source_side.is_none() && request.source_revision.is_some() {
+            return Err(InspectionError::new(
+                "review_invalid_request",
+                "source revision requires a source side",
+            ));
+        }
         let stored = self
             .active_snapshot(
                 session_id,
@@ -241,6 +260,7 @@ impl ReviewService {
             &request.file_id,
             request.source_side,
             request.source_offset,
+            request.source_revision.as_deref(),
         )
         .await
     }
@@ -250,14 +270,23 @@ impl ReviewService {
     /// file switches, comments, and reopens reuse the same frozen content.
     async fn materialize_file(
         &self,
-        mut stored: StoredSnapshot,
+        stored: StoredSnapshot,
         file_id: &str,
         source_side: Option<ReviewSide>,
         source_offset: u32,
+        source_revision: Option<&str>,
     ) -> Result<ReviewFileDiff, InspectionError> {
+        if let Some(diff) = self
+            .load_file_cache(&stored.snapshot.review_id, file_id)
+            .await?
+        {
+            return self
+                .continue_source(&stored, diff, source_side, source_offset, source_revision)
+                .await;
+        }
         if let Some(diff) = stored.diffs.get(file_id).cloned() {
             return self
-                .continue_source(&stored, diff, source_side, source_offset)
+                .continue_source(&stored, diff, source_side, source_offset, source_revision)
                 .await;
         }
         let change = stored.changes.get(file_id).cloned().ok_or_else(|| {
@@ -271,6 +300,8 @@ impl ReviewService {
             index: stored.snapshot.index_revision.clone(),
             worktree: stored.snapshot.worktree_revision.clone(),
         };
+        self.verify_worktree_revisions(Path::new(&stored.snapshot.checkout_path), &change)
+            .await?;
         let (mut diff, _) = match self
             .diff(
                 Path::new(&stored.snapshot.checkout_path),
@@ -311,11 +342,11 @@ impl ReviewService {
         diff.binding_id = stored.snapshot.binding_id.clone();
         diff.session_id = stored.snapshot.session_id.clone();
         diff.pane_id = stored.snapshot.pane_id.clone();
-        stored.diffs.insert(file_id.to_owned(), diff.clone());
-        let response = self
-            .continue_source(&stored, diff, source_side, source_offset)
+        self.save_file_cache(&stored.snapshot.review_id, &diff)
             .await?;
-        self.save_snapshot(stored).await?;
+        let response = self
+            .continue_source(&stored, diff, source_side, source_offset, source_revision)
+            .await?;
         Ok(response)
     }
 
@@ -325,17 +356,22 @@ impl ReviewService {
         mut diff: ReviewFileDiff,
         source_side: Option<ReviewSide>,
         source_offset: u32,
+        source_revision: Option<&str>,
     ) -> Result<ReviewFileDiff, InspectionError> {
         let Some(side) = source_side else {
             return Ok(diff);
         };
-        if source_offset == 0
-            && match side {
-                ReviewSide::Old => diff.old_source.is_some(),
-                ReviewSide::New => diff.new_source.is_some(),
+        let expected = match side {
+            ReviewSide::Old => diff.file.old_revision.as_deref(),
+            ReviewSide::New => diff.file.new_revision.as_deref(),
+        };
+        if let Some(requested) = source_revision {
+            if Some(requested) != expected {
+                return Err(InspectionError::new(
+                    "review_source_stale",
+                    "source continuation revision does not match the frozen file",
+                ));
             }
-        {
-            return Ok(diff);
         }
         let change = stored
             .changes
@@ -347,6 +383,33 @@ impl ReviewService {
                     "review file is not in this immutable snapshot",
                 )
             })?;
+        if source_offset > 0 {
+            let total = match side {
+                ReviewSide::Old => diff.old_source_total_bytes,
+                ReviewSide::New => diff.new_source_total_bytes,
+            };
+            if total.is_some_and(|total| source_offset > total) {
+                return Err(InspectionError::new(
+                    "review_invalid_request",
+                    "source continuation offset is outside the frozen source",
+                ));
+            }
+            self.verify_source_revision(
+                Path::new(&stored.snapshot.checkout_path),
+                &change,
+                side,
+                expected,
+            )
+            .await?;
+        }
+        if source_offset == 0
+            && match side {
+                ReviewSide::Old => diff.old_source.is_some(),
+                ReviewSide::New => diff.new_source.is_some(),
+            }
+        {
+            return Ok(diff);
+        }
         let revisions = RevisionTokens {
             head: stored.snapshot.head_revision.clone(),
             index: stored.snapshot.index_revision.clone(),
@@ -400,6 +463,26 @@ impl ReviewService {
                 change.new_path.as_deref().expect("path checked"),
                 SourceObject::Worktree,
             ),
+            (ReviewComparison::Staged, ReviewSide::Old) => (
+                change.old_path.as_deref().expect("path checked"),
+                SourceObject::Git(revisions.head.as_deref().expect("head revision")),
+            ),
+            (ReviewComparison::Staged, ReviewSide::New) => (
+                change.new_path.as_deref().expect("path checked"),
+                SourceObject::Index,
+            ),
+            (ReviewComparison::Unstaged, ReviewSide::Old) => (
+                change.old_path.as_deref().expect("path checked"),
+                SourceObject::Index,
+            ),
+            (ReviewComparison::Branch, ReviewSide::Old) => (
+                change.old_path.as_deref().expect("path checked"),
+                SourceObject::Git(base.expect("branch base")),
+            ),
+            (ReviewComparison::Branch, ReviewSide::New) => (
+                change.new_path.as_deref().expect("path checked"),
+                SourceObject::Git(revisions.head.as_deref().expect("head revision")),
+            ),
             _ => return Ok(FrozenSource::absent()),
         };
         match object {
@@ -412,10 +495,10 @@ impl ReviewService {
                 .await
                 .map_err(|error| InspectionError::new("review_task", error.to_string()))?
             }
-            SourceObject::Git(_) | SourceObject::Index => {
-                let _ = (base, revisions);
-                Ok(FrozenSource::absent())
+            SourceObject::Git(revision) => {
+                self.git_source_page(checkout, revision, path, offset).await
             }
+            SourceObject::Index => self.git_source_page(checkout, ":", path, offset).await,
         }
     }
 
@@ -528,7 +611,9 @@ impl ReviewService {
         let stored = self
             .active_snapshot_with_evidence(evidence, review_id, generation)
             .await?;
-        let diff = self.materialize_file(stored, file_id, None, 0).await?;
+        let diff = self
+            .materialize_file(stored, file_id, None, 0, None)
+            .await?;
         let (path, revision, content_hash, text, total_lines, truncated) = match side {
             ReviewSide::Old => (
                 diff.file.old_path.as_deref(),
@@ -590,12 +675,16 @@ impl ReviewService {
             .await?;
         let checkout = PathBuf::from(&stored.snapshot.checkout_path);
         let base_revision = stored.snapshot.base_revision.clone();
-        let diff = self.materialize_file(stored, file_id, None, 0).await?;
+        let diff = self
+            .materialize_file(stored, file_id, None, 0, None)
+            .await?;
         let change = Change {
             status: diff.file.status,
             comparison: diff.file.comparison,
             old_path: diff.file.old_path.clone(),
             new_path: diff.file.new_path.clone(),
+            old_revision: diff.file.old_revision.clone(),
+            new_revision: diff.file.new_revision.clone(),
         };
         let revisions = RevisionTokens {
             head: self
@@ -801,7 +890,8 @@ impl ReviewService {
             let changes = self
                 .changes(checkout, comparison, base_revision.as_deref())
                 .await?;
-            for change in changes {
+            for mut change in changes {
+                capture_inventory_revisions(checkout, &mut change, revisions)?;
                 let file_id = file_id(comparison, &change.old_path, &change.new_path);
                 files.push(change_file(
                     &file_id,
@@ -991,6 +1081,8 @@ impl ReviewService {
         let source_truncated = old_source.truncated || new_source.truncated;
         let (additions, deletions) =
             change_counts(&hunks, binary, truncated || source_truncated, status);
+        let old_revision = old_source.identity.clone().or(old_revision);
+        let new_revision = new_source.identity.clone().or(new_revision);
         let file = ReviewChangedFile {
             file_id: file_id.to_owned(),
             comparison: change.comparison,
@@ -1128,9 +1220,149 @@ impl ReviewService {
                 path,
                 "Git could not read the immutable source for this review side",
             )),
-            Err(error) if error.code == "bounded_output" => Ok(FrozenSource::truncated(path)),
+            Err(error) if error.code == "bounded_output" => {
+                self.git_source_page(checkout, revision, path, 0).await
+            }
             Err(error) => Err(error),
         }
+    }
+
+    /// Stream one bounded page from an immutable Git object. `git show` is
+    /// useful for small previews, but its bounded command reader cannot seek
+    /// a multi-megabyte blob without buffering it. `cat-file --batch` gives us
+    /// the object size and lets this reader skip and consume only one page.
+    async fn git_source_page(
+        &self,
+        checkout: &Path,
+        revision: &str,
+        path: &str,
+        offset: u32,
+    ) -> Result<FrozenSource, InspectionError> {
+        let object = if revision == ":" {
+            format!(":{path}")
+        } else {
+            format!("{revision}:{path}")
+        };
+        let mut command = Command::new("git");
+        command
+            .current_dir(checkout)
+            .arg("-c")
+            .arg("core.hooksPath=/dev/null")
+            .arg("-c")
+            .arg("core.fsmonitor=false")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "")
+            .args(["cat-file", "--batch"]);
+        command.kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        let child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| InspectionError::new("execution_failed", "Git could not be started"))?;
+        let mut owned = OwnedChild::new(child);
+        let result = tokio::time::timeout(
+            Duration::from_millis(self.configuration.limits.git_timeout_ms as u64),
+            async {
+                let child = owned.child.as_mut().expect("owned child available");
+                let mut stdin = child.stdin.take().ok_or_else(|| {
+                    InspectionError::new("execution_failed", "Git stdin unavailable")
+                })?;
+                stdin.write_all(object.as_bytes()).await.map_err(|_| {
+                    InspectionError::new("review_source_unreadable", "Git query failed")
+                })?;
+                stdin.write_all(b"\n").await.map_err(|_| {
+                    InspectionError::new("review_source_unreadable", "Git query failed")
+                })?;
+                stdin.shutdown().await.map_err(|_| {
+                    InspectionError::new("review_source_unreadable", "Git query failed")
+                })?;
+                let stdout = child.stdout.take().ok_or_else(|| {
+                    InspectionError::new("execution_failed", "Git stdout unavailable")
+                })?;
+                let mut reader = BufReader::new(stdout);
+                let mut header = String::new();
+                reader.read_line(&mut header).await.map_err(|_| {
+                    InspectionError::new(
+                        "review_source_unreadable",
+                        "Git object header could not be read",
+                    )
+                })?;
+                let mut fields = header.split_whitespace();
+                let _object_id = fields.next();
+                let object_type = fields.next();
+                let size = fields
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        InspectionError::new(
+                            "review_source_unavailable",
+                            "Git object is unavailable",
+                        )
+                    })?;
+                if object_type != Some("blob") {
+                    return Err(InspectionError::new(
+                        "review_source_unavailable",
+                        "Git review source is not a blob",
+                    ));
+                }
+                let offset = u64::from(offset).min(size);
+                let mut skipped = 0u64;
+                let mut discard = [0u8; 64 * 1024];
+                while skipped < offset {
+                    let want = (offset - skipped).min(discard.len() as u64) as usize;
+                    reader.read_exact(&mut discard[..want]).await.map_err(|_| {
+                        InspectionError::new(
+                            "review_source_unreadable",
+                            "Git source could not be seeked",
+                        )
+                    })?;
+                    skipped += want as u64;
+                }
+                let amount = (size - offset).min(MAX_FILE_BYTES as u64) as usize;
+                let mut bytes = vec![0u8; amount];
+                reader.read_exact(&mut bytes).await.map_err(|_| {
+                    InspectionError::new("review_source_unreadable", "Git source could not be read")
+                })?;
+                let text = String::from_utf8(bytes).map_err(|_| {
+                    InspectionError::new(
+                        "review_source_binary",
+                        "Git review source is not UTF-8 text",
+                    )
+                })?;
+                let end = offset.saturating_add(text.len() as u64);
+                Ok(FrozenSource {
+                    text: Some(text),
+                    hash: None,
+                    identity: Some(object),
+                    total_lines: None,
+                    total_bytes: u32::try_from(size).ok(),
+                    truncated: end < size,
+                    diagnostic: None,
+                })
+            },
+        )
+        .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => Err(InspectionError::new(
+                "review_timeout",
+                "Git source page exceeded the configured timeout",
+            )),
+        };
+        let cleanup = owned.kill_and_reap().await;
+        if let Some(cleanup) = cleanup {
+            if result.is_ok() {
+                return Err(InspectionError::new("review_task", cleanup));
+            }
+        }
+        result
     }
 
     async fn revision_tokens(&self, checkout: &Path) -> Result<RevisionTokens, InspectionError> {
@@ -1238,6 +1470,143 @@ impl ReviewService {
         .await
     }
 
+    async fn verify_worktree_revisions(
+        &self,
+        checkout: &Path,
+        change: &Change,
+    ) -> Result<(), InspectionError> {
+        if !matches!(
+            change.comparison,
+            ReviewComparison::Untracked | ReviewComparison::Unstaged
+        ) {
+            return Ok(());
+        }
+        let Some(path) = change.new_path.as_deref() else {
+            return Ok(());
+        };
+        let expected = change.new_revision.as_deref();
+        if expected.is_none() {
+            return Ok(());
+        }
+        let checkout = checkout.to_path_buf();
+        let path = path.to_owned();
+        let current = tokio::task::spawn_blocking(move || {
+            worktree_source_identity(&checkout, &path)
+                .transpose()
+                .map_err(|error| error)
+        })
+        .await
+        .map_err(|error| InspectionError::new("review_task", error.to_string()))??;
+        if current.as_deref() != expected {
+            return Err(InspectionError::new(
+                "review_source_stale",
+                "working-tree source changed after the review inventory was captured",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn verify_source_revision(
+        &self,
+        checkout: &Path,
+        change: &Change,
+        side: ReviewSide,
+        expected: Option<&str>,
+    ) -> Result<(), InspectionError> {
+        let is_worktree = matches!(
+            (change.comparison, side),
+            (ReviewComparison::Untracked, ReviewSide::New)
+                | (ReviewComparison::Unstaged, ReviewSide::New)
+        );
+        if !is_worktree {
+            return Ok(());
+        }
+        let Some(path) = change.new_path.as_deref() else {
+            return Ok(());
+        };
+        let Some(expected) = expected else {
+            return Err(InspectionError::new(
+                "review_source_stale",
+                "working-tree source has no immutable revision cursor",
+            ));
+        };
+        let checkout = checkout.to_path_buf();
+        let path = path.to_owned();
+        let current = tokio::task::spawn_blocking(move || {
+            worktree_source_identity(&checkout, &path)
+                .transpose()
+                .map_err(|error| error)
+        })
+        .await
+        .map_err(|error| InspectionError::new("review_task", error.to_string()))??;
+        if current.as_deref() != Some(expected) {
+            return Err(InspectionError::new(
+                "review_source_stale",
+                "working-tree source changed while the review page was being read",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn save_file_cache(
+        &self,
+        review_id: &str,
+        diff: &ReviewFileDiff,
+    ) -> Result<(), InspectionError> {
+        let state = self.store.clone();
+        let review_id = review_id.to_owned();
+        let diff = diff.clone();
+        tokio::task::spawn_blocking(move || {
+            let name = file_cache_name(&review_id, &diff.file.file_id)?;
+            let serialized = serde_json::to_vec(&diff)
+                .map_err(|error| InspectionError::new("review_write", error.to_string()))?;
+            if serialized.len() > MAX_STORED_SNAPSHOT_BYTES as usize {
+                return Err(InspectionError::new(
+                    "review_file_bounded",
+                    "review file cache exceeds its per-file storage limit",
+                ));
+            }
+            atomic_write_json(state.state_dir(), &name, &diff)
+                .map_err(|error| InspectionError::new("review_write", error.to_string()))
+        })
+        .await
+        .map_err(|error| InspectionError::new("review_task", error.to_string()))?
+    }
+
+    async fn load_file_cache(
+        &self,
+        review_id: &str,
+        file_id: &str,
+    ) -> Result<Option<ReviewFileDiff>, InspectionError> {
+        let state = self.store.clone();
+        let review_id = review_id.to_owned();
+        let file_id = file_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let name = file_cache_name(&review_id, &file_id)?;
+            match state.state_dir().symlink_metadata(&name) {
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                    let diff: ReviewFileDiff =
+                        read_json_bounded(state.state_dir(), &name, MAX_STORED_SNAPSHOT_BYTES)?;
+                    if diff.file.file_id != file_id {
+                        return Err(InspectionError::new(
+                            "review_read",
+                            "review file cache identity does not match its key",
+                        ));
+                    }
+                    Ok(Some(diff))
+                }
+                Ok(_) => Err(InspectionError::new(
+                    "unsafe_path",
+                    "review file cache is not a regular file",
+                )),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(InspectionError::new("review_read", error.to_string())),
+            }
+        })
+        .await
+        .map_err(|error| InspectionError::new("review_task", error.to_string()))?
+    }
+
     async fn save_snapshot(&self, stored: StoredSnapshot) -> Result<(), InspectionError> {
         let state = self.store.clone();
         tokio::task::spawn_blocking(move || {
@@ -1302,6 +1671,7 @@ impl FrozenSource {
         Self {
             text: None,
             hash: None,
+            identity: None,
             total_lines: None,
             total_bytes: None,
             truncated: false,
@@ -1316,13 +1686,15 @@ impl FrozenSource {
                 total_lines: Some(physical_line_count(&text)),
                 total_bytes: u32::try_from(text.len()).ok(),
                 text: Some(text),
-                hash,
+                hash: hash.clone(),
+                identity: hash.clone(),
                 truncated: false,
                 diagnostic: None,
             },
             Err(_) => Self {
                 text: None,
-                hash,
+                hash: hash.clone(),
+                identity: hash.clone(),
                 total_lines: None,
                 total_bytes: None,
                 truncated: false,
@@ -1335,6 +1707,12 @@ impl FrozenSource {
         }
     }
 
+    fn from_bytes_with_identity(bytes: Vec<u8>, _metadata_identity: String) -> Self {
+        // A bounded body hash is the exact cursor for small files. The
+        // metadata identity is only needed for oversized continuation pages.
+        Self::from_bytes(bytes)
+    }
+
     fn truncated(path: &str) -> Self {
         Self::truncated_with_bytes(path, None)
     }
@@ -1343,6 +1721,7 @@ impl FrozenSource {
         Self {
             text: None,
             hash: None,
+            identity: None,
             total_lines: None,
             total_bytes,
             truncated: true,
@@ -1354,10 +1733,16 @@ impl FrozenSource {
         }
     }
 
+    fn with_identity(mut self, identity: String) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
     fn unavailable(path: &str, message: &str) -> Self {
         Self {
             text: None,
             hash: None,
+            identity: None,
             total_lines: None,
             total_bytes: None,
             truncated: false,
@@ -1413,9 +1798,8 @@ fn checkout_source_id(checkout: &Path) -> Result<String, InspectionError> {
     hasher.update([0]);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        hasher.update(metadata.dev().to_le_bytes());
-        hasher.update(metadata.ino().to_le_bytes());
+        hasher.update(cap_fs_ext::MetadataExt::dev(&metadata).to_le_bytes());
+        hasher.update(cap_fs_ext::MetadataExt::ino(&metadata).to_le_bytes());
     }
     #[cfg(not(unix))]
     {
@@ -1438,7 +1822,7 @@ fn read_worktree_source(checkout: &Path, path: &str) -> Result<FrozenSource, Ins
     let (parent, leaf) = open_worktree_parent(checkout, path)?;
     let mut options = OpenOptions::new();
     options.read(true).follow(FollowSymlinks::No).nonblock(true);
-    let file = match parent.open_with(&leaf, &options) {
+    let mut file = match parent.open_with(&leaf, &options) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => {
             return Ok(FrozenSource::unavailable(
@@ -1469,10 +1853,12 @@ fn read_worktree_source(checkout: &Path, path: &str) -> Result<FrozenSource, Ins
         return Ok(FrozenSource::truncated_with_bytes(
             &display_path,
             u32::try_from(metadata.len()).ok(),
-        ));
+        )
+        .with_identity(worktree_metadata_identity(&metadata)));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_FILE_BYTES.saturating_add(1) as u64)
+    (&mut file)
+        .take(MAX_FILE_BYTES.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| {
             InspectionError::new("review_unreadable", "working-tree source could not be read")
@@ -1481,9 +1867,40 @@ fn read_worktree_source(checkout: &Path, path: &str) -> Result<FrozenSource, Ins
         return Ok(FrozenSource::truncated_with_bytes(
             &display_path,
             u32::try_from(metadata.len()).ok(),
+        )
+        .with_identity(worktree_metadata_identity(&metadata)));
+    }
+    let after = file.metadata().map_err(|_| {
+        InspectionError::new(
+            "review_unreadable",
+            "working-tree source could not be inspected",
+        )
+    })?;
+    if worktree_metadata_identity(&after) != worktree_metadata_identity(&metadata) {
+        return Err(InspectionError::new(
+            "review_source_stale",
+            "working-tree source changed while it was being read",
         ));
     }
-    Ok(FrozenSource::from_bytes(bytes))
+    Ok(FrozenSource::from_bytes_with_identity(
+        bytes,
+        worktree_metadata_identity(&metadata),
+    ))
+}
+
+fn worktree_metadata_identity(metadata: &cap_std::fs::Metadata) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"cockpit-review-worktree-v1\0");
+    hasher.update(metadata.len().to_le_bytes());
+    if let Ok(modified) = metadata.modified() {
+        hasher.update(format!("{modified:?}").as_bytes());
+    }
+    #[cfg(unix)]
+    {
+        hasher.update(cap_fs_ext::MetadataExt::dev(metadata).to_le_bytes());
+        hasher.update(cap_fs_ext::MetadataExt::ino(metadata).to_le_bytes());
+    }
+    format!("worktree-{:x}", hasher.finalize())
 }
 
 fn read_worktree_source_page(
@@ -1528,7 +1945,8 @@ fn read_worktree_source_page(
         )
     })?;
     let mut bytes = Vec::with_capacity(MAX_FILE_BYTES.min((metadata.len() - offset) as usize));
-    file.take(MAX_FILE_BYTES as u64)
+    (&mut file)
+        .take(MAX_FILE_BYTES as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| {
             InspectionError::new("review_unreadable", "working-tree source could not be read")
@@ -1551,10 +1969,23 @@ fn read_worktree_source_page(
             })?
         }
     };
+    let after = file.metadata().map_err(|_| {
+        InspectionError::new(
+            "review_unreadable",
+            "working-tree source could not be inspected",
+        )
+    })?;
+    if worktree_metadata_identity(&after) != worktree_metadata_identity(&metadata) {
+        return Err(InspectionError::new(
+            "review_source_stale",
+            "working-tree source changed while the page was being read",
+        ));
+    }
     let end = offset.saturating_add(text.len() as u64);
     Ok(FrozenSource {
         text: Some(text),
         hash: None,
+        identity: Some(worktree_metadata_identity(&metadata)),
         total_lines: None,
         total_bytes: Some(total_bytes),
         truncated: end < metadata.len(),
@@ -1733,6 +2164,8 @@ fn parse_name_status(
             comparison,
             old_path,
             new_path,
+            old_revision: None,
+            new_revision: None,
         });
     }
     Ok(changes)
@@ -1758,6 +2191,8 @@ fn parse_untracked(bytes: &[u8]) -> Result<Vec<Change>, InspectionError> {
             comparison: ReviewComparison::Untracked,
             old_path: None,
             new_path: Some(path),
+            old_revision: None,
+            new_revision: None,
         });
     }
     Ok(changes)
@@ -1899,20 +2334,20 @@ fn truncated_diff(
     code: &str,
     message: &str,
 ) -> ReviewFileDiff {
-    let old_revision = match change.comparison {
+    let old_revision = change.old_revision.clone().or_else(|| match change.comparison {
         ReviewComparison::Staged => revisions.head.clone(),
         ReviewComparison::Branch => base.map(str::to_owned),
         ReviewComparison::Unstaged => Some(revisions.index.clone()),
         ReviewComparison::Untracked | ReviewComparison::AllLocal => None,
-    };
-    let new_revision = match change.comparison {
+    });
+    let new_revision = change.new_revision.clone().or_else(|| match change.comparison {
         ReviewComparison::Staged => Some(revisions.index.clone()),
         ReviewComparison::Branch => revisions.head.clone(),
         ReviewComparison::Unstaged | ReviewComparison::Untracked => {
             Some(revisions.worktree.clone())
         }
         ReviewComparison::AllLocal => None,
-    };
+    });
     let path = change.new_path.as_deref().or(change.old_path.as_deref());
     ReviewFileDiff {
         binding_id: String::new(),
@@ -1944,8 +2379,8 @@ fn truncated_diff(
         new_source_total_bytes: None,
         old_total_lines: None,
         new_total_lines: None,
-        old_source_truncated: false,
-        new_source_truncated: false,
+        old_source_truncated: code == "review_diff_bounded",
+        new_source_truncated: code == "review_diff_bounded",
         truncated: code != "review_unreadable",
         diagnostics: vec![diagnostic(code, message, path)],
     }
@@ -2100,6 +2535,47 @@ fn change_file(
 fn summary(change: &Change) -> String {
     format!("{:?} {:?}", change.comparison, change.status).to_lowercase()
 }
+
+fn capture_inventory_revisions(
+    checkout: &Path,
+    change: &mut Change,
+    revisions: &RevisionTokens,
+) -> Result<(), InspectionError> {
+    change.old_revision = match change.comparison {
+        ReviewComparison::Staged => revisions.head.clone(),
+        ReviewComparison::Unstaged => Some(revisions.index.clone()),
+        ReviewComparison::Branch => None,
+        ReviewComparison::Untracked | ReviewComparison::AllLocal => None,
+    };
+    change.new_revision = match change.comparison {
+        ReviewComparison::Staged => Some(revisions.index.clone()),
+        ReviewComparison::Branch => revisions.head.clone(),
+        ReviewComparison::Unstaged | ReviewComparison::Untracked => {
+            if let Some(path) = change.new_path.as_deref() {
+                match worktree_source_identity(checkout, path) {
+                    Some(identity) => Some(identity?),
+                    None => None,
+                }
+            } else {
+                None
+            }
+        }
+        ReviewComparison::AllLocal => None,
+    };
+    Ok(())
+}
+
+fn worktree_source_identity(
+    checkout: &Path,
+    path: &str,
+) -> Option<Result<String, InspectionError>> {
+    match read_worktree_source(checkout, path) {
+        Ok(source) => source.identity.map(Ok),
+        Err(error) if error.code == "review_unreadable" => None,
+        Err(error) => Some(Err(error)),
+    }
+}
+
 fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnostic {
     ProjectDiagnostic {
         code: code.to_owned(),
@@ -2117,24 +2593,32 @@ fn snapshot_name(id: &str) -> Result<String, InspectionError> {
     Ok(format!("snapshot-{id}.json"))
 }
 
+fn file_cache_name(review_id: &str, file_id: &str) -> Result<String, InspectionError> {
+    let _ = snapshot_name(review_id)?;
+    let digest = Sha256::digest(file_id.as_bytes());
+    Ok(format!("file-{review_id}-{:x}.json", digest))
+}
+
 fn prune_snapshots(state: &ProjectStore) -> Result<(), InspectionError> {
     let mut snapshots = Vec::new();
-    let mut entries = 0usize;
+    let mut file_caches = Vec::new();
     for entry in state
         .state_dir()
         .entries()
         .map_err(|error| InspectionError::new("review_read", error.to_string()))?
     {
-        entries = entries.saturating_add(1);
-        if entries > MAX_SNAPSHOT_ENTRIES {
-            return Err(InspectionError::new(
-                "review_bounded",
-                "review snapshot directory exceeded its entry limit",
-            ));
-        }
         let entry =
             entry.map_err(|error| InspectionError::new("review_read", error.to_string()))?;
         let name = entry.file_name();
+        if let Some(id) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("file-"))
+            .and_then(|name| name.get(..36))
+            .filter(|id| Uuid::parse_str(id).is_ok())
+        {
+            file_caches.push((name.to_owned(), id.to_owned()));
+            continue;
+        }
         let Some(id) = name
             .to_str()
             .and_then(|name| name.strip_prefix("snapshot-"))
@@ -2150,14 +2634,32 @@ fn prune_snapshots(state: &ProjectStore) -> Result<(), InspectionError> {
             name.to_str().expect("utf-8 checked"),
             MAX_STORED_SNAPSHOT_BYTES,
         )?;
-        snapshots.push((name.to_owned(), stored.created_at));
+        snapshots.push((name.to_owned(), id.to_owned(), stored.created_at));
     }
-    snapshots.sort_by(|left, right| right.1.cmp(&left.1));
-    for (name, _) in snapshots.into_iter().skip(MAX_SNAPSHOTS) {
+    snapshots.sort_by(|left, right| right.2.cmp(&left.2));
+    let retained: std::collections::BTreeSet<String> = snapshots
+        .iter()
+        .take(MAX_SNAPSHOTS)
+        .map(|(_, id, _)| id.clone())
+        .collect();
+    for (name, id, _) in snapshots.into_iter().skip(MAX_SNAPSHOTS) {
         state
             .state_dir()
             .remove_file(name)
             .map_err(|error| InspectionError::new("review_write", error.to_string()))?;
+        for (cache_name, _) in file_caches.iter().filter(|(_, cache_id)| cache_id == &id) {
+            state
+                .state_dir()
+                .remove_file(cache_name)
+                .map_err(|error| InspectionError::new("review_write", error.to_string()))?;
+        }
+    }
+    // Orphaned per-file caches from a crash are safe to remove. Caches for
+    // retained snapshots remain immutable so frozen comment anchors survive.
+    for (cache_name, cache_id) in file_caches {
+        if !retained.contains(cache_id.as_str()) {
+            let _ = state.state_dir().remove_file(cache_name);
+        }
     }
     Ok(())
 }
@@ -2647,6 +3149,8 @@ mod tests {
             comparison: ReviewComparison::Unstaged,
             old_path: Some("old.txt".to_owned()),
             new_path: Some("new.txt".to_owned()),
+            old_revision: None,
+            new_revision: None,
         };
         let (hunks, binary, truncated) =
             parse_unified("@@ -2,2 +2,3 @@\n same\n-old\n+new\n+tail\n", &change, 8)
@@ -2701,6 +3205,23 @@ mod tests {
     }
 
     #[test]
+    fn worktree_source_cursor_rejects_a_changed_file_between_pages() {
+        let root = fixture("source-cursor");
+        std::fs::write(root.join("large.txt"), vec![b'x'; MAX_FILE_BYTES + 17])
+            .expect("write source");
+        let first = read_worktree_source_page(&root, "large.txt", 0).expect("first page");
+        let first_identity = first.identity.clone().expect("cursor");
+        std::fs::write(root.join("large.txt"), vec![b'y'; MAX_FILE_BYTES + 17])
+            .expect("mutate source");
+        let second_identity = worktree_source_identity(&root, "large.txt")
+            .transpose()
+            .expect("read cursor")
+            .expect("mutated cursor");
+        assert_ne!(first_identity, second_identity);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn worktree_token_covers_untracked_inventory_beyond_the_old_row_limit() {
         let root = fixture("untracked-inventory");
         let paths = (0..257)
@@ -2738,6 +3259,33 @@ mod tests {
         assert_eq!(changes.len(), 257);
         assert!(diagnostics.is_empty());
         assert!(!truncated);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn git_source_pages_stream_large_blob_sides() {
+        let root = fixture("git-paged-source");
+        std::fs::write(root.join("large.txt"), vec![b'x'; MAX_FILE_BYTES + 17])
+            .expect("write source");
+        commit(&root, "large source");
+        let head = String::from_utf8(git_bytes(&root, &["rev-parse", "HEAD"]))
+            .expect("head text")
+            .trim()
+            .to_owned();
+        let service = service(&root);
+        let first = service
+            .git_source_page(&root, &head, "large.txt", 0)
+            .await
+            .expect("first Git page");
+        assert_eq!(first.text.as_deref().map(str::len), Some(MAX_FILE_BYTES));
+        assert!(first.truncated);
+        assert_eq!(first.total_bytes, Some((MAX_FILE_BYTES + 17) as u32));
+        let second = service
+            .git_source_page(&root, &head, "large.txt", MAX_FILE_BYTES as u32)
+            .await
+            .expect("second Git page");
+        assert_eq!(second.text.as_deref(), Some("xxxxxxxxxxxxxxxxx"));
+        assert!(!second.truncated);
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 
