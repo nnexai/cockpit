@@ -1868,47 +1868,58 @@ summary:focus-visible {
   cursor: pointer;
 }
 
-.command-actions {
-  display: grid;
-  gap: 1px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
+.command-search {
+  display: block;
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--app-bg);
+  color: var(--text-primary);
 }
 
-.command-actions .session-command {
-  width: 100%;
+.command-status {
+  display: grid;
+  gap: 4px;
+  padding: 0 8px 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.command-status p {
   margin: 0;
 }
 
-.session-command {
-  width: calc(100% - 16px);
-  min-height: 32px;
-  margin: 8px 8px 0;
-  padding: 5px 7px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--text-primary);
-  text-align: left;
-  cursor: pointer;
+.command-status [role="alert"] {
+  color: var(--blocked);
 }
 
-.session-command:hover,
-.session-command:focus-visible {
-  background: var(--surface-selected);
+.command-list {
+  max-height: min(510px, calc(100vh - 220px));
+  padding: 0 8px 8px;
+  overflow: auto;
 }
 
-.shortcut-list {
+.command-group {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
-  padding: 8px;
 }
 
-.shortcut-row,
-.shortcut-list > button {
+.command-group h3 {
+  margin: 8px 7px 3px;
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.command-row {
   display: flex;
-  min-height: 34px;
+  width: 100%;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -1918,14 +1929,76 @@ summary:focus-visible {
   background: transparent;
   color: var(--text-secondary);
   text-align: left;
-}
-
-.shortcut-list > button {
   cursor: pointer;
 }
 
-.shortcut-list > button:hover,
-.shortcut-list > button:focus-visible {
+.command-row:hover,
+.command-row:focus-visible,
+.command-row.is-active {
+  background: var(--surface-selected);
+  color: var(--text-primary);
+}
+
+.command-row:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.command-row-label {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.command-row-label small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+}
+
+.command-row kbd {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.command-empty {
+  margin: 16px 7px;
+  color: var(--text-secondary);
+}
+
+.shortcut-help {
+  margin: 0 8px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.shortcut-help summary {
+  padding: 8px 0 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.shortcut-help p {
+  margin: 0 0 4px;
+}
+
+.command-switch-session {
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin: 0 8px 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-switch-session:hover,
+.command-switch-session:focus-visible {
   background: var(--surface-selected);
 }
 
