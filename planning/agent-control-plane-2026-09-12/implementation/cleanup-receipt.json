@@ -1,0 +1,25 @@
+{
+  "captured_at": "2026-09-12T20:07:00+02:00",
+  "action": "authorized run-owned runtime cleanup",
+  "stopped": {
+    "herdr_sessions": [
+      {"session": "cn12", "server_pid": 2817362, "socket": "/tmp/cn12/config/herdr/sessions/cn12/herdr.sock"},
+      {"session": "csu12", "server_pid": 3580609, "socket": "/tmp/csu12-runtime/config/herdr/sessions/csu12/herdr.sock"},
+      {"session": "native12", "server_pid": 3920415, "socket": "/tmp/cn12-native/config/herdr/sessions/native12/herdr.sock"}
+    ],
+    "gateways": [
+      {"pid": 2959446, "address": "127.0.0.1:4192", "config": "/tmp/cn12/cockpit.toml"},
+      {"pid": 4022393, "address": "127.0.0.1:4193", "config": "/tmp/csu12-runtime/cockpit.toml"}
+    ],
+    "playwright_sessions": ["csu12-final", "csu12-files", "csu12-contextfix"]
+  },
+  "verified": {
+    "owned_processes_absent": true,
+    "owned_sockets_absent": true,
+    "fixtures_preserved": ["/tmp/csu12-runtime/worktrees/cockpit-37524fca-2fef-42c0-b6e6-c339ff7ee42c/large-review.txt"],
+    "evidence_preserved": ["/tmp/csu12-evidence/review-large-page1.yml"],
+    "user_pid_2523753_touched": false,
+    "user_gateway_pid_191105_touched": false,
+    "shell_worker_gateway_4190_touched": false
+  }
+}
