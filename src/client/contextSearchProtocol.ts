@@ -95,7 +95,7 @@ export function parseContextSearchResponse(value: unknown): ContextSearchRespons
   }
   const results = value.results.map(parseResult);
   if (value.revision !== undefined && value.revision !== null && !identity(value.revision)) return malformed("search revision");
-  if (value.next_offset !== undefined && value.next_offset !== null && (!Number.isSafeInteger(value.next_offset) || (value.next_offset as number) < 0)) return malformed("search continuation");
+  if (value.next_offset !== undefined && value.next_offset !== null && (!Number.isSafeInteger(value.next_offset) || (value.next_offset as number) < 0 || (value.next_offset as number) > 100_000)) return malformed("search continuation");
   if (value.partial_reason !== undefined && value.partial_reason !== null && !text(value.partial_reason)) return malformed("search partial reason");
   return {
     binding_id: value.binding_id,
