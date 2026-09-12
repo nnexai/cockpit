@@ -2,163 +2,74 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-
-let WebSocket;
-try {
-  ({ default: WebSocket } = await import('ws'));
-} catch {
-  throw new Error('smoke.mjs requires the ws package; run npm install in poc/cef-osr-panel');
-}
+import readline from 'node:readline';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const helperPath = path.join(ROOT, 'helper', 'cef-helper.mjs');
 const BINARY = process.env.CEF_OSR_PANEL_BINARY || path.join(ROOT, 'build', 'Release', 'cef-osr-panel');
-const PORT = Number(process.env.CEF_OSR_PANEL_CDP_PORT || 9223);
-const FIXTURE = path.join(ROOT, 'fixture', 'index.html');
-const FIXTURE_URL = `file://${FIXTURE}`;
-const STARTUP_TIMEOUT_MS = 15_000;
-const FRAME_TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 15_000;
+if (!existsSync(helperPath)) throw new Error(`CEF helper not found: ${helperPath}`);
+if (!existsSync(BINARY)) throw new Error(`CEF executable not found: ${BINARY}; configure/build with CEF_ROOT first`);
 
-if (!existsSync(BINARY)) {
-  throw new Error(`CEF executable not found: ${BINARY}; configure and build with -DCEF_ROOT=... first`);
-}
-if (!existsSync(FIXTURE)) {
-  throw new Error(`fixture not found: ${FIXTURE}`);
-}
-
-const child = spawn(BINARY, [
-  `--fixture=${FIXTURE_URL}`,
-  `--remote-debugging-port=${PORT}`,
-], {
+const child = spawn(process.env.NODE_BINARY || process.execPath, [helperPath], {
   cwd: ROOT,
-  stdio: ['ignore', 'pipe', 'inherit'],
-  env: { ...process.env },
+  stdio: ['pipe', 'pipe', 'inherit'],
+  env: { ...process.env, CEF_OSR_PANEL_BINARY: BINARY },
 });
-const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-const frames = [];
-let output = '';
+const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+const pending = new Map();
+let nextId = 1;
+let latestFrame;
 lines.on('line', (line) => {
-  output += `${line}\n`;
-  const match = /^FRAME sequence=(\d+) width=(\d+) height=(\d+) checksum=(\d+)$/.exec(line);
-  if (match) {
-    frames.push({ sequence: Number(match[1]), width: Number(match[2]), height: Number(match[3]), checksum: match[4] });
-  }
+  let message;
+  try { message = JSON.parse(line); } catch { return; }
+  if (message.event === 'cefFrame') { latestFrame = message.frame; return; }
+  const waiter = pending.get(message.id);
+  if (!waiter) return;
+  pending.delete(message.id);
+  clearTimeout(waiter.timer);
+  if (message.ok) waiter.resolve(message.result);
+  else waiter.reject(new Error(message.error || 'CEF helper rejected request'));
 });
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
+function request(method, fields = {}) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`timed out waiting for ${method}`)); }, TIMEOUT_MS);
+    pending.set(id, { resolve, reject, timer });
+    child.stdin.write(`${JSON.stringify({ id, method, ...fields })}\n`);
+  });
 }
-
-async function waitFor(predicate, timeoutMs, description) {
-  const deadline = Date.now() + timeoutMs;
+async function waitForFrameAfter(sequence, oldData) {
+  const deadline = Date.now() + TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const value = await predicate();
-    if (value) return value;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (latestFrame && latestFrame.sequence > sequence && latestFrame.jpegDataUrl !== oldData) return latestFrame;
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`timed out waiting for ${description}`);
+  throw new Error(`timed out waiting for changed CEF frame after ${sequence}`);
 }
-
-async function cdpTarget() {
-  try {
-    const response = await fetch(`http://127.0.0.1:${PORT}/json/list`);
-    if (!response.ok) return null;
-    const targets = await response.json();
-    return targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl) || null;
-  } catch {
-    return null;
-  }
-}
-
-function connect(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const onError = (error) => reject(error);
-    socket.once('error', onError);
-    socket.once('open', () => {
-      socket.removeListener('error', onError);
-      resolve(socket);
-    });
-  });
-}
-
-function cdpCall(socket, method, params = {}) {
-  const id = cdpCall.nextId++;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.removeListener('message', onMessage);
-      reject(new Error(`CDP call timed out: ${method}`));
-    }, FRAME_TIMEOUT_MS);
-    const onMessage = (raw) => {
-      let message;
-      try { message = JSON.parse(raw.toString()); } catch { return; }
-      if (message.id !== id) return;
-      clearTimeout(timer);
-      socket.removeListener('message', onMessage);
-      if (message.error) reject(new Error(`${method}: ${message.error.message}`));
-      else resolve(message.result);
-    };
-    socket.on('message', onMessage);
-    socket.send(JSON.stringify({ id, method, params }));
-  });
-}
-cdpCall.nextId = 1;
-
-async function waitForChangedFrame(previous, description) {
-  return waitFor(() => frames.find((frame) => frame.sequence > previous.sequence && frame.checksum !== previous.checksum), FRAME_TIMEOUT_MS, description);
-}
-
-async function cleanup() {
-  if (child.exitCode === null) {
-    child.kill('SIGTERM');
-    await Promise.race([
-      new Promise((resolve) => child.once('exit', resolve)),
-      new Promise((resolve) => setTimeout(resolve, 2_000)),
-    ]);
-    if (child.exitCode === null) child.kill('SIGKILL');
-  }
-}
-
-let socket;
+let exitCode = 0;
 try {
-  const target = await waitFor(cdpTarget, STARTUP_TIMEOUT_MS, 'CEF CDP page target');
-  assert(target.url.startsWith('file://'), `expected local fixture target, got ${target.url}`);
-  socket = await connect(target.webSocketDebuggerUrl);
-  await cdpCall(socket, 'Runtime.enable');
-
-  const initialFrame = await waitFor(() => frames[frames.length - 1], FRAME_TIMEOUT_MS, 'initial CEF OSR frame');
-  assert(initialFrame.width > 0 && initialFrame.height > 0,
-    `unexpected initial frame size: ${initialFrame.width}x${initialFrame.height}`);
-
-  const greeting = await cdpCall(socket, 'Runtime.evaluate', {
-    expression: `(() => {
-      const input = document.querySelector('#name');
-      input.value = 'Ada Lovelace';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('#greet').click();
-      return document.querySelector('#result').textContent;
-    })()`,
-    returnByValue: true,
-  });
-  assert(greeting.result?.value === 'Hello, Ada Lovelace! CEF received your input.',
-    `unexpected greeting result: ${JSON.stringify(greeting.result?.value)}`);
-  const greetingFrame = await waitForChangedFrame(initialFrame, 'OSR frame after CDP greeting interaction');
-
-  const scroll = await cdpCall(socket, 'Runtime.evaluate', {
-    expression: 'window.scrollTo(0, 900); window.scrollY',
-    returnByValue: true,
-  });
-  assert(Number(scroll.result?.value) > 0, `scroll did not move the fixture: ${JSON.stringify(scroll.result?.value)}`);
-  const scrolledFrame = await waitForChangedFrame(greetingFrame, 'OSR frame after CDP scrolling');
-
-  console.log(`CEF OSR/CDP smoke passed: greeting frame ${greetingFrame.sequence}, scroll frame ${scrolledFrame.sequence}`);
+  const initial = await request('start');
+  if (initial.width !== 1024 || initial.height !== 720) throw new Error(`unexpected frame dimensions: ${initial.width}x${initial.height}`);
+  const navigated = await request('navigate', { url: initial.url });
+  if (navigated.url !== initial.url || navigated.sequence <= initial.sequence) throw new Error(`navigation did not produce a fresh fixture frame: ${navigated.url} sequence ${navigated.sequence}`);
+  const greeting = await request('evaluate', { expression: `(() => { const input = document.querySelector('#name'); input.value = 'Ada'; document.querySelector('#greet').click(); return document.querySelector('#result').textContent; })()` });
+  if (greeting.result?.value !== 'Hello, Ada! CEF received your input.') throw new Error(`greeting did not update: ${greeting.result?.value}`);
+  const firstChanged = await waitForFrameAfter(navigated.sequence, navigated.jpegDataUrl);
+  const inspected = await request('inspect');
+  if (!inspected.fixtureStatus.includes('Hello, Ada!')) throw new Error(`CEF inspect omitted greeting: ${inspected.fixtureStatus}`);
+  await request('input', { event: { kind: 'wheel', x: 500, y: 650, deltaX: 0, deltaY: 600, modifiers: 0 } });
+  const scrolled = await waitForFrameAfter(firstChanged.sequence, firstChanged.jpegDataUrl);
+  const scrollState = await request('inspect');
+  if (!(scrollState.scrollY > 0)) throw new Error(`fixture did not scroll: ${scrollState.scrollY}`);
+  console.log(JSON.stringify({ scope: 'CEF OSR OnPaint/CDP helper smoke', firstFrame: initial.sequence, greetingFrame: firstChanged.sequence, scrollFrame: scrolled.sequence, scrollY: scrollState.scrollY }));
 } catch (error) {
-  console.error(`CEF OSR/CDP smoke failed: ${error.message}`);
-  if (output) console.error(output.trim());
-  process.exitCode = 1;
+  exitCode = 1;
+  console.error(`CEF smoke failed: ${error instanceof Error ? error.message : String(error)}`);
 } finally {
-  if (socket) socket.close();
-  await cleanup();
+  try { await request('stop'); } catch {}
+  child.kill('SIGTERM');
 }
+process.exitCode = exitCode;

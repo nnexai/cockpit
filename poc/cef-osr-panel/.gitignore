@@ -5,3 +5,5 @@
 *.tar
 *.tar.bz2
 *.tar.gz
+/node_modules/
+/src-tauri/target/

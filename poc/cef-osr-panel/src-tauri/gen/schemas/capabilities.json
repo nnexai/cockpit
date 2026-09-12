@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default permissions for the CEF OSR panel POC","local":true,"windows":["main"],"permissions":["core:default"]}}

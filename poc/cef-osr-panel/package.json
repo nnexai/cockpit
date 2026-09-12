@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "wayland": "scripts/run-wayland.sh",
+    "build": "cargo build --manifest-path src-tauri/Cargo.toml",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
