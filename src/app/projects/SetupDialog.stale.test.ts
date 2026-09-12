@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ProjectConfiguration, RepositoryListResponse, WorkspaceOperation } from "../../protocol/generated/v1";
-import { operationSnapshotIsNewer, operationStatusMessage, SetupDialog } from "./SetupDialog";
+import { operationSnapshotIsNewer, operationStatusMessage, SetupDialog, validateArtifactUrl } from "./SetupDialog";
 
 function operation(generation: number, sequence: number): WorkspaceOperation {
   return { generation, sequence } as WorkspaceOperation;
@@ -83,6 +83,13 @@ function SetupDialogHarness() {
 }
 
 describe("SetupDialog operation snapshot ordering", () => {
+  it("validates source provider ownership and issue identity before planning", () => {
+    const configured = { ...configuration, providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] };
+    expect(validateArtifactUrl("https://github.com/nnexai/cockpit/issues/4", configured)).toEqual({ valid: true, providerId: "github", identity: "nnexai/cockpit#4" });
+    expect(validateArtifactUrl("https://github.com/nnexai/cockpit/pulls/4", configured)).toMatchObject({ valid: false });
+    expect(validateArtifactUrl("https://forge.example/acme/repo/issues/4", configured)).toMatchObject({ valid: false });
+  });
+
   it("accepts a newer generation and sequence, but rejects stale or duplicate snapshots", () => {
     const current = operation(4, 12);
     expect(operationSnapshotIsNewer(current, operation(4, 13))).toBe(true);

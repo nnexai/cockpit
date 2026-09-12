@@ -76,6 +76,40 @@ function issueUrlPlaceholder(configuration: ProjectConfiguration | null): string
   return github ? "https://github.com/owner/repository/issues/number" : "https://provider.example/owner/repository/issues/number";
 }
 
+export type ArtifactValidation = { valid: true; providerId: string; identity: string } | { valid: false; message: string } | null;
+
+/** Validate the provider boundary while the URL is still a draft. The server remains authoritative. */
+export function validateArtifactUrl(value: string, configuration: ProjectConfiguration | null): ArtifactValidation {
+  const input = value.trim();
+  if (!input) return null;
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return { valid: false, message: "Enter a complete http(s) issue or review URL." };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { valid: false, message: "The source URL must use http or https." };
+  }
+  const provider = configuration?.providers.find((candidate) => {
+    try {
+      const base = new URL(candidate.base_url);
+      return base.origin === url.origin && (base.pathname === "/" || base.pathname === "" || url.pathname.startsWith(`${base.pathname.replace(/\/$/, "")}/`));
+    } catch {
+      return false;
+    }
+  });
+  if (!provider) return { valid: false, message: "No configured provider owns this source URL." };
+  if (provider.id === "github" || provider.base_url === "https://github.com") {
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/);
+    if (!match || url.search || url.hash) return { valid: false, message: "GitHub sources must identify one issue, such as owner/repository/issues/42." };
+    return { valid: true, providerId: provider.id, identity: `${match[1]}/${match[2]}#${match[3]}` };
+  }
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 3) return { valid: false, message: "The source URL does not identify a supported provider resource." };
+  return { valid: true, providerId: provider.id, identity: url.pathname };
+}
+
 export function operationStatusMessage(operation: Pick<WorkspaceOperation, "state" | "step" | "error">): string {
   const sourceFailure = operation.error?.code.startsWith("source_") ?? false;
   if (operation.state === "partial" && sourceFailure) {
@@ -234,12 +268,16 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
   const recoveryAction = recoveryActionFor(operation);
   const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Recover existing checkout" : recoveryAction === "retry_environment" ? "Retry environment" : null;
   const retrySource = sourceRetry(operation);
+  const failedResource = retrySource && operation.plan.artifact
+    ? `Failed resource: ${operation.plan.artifact.provider_id} ${operation.plan.artifact.canonical_id}`
+    : failed ? `Failed step: ${operationStepLabel(operation.step)}` : null;
   return (
     <section className="setup-progress" aria-live="polite" aria-busy={busy} aria-label="Workspace setup progress">
       <div className="setup-progress-heading"><div><span className="setup-eyebrow">Durable operation</span><h3>{operationStepLabel(operation.step)}</h3></div><span className={`setup-state setup-state-${operation.state}`}>{operation.state.replaceAll("_", " ")}</span></div>
       <div className="setup-progress-track"><span style={{ width: `${operation.step === "completed" ? 100 : Math.min(94, Math.max(8, (operation.sequence + 1) * 10))}%` }} /></div>
       <p className="setup-progress-meta">Generation {operation.generation} · update {operation.sequence} · last updated {operation.updated_at}</p>
       <p className="setup-progress-message" role="status">{operationStatusMessage(operation)}</p>
+      {failedResource ? <p className="setup-progress-resource" role="status">{failedResource}</p> : null}
       {readError ? <p className="setup-transient" role="status">Could not read the latest operation snapshot. Showing the last confirmed progress; no mutation was retried.</p> : null}
       {operation.error ? <p className="setup-error" role="alert"><strong>{operation.error.code}</strong> {operation.error.message}</p> : null}
       {operation.owned_resources.length > 0 ? <div className="setup-owned"><strong>Resources retained</strong><ul>{operation.owned_resources.map((resource, index) => <li key={`${resource.kind}-${resource.path}-${index}`}><code>{resource.path}</code> · {resource.created_by_operation ? "created by this operation" : "existing resource"}</li>)}</ul></div> : null}
@@ -419,6 +457,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
   const selectedRepository = repositories.find((repository) => repository.repository_id === form.repositoryId) ?? null;
   const parentRepository = selectedParent ? resolveParentRepository(repositories, selectedParent) : null;
   const parentRepositoryMatched = parentRepository !== null;
+  const artifactValidation = validateArtifactUrl(form.artifactUrl, configuration);
 
   const createPlan = useCallback(async () => {
     if (!form.repositoryId) {
@@ -428,6 +467,11 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     }
     if (!form.repositoryConsent) {
       setPlanState({ plan: null, error: "Before Review, explicitly consent to the configured repository actions. Stock Herdr cannot suppress those actions.", pending: false });
+      return;
+    }
+    if (artifactValidation?.valid === false) {
+      setPlanState({ plan: null, error: artifactValidation.message, pending: false });
+      setStep(1);
       return;
     }
     if (form.mode === "open") {
@@ -457,7 +501,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
       if (token !== planRequestToken.current) return;
       setPlanState({ plan: null, error: errorMessage(error, "Could not create a setup plan."), pending: false });
     }
-  }, [form, client, sessionId]);
+  }, [artifactValidation, form, client, sessionId]);
 
   const acceptOperation = useCallback((next: WorkspaceOperation) => {
     const current = operationRef.current;
@@ -610,11 +654,12 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
             {configuration ? <div className="setup-config"><strong>Configured roots</strong><ul><li>Repositories: <code>{configuration.repository_roots.length > 0 ? configuration.repository_roots.join(", ") : "(none)"}</code></li><li>Worktrees: <code>{configuration.worktree_root}</code></li><li>Companions: <code>{configuration.companion_root}</code></li><li>State: <code>{configuration.state_root}</code></li></ul></div> : null}
             <DiagnosticList diagnostics={diagnosticsWithLoad} />
             <Field label="Task name" hint="optional" htmlFor="setup-task-name"><input id="setup-task-name" value={form.taskName} onChange={onField("taskName")} placeholder="Short task description" /></Field>
-            <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onField("artifactUrl")} placeholder={issueUrlPlaceholder(configuration)} /></Field>
-            <div className="setup-actions"><button type="button" className="setup-primary" disabled={!form.repositoryId || loadState !== "ready"} onClick={() => setStep(2)}>Continue to worktree</button></div>
+            <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onField("artifactUrl")} placeholder={issueUrlPlaceholder(configuration)} aria-invalid={artifactValidation?.valid === false} aria-describedby="setup-artifact-status" /></Field>
+            {artifactValidation ? <p id="setup-artifact-status" className={`setup-inline-status ${artifactValidation.valid ? "is-valid" : "is-invalid"}`} role={artifactValidation.valid ? "status" : "alert"}>{artifactValidation.valid ? `Validated ${artifactValidation.providerId} source ${artifactValidation.identity}; the server will recheck it before effects.` : artifactValidation.message}</p> : null}
+            <div className="setup-actions"><button type="button" className="setup-primary" disabled={!form.repositoryId || loadState !== "ready" || artifactValidation?.valid === false} onClick={() => setStep(2)}>Continue to worktree</button></div>
           </section> : null}
           {step === 2 ? <section className="setup-step-content" aria-labelledby="worktree-heading"><div className="setup-section-heading"><div><h3 id="worktree-heading">Worktree</h3><p>Choose create or open. Branch and destination values are reviewed before any Herdr mutation.</p></div></div><div className="setup-choice-grid"><button type="button" className={form.mode === "create" ? "is-selected" : ""} aria-pressed={form.mode === "create"} onClick={() => setWorktreeMode("create")}><strong>Create linked worktree</strong><span>New checkout below the configured worktree root.</span></button><button type="button" className={form.mode === "open" ? "is-selected" : ""} aria-pressed={form.mode === "open"} onClick={() => setWorktreeMode("open")}><strong>Open existing checkout</strong><span>Use an already-discovered local checkout; it remains borrowed.</span></button></div>{form.mode === "open" ? <><p className="setup-label">Open target</p><div className="setup-choice-grid"><button type="button" className={form.openTarget === "branch" ? "is-selected" : ""} aria-pressed={form.openTarget === "branch"} onClick={() => updateOpenTarget("branch", form.branch)}><strong>Branch</strong><span>Resolve one existing checkout by branch.</span></button><button type="button" className={form.openTarget === "path" ? "is-selected" : ""} aria-pressed={form.openTarget === "path"} onClick={() => updateOpenTarget("path", form.checkoutPath)}><strong>Checkout path</strong><span>Use one exact existing checkout path.</span></button></div>{form.openTarget === "branch" ? <Field label="Branch" hint="required for Open" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={(event) => updateOpenTarget("branch", event.target.value)} placeholder="feature/task-name" /></Field> : <Field label="Checkout path" hint="required for Open" htmlFor="setup-checkout"><input id="setup-checkout" value={form.checkoutPath} onChange={(event) => updateOpenTarget("path", event.target.value)} placeholder="/absolute/path/to/checkout" /></Field>}</> : <><Field label="Branch" hint="required by policy" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onField("branch")} placeholder="feature/task-name" /></Field><Field label="Base ref" hint="optional" htmlFor="setup-base"><input id="setup-base" value={form.base} onChange={onField("base")} placeholder="main" /></Field><Field label="Destination" hint="optional" htmlFor="setup-checkout"><input id="setup-checkout" value={form.checkoutPath} onChange={onField("checkoutPath")} placeholder="Configured worktree root default" /></Field></>}<Field label="Space label" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onField("label")} placeholder={form.taskName || "Task workspace"} /></Field><div className="setup-checkboxes"><label><input type="checkbox" checked={form.focus} onChange={onField("focus")} /> Focus the resulting Space and context terminal</label></div><p className="setup-info">Open supplies exactly one branch or checkout path. Base refs are rejected for Open. Create validates branch names and destinations against Git and configured roots; collisions stop before mutation.</p><div className="setup-actions"><button type="button" onClick={() => setStep(1)}>Back</button><button type="button" className="setup-primary" onClick={() => setStep(3)}>Continue to context</button></div></section> : null}
-          {step === 3 ? <section className="setup-step-content" aria-labelledby="context-heading"><div className="setup-section-heading"><div><h3 id="context-heading">Context</h3><p>Review the companion association and terminal environment. Start agents manually in the new terminal.</p></div></div><div className="setup-context-card"><strong>Companion association</strong><p>A Cockpit-owned companion is created at the reviewed path. The manifest records the Herdr session, returned workspace, repository provenance, and optional artifact.</p><span className="setup-badge">Selected after planning</span></div><div className="setup-context-card"><strong>Sources</strong><p>{form.artifactUrl.trim() ? "The supplied artifact URL is retained for typed validation; provider downloads remain explicit and bounded." : "No artifact selected. Repository-only setup creates no remote source."}</p></div><div className="setup-context-card"><strong>Installed Context viewer</strong><p>Opening a Context pane requires the configured file-viewer support to be installed and available at the Herdr endpoint. This setup does not install or enable viewer support; Context reports its availability when opened, and source failures remain partial with an explicit retry.</p></div><div className="setup-context-card"><strong>Terminal handoff</strong><p>A new context-aware terminal receives allowlisted <code>COCKPIT_*</code> values for processes Cockpit creates. The original Herdr root pane is unchanged; start an agent manually.</p></div><div className="setup-consent"><strong>Per-operation repository consent</strong><p>Stock Herdr cannot suppress configured repository actions. This consent applies only to this reviewed operation; it is not a Herdr trust flag.</p><label><input type="checkbox" checked={form.repositoryConsent} onChange={onField("repositoryConsent")} /> I understand and consent to the configured repository actions for this operation.</label></div><div className="setup-actions"><button type="button" onClick={() => setStep(2)}>Back</button><button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryId || !form.repositoryConsent}>{planState.pending ? "Planning…" : "Review exact effects"}</button></div>{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}</section> : null}
+          {step === 3 ? <section className="setup-step-content" aria-labelledby="context-heading"><div className="setup-section-heading"><div><h3 id="context-heading">Context</h3><p>Review the companion association and terminal environment. Start agents manually in the new terminal.</p></div></div><div className="setup-context-card"><strong>Companion association</strong><p>A Cockpit-owned companion is created at the reviewed path. The manifest records the Herdr session, returned workspace, repository provenance, and optional artifact.</p><span className="setup-badge">Selected after planning</span></div><details className="setup-disclosure"><summary>Additional sources and viewer readiness</summary><div className="setup-context-card"><strong>Sources</strong><p>{form.artifactUrl.trim() ? "The validated source is retained for bounded provider download during the operation." : "No artifact selected. Repository-only setup creates no remote source."}</p></div><div className="setup-context-card"><strong>Installed Context viewer</strong><p>Opening a Context pane requires configured file-viewer support at the Herdr endpoint. A missing viewer leaves the workspace available and reports recovery when opened.</p></div></details><div className="setup-context-card"><strong>Terminal handoff</strong><p>A new context-aware terminal receives allowlisted <code>COCKPIT_*</code> values for processes Cockpit creates. The original Herdr root pane is unchanged; start an agent manually.</p></div><div className="setup-consent"><strong>Per-operation repository consent</strong><p>Stock Herdr cannot suppress configured repository actions. This consent applies only to this reviewed operation; it is not a Herdr trust flag.</p><label><input type="checkbox" checked={form.repositoryConsent} onChange={onField("repositoryConsent")} /> I understand and consent to the configured repository actions for this operation.</label></div><div className="setup-actions"><button type="button" onClick={() => setStep(2)}>Back</button><button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryId || !form.repositoryConsent || artifactValidation?.valid === false}>{planState.pending ? "Planning…" : "Review exact effects"}</button></div>{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}</section> : null}
           {step === 4 ? <section className="setup-step-content" aria-labelledby="review-heading"><div className="setup-section-heading"><div><h3 id="review-heading">Review before starting</h3><p>Nothing is created until you explicitly start this reviewed operation.</p></div></div>{planState.pending ? <p className="setup-empty">Preparing exact paths and effects…</p> : null}{planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}{planState.plan ? <PlanSummary plan={planState.plan} /> : null}<div className="setup-actions"><button type="button" onClick={() => setStep(3)}>Back</button>{planState.plan ? <button type="button" className="setup-primary" onClick={() => void start()} disabled={Boolean(operation) || actionPending || !planState.plan.trust_repository}>Start {modeLabel(planState.plan.mode)}</button> : <button type="button" className="setup-primary" onClick={() => void createPlan()} disabled={planState.pending || !form.repositoryConsent}>Create review plan</button>}</div></section> : null}
         </main> : null}
         {operationDone ? <section className="setup-complete" aria-live="polite"><h3>Workspace setup completed</h3><p>The Herdr workspace, companion association, and context-aware terminal are ready. Start an agent manually in the new terminal; the original root pane was left unchanged.</p><PlanSummary plan={operation.plan} /><div className="setup-actions"><button type="button" className="setup-primary" onClick={handleClose}>Done</button></div></section> : null}
