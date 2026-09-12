@@ -4,6 +4,8 @@ These are screenshots of proposals. The terminal interiors use archived atlas pi
 
 Use the [interactive review board](mocks/review.html) to compare sizes and try the local controls.
 
+Compare [Files and Review side by side](mocks/viewers.html), or open the [comparison screenshot](previews/unified-viewers.png) with their shared typography and spacing. The [real issue-4 workflow screenshots](workflow/issue-4/README.md) are separate production evidence.
+
 | Surface | Desktop | Portrait or narrow pane |
 | --- | --- | --- |
 | Shell | [1440×900](previews/shell-desktop.png) | [800×1000](previews/shell-800.png), [600×900](previews/shell-600.png), [480×900](previews/shell-480.png) |

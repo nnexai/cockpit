@@ -10,6 +10,10 @@ Use a bounded searchable list of actual actions. Place an existing shortcut besi
 
 Keep resource context apparent where it prevents mis-targeting. Use one title or search input, not a title plus explanatory subtitle. Use consistent row heights, aligned text, a visible selected row, and one scroll region. Unavailable commands explain the actual capability restriction.
 
+## Runtime evidence
+
+The [issue-4 trial](../workflow/issue-4/README.md) found that disabled Files/Review commands expose an extension reason in a tooltip, but disabled Context commands expose no reason. After plugins were enabled, Context still depended on a hidden companion-directory requirement. Coordinate the direct Context launch with packet 12; repair capability explanations and recovery consistently across all actions.
+
 ## Acceptance
 
 - Pointer and the existing Herdr-compatible Commands shortcut open the same menu. Preserve magic-escape priority and normal typing.

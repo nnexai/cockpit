@@ -10,6 +10,10 @@ Include staged/unstaged overlap, branch comparison, renames, deletions, untracke
 
 ## Proposed redesign
 
+Use [the shared viewer design](../VIEWERS.md) with packet 06. Match source/diff typography, file rows, document insets, gutters, controls, and comment editors. Consolidate shared rules instead of adding Review-specific font overrides.
+
+The [real issue-4 trial](../workflow/issue-4/README.md) found three files, saved two annotations, and generated their preview. Refresh and tab return reset the selected file. A refresh briefly displayed zero comments before restoring the saved batch. First file-list display took 5,828 ms, a subsequent file display 798 ms, and one comment save 1,832 ms. These are single-run observations, not a benchmark or diagnosed backend cost. Measure first useful diff separately from the file list and from renderer detection.
+
 Keep one scope toolbar, changed-file navigation, a readable diff, inline comments, and compact draft actions. Show base ref only when the selected comparison needs it. Use file and hunk loading on demand with cancellable work and bounded caching if measurements support it. Preserve immutable revision identity. A partial large diff must remain inspectable without falsely claiming the whole review is loaded.
 
 Preserve selected file, hunk, old/new side, scroll, and drafts on refresh when identity matches. Avoid reconstructing source view with scroll zero on every switch. Retain exact side-aware anchors and stale revalidation. Coordinate shared comment/source changes with packet 06.

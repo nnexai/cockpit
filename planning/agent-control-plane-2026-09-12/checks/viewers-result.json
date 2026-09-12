@@ -1,0 +1,12 @@
+{
+  "kind": "mock-only viewer comparison",
+  "productionBehaviorVerified": false,
+  "checks": 5,
+  "results": [
+    "context comparison fits without a duplicate design toolbar",
+    "review comparison fits without a duplicate design toolbar",
+    "Empty review hides delivery controls",
+    "A review draft exposes delivery controls",
+    "Clearing the draft removes empty delivery controls"
+  ]
+}

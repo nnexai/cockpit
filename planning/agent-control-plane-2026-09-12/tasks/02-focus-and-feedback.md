@@ -4,6 +4,8 @@ The user wants Herdr-style focus: selecting a pane should take control without a
 
 ## Inspect and reproduce
 
+The [issue-4 runtime trial](../workflow/issue-4/README.md) observed loss of the beginning of a command typed immediately after selecting the visible terminal. Herdr readback confirmed the partial command. Retrying after focus settled worked. Reproduce this with explicit timing and harmless input; the trial does not establish its root cause.
+
 Read `src/app/TerminalPane.tsx:166-197`, `293-310`, `src/app/session/focusCoordinator.ts`, `session/sessionStore.ts`, and `App.tsx:962`, `1211`. The code already has control requests, ownership checks, and pending input. Diagnose which normal gesture still requires extra action. The global delayed-focus toast is present in source.
 
 Compare clicks, agent-row selection, tab switches, keyboard pane navigation, and re-entry after a menu with Herdr. Exercise a delayed confirmation and a second disposable client taking ownership. Capture event order and the first typed character, not just the final border color.

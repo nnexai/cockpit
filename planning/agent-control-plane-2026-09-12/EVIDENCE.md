@@ -2,7 +2,7 @@
 
 Inspected checkout: `fa3d483dc715505918db63830de7ab720fbd7c14`. Atlas baseline: `1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5`. `git diff 1d09b5c..fa3d483 -- src crates` is empty. The intervening commits add documentation, but the recorded frames still prove only the captured scenarios.
 
-No fresh Herdr or production Cockpit session was launched in this planning pass. A disposable browser checks the design artifacts only. User-reported failures remain reports until their task packet reproduces them. Historical memory informed which constraints to recheck; current source and the September 8 decisions supersede the older protocol-20/stable migration notes.
+The initial planning pass checked design artifacts only. A subsequent user-requested [issue-4 trial](workflow/issue-4/README.md) ran the rebuilt real application and Herdr against an isolated Cockpit clone at `e51f97e`. It created and closed a child task Space, verified the real linked worktree and companion, displayed manually downloaded GitHub context, and saved two Review annotations. Its report distinguishes product results from workarounds. Other user-reported failures remain reports until reproduced. Historical memory informed which constraints to recheck; current source and the September 8 decisions supersede the older protocol-20/stable migration notes.
 
 ## Atlas evidence
 
@@ -70,6 +70,8 @@ Test-only Context fixtures use smaller limits than production defaults. Do not b
 
 ## What the mock checks establish
 
-The local browser checked 120 assertions over the design artifacts. It exercised all five Cockpit-owned mock surfaces at the four requested viewports, sidebar pointer/keyboard resize, collapse, drawer geometry and focus, Commands filtering, narrow-pane file navigation, source selection, setup effect preview, annotation hover/selection/Escape, and illustrative empty/disconnected recovery.
+The local browser checked 148 assertions over the design artifacts. It exercised all five Cockpit-owned mock surfaces at the four requested viewports, sidebar pointer/keyboard resize, collapse, drawer geometry and focus, Commands filtering, narrow-pane file navigation, source selection, setup effect preview, annotation hover/selection/Escape, and illustrative empty/disconnected recovery. Files and Review now share a viewer stylesheet; the checks compare computed source, file-row, control, metadata, and inset values at each size.
 
 The mock implements discussion interactions only. Resource selection and mutations in the shell report their intended action outside the product frame. Region/freehand annotation in the special-pane study creates schematic marks rather than reproducing the production gesture engine. Clipboard, drag and drop, terminal scrolling, real ownership, actual file continuation, large-review performance, durable storage, and extension delivery remain future runtime acceptance.
+
+The revised setup mock illustrates the proposed issue-4 workflow with recorded sample metadata. It does not fetch GitHub or create a workspace. It keeps the issue in the primary form and previews the parent, companion, and issue-body/comment download. Other URLs remain unresolved in this bounded discussion mock.

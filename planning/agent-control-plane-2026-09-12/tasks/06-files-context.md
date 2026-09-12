@@ -10,6 +10,10 @@ Record the user's effective configuration. In a disposable repository, include f
 
 ## Work
 
+Use [the shared viewer design](../VIEWERS.md) with packet 07. Files, Context source, diff text, and expanded source must share typography, gutters, controls, and spacing. Do not reduce type size in narrow panes.
+
+The [real issue-4 trial](../workflow/issue-4/README.md) reproduced an unusably narrow document beside the persistent tree. It also found that Open Context remains disabled after setup until the operator changes a terminal into the companion directory. Coordinate that launch repair with packet 12; a user must not need a shell command to open prepared context.
+
 Default to a lean reader: root, file picker/search, tree, document, and relevant local actions. Move source import, snapshot management, and draft overview out of the persistent reading path. Collapse or resize the tree based on pane width. Preserve roots, source identity, search, selected file, scroll, and drafts across navigation and updates.
 
 Bind continuation to a file/directory revision or validated cursor. Mutate the directory or file between pages: the UI must preserve the previous view and mark it stale, without duplicate/omitted entries or anchors on another version.

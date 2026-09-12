@@ -78,6 +78,7 @@ async page => {
   check(await page.locator('#ownership').isHidden(), 'Illustrative selection needs no second Take focus action');
 
   await page.goto(base + 'mocks/surfaces.html');
+  await page.evaluate(async () => { await document.fonts.ready; });
   for (const [width,height] of [[1440,900],[800,1000],[600,900],[480,900]]) {
     await page.setViewportSize({width,height});
     for (const surface of ['context','review','setup','feedback','capture']) {
@@ -88,6 +89,20 @@ async page => {
       check(!clipped, surface + ' content has no horizontal overflow at ' + width);
       if (width === 1440 || width === 480) await screenshot(surface + '-' + width);
     }
+    const type = await page.evaluate(() => {
+      const style = selector => {
+        const value = getComputedStyle(document.querySelector(selector));
+        return {family:value.fontFamily,size:value.fontSize,line:value.lineHeight,inset:value.paddingLeft};
+      };
+      return {source:style('#file-content>.source-line'),diff:style('#diff-content>span:not(.hunk)'),fileRow:style('.file-tree .file'),diffRow:style('.changed-files button'),fileControl:style('#context-load'),diffControl:style('#review-load'),fileHeader:style('.reader>header'),diffHeader:style('.diff>header')};
+    });
+    const sameType = (left,right) => left.family === right.family && left.size === right.size && left.line === right.line;
+    check(sameType(type.source,type.diff), 'Source and diff typography match at ' + width);
+    check(type.source.size === '13px' && type.source.line === '19px', 'Source keeps the 13/19 baseline at ' + width);
+    check(sameType(type.fileRow,type.diffRow), 'File navigation typography matches at ' + width);
+    check(sameType(type.fileControl,type.diffControl), 'Viewer control typography matches at ' + width);
+    check(sameType(type.fileHeader,type.diffHeader), 'Document metadata typography matches at ' + width);
+    check(type.fileHeader.inset === type.diffHeader.inset, 'Document header insets match at ' + width);
   }
   await page.setViewportSize({width:1440,height:900});
   await page.locator('#surface').selectOption('context');
@@ -120,6 +135,12 @@ async page => {
   await page.locator('#trust').check();
   await page.locator('#path').fill('/tmp/ui-study-worktree');
   check((await page.locator('#effect-path').textContent()) === '/tmp/ui-study-worktree', 'Setup effect preview follows the input');
+  check((await page.locator('#effect-source').textContent()).includes('3 comments'), 'Setup previews the approved issue context');
+  check((await page.locator('#effect-parent').textContent()) === 'cockpit', 'Setup previews the parent Space');
+  await page.locator('#setup-issue').fill('https://unknown.example/issue');
+  check(await page.locator('#setup-preview').isHidden(), 'Unresolved source invalidates the setup preview');
+  await page.locator('#setup-issue').fill('https://github.com/nnexai/cockpit/issues/4');
+  check(await page.locator('#setup-preview').isVisible(), 'Resolved sample source restores the setup preview');
   await page.locator('#surface').selectOption('capture');
   await page.locator('#capture-open').click();
   await page.keyboard.press('e');

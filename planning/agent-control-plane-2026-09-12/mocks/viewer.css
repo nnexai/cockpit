@@ -1,0 +1,79 @@
+@font-face {
+  font-family: "Viewer Mono";
+  src: url("../../../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --viewer-ui-font: 13px/20px Plex, "IBM Plex Sans", sans-serif;
+  --viewer-source-font: 13px/19px "Viewer Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --viewer-meta-font: 12px/16px Plex, "IBM Plex Sans", sans-serif;
+  --viewer-inset: 12px;
+  --viewer-gap: 8px;
+  --viewer-row-height: 30px;
+  --viewer-toolbar-height: 36px;
+  --viewer-gutter: 4ch;
+}
+
+.context, .review { font: var(--viewer-ui-font); }
+.context .toolrow, .review .toolrow {
+  min-height: var(--viewer-toolbar-height);
+  gap: var(--viewer-gap);
+  padding-inline: var(--viewer-inset);
+}
+.file-tree button, .changed-files button {
+  min-height: var(--viewer-row-height);
+  font: var(--viewer-ui-font);
+}
+.file-tree .folder { font-weight: 500; }
+.changed-files em, .reader>header, .diff>header {
+  font: var(--viewer-meta-font);
+}
+.reader>header, .diff>header {
+  min-height: var(--viewer-toolbar-height);
+  padding: 6px var(--viewer-inset);
+}
+.reader>header code, .diff>header code { font: var(--viewer-source-font); }
+.reader>header button, .diff>header button,
+.comment-draft textarea, .inline-comment textarea { font: var(--viewer-ui-font); }
+
+.reader pre, .diff pre {
+  margin: 0;
+  padding: var(--viewer-inset);
+  font: var(--viewer-source-font);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.reader pre code, .diff pre code { font: inherit; }
+#file-content>.source-line, #diff-content>span {
+  display: grid;
+  grid-template-columns: var(--viewer-gutter) minmax(0, 1fr);
+  font: var(--viewer-source-font);
+  min-height: 19px;
+  white-space: pre-wrap;
+}
+#diff-content { --viewer-gutter: 8ch; }
+#file-content>.source-line::before, #diff-content>span:not(.hunk)::before {
+  content: attr(data-line);
+  padding-right: var(--viewer-gap);
+  color: var(--muted);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+#diff-content>span:not(.hunk)::before { content: attr(data-old) "  " attr(data-new); }
+#diff-content>.hunk { display: block; padding-left: var(--viewer-gutter); }
+.reader-extra summary { font: var(--viewer-meta-font); }
+.comment-draft, .inline-comment {
+  margin-inline: var(--viewer-inset);
+  font: var(--viewer-ui-font);
+}
+
+@container(max-width:620px) {
+  .reader>header, .diff>header { padding-inline: var(--viewer-gap); }
+  .reader pre, .diff pre { padding-inline: var(--viewer-gap); }
+}
+.embedded .labbar { display: none; }
+.embedded .mock { height: 100dvh; width: 100%; border: 0; }

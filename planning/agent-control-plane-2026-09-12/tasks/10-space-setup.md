@@ -8,7 +8,9 @@ Own `src/app/projects/SetupDialog.tsx`, `setup.css`, and related setup/recovery 
 
 ## Work
 
-Use a compact create/open form. Show only fields required by the chosen operation. Keep optional task/context inputs in a disclosure where possible. Validate inline and retain user input through planning errors. Show the concrete checkout path, branch/base, companion, focus intent, and exact effects in the existing reviewed-plan step.
+Use a compact create/open form. Show only fields required by the chosen operation. Keep the task's issue or review source beside the repository in the primary flow; put additional sources in a disclosure. Validate provider support and identity inline before the later steps. Retain user input through planning errors. Show the concrete parent association, checkout path, branch/base, companion, approved source downloads, focus intent, and exact effects in the existing reviewed-plan step.
+
+Use [packet 12](12-task-context-readiness.md) and the [real issue-4 trial](../workflow/issue-4/README.md) as the acceptance scenario. The current creation step is quick, but unsupported GitHub URLs fail late and completed setup leaves Context disabled. The form must describe the real readiness of the task, including missing viewer prerequisites or pending context.
 
 Reduce repeated headings, explanatory paragraphs, and empty progress cards. Keep useful ownership, Git state, provider failures, plan expiry, and partial-operation facts. Progress should name the current operation and failed resource, with its relevant recovery action. Closed Spaces must not hide outstanding cleanup.
 

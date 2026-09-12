@@ -1,7 +1,7 @@
 {
   "kind": "mock-only verification",
   "productionBehaviorVerified": false,
-  "checks": 120,
+  "checks": 148,
   "results": [
     "Rail resize works with keyboard",
     "Rail resize works with pointer",
@@ -51,6 +51,12 @@
     "Only the chosen capture surface appears at 1440",
     "capture 1440 fits the viewport",
     "capture content has no horizontal overflow at 1440",
+    "Source and diff typography match at 1440",
+    "Source keeps the 13/19 baseline at 1440",
+    "File navigation typography matches at 1440",
+    "Viewer control typography matches at 1440",
+    "Document metadata typography matches at 1440",
+    "Document header insets match at 1440",
     "Only the chosen context surface appears at 800",
     "context 800 fits the viewport",
     "context content has no horizontal overflow at 800",
@@ -66,6 +72,12 @@
     "Only the chosen capture surface appears at 800",
     "capture 800 fits the viewport",
     "capture content has no horizontal overflow at 800",
+    "Source and diff typography match at 800",
+    "Source keeps the 13/19 baseline at 800",
+    "File navigation typography matches at 800",
+    "Viewer control typography matches at 800",
+    "Document metadata typography matches at 800",
+    "Document header insets match at 800",
     "Only the chosen context surface appears at 600",
     "context 600 fits the viewport",
     "context content has no horizontal overflow at 600",
@@ -81,6 +93,12 @@
     "Only the chosen capture surface appears at 600",
     "capture 600 fits the viewport",
     "capture content has no horizontal overflow at 600",
+    "Source and diff typography match at 600",
+    "Source keeps the 13/19 baseline at 600",
+    "File navigation typography matches at 600",
+    "Viewer control typography matches at 600",
+    "Document metadata typography matches at 600",
+    "Document header insets match at 600",
     "Only the chosen context surface appears at 480",
     "context 480 fits the viewport",
     "context content has no horizontal overflow at 480",
@@ -96,6 +114,12 @@
     "Only the chosen capture surface appears at 480",
     "capture 480 fits the viewport",
     "capture content has no horizontal overflow at 480",
+    "Source and diff typography match at 480",
+    "Source keeps the 13/19 baseline at 480",
+    "File navigation typography matches at 480",
+    "Viewer control typography matches at 480",
+    "Document metadata typography matches at 480",
+    "Document header insets match at 480",
     "File tree adapts to pane width on a wide desktop",
     "Narrow file tree can reopen",
     "File selection changes the document",
@@ -107,6 +131,10 @@
     "Review base is hidden for local scope",
     "Review file selection updates the diff",
     "Setup effect preview follows the input",
+    "Setup previews the approved issue context",
+    "Setup previews the parent Space",
+    "Unresolved source invalidates the setup preview",
+    "Resolved sample source restores the setup preview",
     "Element annotation previews its target before click",
     "Tool shortcuts do not intercept editor typing",
     "Escape closes the editor",
@@ -124,35 +152,5 @@
     "capture has a distinct empty state",
     "No browser JavaScript errors"
   ],
-  "errors": [],
-  "viewports": [
-    [
-      1440,
-      900
-    ],
-    [
-      800,
-      1000
-    ],
-    [
-      600,
-      900
-    ],
-    [
-      480,
-      900
-    ]
-  ],
-  "date": "2026-09-12",
-  "supplemental": {
-    "review_board_exact_viewport": [
-      480,
-      900
-    ],
-    "review_board_surface_selection": true,
-    "updated_feedback_fits": [
-      1440,
-      480
-    ]
-  }
+  "errors": []
 }

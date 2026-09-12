@@ -6,6 +6,8 @@ The aim is to remove friction from the current product. Terminal copy/paste, foc
 
 Herdr's terminal content, status semantics, hierarchy, ordering, tabs, and pane layout are fixed constraints. Cockpit's terminal input integration can be repaired. Cockpit-owned Files, Context, Review, setup, and browser interfaces can be redesigned fully within their existing resource bindings.
 
+The central acceptance flow is now [issue #4 to a prepared task Space, Review annotations, and close](workflow/issue-4/README.md). The real application trial created the worktree and companion and saved annotations, but required workarounds for GitHub importing and opening Context. [Packet 12](tasks/12-task-context-readiness.md) connects those capabilities into the intended workflow. No production repairs were implemented during the trial.
+
 ## Discuss the direction
 
 Open the [review board](mocks/review.html) to switch surfaces and exact viewport sizes. Start with 800×1000 and compare the original atlas capture with directions A and B.
@@ -13,6 +15,7 @@ Open the [review board](mocks/review.html) to switch surfaces and exact viewport
 - [Static preview index](PREVIEWS.md): screenshots if you prefer to review without running a server.
 - [Shell comparison](mocks/index.html): original atlas captures, a refined rail, and a portrait drawer. Includes Commands, resource menus, Feedback, and illustrative recovery states.
 - [Cockpit-owned interfaces](mocks/surfaces.html): Files and Context, Review, Space setup, browser feedback, and browser capture.
+- [Unified file/diff comparison](mocks/viewers.html): shared typography, spacing, gutters, and controls. [Viewer design contract](VIEWERS.md) applies to both implementation packets.
 - [Design decisions and states](DESIGN.md): the proposed interaction contract, including automatic control on normal selection and fewer toasts.
 - [Evidence and limitations](EVIDENCE.md): user reports, source findings, atlas provenance, and the limits of this planning pass.
 
@@ -43,8 +46,11 @@ Each packet contains the problem, ownership boundary, proposed work, reproductio
 | 9 | [09 · Clarify browser feedback and delivery](tasks/09-browser-feedback.md) | Read, target, send, and recover without ambiguous acknowledgement | Existing contract; atlas evidence is mixed |
 | 10 | [10 · Simplify Space setup and recovery](tasks/10-space-setup.md) | Show required inputs and actual effects without excess chrome | Design proposal grounded in existing setup flow |
 | 11 | [11 · Replace the terminal-edge scrollbar line](tasks/11-terminal-scroll-affordance.md) | The persistent line conveys little useful information | User report; xterm scrollbar configuration found |
+| 12 | [12 · Create a task Space with context ready](tasks/12-task-context-readiness.md) | Issue-to-ready setup is Cockpit's central workflow | Real GitHub/worktree/companion/Review/close trial |
 
 Packets 01–07 and 11 are repairs or direct usability work. Packets 8–10 include larger Cockpit-owned interaction changes. Start with 01–02, then evaluate 11 with the same terminal run. The remaining numbers suggest a sequence, not implementation effort.
+
+Use packet 12's complete workflow to judge readiness. Coordinate it with setup, Files/Context, and Review; completing their individual screens is insufficient if the operator still has to download context or discover hidden terminal-directory requirements manually.
 
 ## Coordinate delivery
 
@@ -66,7 +72,7 @@ The design does not add a permanent instruction composer. Repair clipboard and t
 
 ## Check the design artifacts
 
-The [mock check result](checks/result.json) records 120 browser checks across the four requested sizes. These cover mock geometry and local controls only. They do not verify any production fix. The [check script](checks/browser.js) also regenerates the preview screenshots.
+The [mock check result](checks/result.json) records 148 browser checks across the four requested sizes, including matching computed viewer typography and insets. These cover mock geometry and local controls only. They do not verify any production fix. The [check script](checks/browser.js) also regenerates the preview screenshots. The separate [runtime trial](workflow/issue-4/README.md) records actual application behavior and 32 screenshots.
 
 With the local server running, open a disposable Playwright CLI browser and run:
 
@@ -76,4 +82,4 @@ playwright-cli -s=cockpit-ui-study run-code --filename=planning/agent-control-pl
 playwright-cli -s=cockpit-ui-study close
 ```
 
-The screenshot output path in the script points to this checkout. Change that one path if the package moves. The mock styles fall back to system fonts if local Plex files are unavailable.
+The [viewer comparison check](checks/viewers.js) separately regenerates the side-by-side image and checks that an empty Review has no delivery footer. Run it with the same `run-code --filename` command. The mock styles fall back to system fonts if local Plex files are unavailable.

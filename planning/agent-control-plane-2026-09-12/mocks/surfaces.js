@@ -66,7 +66,7 @@ $$('[data-file]').forEach((button) => button.addEventListener('click', () => {
   button.classList.add('selected');
   const path = button.dataset.file;
   $('#file-path').textContent = path;
-  $('#file-content').textContent = files[path];
+  renderSource(files[path]);
   $('#context-load-status').textContent = files[path].split('\n').length + ' lines · read-only';
   if (mock.getBoundingClientRect().width <= 620) { $('.context').classList.remove('tree-open'); $('#tree-toggle').setAttribute('aria-expanded','false'); }
 }));
@@ -112,26 +112,33 @@ $$('[data-diff]').forEach((button) => button.addEventListener('click', () => {
 }));
 $('#review-draft').addEventListener('input', (event) => {
   const count = event.currentTarget.value.trim() ? 1 : 0;
-  $('#draft-count').textContent = count + ' draft' + (count === 1 ? '' : 's') + ' · preview before delivery';
+  $('.paste-bar').hidden = count === 0;
+  $('#draft-count').textContent = count + ' draft' + (count === 1 ? '' : 's');
 });
 $('#prepare-paste').addEventListener('click', () => { $('#paste-result').textContent = 'Prepared for ' + $('#paste-target').value + '. Enter does not deliver.'; });
 $('#review-refresh').addEventListener('click', () => lab('Review refresh is a local design demonstration.'));
 
 function updateSetupPreview() {
-  const valid = $('#repo').value && $('#trust').checked && $('#branch').value.trim() && $('#path').value.trim();
+  const source = $('#setup-issue').value.trim();
+  const resolved = source === '' || source === 'https://github.com/nnexai/cockpit/issues/4';
+  $('#setup-source-note').textContent = source === '' ? 'Repository-only task' : resolved ? 'GitHub · issue #4 · 3 comments' : 'Source needs validation';
+  const valid = resolved && $('#repo').value && $('#trust').checked && $('#branch').value.trim() && $('#path').value.trim();
   $('#setup-preview').hidden = !valid;
   if (!valid) return;
   $('#effect-path').textContent = $('#path').value.trim();
   $('#effect-branch').textContent = $('#branch').value.trim();
   $('#effect-repo').textContent = $('#repo').selectedOptions[0].text;
+  $('#effect-parent').textContent = $('#repo').value;
+  $('#effect-companion').textContent = '/work/context/' + $('#path').value.trim().split('/').pop();
+  $('#effect-source').hidden = source === '';
 }
-['#repo', '#trust', '#branch', '#path'].forEach((selector) => { $(selector).addEventListener('input', updateSetupPreview); $(selector).addEventListener('change', updateSetupPreview); });
+['#repo', '#trust', '#branch', '#path', '#setup-issue'].forEach((selector) => { $(selector).addEventListener('input', updateSetupPreview); $(selector).addEventListener('change', updateSetupPreview); });
 $('#setup-form').addEventListener('submit', (event) => {
   event.preventDefault();
   updateSetupPreview();
   const invalid = $('#setup-preview').hidden;
   $('#setup-error').hidden = !invalid;
-  $('#setup-error').textContent = 'Choose a repository, branch, path, and trust local configuration before review.';
+  $('#setup-error').textContent = 'Resolve the task source and choose the repository, branch, path, and repository consent before review.';
   if (!invalid) lab('Space setup preview updated locally.');
 });
 $('#setup-cancel').addEventListener('click', () => { $('#setup-preview').hidden = true; $('#setup-error').hidden = true; });
@@ -253,6 +260,18 @@ updateSetupPreview();
 
 $('#state-retry').addEventListener('click', () => { state.value = 'loading'; setState(); setTimeout(() => {state.value = 'ready'; setState(); lab('Illustrative refresh completed.');}, 650); });
 
+function renderSource(text) {
+  const rows = text.split('\n').map((line, index) => {
+    const row = document.createElement('span');
+    row.className = 'source-line';
+    row.dataset.line = String(index + 1);
+    row.textContent = line || ' ';
+    return row;
+  });
+  $('#file-content').replaceChildren(...rows);
+}
+renderSource(files['src/App.tsx']);
+
 function numberDiff() {
   const hunk = $('#diff-content .hunk').textContent.match(/-(\d+),\d+ \+(\d+),/);
   let oldLine = Number(hunk[1]);
@@ -265,6 +284,7 @@ function numberDiff() {
 numberDiff();
 
 const studyParams = new URLSearchParams(location.search);
+if (studyParams.get('embed') === '1') document.body.classList.add('embedded');
 if ([...surface.options].some(option => option.value === studyParams.get('surface'))) surface.value = studyParams.get('surface');
 if ([...state.options].some(option => option.value === studyParams.get('state'))) state.value = studyParams.get('state');
 showSurface();setState();
