@@ -1,0 +1,347 @@
+{
+  "schemaVersion": 1,
+  "atlas": "product-atlas-2026-09-12",
+  "scope": "task setup/recovery/teardown; Context and Files; source imports/snapshots; local Review",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "authority": {
+    "latestAcceptance": "planning/daily-use-2026-09-06.md and planning/daily-use-2026-09-06-evidence.json (2026-09-06)",
+    "staleDocuments": [
+      "planning/next-level/02-project-setup-and-lifecycle.md (2026-09-04 proposed plan; not runtime authority)",
+      "planning/next-level/03-context-and-sources.md (2026-09-04 proposed plan; implementation not authorized by that document)",
+      "planning/next-level/04-viewer-and-reference-comments.md (2026-09-04 proposed stories; use only for intended contract)",
+      "planning/browser-space-integration-2026-09-08.md (design/contract; not proof of every acceptance path)"
+    ],
+    "notes": "Runtime claims below are limited to the dated 2026-09-06 acceptance record. Proposed lifecycle/source contracts are static evidence, not completed behavior."
+  },
+  "scenarios": [
+    {
+      "id": "setup.repository-artifact-to-workspace",
+      "surface": "task setup",
+      "implemented": true,
+      "authority": [
+        "planning/next-level/02-project-setup-and-lifecycle.md#L102-L140",
+        "planning/next-level/02-project-setup-and-lifecycle.md#L148-L186",
+        "src/app/projects/SetupDialog.tsx",
+        "planning/next-level/execution/run-20260904T214621Z/WORKFLOW_ACCEPTANCE.md"
+      ],
+      "preconditions": [
+        "Configured local repository root is available",
+        "Optional artifact URL is valid",
+        "Disposable Herdr session and isolated companion root"
+      ],
+      "actions": [
+        "Select local repository",
+        "Optionally resolve issue/review URL",
+        "Review setup plan",
+        "Start worktree operation",
+        "Re-read authoritative snapshot and worktree list"
+      ],
+      "observations": [
+        "Plan should name exact effects and repository provenance",
+        "A URL does not authorize cloning or repository discovery",
+        "Herdr workspace identity, checkout path, branch and companion association must be returned"
+      ],
+      "states": [
+        "planned",
+        "running",
+        "completed",
+        "already_open",
+        "repository_root_unavailable",
+        "worktree_create_failed",
+        "herdr_operation_unknown"
+      ],
+      "artifacts": [],
+      "friction": [
+        "No current runtime screenshot or end-to-end setup receipt in the dated evidence"
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "client": "native",
+        "viewport": "",
+        "session": "disposable only"
+      },
+      "cleanup": [
+        "Do not mutate protected/default Herdr session",
+        "Remove only owned disposable worktree/companion after explicit confirmation"
+      ],
+      "primaryCategory": "session-lifecycle",
+      "secondaryCategories": [
+        "provenance-safety"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "setup.recovery-and-teardown",
+      "surface": "task recovery/teardown",
+      "implemented": true,
+      "authority": [
+        "planning/next-level/02-project-setup-and-lifecycle.md#L179-L186",
+        "planning/next-level/02-project-setup-and-lifecycle.md#L97-L100",
+        "src/app/projects/TeardownDialog.tsx",
+        "src/app/projects/TeardownRecoveryPanel.tsx",
+        "planning/next-level/execution/run-20260904T214621Z/WORKFLOW_ACCEPTANCE.md"
+      ],
+      "preconditions": [
+        "Interrupted or uncertain operation in an owned disposable session"
+      ],
+      "actions": [
+        "List operation state",
+        "Reconcile with fresh Herdr snapshot/worktree list",
+        "Retry only safe steps or cancel",
+        "Review exact removal plan",
+        "Remove worktree then owned companion"
+      ],
+      "observations": [
+        "Timeout is unknown until reconciliation; never blindly retry create",
+        "Close and remove are distinct",
+        "Cancellation preserves completed work and reports residual artifacts",
+        "No promise of restoring terminated processes"
+      ],
+      "states": [
+        "partial",
+        "interrupted",
+        "unknown",
+        "retryable",
+        "cancelled",
+        "removed"
+      ],
+      "artifacts": [],
+      "friction": [
+        "No current runtime proof for restart recovery, removal confirmation, or crash reconciliation"
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "client": "native",
+        "viewport": "",
+        "session": "disposable only"
+      },
+      "cleanup": [
+        "Preserve unrelated sessions and paths; verify ownership before reconciliation or removal"
+      ],
+      "primaryCategory": "errors-recovery",
+      "secondaryCategories": [
+        "session-lifecycle",
+        "provenance-safety"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "context.files-browse-render-search-comment-paste",
+      "surface": "Context/Files",
+      "implemented": true,
+      "authority": [
+        "planning/daily-use-2026-09-06.md#L27-L35",
+        "planning/next-level/04-viewer-and-reference-comments.md#L42-L100"
+      ],
+      "preconditions": [
+        "Context tree contains nested files and preview-capable Markdown/HTML",
+        "Reviewable disposable workspace"
+      ],
+      "actions": [
+        "Switch tree/content focus",
+        "Search with fuzzy path matching",
+        "Open nested file",
+        "Toggle rendered Markdown to Source",
+        "Add/edit preview comment",
+        "Cancel picker with Escape",
+        "Paste assembled comments without submit"
+      ],
+      "observations": [
+        "2026-09-06 acceptance reports nested picker, bounded search, cancellation, Markdown preview/source toggle, preview comments, and focus behavior",
+        "Plain text remains readable",
+        "Comments anchor immutable source lines; paste does not submit"
+      ],
+      "states": [
+        "tree-focused",
+        "content-focused",
+        "picker-open",
+        "preview",
+        "source",
+        "comment-draft",
+        "cancelled",
+        "pasted-not-submitted"
+      ],
+      "artifacts": [
+        {
+          "path": "files-original.png",
+          "kind": "design-reference",
+          "provenance": "Copied from planning/ui-polish/assets/files-original.png; original evidence date 2026-09-06 (durable UI-polish capture; exact source commit not recorded)",
+          "originalEvidenceDate": "2026-09-06",
+          "originalCommit": "unknown",
+          "evidenceClass": "mock",
+          "capturedAt": "2026-09-06",
+          "sourceCommit": "unknown",
+          "sha256": "4ee8257ba7a830bf8b120ac115cd20aefc84d118314e9097869b698941f54456"
+        }
+      ],
+      "friction": [
+        "The screenshot is durable visual evidence, but does not prove current baseline 1d09b5c behavior",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "7084603beeb5261fbefd7b658496767a1d716983",
+        "client": "browser",
+        "viewport": "1440x900",
+        "session": "daily disposable fixture"
+      },
+      "cleanup": [
+        "Cancel picker and discard disposable comment draft unless retained for review"
+      ],
+      "primaryCategory": "context-files",
+      "secondaryCategories": [
+        "input-focus",
+        "review-comments"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "context.sources-import-and-snapshot",
+      "surface": "source imports/snapshots",
+      "implemented": true,
+      "authority": [
+        "planning/next-level/03-context-and-sources.md#L43-L66",
+        "planning/next-level/03-context-and-sources.md#L8-L15",
+        "src/app/projects/SourceImport.tsx",
+        "src/app/projects/SnapshotImport.tsx",
+        "planning/next-level/execution/run-20260904T214621Z/FEATURE_ACCEPTANCE.md"
+      ],
+      "preconditions": [
+        "Primary local repository and already-discovered reference repository",
+        "Owned companion directory"
+      ],
+      "actions": [
+        "Plan/add/refresh/remove a source",
+        "Create bounded local snapshot",
+        "Attempt reflink then verified copy fallback",
+        "Inspect dirty/ignored status and hashes"
+      ],
+      "observations": [
+        "Source ingestion is read-only",
+        "Hardlinks/Git alternates are forbidden",
+        "Generated and user namespaces remain separate",
+        "Limits and copy fallback must be explicit"
+      ],
+      "states": [
+        "planned",
+        "imported",
+        "refreshed",
+        "copy-fallback",
+        "limit-exhausted",
+        "sync-conflict",
+        "removed"
+      ],
+      "artifacts": [],
+      "friction": [
+        "No durable runtime screenshot or acceptance receipt for source import/snapshot in available dated evidence"
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "client": "native",
+        "viewport": "",
+        "session": "disposable only"
+      },
+      "cleanup": [
+        "Delete only owned companion snapshot after verifying source remains unchanged"
+      ],
+      "primaryCategory": "providers-sources",
+      "secondaryCategories": [
+        "context-files",
+        "provenance-safety"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "review.local-scopes-navigation-comments-fallback",
+      "surface": "local Review",
+      "implemented": true,
+      "authority": [
+        "planning/daily-use-2026-09-06.md#L27-L35",
+        "planning/next-level/04-viewer-and-reference-comments.md#L101-L160"
+      ],
+      "preconditions": [
+        "Disposable repository has changed files and stable source revisions",
+        "Review pane is available"
+      ],
+      "actions": [
+        "Open Review",
+        "Search changed files",
+        "Navigate file/line scopes",
+        "Create/edit/remove local comments",
+        "Refresh after source change",
+        "Attempt paste with unavailable target and observe fallback/rejection"
+      ],
+      "observations": [
+        "2026-09-06 acceptance reports Review search over changed files and focus movement",
+        "Comments use source-mode immutable anchors",
+        "Stale drafts invalidate rather than silently rebase",
+        "Target filtering is same session/Space/tab agent; no arbitrary fallback"
+      ],
+      "states": [
+        "file-scope",
+        "line-scope",
+        "comment-draft",
+        "stale",
+        "accepted",
+        "rejected",
+        "outcome-unknown"
+      ],
+      "artifacts": [
+        {
+          "path": "review-original.png",
+          "kind": "design-reference",
+          "provenance": "Copied from planning/ui-polish/assets/review-original.png; original evidence date 2026-09-06 (durable UI-polish capture; exact source commit not recorded)",
+          "originalEvidenceDate": "2026-09-06",
+          "originalCommit": "unknown",
+          "evidenceClass": "mock",
+          "capturedAt": "2026-09-06",
+          "sourceCommit": "unknown",
+          "sha256": "4c159d3b2c5f5d9bb4258a3c3b7d1f06a1fcbb49cbad15fde1f4310780be2496"
+        }
+      ],
+      "friction": [
+        "Fallback and unknown-delivery branches remain open in the 2026-09-08 handoff; no screenshot proves them",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "7084603beeb5261fbefd7b658496767a1d716983",
+        "client": "browser",
+        "viewport": "1440x900",
+        "session": "daily disposable fixture"
+      },
+      "cleanup": [
+        "Discard disposable review drafts; preserve only explicitly collected evidence"
+      ],
+      "primaryCategory": "review-comments",
+      "secondaryCategories": [
+        "context-files",
+        "provenance-safety"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    }
+  ]
+}

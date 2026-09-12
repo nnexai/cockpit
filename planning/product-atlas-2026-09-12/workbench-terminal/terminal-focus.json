@@ -1,0 +1,72 @@
+{
+  "id": "terminal.focus-keyboard",
+  "surface": "Terminal focus and keyboard control",
+  "implemented": true,
+  "authority": [
+    "src/app/TerminalPane.tsx:141-152,466-490",
+    "src/app/input/keymap.ts:57-64",
+    "src/app/TerminalPane.test.tsx:165-198"
+  ],
+  "preconditions": [
+    "Terminal pane is mounted and has a stream"
+  ],
+  "actions": [
+    "Click terminal",
+    "Type input",
+    "Press modified Enter",
+    "Use pane-navigation keys"
+  ],
+  "observations": [
+    "Terminal host selects pane and terminal input is forwarded only through the active stream.",
+    "Shift+Enter produces a newline; Kitty keyboard reporting is negotiated.",
+    "Terminal configuration includes visible scrollbar and 5000-line scrollback."
+  ],
+  "states": [
+    "terminal-observing",
+    "terminal-controlled",
+    "terminal-focused"
+  ],
+  "artifacts": [
+    {
+      "path": "terminal.png",
+      "kind": "design-reference",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "provenance": "Copied UI-polish design reference; not runtime proof.",
+      "sha256": "918e58994f14a2304a6c5d72b7a0dcc2a42a83b7aa904c80b5b852d46f19d3b2"
+    },
+    {
+      "path": "src/app/TerminalPane.tsx",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    },
+    {
+      "path": "src/app/input/keymap.ts",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    }
+  ],
+  "friction": [
+    "The screenshot is simulated mock evidence; actual keyboard capture is source/test evidence only."
+  ],
+  "result": "INCONCLUSIVE",
+  "environment": {
+    "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "client": "browser|native",
+    "viewport": "unknown",
+    "session": "none"
+  },
+  "cleanup": [],
+  "primaryCategory": "input-focus",
+  "secondaryCategories": [
+    "terminal-rendering"
+  ],
+  "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+}

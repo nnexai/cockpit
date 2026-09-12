@@ -1,0 +1,74 @@
+{
+  "id": "loading.errors-recovery",
+  "surface": "Loading, closed terminal, errors and recovery",
+  "implemented": true,
+  "authority": [
+    "src/app/TerminalPane.tsx:29-32,141-152,523-533",
+    "src/app/projects/TeardownRecoveryPanel.tsx",
+    "src/app/projects/SetupDialog.tsx:554-556"
+  ],
+  "preconditions": [
+    "A pane open or setup/teardown operation is pending"
+  ],
+  "actions": [
+    "Wait for terminal open",
+    "Trigger stream error or closure",
+    "Choose Resync or Close pane",
+    "Review setup failure"
+  ],
+  "observations": [
+    "Terminal tracks ready, closed, and error states; closed panes expose Close pane and Resync recovery actions.",
+    "Workspace setup exposes pending preparation and an alert error before explicit start.",
+    "No runtime capture establishes exact loading copy or transition timing."
+  ],
+  "states": [
+    "loading",
+    "ready",
+    "error",
+    "closed",
+    "recovery"
+  ],
+  "artifacts": [
+    {
+      "path": "src/app/TerminalPane.tsx",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    },
+    {
+      "path": "src/app/projects/SetupDialog.tsx",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    },
+    {
+      "path": "src/app/projects/TeardownRecoveryPanel.tsx",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    }
+  ],
+  "friction": [
+    "Temporal/flicker behavior is an open gap."
+  ],
+  "result": "INCONCLUSIVE",
+  "environment": {
+    "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "client": "browser|native",
+    "viewport": "unknown",
+    "session": "none"
+  },
+  "cleanup": [],
+  "primaryCategory": "errors-recovery",
+  "secondaryCategories": [
+    "terminal-rendering",
+    "session-lifecycle"
+  ],
+  "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+}

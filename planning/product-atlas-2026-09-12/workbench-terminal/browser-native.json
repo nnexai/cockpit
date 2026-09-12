@@ -1,0 +1,72 @@
+{
+  "id": "browser-native-differences",
+  "surface": "Browser/native client differences",
+  "implemented": true,
+  "authority": [
+    "src/app/App.integration.test.tsx:43-45",
+    "planning/daily-use-2026-09-06-evidence.json:28-55",
+    "scripts/install-native.py"
+  ],
+  "preconditions": [
+    "Run either browser client or native shell against compatible Herdr"
+  ],
+  "actions": [
+    "Open workbench in browser",
+    "Open workbench in native client",
+    "Compare tabs, terminal and focus behavior"
+  ],
+  "observations": [
+    "Integration fixture advertises browser capability terminal_mouse_input=false.",
+    "Historical daily-use evidence records native tab/window artifacts and runtime logs, but originals are outside this atlas.",
+    "Shared snapshot and focus contracts are source-backed; platform chrome, viewport and pointer differences remain unproven."
+  ],
+  "states": [
+    "browser",
+    "native",
+    "capability-limited"
+  ],
+  "artifacts": [
+    {
+      "path": "planning/daily-use-2026-09-06-evidence.json",
+      "evidenceClass": "historical",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "7084603beeb5261fbefd7b658496767a1d716983",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    },
+    {
+      "path": "src/app/App.integration.test.tsx",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    },
+    {
+      "path": "scripts/install-native.py",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    }
+  ],
+  "friction": [
+    "Native/browser visual parity and mouse behavior need fresh disposable captures; do not infer from mock screenshots."
+  ],
+  "result": "INCONCLUSIVE",
+  "environment": {
+    "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "client": "browser|native",
+    "viewport": "unknown",
+    "session": "historical disposable runs only"
+  },
+  "cleanup": [
+    "No browser profile or native process started"
+  ],
+  "primaryCategory": "terminal-rendering",
+  "secondaryCategories": [
+    "extension-panes"
+  ],
+  "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+}

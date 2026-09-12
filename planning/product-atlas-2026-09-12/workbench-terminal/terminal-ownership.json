@@ -1,0 +1,76 @@
+{
+  "id": "terminal.scroll-ownership",
+  "surface": "Terminal scroll, ownership and mouse input",
+  "implemented": true,
+  "authority": [
+    "src/app/TerminalPane.tsx:8-12,29-53,466-490",
+    "src/app/TerminalPane.test.tsx:343-482",
+    "planning/picker-focus-performance-2026-09-06-evidence.json"
+  ],
+  "preconditions": [
+    "Terminal stream can report ownership and mouse mode"
+  ],
+  "actions": [
+    "Scroll terminal",
+    "Request control",
+    "Observe ownership conflict",
+    "Resync or retry"
+  ],
+  "observations": [
+    "Pending control commands are bounded to 64 entries.",
+    "Ownership conflict switches to observe mode and supports resync; stale stream messages are ignored.",
+    "Mouse coordinates are translated to terminal cells in browser pointer handling."
+  ],
+  "states": [
+    "ownership-observing",
+    "control-pending",
+    "owned",
+    "conflict",
+    "resync"
+  ],
+  "artifacts": [
+    {
+      "path": "terminal.png",
+      "kind": "design-reference",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "provenance": "Copied UI-polish design reference; not runtime proof.",
+      "sha256": "918e58994f14a2304a6c5d72b7a0dcc2a42a83b7aa904c80b5b852d46f19d3b2"
+    },
+    {
+      "path": "src/app/TerminalPane.test.tsx",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    },
+    {
+      "path": "planning/picker-focus-performance-2026-09-06-evidence.json",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    }
+  ],
+  "friction": [
+    "Scroll timing, flicker, and pointer/mouse behavior are not runtime-proven; mark as gaps rather than infer from image."
+  ],
+  "result": "INCONCLUSIVE",
+  "environment": {
+    "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "client": "browser|native",
+    "viewport": "unknown",
+    "session": "daily fixture (historical; not reused)"
+  },
+  "cleanup": [
+    "No live terminal session used"
+  ],
+  "primaryCategory": "terminal-rendering",
+  "secondaryCategories": [
+    "input-focus"
+  ],
+  "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+}

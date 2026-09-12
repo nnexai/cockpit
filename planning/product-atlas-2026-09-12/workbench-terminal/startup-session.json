@@ -1,0 +1,53 @@
+{
+  "id": "startup.session-selection",
+  "surface": "Workbench startup and session selection",
+  "implemented": true,
+  "authority": [
+    "src/app/App.tsx:authoritativeSelection",
+    "planning/daily-use-2026-09-06-evidence.json"
+  ],
+  "preconditions": [
+    "A session list and session snapshot are available"
+  ],
+  "actions": [
+    "Open workbench",
+    "Choose a session"
+  ],
+  "observations": [
+    "Selection is derived from authoritative focused space, tab, and pane IDs; invalid focus falls back to first available item.",
+    "Runtime startup screenshot/log is indexed by daily-use evidence but original artifact is outside this atlas."
+  ],
+  "states": [
+    "startup",
+    "session-selected",
+    "fallback-selection"
+  ],
+  "artifacts": [
+    {
+      "path": "planning/daily-use-2026-09-06-evidence.json",
+      "evidenceClass": "historical",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "7084603beeb5261fbefd7b658496767a1d716983",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    }
+  ],
+  "friction": [
+    "Exact startup timing and flicker are not proven."
+  ],
+  "result": "INCONCLUSIVE",
+  "environment": {
+    "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "client": "browser|native",
+    "viewport": "unknown",
+    "session": "daily fixture (historical; not reused)"
+  },
+  "cleanup": [
+    "No session started or modified"
+  ],
+  "primaryCategory": "session-lifecycle",
+  "secondaryCategories": [
+    "navigation-layout"
+  ],
+  "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+}

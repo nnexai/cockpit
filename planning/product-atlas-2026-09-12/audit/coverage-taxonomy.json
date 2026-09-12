@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "purpose": "Finite taxonomy for the current-behavior product atlas; categories classify scenarios, not implementation ownership.",
+  "categories": [
+    {"id":"navigation-layout","label":"Navigation and layout","examples":["Spaces/sidebar ordering","tab and pane hierarchy","responsive/collapsed layout","selection persistence"]},
+    {"id":"session-lifecycle","label":"Session and workspace lifecycle","examples":["session refresh/reconnect","Space/worktree create-open-close-remove","partial provisioning and recovery"]},
+    {"id":"terminal-rendering","label":"Terminal rendering and temporal behavior","examples":["scrollback","redraw stability","graphics","resize","renderer choice"]},
+    {"id":"input-focus","label":"Input, focus, and ownership","examples":["keyboard routing","mouse/wheel","semantic focus","attachment/control ownership","paste framing"]},
+    {"id":"context-files","label":"Context, files, and source mapping","examples":["tree/read/search","line mapping","Markdown/Mermaid/images","containment and symlink policy"]},
+    {"id":"review-comments","label":"Review and comment workflow","examples":["draft batches","multi-file comments","preview/edit/remove","stale source and paste outcomes"]},
+    {"id":"providers-sources","label":"Providers and source hydration","examples":["read-only issue/PR/wiki fetch","pagination","freshness/revision","partial failure and bounds"]},
+    {"id":"extension-panes","label":"Extension pane detection and replacement","examples":["process provenance","Context/Review/Terminal rendering","same-title false match","renderer switching"]},
+    {"id":"provenance-safety","label":"Provenance, authorization, and safety","examples":["resource ownership","endpoint/session pinning","secret redaction","foreign-resource refusal"]},
+    {"id":"errors-recovery","label":"Errors, uncertainty, and recovery","examples":["unsupported capability","timeout/outcome unknown","resync","preserved drafts and partial artifacts"]},
+    {"id":"performance-bounds","label":"Performance and bounded resources","examples":["latency","frame cadence","payload/file/search limits","concurrency and cancellation"]}
+  ],
+  "resultStates": {
+    "PASS":"Observed behavior satisfies the scenario's stated assertions, with complete provenance and no unresolved required subcheck.",
+    "FAIL":"Observed behavior contradicts a required assertion, or a required safety/ownership invariant is violated.",
+    "INCONCLUSIVE":"Evidence is missing, stale, contradictory, environment-inapplicable, or a required capability/provider is unavailable; never treat this as PASS."
+  },
+  "classificationRules": [
+    "Assign every scenario one primary category and zero or more secondary categories from the finite list.",
+    "A scenario may be marked implemented=false when source/runtime evidence shows the surface is absent; absence is a behavior result, not a failed capture.",
+    "Use the scenario-template.json shape for each scenario; result must be PASS, FAIL, or INCONCLUSIVE after collection (unverified is collection-time only).",
+    "When categories overlap, classify by the user-visible assertion being tested and retain cross-cutting safety/provenance as a secondary category."
+  ]
+}

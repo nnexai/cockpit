@@ -1,0 +1,20 @@
+{
+  "id": "surface.behavior.state",
+  "surface": "",
+  "implemented": true,
+  "authority": [],
+  "preconditions": [],
+  "actions": [],
+  "observations": [],
+  "states": [],
+  "artifacts": [],
+  "friction": [],
+  "result": "unverified",
+  "environment": {
+    "commit": "",
+    "client": "browser|native|extension",
+    "viewport": "",
+    "session": ""
+  },
+  "cleanup": []
+}

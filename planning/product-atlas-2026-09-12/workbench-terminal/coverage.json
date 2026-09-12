@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,
+  "surface":"workbench-terminal",
+  "baselineCommit":"1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "date":"2026-09-12",
+  "legend":{"runtime":"current runtime proof","static":"source or test evidence","mock":"simulated mock visual","gap":"not proven"},
+  "coverage":[
+    {"area":"startup/session states","runtime":"partial (historical index only)","static":"covered","mock":"workspace-original.png","gaps":["startup timing/flicker"]},
+    {"area":"Spaces","runtime":"none","static":"covered","mock":"workspace-original.png","gaps":["mouse expand/collapse","hover states"]},
+    {"area":"Agents","runtime":"none","static":"covered","mock":"workspace-original.png","gaps":["live status transitions"]},
+    {"area":"tabs and panes","runtime":"partial (historical native tab artifact indexed)","static":"covered","mock":"terminal.png","gaps":["drag/drop","mouse resize"]},
+    {"area":"pane/command menus","runtime":"none","static":"covered","mock":"none","gaps":["menu placement and mouse activation"]},
+    {"area":"terminal focus/control","runtime":"partial (historical focus evidence indexed)","static":"covered","mock":"terminal.png","gaps":["fresh keyboard capture"]},
+    {"area":"terminal scroll/ownership","runtime":"partial (historical performance evidence indexed)","static":"covered","mock":"terminal.png","gaps":["scroll timing","flicker","mouse ownership"]},
+    {"area":"loading/errors/recovery","runtime":"none","static":"covered","mock":"review-original.png","gaps":["transition timing and exact error presentation"]},
+    {"area":"browser/native differences","runtime":"partial (historical native artifacts indexed)","static":"covered","mock":"files-original.png","gaps":["visual parity","platform chrome","mouse capability behavior"]}
+  ],
+  "artifactPolicy":"Images copied here are simulated mock evidence from planning/ui-polish/assets and must not be treated as runtime proof. Historical runtime evidence is referenced by provenance only; /tmp originals were not copied.",
+  "openGaps":["No fresh runtime capture was made under protected-session policy.","Temporal/flicker behavior cannot be established from static screenshots.","Unproven mouse interactions are explicitly gaps."]
+}

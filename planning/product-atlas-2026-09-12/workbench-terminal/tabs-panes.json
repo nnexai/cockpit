@@ -1,0 +1,73 @@
+{
+  "id": "tabs.panes-layout",
+  "surface": "Tabs, panes and layout",
+  "implemented": true,
+  "authority": [
+    "src/app/App.tsx:167-176,221-229",
+    "src/app/layout/layoutProjection.ts",
+    "src/app/App.integration.test.tsx:55-106"
+  ],
+  "preconditions": [
+    "Snapshot has tabs and panes in one or more Spaces"
+  ],
+  "actions": [
+    "Select a tab",
+    "Move focus between panes",
+    "Toggle zoom or split"
+  ],
+  "observations": [
+    "Tabs are scoped to the selected Space; panes are scoped to the selected tab.",
+    "Zoom projects only the focused pane; directional focus is layout-aware.",
+    "terminal.png and workspace-original.png are simulated mock references."
+  ],
+  "states": [
+    "tab-strip",
+    "multi-pane",
+    "zoomed-pane",
+    "empty-tab"
+  ],
+  "artifacts": [
+    {
+      "path": "terminal.png",
+      "kind": "design-reference",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "provenance": "Copied UI-polish design reference; not runtime proof.",
+      "sha256": "918e58994f14a2304a6c5d72b7a0dcc2a42a83b7aa904c80b5b852d46f19d3b2"
+    },
+    {
+      "path": "workspace-original.png",
+      "kind": "design-reference",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "provenance": "Copied UI-polish design reference; not runtime proof.",
+      "sha256": "364679f3cf943d07b0bb96fb888f30e68a85d5a996139fa1b97b613f26e49700"
+    },
+    {
+      "path": "src/app/layout/layoutProjection.ts",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "provenance": "Recorded atlas evidence; see authority for source identity.",
+      "sha256": null
+    }
+  ],
+  "friction": [
+    "Drag/drop and mouse resize are not proven by available evidence."
+  ],
+  "result": "INCONCLUSIVE",
+  "environment": {
+    "commit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "client": "browser|native",
+    "viewport": "unknown",
+    "session": "none"
+  },
+  "cleanup": [],
+  "primaryCategory": "navigation-layout",
+  "secondaryCategories": [
+    "terminal-rendering"
+  ],
+  "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+}

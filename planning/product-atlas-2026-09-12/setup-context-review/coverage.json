@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "scope": "setup-context-review",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "evidenceClasses": {
+    "currentRuntimeProof": [
+      {
+        "source": "planning/daily-use-2026-09-06.md",
+        "date": "2026-09-06",
+        "commit": "7084603beeb5261fbefd7b658496767a1d716983",
+        "covers": [
+          "Files tree/content focus",
+          "fuzzy picker and cancellation",
+          "Markdown preview/source toggle",
+          "preview comments",
+          "Review changed-file search and focus movement"
+        ]
+      }
+    ],
+    "staticSourceEvidence": [
+      {
+        "source": "planning/next-level/02-project-setup-and-lifecycle.md",
+        "date": "2026-09-04",
+        "covers": [
+          "setup plan/start",
+          "recovery operations",
+          "teardown/removal ownership"
+        ]
+      },
+      {
+        "source": "planning/next-level/03-context-and-sources.md",
+        "date": "2026-09-04",
+        "covers": [
+          "source import",
+          "local snapshot policy",
+          "reflink/copy fallback",
+          "ownership and limits"
+        ]
+      },
+      {
+        "source": "planning/next-level/04-viewer-and-reference-comments.md",
+        "date": "2026-09-04",
+        "covers": [
+          "bounded viewer",
+          "comment anchors",
+          "Review scopes",
+          "paste target filtering"
+        ]
+      }
+    ],
+    "durableScreenshotEvidence": [
+      {
+        "path": "files-original.png",
+        "original": "planning/ui-polish/assets/files-original.png",
+        "originalEvidenceDate": "2026-09-06",
+        "originalCommit": "unknown",
+        "classification": "durable visual capture; runtime provenance is not independently recorded",
+        "kind": "design-reference",
+        "evidenceClass": "mock",
+        "capturedAt": "2026-09-06",
+        "sourceCommit": "unknown",
+        "provenance": "Copied UI-polish design reference; not runtime proof.",
+        "sha256": "4ee8257ba7a830bf8b120ac115cd20aefc84d118314e9097869b698941f54456"
+      },
+      {
+        "path": "review-original.png",
+        "original": "planning/ui-polish/assets/review-original.png",
+        "originalEvidenceDate": "2026-09-06",
+        "originalCommit": "unknown",
+        "classification": "durable visual capture; runtime provenance is not independently recorded",
+        "kind": "design-reference",
+        "evidenceClass": "mock",
+        "capturedAt": "2026-09-06",
+        "sourceCommit": "unknown",
+        "provenance": "Copied UI-polish design reference; not runtime proof.",
+        "sha256": "4c159d3b2c5f5d9bb4258a3c3b7d1f06a1fcbb49cbad15fde1f4310780be2496"
+      },
+      {
+        "path": "workspace-original.png",
+        "original": "planning/ui-polish/assets/workspace-original.png",
+        "originalEvidenceDate": "2026-09-06",
+        "originalCommit": "unknown",
+        "classification": "durable visual capture; adjacent workspace setup context only",
+        "kind": "design-reference",
+        "evidenceClass": "mock",
+        "capturedAt": "2026-09-06",
+        "sourceCommit": "unknown",
+        "provenance": "Copied UI-polish design reference; not runtime proof.",
+        "sha256": "364679f3cf943d07b0bb96fb888f30e68a85d5a996139fa1b97b613f26e49700"
+      },
+      {
+        "path": "terminal.png",
+        "original": "planning/ui-polish/assets/terminal.png",
+        "originalEvidenceDate": "2026-09-06",
+        "originalCommit": "unknown",
+        "classification": "durable visual capture; terminal context only, not setup proof",
+        "kind": "design-reference",
+        "evidenceClass": "mock",
+        "capturedAt": "2026-09-06",
+        "sourceCommit": "unknown",
+        "provenance": "Copied UI-polish design reference; not runtime proof.",
+        "sha256": "918e58994f14a2304a6c5d72b7a0dcc2a42a83b7aa904c80b5b852d46f19d3b2"
+      }
+    ],
+    "simulatedMockEvidence": [],
+    "openGaps": [
+      "No current-baseline (1d09b5c) runtime setup receipt or screenshot.",
+      "No exercised restart/crash recovery, operation retry/cancel, or exact teardown/removal proof.",
+      "No source import/refresh/remove or local snapshot runtime proof; reflink/copy fallback is static contract only.",
+      "Review fallback/target-unavailable and outcome-unknown delivery are not proven by the latest acceptance record.",
+      "No evidence of source mutation invalidating a comment draft or stale-anchor handling in a live run.",
+      "Copied screenshots retain unknown original commit; they must not be treated as baseline-commit proof.",
+      "No current-baseline runtime setup receipt or screenshot.",
+      "No source import/refresh/remove or local snapshot runtime proof; implementation is established by current source and acceptance records.",
+      "No current-baseline runtime setup receipt or screenshot.",
+      "No source import/refresh/remove or local snapshot runtime proof; implementation is established by current source and acceptance records.",
+      "No current-baseline runtime setup receipt or screenshot.",
+      "No source import/refresh/remove or local snapshot runtime proof; implementation is established by current source and acceptance records.",
+      "No current-baseline runtime setup receipt or screenshot.",
+      "No source import/refresh/remove or local snapshot runtime proof; implementation is established by current source and acceptance records."
+    ]
+  },
+  "coverage": [
+    {
+      "scenario": "setup.repository-artifact-to-workspace",
+      "runtime": "none",
+      "static": "current-acceptance-and-source",
+      "screenshot": "none",
+      "status": "implemented-static-runtime-gap"
+    },
+    {
+      "scenario": "setup.recovery-and-teardown",
+      "runtime": "none",
+      "static": "current-acceptance-and-source",
+      "screenshot": "none",
+      "status": "implemented-static-runtime-gap"
+    },
+    {
+      "scenario": "context.files-browse-render-search-comment-paste",
+      "runtime": "latest-dated-acceptance",
+      "static": "supporting",
+      "screenshot": "files-original.png",
+      "status": "covered-with-baseline-drift"
+    },
+    {
+      "scenario": "context.sources-import-and-snapshot",
+      "runtime": "none",
+      "static": "current-acceptance-and-source",
+      "screenshot": "none",
+      "status": "implemented-static-runtime-gap"
+    },
+    {
+      "scenario": "review.local-scopes-navigation-comments-fallback",
+      "runtime": "latest-dated-acceptance-partial",
+      "static": "supporting",
+      "screenshot": "review-original.png",
+      "status": "covered-with-open-fallback-gaps"
+    }
+  ],
+  "authorityRule": "Prefer the latest dated acceptance record (2026-09-06) over older proposed plans. Treat all 2026-09-04 next-level documents as static intent, not proof.",
+  "currentAcceptanceEvidence": [
+    {
+      "source": "planning/next-level/execution/run-20260904T214621Z/WORKFLOW_ACCEPTANCE.md",
+      "date": "2026-09-05",
+      "commit": "a1fb90c",
+      "covers": [
+        "Context workflow increment",
+        "setup creation",
+        "typed teardown",
+        "dirty-worktree refusal",
+        "durable orphan recovery",
+        "snapshot import"
+      ]
+    },
+    {
+      "source": "planning/next-level/execution/run-20260904T214621Z/FEATURE_ACCEPTANCE.md",
+      "date": "2026-09-05",
+      "commit": "a1fb90c",
+      "covers": [
+        "SRC-01/02/03 source hydration",
+        "source refresh result",
+        "snapshot import",
+        "Review and paste acceptance"
+      ]
+    }
+  ],
+  "acceptanceChronology": "2026-09-05 FEATURE_ACCEPTANCE and WORKFLOW_ACCEPTANCE describe the completed increment; 2026-09-06 daily-use evidence is later runtime evidence but predates this atlas baseline."
+}

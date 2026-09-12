@@ -1,0 +1,694 @@
+{
+  "schemaVersion": 1,
+  "surface": "browser-extension",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "evidenceDate": "2026-09-12",
+  "scenarios": [
+    {
+      "id": "browser.lifecycle-pairing",
+      "surface": "browser extension lifecycle and pairing",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "planning/browser-space-integration-2026-09-08.md",
+        "browser-extension/background.js"
+      ],
+      "preconditions": [
+        "Named disposable browser session and isolated profile",
+        "Cockpit association exists or pairing is requested"
+      ],
+      "actions": [
+        "Open or discover the associated browser",
+        "Load the unpacked extension",
+        "Read popup connection state",
+        "Close and reopen the owned browser"
+      ],
+      "observations": [
+        "Checkpoint reports popup Connected after extension reload",
+        "Pairing candidates become authoritative only after successful loading",
+        "Scoped close retains profile and feedback",
+        "Existing page memory is not claimed to be restored"
+      ],
+      "states": [
+        "connected",
+        "closed-or-disconnected",
+        "reopened",
+        "stale-pairing-candidate"
+      ],
+      "artifacts": [
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/cockpit-state/browser/evidence/popup-connected.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8; documented but temporary root is unavailable",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        },
+        {
+          "kind": "source",
+          "path": "browser-extension/background.js",
+          "availability": "available",
+          "provenance": "baseline commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "evidenceClass": "static",
+          "capturedAt": "2026-09-12",
+          "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "No durable screenshot copy is available in this checkout",
+        "Full lifecycle matrix remains incomplete",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8 (checkpoint evidence)",
+        "client": "extension",
+        "viewport": "unknown",
+        "session": "disposable browser session documented in handoff"
+      },
+      "cleanup": [
+        "Checkpoint states disposable session/profile were cleaned or retained only as evidence",
+        "Protected default session was untouched"
+      ],
+      "primaryCategory": "extension-panes",
+      "secondaryCategories": [
+        "session-lifecycle",
+        "provenance-safety"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.popup-status-feedback",
+      "surface": "extension popup",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/popup.html",
+        "browser-extension/popup.js",
+        "browser-extension/popup.css",
+        "browser-extension/background.js"
+      ],
+      "preconditions": [
+        "Extension is paired or disconnected"
+      ],
+      "actions": [
+        "Open popup",
+        "Inspect connection/status and pending feedback",
+        "Close popup and reopen browser"
+      ],
+      "observations": [
+        "Popup reported Connected at checkpoint",
+        "Feedback remains readable after browser close",
+        "Acknowledgement removes pending card and shows No pending browser annotations"
+      ],
+      "states": [
+        "connected",
+        "disconnected",
+        "pending",
+        "empty"
+      ],
+      "artifacts": [
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/cockpit-state/browser/evidence/popup-connected.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        },
+        {
+          "kind": "source",
+          "path": "browser-extension/popup.html",
+          "availability": "available",
+          "provenance": "baseline commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "evidenceClass": "static",
+          "capturedAt": "2026-09-12",
+          "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Popup screenshot is referenced by the checkpoint but not durable here",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "unknown",
+        "session": "disposable browser"
+      },
+      "cleanup": [],
+      "primaryCategory": "extension-panes",
+      "secondaryCategories": [
+        "errors-recovery"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.annotation-overlay-tools",
+      "surface": "annotation overlay and tools",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/content.js",
+        "browser-extension/background.js"
+      ],
+      "preconditions": [
+        "Paired extension on a disposable fixture page"
+      ],
+      "actions": [
+        "Draw a freehand mark",
+        "Add or edit inline text",
+        "Create element/region comments",
+        "Remove a mark",
+        "Save through palette"
+      ],
+      "observations": [
+        "Freehand stroke is thicker and visible while in progress",
+        "Text is inline beside mark",
+        "Drawing did not activate fixture payment button",
+        "Saved freehand-only batch contained only remaining mark",
+        "Palette/editor are excluded from saved PNG"
+      ],
+      "states": [
+        "browse",
+        "drawing",
+        "editing-comment",
+        "saved",
+        "removed"
+      ],
+      "artifacts": [
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/live-stroke-polish.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        },
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/inline-comment-polish.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        },
+        {
+          "kind": "source",
+          "path": "browser-extension/content.js",
+          "availability": "available",
+          "provenance": "baseline commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "evidenceClass": "static",
+          "capturedAt": "2026-09-12",
+          "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Scroll/resize/zoom/modal alignment acceptance remains open",
+        "No durable screenshot copy in checkout",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "1440x900 (documented)",
+        "session": "disposable fixture"
+      },
+      "cleanup": [
+        "Fixture and disposable browser were stopped per handoff"
+      ],
+      "primaryCategory": "extension-panes",
+      "secondaryCategories": [
+        "input-focus"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.capture",
+      "surface": "combined page and annotation capture",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/background.js",
+        "browser-extension/content.js"
+      ],
+      "preconditions": [
+        "Annotation exists on current document",
+        "Capture target remains active"
+      ],
+      "actions": [
+        "Save capture",
+        "Read resulting PNG",
+        "Attempt capture after page/tab/document change"
+      ],
+      "observations": [
+        "PNG includes page, drawing, and optional comment",
+        "Browser chrome and controls are excluded",
+        "Geometry validation uses bounded anchors",
+        "Wrong-tab, navigation, viewport, and offscreen protections remain"
+      ],
+      "states": [
+        "ready",
+        "captured",
+        "stale-document",
+        "wrong-tab",
+        "geometry-review"
+      ],
+      "artifacts": [
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/cockpit-state/browser/artifacts/capture-d49b963b-aab4-43de-9aa6-f6ae68716d7e.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        },
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/cockpit-state/browser/artifacts/capture-79ab5ba4-73c0-4803-9d8e-041b20a99fea.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Active-tab-switch race still needs explicit exercise",
+        "No durable screenshot copy in checkout",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "1440x900",
+        "session": "disposable fixture"
+      },
+      "cleanup": [],
+      "primaryCategory": "extension-panes",
+      "secondaryCategories": [
+        "provenance-safety"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.stale-drafts",
+      "surface": "stale draft recovery",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/background.js"
+      ],
+      "preconditions": [
+        "Unsubmitted annotation draft exists"
+      ],
+      "actions": [
+        "Close popup/browser",
+        "Reload or navigate document",
+        "Reopen extension",
+        "Inspect recovery state",
+        "Retry captured pixels after submission failure"
+      ],
+      "observations": [
+        "Drafts survived popup closure and browser reopen",
+        "Stale documents appeared in recovery",
+        "Injected pixel failure retained drafts",
+        "Injected submission failure retained pixels for retry without recapture"
+      ],
+      "states": [
+        "draft",
+        "stale",
+        "recoverable",
+        "pixel-failure",
+        "submission-failure"
+      ],
+      "artifacts": [
+        {
+          "kind": "source",
+          "path": "browser-extension/background.js",
+          "availability": "available",
+          "provenance": "baseline commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "evidenceClass": "static",
+          "capturedAt": "2026-09-12",
+          "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+          "sha256": null
+        },
+        {
+          "kind": "runtime-proof",
+          "path": "planning/browser-space-handoff-2026-09-08.md#87-100",
+          "availability": "available",
+          "provenance": "2026-09-08 handoff, checkpoint be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Popup lacks explicit stale-document recovery view",
+        "Bounded capacity and read/modify/write races remain open",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "unknown",
+        "session": "disposable browser"
+      },
+      "cleanup": [],
+      "primaryCategory": "errors-recovery",
+      "secondaryCategories": [
+        "extension-panes"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.feedback-overview",
+      "surface": "feedback overview",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/background.js",
+        "browser-extension/popup.html",
+        "browser-extension/popup.js",
+        "browser-extension/popup.css",
+        "src/app/App.tsx"
+      ],
+      "preconditions": [
+        "At least one saved annotation exists or store is empty"
+      ],
+      "actions": [
+        "Open overview",
+        "Refresh",
+        "Read image",
+        "Acknowledge one item",
+        "Verify remaining pending items"
+      ],
+      "observations": [
+        "Overview retains loaded image data during background refresh",
+        "Acknowledgement removes pending card",
+        "Newer capture remains pending when older ID is acknowledged",
+        "Zero-pending state is shown explicitly",
+        "Cockpit FeedbackPanel acknowledgement is a separate native workbench surface; popup acknowledgement evidence must not be attributed to FeedbackPanel.",
+        "Cockpit FeedbackPanel acknowledgement is a separate native workbench surface; popup acknowledgement evidence must not be attributed to FeedbackPanel."
+      ],
+      "states": [
+        "pending",
+        "empty",
+        "acknowledged",
+        "closed-browser"
+      ],
+      "artifacts": [
+        {
+          "kind": "runtime-proof",
+          "path": "planning/browser-space-handoff-2026-09-08.md#54-67",
+          "availability": "available",
+          "provenance": "2026-09-08 handoff, checkpoint be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        },
+        {
+          "kind": "screenshot",
+          "path": "/tmp/cb0908-y9mvnus6/native-polish-feedback.png",
+          "availability": "not-present-in-checkout",
+          "provenance": "Checkpoint handoff, 2026-09-08, commit be68fc8; native surface, not extension popup",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Native screenshot is not a browser-extension screenshot",
+        "Image expiry grace-period behavior is unverified",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "unknown",
+        "session": "disposable browser"
+      },
+      "cleanup": [],
+      "primaryCategory": "extension-panes",
+      "secondaryCategories": [
+        "session-lifecycle"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.delivery-acknowledgement",
+      "surface": "acknowledgement and direct delivery",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/background.js",
+        "src/app/App.tsx"
+      ],
+      "preconditions": [
+        "Pending feedback and eligible Luna pane in active tab"
+      ],
+      "actions": [
+        "Acknowledge without sending",
+        "Use Send to agent",
+        "Inspect recipient input",
+        "Confirm pending count"
+      ],
+      "observations": [
+        "Acknowledge means handled without sending",
+        "Direct delivery selected active-tab Luna pane without picker",
+        "Pasted attachment was not a submitted turn",
+        "Pending count became zero after accepted delivery",
+        "Cockpit FeedbackPanel acknowledgement is a separate native workbench surface; popup acknowledgement evidence must not be attributed to FeedbackPanel.",
+        "Cockpit FeedbackPanel acknowledgement is a separate native workbench surface; popup acknowledgement evidence must not be attributed to FeedbackPanel."
+      ],
+      "states": [
+        "pending",
+        "acknowledged",
+        "delivered-unsubmitted",
+        "no-eligible-agent"
+      ],
+      "artifacts": [
+        {
+          "kind": "runtime-proof",
+          "path": "planning/browser-space-handoff-2026-09-08.md#64-67",
+          "availability": "available",
+          "provenance": "2026-09-08 handoff, checkpoint be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Standalone Send browser context with no selected IDs is open",
+        "No-eligible-agent, wrong-Space, destination-change, rejection, and unknown-outcome paths remain open",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "unknown",
+        "session": "disposable Herdr/browser"
+      },
+      "cleanup": [],
+      "primaryCategory": "provenance-safety",
+      "secondaryCategories": [
+        "extension-panes",
+        "input-focus"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    },
+    {
+      "id": "browser.failure-retention",
+      "surface": "failure and retention states",
+      "implemented": true,
+      "authority": [
+        "planning/browser-space-handoff-2026-09-08.md",
+        "browser-extension/background.js"
+      ],
+      "preconditions": [
+        "Disposable fixture with failure injection"
+      ],
+      "actions": [
+        "Inject pixel failure",
+        "Inject submission failure",
+        "Retry captured pixels",
+        "Acknowledge and wait retention grace period",
+        "Exercise unknown delivery"
+      ],
+      "observations": [
+        "Pixel failure retains drafts",
+        "Submission failure retains pixels and permits retry without recapture",
+        "Unknown receipt retention is covered at store boundary",
+        "Immediate acknowledged-image survival observed"
+      ],
+      "states": [
+        "pixel-failure",
+        "submission-failure",
+        "unknown-outcome",
+        "retained",
+        "expired-unverified"
+      ],
+      "artifacts": [
+        {
+          "kind": "runtime-proof",
+          "path": "planning/browser-space-handoff-2026-09-08.md#107-119",
+          "availability": "available",
+          "provenance": "2026-09-08 handoff, 2026-09-12 atlas baseline; checkpoint be68fc8",
+          "evidenceClass": "historical",
+          "capturedAt": "2026-09-08",
+          "sourceCommit": "be68fc8",
+          "sha256": null
+        }
+      ],
+      "friction": [
+        "Complete retention/failure matrix is not evidenced",
+        "Image expiry and automatic pruning are unverified",
+        "Explicit paste rejection/unknown dispatch runtime evidence is missing",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Checkpoint handoff observations are historical; current source confirms implementation shape, not fresh browser runtime behavior.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
+      ],
+      "result": "INCONCLUSIVE",
+      "environment": {
+        "commit": "be68fc8",
+        "client": "extension",
+        "viewport": "unknown",
+        "session": "disposable fixture"
+      },
+      "cleanup": [
+        "No failure injection was run for this atlas collection"
+      ],
+      "primaryCategory": "errors-recovery",
+      "secondaryCategories": [
+        "extension-panes"
+      ],
+      "evidenceFreshness": "current-static-source; runtime acceptance stale or unavailable"
+    }
+  ]
+}

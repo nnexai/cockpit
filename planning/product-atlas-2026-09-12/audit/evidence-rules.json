@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "scope": "Rules for collecting and judging current-behavior atlas evidence.",
+  "evidenceClasses": {
+    "runtime": {"meaning":"Observed on the actual browser, native, extension, or Herdr-backed surface.","strength":"Required for timing, rendering, focus, input, lifecycle, and environment-dependent claims."},
+    "static": {"meaning":"Repository source, contracts, fixtures, plans, or checked-in evidence inspected without executing the surface.","strength":"Supports implemented shape and intended/encoded behavior; cannot prove live rendering, timing, focus, or resource mutation."},
+    "mock": {"meaning":"Simulated provider, transport, fixture, or UI harness behavior.","strength":"Supports deterministic state/error contract claims only; must not be presented as runtime proof."},
+    "historical": {"meaning":"Evidence captured before the atlas baseline or against another source identity.","strength":"Context only unless explicitly shown compatible; cannot establish current behavior by itself."}
+  },
+  "provenance": {
+    "requiredScenarioFields":["id","surface","authority","preconditions","actions","observations","states","artifacts","result","environment","cleanup"],
+    "requiredEnvironment":["commit","client","viewport","session"],
+    "requiredArtifactMetadata":["path","kind","evidenceClass","capturedAt","sourceCommit","provenance","sha256"],
+    "runtimeRequirements":["Record uniquely named disposable session and owned resources; never use protected/default Herdr session.","Record exact client/runtime identity, viewport, session, command or action sequence, and cleanup outcome.","Record source commit and relevant configuration/tool hashes; identify any source drift during capture.","Screenshots/logs/traces must identify the scenario and observation they support; retain raw evidence where practical.","Copied artifacts retain original path or stable identifier, original evidence date, original commit, and copy hash; copying does not refresh their observation date."],
+    "staticRequirements":["Record exact repository path and source commit; cite lines/symbols or immutable artifact hash.","Label intended/contract evidence separately from observed behavior."],
+    "mockRequirements":["Name the simulator/fixture and its version or source hash; record inputs and deterministic outputs.","State explicitly that no real provider, browser, native window, Herdr process, or user resource was exercised."],
+    "freshness":"Evidence is current only when its source commit, runtime/configuration, and target surface match the scenario. Otherwise retain it as historical or mark INCONCLUSIVE."
+  },
+  "decisionRules": {
+    "PASS":["All required assertions are observed and traceable to evidence artifacts.","Evidence class is appropriate to the claim (runtime for live/runtime claims; static or mock only where explicitly sufficient).","Required provenance, safety, and cleanup fields are complete; no unresolved contradiction remains."],
+    "FAIL":["A required assertion is contradicted by observed evidence.","A safety, ownership, authorization, secret-redaction, or cleanup invariant is violated.","A live operation mutates an out-of-scope provider, protected session, user tab/profile, or foreign resource."],
+    "INCONCLUSIVE":["Required runtime/capability/provider is unavailable, credentials are absent, or evidence cannot be safely collected.","Evidence is stale, incomplete, corrupted, contradictory, or lacks source/runtime identity.","A mock/static result is being used to claim behavior that requires live rendering, timing, focus, input, lifecycle, or resource ownership.","Only a subset of required assertions was exercised; do not downgrade the missing portion to PASS."]
+  },
+  "privacySafety": {
+    "protectedResources":["Herdr session default","user active agent/session","unrelated browser tabs and profiles","unowned worktrees, files, processes, and provider resources"],
+    "mustNot":["Navigate, capture, annotate, modify, focus, or close unrelated user tabs/profiles.","Start automation against the protected/default Herdr session or user's live agent.","Persist credentials, tokens, cookies, raw authorization headers, private payloads, or full process argv/cmdline in atlas artifacts.","Use an absolute path, session name, workspace ID, or display label alone as proof of ownership.","Broadly kill processes or delete resources during cleanup."],
+    "must":["Use a uniquely named disposable Herdr session, isolated browser profile/config/state, fixture repository, and resource ledger for runtime work.","Redact secrets and minimize personal/private content before retaining evidence; use synthetic fixtures where possible.","Verify ownership before every destructive action and clean only resources created by the capture.","Record cleanup failures and residual resource identities instead of hiding them."]
+  },
+  "reusePolicy": {
+    "reuseExistingArtifactWhen":["Artifact is immutable or copied without alteration and has complete provenance.","Its source commit, runtime/configuration, client, viewport, target surface, and scenario assertions match the current scenario.","The claim is not sensitive to elapsed time, process/session identity, focus, timing, animation, provider freshness, or resource ownership."],
+    "requireNewDisposableRuntimeCaptureWhen":[
+      {"scenario":"terminal-temporal-rendering","reason":"Frame cadence, redraw artifacts, scrollback continuity, graphics, and resize behavior depend on a live renderer and timing."},
+      {"scenario":"keyboard-mouse-focus-ownership","reason":"Routing, semantic focus, attachment, wheel/pointer delivery, magic escape, and paste ownership are live interaction properties."},
+      {"scenario":"herdr-session-space-pane-lifecycle","reason":"Create/open/close/remove, authoritative IDs, async events, reconnect, and cleanup require an owned live Herdr session."},
+      {"scenario":"worktree-context-provenance","reason":"Filesystem-bound repository identity, companion ownership, environment handoff, and destructive lifecycle checks require disposable resources."},
+      {"scenario":"native-browser-surface-parity","reason":"WebKit/Tauri window, browser transport, viewport, keyboard routing, and native scale/rendering cannot be inferred from static or mock evidence."},
+      {"scenario":"extension-detection-and-replacement","reason":"Process generation, plugin launch provenance, renderer switching, and false-match behavior depend on live panes and processes."},
+      {"scenario":"browser-capture-annotation","reason":"Visible-tab/document stability, element anchors, screenshot dimensions, pending retry, and pairing safety are live browser-extension behavior."},
+      {"scenario":"provider-read-only-smoke","reason":"Configured provider capability, auth, pagination, freshness, bounded calls, and no-mutation audit require an authorized disposable/read-only fixture."},
+      {"scenario":"uncertain-outcome-recovery","reason":"Timeouts, disconnects, resync, at-most-once effects, and preserved drafts require inducing failure in a disposable runtime."}
+    ],
+    "neverReuseAsRuntimeProof":["Historical screenshots/logs from a different commit or environment","Mock/fixture outputs for live rendering, timing, focus, input, ownership, or provider claims","Evidence captured in the protected/default session or a user's live browser/profile","Artifacts lacking date, source commit, target identity, or cleanup provenance"]
+  }
+}

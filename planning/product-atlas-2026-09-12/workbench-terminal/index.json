@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "surface": "workbench-terminal",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "evidenceDate": "2026-09-12",
+  "scenarios": [
+    {
+      "id": "startup.session-selection",
+      "file": "startup-session.json",
+      "surface": "Workbench startup and session selection",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "session-lifecycle",
+      "secondaryCategories": [
+        "navigation-layout"
+      ]
+    },
+    {
+      "id": "spaces.agents-sidebar",
+      "file": "spaces-agents.json",
+      "surface": "Spaces and Agents sidebar",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "navigation-layout",
+      "secondaryCategories": [
+        "session-lifecycle"
+      ]
+    },
+    {
+      "id": "tabs.panes-layout",
+      "file": "tabs-panes.json",
+      "surface": "Tabs, panes and layout",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "navigation-layout",
+      "secondaryCategories": [
+        "terminal-rendering"
+      ]
+    },
+    {
+      "id": "menus.command-pane",
+      "file": "menus.json",
+      "surface": "Command and pane menus",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "navigation-layout",
+      "secondaryCategories": [
+        "input-focus"
+      ]
+    },
+    {
+      "id": "terminal.focus-keyboard",
+      "file": "terminal-focus.json",
+      "surface": "Terminal focus and keyboard control",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "input-focus",
+      "secondaryCategories": [
+        "terminal-rendering"
+      ]
+    },
+    {
+      "id": "terminal.scroll-ownership",
+      "file": "terminal-ownership.json",
+      "surface": "Terminal scroll, ownership and mouse input",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "terminal-rendering",
+      "secondaryCategories": [
+        "input-focus"
+      ]
+    },
+    {
+      "id": "loading.errors-recovery",
+      "file": "loading-recovery.json",
+      "surface": "Loading, closed terminal, errors and recovery",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "errors-recovery",
+      "secondaryCategories": [
+        "terminal-rendering",
+        "session-lifecycle"
+      ]
+    },
+    {
+      "id": "browser-native-differences",
+      "file": "browser-native.json",
+      "surface": "Browser/native client differences",
+      "result": "INCONCLUSIVE",
+      "primaryCategory": "terminal-rendering",
+      "secondaryCategories": [
+        "extension-panes"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "workspace-original.png",
+      "kind": "design-reference",
+      "provenance": "Copied from planning/ui-polish/assets/workspace-original.png; durable UI-polish capture, source date 2026-09-06 (working-tree asset), commit unknown.",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "sha256": "364679f3cf943d07b0bb96fb888f30e68a85d5a996139fa1b97b613f26e49700"
+    },
+    {
+      "path": "terminal.png",
+      "kind": "design-reference",
+      "provenance": "Copied from planning/ui-polish/assets/terminal.png; durable UI-polish capture, source date 2026-09-06 (working-tree asset), commit unknown.",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "sha256": "918e58994f14a2304a6c5d72b7a0dcc2a42a83b7aa904c80b5b852d46f19d3b2"
+    },
+    {
+      "path": "review-original.png",
+      "kind": "design-reference",
+      "provenance": "Copied from planning/ui-polish/assets/review-original.png; durable UI-polish capture, source date 2026-09-06 (working-tree asset), commit unknown.",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "sha256": "4c159d3b2c5f5d9bb4258a3c3b7d1f06a1fcbb49cbad15fde1f4310780be2496"
+    },
+    {
+      "path": "files-original.png",
+      "kind": "design-reference",
+      "provenance": "Copied from planning/ui-polish/assets/files-original.png; durable UI-polish capture, source date 2026-09-06 (working-tree asset), commit unknown.",
+      "evidenceClass": "mock",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "unknown",
+      "sha256": "4ee8257ba7a830bf8b120ac115cd20aefc84d118314e9097869b698941f54456"
+    },
+    {
+      "path": "planning/daily-use-2026-09-06-evidence.json",
+      "kind": "current-runtime-proof-index",
+      "provenance": "Existing evidence index; baseline 7084603beeb5261fbefd7b658496767a1d716983; runtime artifacts remain at recorded /tmp paths and were not copied.",
+      "evidenceClass": "historical",
+      "capturedAt": "2026-09-06",
+      "sourceCommit": "7084603beeb5261fbefd7b658496767a1d716983",
+      "sha256": null
+    },
+    {
+      "path": "src/app/App.tsx",
+      "kind": "static-source",
+      "provenance": "Baseline source authority, commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5.",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": null
+    },
+    {
+      "path": "src/app/TerminalPane.tsx",
+      "kind": "static-source",
+      "provenance": "Baseline source authority, commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5.",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": null
+    },
+    {
+      "path": "src/app/input/keymap.ts",
+      "kind": "static-source",
+      "provenance": "Baseline source authority, commit 1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5.",
+      "evidenceClass": "static",
+      "capturedAt": "2026-09-12",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": null
+    }
+  ]
+}
