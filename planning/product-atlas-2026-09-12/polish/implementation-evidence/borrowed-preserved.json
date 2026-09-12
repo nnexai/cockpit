@@ -1,0 +1,5 @@
+{
+  "plain_has_git": false,
+  "nested_plain_text": "# Borrowed notes\n\nKeep this directory and file.\n",
+  "nested_git_text": "Keep nested Git files.\n"
+}

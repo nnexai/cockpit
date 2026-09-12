@@ -1,0 +1,30 @@
+{
+  "metrics": [
+    {
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "16px",
+      "rowHeight": 20
+    },
+    {
+      "width": 1024,
+      "scrollWidth": 1024,
+      "font": "16px",
+      "rowHeight": 20
+    },
+    {
+      "width": 800,
+      "scrollWidth": 800,
+      "font": "16px",
+      "rowHeight": 20
+    },
+    {
+      "width": 480,
+      "scrollWidth": 480,
+      "font": "16px",
+      "rowHeight": 20
+    }
+  ],
+  "scrolled": "60                                                                                                                        \n61                                   ",
+  "selectionRects": 0
+}

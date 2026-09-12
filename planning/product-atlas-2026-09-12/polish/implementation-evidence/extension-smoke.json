@@ -1,0 +1,120 @@
+{
+  "fixture": "http://127.0.0.1:34359/",
+  "extensionId": "fblkilbfbmpndnfjaacljmcljhepakok",
+  "checks": [
+    {
+      "name": "extension-worker",
+      "status": "pass",
+      "detail": "chrome-extension://fblkilbfbmpndnfjaacljmcljhepakok/background.js"
+    },
+    {
+      "name": "toolbar-opened",
+      "status": "pass",
+      "detail": "{\"x\":767,\"y\":8,\"width\":225,\"height\":38,\"hidden\":false,\"opacity\":\"0.45\",\"text\":\"Draw, pick an element, or drag a region. V Select, E Element, R Region, F Freehand.\"}"
+    },
+    {
+      "name": "toolbar-idle-opacity",
+      "status": "pass",
+      "detail": "0.45"
+    },
+    {
+      "name": "notes-default-closed-outside-toolbar",
+      "status": "pass",
+      "detail": "{\"notes\":{\"x\":940.765625,\"y\":52,\"width\":51.234375,\"height\":29.59375,\"hidden\":false,\"opacity\":\"1\",\"text\":\"Notes\"},\"toolbar\":{\"x\":767,\"y\":8,\"width\":225,\"height\":38,\"hidden\":false,\"opacity\":\"0.45\",\"text\":\"Draw, pick an element, or drag a region. V Select, E Element, R Region, F Freehand.\"},\"expanded\":\"false\",\"hidden\":true}"
+    },
+    {
+      "name": "freehand-live-points",
+      "status": "pass",
+      "detail": "[{\"tag\":\"polyline\",\"className\":\"mark\",\"points\":\"110,205 120,205 130,205 140,205 150,205 160,205 170,205 180,215 190,225 200,235 210,245\",\"strokeWidth\":\"3px\"}]"
+    },
+    {
+      "name": "freehand-release-simplifies",
+      "status": "pass",
+      "detail": "{\"tag\":\"polyline\",\"className\":\"mark\",\"points\":\"110,205 170,205 210,245\",\"strokeWidth\":\"3px\"}"
+    },
+    {
+      "name": "freehand-3px",
+      "status": "pass",
+      "detail": "3px"
+    },
+    {
+      "name": "region-created",
+      "status": "pass",
+      "detail": "[{\"tag\":\"polyline\",\"className\":\"mark\",\"points\":\"110,205 170,205 210,245\",\"strokeWidth\":\"3px\"},{\"tag\":\"rect\",\"className\":\"mark region\",\"points\":null,\"strokeWidth\":\"2px\"}]"
+    },
+    {
+      "name": "region-2px",
+      "status": "pass",
+      "detail": "2px"
+    },
+    {
+      "name": "notes-sidebar-opens",
+      "status": "pass",
+      "detail": "{\"expanded\":\"true\",\"hidden\":false}"
+    },
+    {
+      "name": "notes-sidebar-closes",
+      "status": "pass",
+      "detail": "{\"expanded\":\"false\",\"hidden\":true}"
+    },
+    {
+      "name": "inline-comment",
+      "status": "pass",
+      "detail": "offline draft note"
+    },
+    {
+      "name": "toolbar-hover-opacity",
+      "status": "pass",
+      "detail": "1"
+    },
+    {
+      "name": "toolbar-focus-opacity",
+      "status": "pass",
+      "detail": "1"
+    },
+    {
+      "name": "pointercancel-discards-drawing",
+      "status": "pass",
+      "detail": "3 -> 2"
+    },
+    {
+      "name": "notes-revisit-item",
+      "status": "pass",
+      "detail": "[{\"x\":703,\"y\":91.59375,\"width\":280,\"height\":47.890625,\"text\":\"freehandoffline draft note\"},{\"x\":703,\"y\":144.484375,\"width\":280,\"height\":47.890625,\"text\":\"regionregion mark\"}]"
+    },
+    {
+      "name": "notes-revisit-scrolls-to-mark",
+      "status": "pass",
+      "detail": "0"
+    },
+    {
+      "name": "page-zoom-changes-visual-scale",
+      "status": "pass",
+      "detail": "1.25"
+    },
+    {
+      "name": "scroll-zoom-retains-marks",
+      "status": "pass",
+      "detail": "2 marks"
+    },
+    {
+      "name": "offline-capture-retains-draft",
+      "status": "pass",
+      "detail": "{\"hint\":\"Failed to fetch\",\"drafts\":[{\"alignment_dirty\":true,\"annotations\":[{\"bounds\":null,\"color\":\"#d62828\",\"comment\":\"offline draft note\",\"document_id\":\"C66FD204CA8C51532AF75555A9A58AF3\",\"element\":null,\"frame_id\":0,\"id\":\"a0ad8210-89f5-445d-adcc-cd9bbb584396\",\"kind\":\"freehand\",\"points\":[{\"x\":110,\"y\":205},{\"x\":170,\"y\":205},{\"x\":210,\"y\":245}]},{\"bounds\":{\"height\":75,\"width\":130,\"x\":300,\"y\":205},\"color\":\"#1769aa\",\"comment\":\"\",\"document_id\":\"C66FD204CA8C51532AF75555A9A58AF3\",\"element\":null,\"frame_id\":0,\"id\":\"4cddd5c8-4033-4300-a0d2-58bb7ac5d650\",\"kind\":\"region\",\"points\":[{\"x\":300,\"y\":205},{\"x\":430,\"y\":280}]}],\"document_id\":\"C66FD204CA8C51532AF75555A9A58AF3\",\"stale\":false,\"tab_id\":2119072755,\"title\":\"Polish annotation fixture\",\"updated_at\":\"2026-09-12T21:44:46.715Z\",\"url\":\"http://127.0.0.1:34359/\",\"viewport\":{\"device_pixel_ratio\":1,\"height\":700,\"scroll_x\":0,\"scroll_y\":850,\"visual_scale\":1,\"width\":1000}}]}"
+    },
+    {
+      "name": "notes-clear",
+      "status": "pass",
+      "detail": "{\"annotations\":0,\"notes\":[]}"
+    }
+  ],
+  "screenshots": [
+    "/tmp/cpol-i11uqx_w/evidence/extension-freehand.png",
+    "/tmp/cpol-i11uqx_w/evidence/extension-notes-open.png",
+    "/tmp/cpol-i11uqx_w/evidence/extension-offline-draft.png",
+    "/tmp/cpol-i11uqx_w/evidence/extension-notes-cleared.png"
+  ],
+  "startedAt": "2026-09-12T21:44:44.835Z",
+  "status": "pass",
+  "finishedAt": "2026-09-12T21:44:47.794Z"
+}

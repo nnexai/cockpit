@@ -1,0 +1,17 @@
+[
+  {
+    "label": "Polish nested plain",
+    "path": "/tmp/cpol-i11uqx_w/plain/nested",
+    "result": "Completed\nCompleted\n\nWorkspace, Context, and terminal are ready.\n\nRetained resources"
+  },
+  {
+    "label": "Polish Git root",
+    "path": "/tmp/cpol-i11uqx_w/repositories/sample",
+    "result": "Completed\nCompleted\n\nWorkspace, Context, and terminal are ready.\n\nRetained resources"
+  },
+  {
+    "label": "Polish nested Git",
+    "path": "/tmp/cpol-i11uqx_w/repositories/sample/nested",
+    "result": "Completed\nCompleted\n\nWorkspace, Context, and terminal are ready.\n\nRetained resources"
+  }
+]

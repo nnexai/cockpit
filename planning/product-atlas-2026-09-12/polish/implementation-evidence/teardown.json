@@ -1,0 +1,5 @@
+{
+  "before": "TASK CLEANUP\nReview teardown\n\nClose keeps local files. Removal is available only for a freshly verified clean, Cockpit-owned linked worktree.\n\nClose\nCheckout\n/tmp/cpol-i11uqx_w/worktrees/sample-675b7b38-31a3-4020-9b56-1550046b5a4a\nOwnership\nowned created\nGit status\nclean\nCompanion\n/tmp/cpol-i11uqx_w/companions/675b7b38-31a3-4020-9b56-1550046b5a4a\nClose Space\nRemove task worktree\nCancel\nChoose an action",
+  "after": "TASK CLEANUP\nReview teardown\n\nClose keeps local files. Removal is available only for a freshly verified clean, Cockpit-owned linked worktree.\n\nClose\nCheckout\n/tmp/cpol-i11uqx_w/worktrees/sample-675b7b38-31a3-4020-9b56-1550046b5a4a\nOwnership\nunknown\nGit status\nunknown\nCompanion\nNo owned companion\nRemoval blocked\nthe exact worktree is not live in the requested workspace\nthe target is not a linked worktree\nworktree status could not be confirmed\nowned worktree and companion provenance is incomplete\nRecovery notes\nthe companion is missing; no companion cleanup will be attempted\nCancel\nChoose an action",
+  "borrowedSpaceRemoved": true
+}

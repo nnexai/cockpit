@@ -1,0 +1,86 @@
+[
+  {
+    "width": 480,
+    "height": 900,
+    "scrollWidth": 480,
+    "sameNode": true,
+    "value": "Resize preserves this whole-file draft.",
+    "focus": true,
+    "start": 7,
+    "end": 16,
+    "modal": true,
+    "rect": {
+      "x": 12,
+      "y": 702.875,
+      "width": 456,
+      "height": 185.125,
+      "top": 702.875,
+      "right": 468,
+      "bottom": 888,
+      "left": 12
+    }
+  },
+  {
+    "width": 800,
+    "height": 1000,
+    "scrollWidth": 800,
+    "sameNode": true,
+    "value": "Resize preserves this whole-file draft.",
+    "focus": true,
+    "start": 7,
+    "end": 16,
+    "modal": true,
+    "rect": {
+      "x": 100,
+      "y": 802.875,
+      "width": 600,
+      "height": 185.125,
+      "top": 802.875,
+      "right": 700,
+      "bottom": 988,
+      "left": 100
+    }
+  },
+  {
+    "width": 1024,
+    "height": 640,
+    "scrollWidth": 1024,
+    "sameNode": true,
+    "value": "Resize preserves this whole-file draft.",
+    "focus": true,
+    "start": 7,
+    "end": 16,
+    "modal": true,
+    "rect": {
+      "x": 212,
+      "y": 442.875,
+      "width": 600,
+      "height": 185.125,
+      "top": 442.875,
+      "right": 812,
+      "bottom": 628,
+      "left": 212
+    }
+  },
+  {
+    "width": 1440,
+    "height": 900,
+    "scrollWidth": 1440,
+    "sameNode": true,
+    "value": "Resize preserves this whole-file draft.",
+    "focus": true,
+    "start": 7,
+    "end": 16,
+    "modal": false,
+    "rect": {
+      "x": 1067.734375,
+      "y": 719.875,
+      "width": 368.34375,
+      "height": 179.125,
+      "top": 719.875,
+      "right": 1436.078125,
+      "bottom": 899,
+      "left": 1067.734375
+    }
+  }
+]

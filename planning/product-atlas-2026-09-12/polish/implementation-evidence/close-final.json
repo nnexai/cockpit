@@ -1,0 +1,4 @@
+{
+  "message": "TASK CLEANUP\nReview teardown\n\nClose keeps local files. Removal is available only for a freshly verified clean, Cockpit-owned linked worktree.\n\nClose\n\nworkspace closed; the checkout and companion were retained\n\nDone",
+  "spaceRemoved": false
+}
