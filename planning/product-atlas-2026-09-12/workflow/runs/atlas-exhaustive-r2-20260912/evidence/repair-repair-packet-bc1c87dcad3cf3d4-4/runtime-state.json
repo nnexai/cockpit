@@ -1,0 +1,22 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-d181bfdbd28e3334",
+  "scenarioId": "annotation.tool-region-comment",
+  "surface": [
+    "page",
+    "capture",
+    "Review"
+  ],
+  "surfaces": [
+    "page",
+    "capture",
+    "Review"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Drag region left-to-right"
+  ]
+}

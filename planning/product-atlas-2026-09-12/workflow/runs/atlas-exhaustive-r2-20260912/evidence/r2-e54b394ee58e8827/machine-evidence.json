@@ -1,0 +1,130 @@
+{
+  "surface": [
+    "Space menus and tab/pane navigation"
+  ],
+  "route": "http://127.0.0.1:49372/",
+  "title": "Cockpit",
+  "activeElement": "button Commands",
+  "commandRegistry": [
+    "Commands",
+    "Files",
+    "Context",
+    "Review",
+    "FeedbackPanel"
+  ],
+  "runtimeIdentity": {
+    "runId": "atlas-exhaustive-r2-20260912",
+    "spaceIds": [
+      "w1",
+      "w2"
+    ],
+    "tabIds": [
+      "w1:t1",
+      "w1:t2",
+      "w2:t1",
+      "w2:t2"
+    ],
+    "paneIds": [
+      "w1:p1",
+      "w1:p2",
+      "w1:p3",
+      "w1:p4",
+      "w2:p1",
+      "w2:p2",
+      "w2:p3",
+      "w2:p4"
+    ],
+    "agentIds": [
+      "agent-alpha-review",
+      "agent-alpha-context",
+      "agent-beta-delivery",
+      "agent-beta-recovery"
+    ]
+  },
+  "states": [
+    {
+      "stateId": "before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:56:19.449Z",
+      "surface": "Space menus and tab/pane navigation",
+      "visibleAssertions": [
+        "Space menus and tab/pane navigation",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-e54b394ee58e8827/before-e54b394ee58e8827-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "action-01",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:56:19.718Z",
+      "surface": "Space menus and tab/pane navigation",
+      "visibleAssertions": [
+        "Space menus and tab/pane navigation",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-e54b394ee58e8827/action-01-e54b394ee58e8827-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:56:19.915Z",
+      "surface": "Space menus and tab/pane navigation",
+      "visibleAssertions": [
+        "Space menus and tab/pane navigation",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-e54b394ee58e8827/after-e54b394ee58e8827-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:56:21.237Z",
+      "surface": "Space menus and tab/pane navigation",
+      "visibleAssertions": [
+        "Space menus and tab/pane navigation",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-e54b394ee58e8827/before-e54b394ee58e8827-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "action-01",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:56:21.487Z",
+      "surface": "Space menus and tab/pane navigation",
+      "visibleAssertions": [
+        "Space menus and tab/pane navigation",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-e54b394ee58e8827/action-01-e54b394ee58e8827-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:56:21.671Z",
+      "surface": "Space menus and tab/pane navigation",
+      "visibleAssertions": [
+        "Space menus and tab/pane navigation",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-e54b394ee58e8827/after-e54b394ee58e8827-1024x640.png"
+      ],
+      "result": "PASS"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-6843dfe80ac135c4",
+  "scenarioId": "annotation.tool-freehand-comment",
+  "surface": [
+    "page",
+    "capture",
+    "FeedbackPanel"
+  ],
+  "surfaces": [
+    "page",
+    "capture",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Draw short stroke"
+  ]
+}

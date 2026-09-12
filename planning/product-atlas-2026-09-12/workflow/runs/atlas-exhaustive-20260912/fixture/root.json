@@ -1,0 +1,83 @@
+{
+  "allFiles": [
+    {
+      "bytes": 224,
+      "path": "browser/docs.html",
+      "sha256": "b31a1efb53f1e3616e3d4e31f993f3aa74dfad8d63d2f0d083d80bfcec34e2eb"
+    },
+    {
+      "bytes": 533,
+      "path": "browser/index.html",
+      "sha256": "172131c9442f8ec5b44973ef1bf702d675c40fe1291dc51e5b800a9970990062"
+    },
+    {
+      "bytes": 70,
+      "path": "context/architecture.md",
+      "sha256": "f261b1d4fc488a0bba62ac6ddee126794ec86a40176d3b3536a2b5cd29158d7f"
+    },
+    {
+      "bytes": 79,
+      "path": "context/review.md",
+      "sha256": "bfc10a718853c8a453947510291905116df3e86a4864636afdce3b7b53d26fd3"
+    },
+    {
+      "bytes": 80,
+      "path": "repos/orbit/README.md",
+      "sha256": "4cfe7b4115bb1d35c87be0761760a6414e69e37e1d3406edc1830fafa30fe61f"
+    },
+    {
+      "bytes": 23,
+      "path": "repos/orbit/assets/orbit.bin",
+      "sha256": "a42e4c82ba46c3ebe70db0b9db8bb5763fb9402f372a2defed10afe364f2f823"
+    },
+    {
+      "bytes": 62,
+      "path": "repos/orbit/notes/orbit.md",
+      "sha256": "8d96af34048fe7682aecce889b9fe46a72fda0b4954a70bb9e1373cd5770b6e8"
+    },
+    {
+      "bytes": 97,
+      "path": "repos/orbit/src/orbit.ts",
+      "sha256": "54f4f593e74baa1d56f0bfeab803c617831b9f0931f9471158acc18f5dcbe829"
+    },
+    {
+      "bytes": 22,
+      "path": "repos/tide/assets/tide.bin",
+      "sha256": "9dedc6b6b959f29e406bff387ef2de0c70d92c289dc51d0bba6459a75fd221ff"
+    },
+    {
+      "bytes": 65,
+      "path": "repos/tide/docs/tide.md",
+      "sha256": "673212e43225efaa4ff2dcf4c1dbff4a09d2739710bf0a169e38fc1579f7b1f8"
+    },
+    {
+      "bytes": 87,
+      "path": "repos/tide/src/tide.ts",
+      "sha256": "a1f0a105b3995fce7607ba73164c97bb62a5c80c2a954ab8ecf91ccfb46cf0b0"
+    },
+    {
+      "bytes": 182,
+      "path": "root.json",
+      "sha256": "c7802e940351c83872c7f10361b24ca5250e98acfe17609c4b8502726f3853ac"
+    },
+    {
+      "bytes": 58,
+      "path": "sources/orbit-source.ts",
+      "sha256": "9e1c877be3cbf99af1ebee102fce6d00d18cc5794ce96ee484f2f625a8966d5c"
+    },
+    {
+      "bytes": 56,
+      "path": "sources/tide-source.ts",
+      "sha256": "ba11801a59eab7db8adc52abc86e75463fce59cffdef966c33adf2facc508458"
+    }
+  ],
+  "capturedAt": "2026-09-12T09:59:25.158883Z",
+  "fixtureRoot": "/tmp/atlas-20260912-fixture",
+  "marker": {
+    "bytes": 224,
+    "path": "browser/docs.html",
+    "sha256": "b31a1efb53f1e3616e3d4e31f993f3aa74dfad8d63d2f0d083d80bfcec34e2eb"
+  },
+  "owner": "atlas-20260912-fixture",
+  "runId": "atlas-exhaustive-20260912"
+}

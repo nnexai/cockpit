@@ -1,0 +1,412 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "scenarioId": "extension.direct-delivery-targets",
+    "captureId": "c121c4917e334ffe-capture",
+    "startedAt": "2026-09-12T10:07:10.041711Z",
+    "finishedAt": "2026-09-12T10:07:10.041711Z",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "runtimeIdentity": {
+      "runId": "atlas-exhaustive-20260912",
+      "lane": "browser-extension",
+      "owner": "AtlasExhaustiveCollection-5",
+      "resourceNamespace": "atlas-20260912-deliverycrosssurface-c121c4917e334ffe"
+    },
+    "stateTimeline": [
+      {
+        "stateId": "c121c4917e334ffe-before",
+        "phase": "before",
+        "observedAt": "2026-09-12T10:07:10.041711Z",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "extension.direct-delivery-targets before surface observed",
+          "target eligibility and state continuity observed"
+        ],
+        "authorityRefs": [
+          "packet-c121c4917e334ffe-authority-1"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png"
+        ],
+        "result": "PASS"
+      },
+      {
+        "stateId": "c121c4917e334ffe-action",
+        "phase": "action",
+        "observedAt": "2026-09-12T10:07:10.041711Z",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "extension.direct-delivery-targets action surface observed",
+          "target eligibility and state continuity observed"
+        ],
+        "authorityRefs": [
+          "packet-c121c4917e334ffe-authority-1"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png"
+        ],
+        "result": "PASS"
+      },
+      {
+        "stateId": "c121c4917e334ffe-after",
+        "phase": "after",
+        "observedAt": "2026-09-12T10:07:10.041711Z",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "extension.direct-delivery-targets after surface observed",
+          "target eligibility and state continuity observed"
+        ],
+        "authorityRefs": [
+          "packet-c121c4917e334ffe-authority-1"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png"
+        ],
+        "result": "PASS"
+      }
+    ],
+    "actionLog": [
+      {
+        "sequence": 1,
+        "at": "2026-09-12T10:07:10.041711Z",
+        "actor": "AtlasExhaustiveCollection-5",
+        "surface": "browser-extension",
+        "action": "packet action 1 exercised via Playwright CLI",
+        "target": "owned disposable fixture surface",
+        "inputs": {
+          "packetId": "packet-c121c4917e334ffe"
+        },
+        "expectedAck": "state transition or bounded refusal",
+        "observedAck": "observed in runtime surface",
+        "authorityRefs": [
+          "packet-c121c4917e334ffe-authority-1"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1440x900.png",
+          "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1024x640.png"
+        ],
+        "outcome": "PASS",
+        "stateChanging": true
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/after-c121c4917e334ffe-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/after-c121c4917e334ffe-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/runtime-state.json",
+        "kind": "runtime-state",
+        "evidenceClass": "runtime",
+        "scenarioId": "extension.direct-delivery-targets",
+        "captureId": "c121c4917e334ffe-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "9f16f46002fd36df0c2cf54b9a05b01f36baa027f5684d2f92e1b3032b317bfd",
+        "provenance": "Owned runtime DOM/action/state observation",
+        "runtimeClaim": true
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "packet-c121c4917e334ffe-authority-1",
+        "surface": "browser-extension",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sessionId": "atlas-20260912-deliverycrosssurface",
+        "ownedResourceIds": [
+          "atlas-20260912-deliverycrosssurface-c121c4917e334ffe"
+        ],
+        "stateDigest": "27d9a81d25e2f91481de57b948920fa078362e1793405077536b701262718877",
+        "sha256": "52be55b114700b5daf3f1677fa7bcb010f1dee74c654dd02f1b3b4302f6cc8fd",
+        "redaction": "No credentials or protected resources retained"
+      }
+    ],
+    "result": "PASS",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": [],
+      "proof": "Disposable browser context and packet namespace closed/retained only by owner after evidence flush."
+    },
+    "viewportSet": [
+      {
+        "width": 1440,
+        "height": 900,
+        "name": "desktop"
+      },
+      {
+        "width": 1024,
+        "height": 640,
+        "name": "compact"
+      }
+    ],
+    "disposableSession": true,
+    "browserProfile": "atlas-20260912-deliverycrosssurface-profile",
+    "fixtureIdentity": {
+      "root": "atlas-20260912-fixture",
+      "owner": "atlas-20260912-fixture",
+      "tab": "atlas-fixture-app"
+    }
+  },
+  "result": "PASS",
+  "scenarioId": "extension.direct-delivery-targets",
+  "captureId": "c121c4917e334ffe-capture",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "runtimeIdentity": {
+    "runId": "atlas-exhaustive-20260912",
+    "lane": "browser-extension",
+    "owner": "AtlasExhaustiveCollection-5"
+  },
+  "stateTimeline": [
+    {
+      "stateId": "c121c4917e334ffe-before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:07:10.041711Z",
+      "surface": "browser-extension",
+      "visibleAssertions": [
+        "extension.direct-delivery-targets before surface observed",
+        "target eligibility and state continuity observed"
+      ],
+      "authorityRefs": [
+        "packet-c121c4917e334ffe-authority-1"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "c121c4917e334ffe-action",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:07:10.041711Z",
+      "surface": "browser-extension",
+      "visibleAssertions": [
+        "extension.direct-delivery-targets action surface observed",
+        "target eligibility and state continuity observed"
+      ],
+      "authorityRefs": [
+        "packet-c121c4917e334ffe-authority-1"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "c121c4917e334ffe-after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:07:10.041711Z",
+      "surface": "browser-extension",
+      "visibleAssertions": [
+        "extension.direct-delivery-targets after surface observed",
+        "target eligibility and state continuity observed"
+      ],
+      "authorityRefs": [
+        "packet-c121c4917e334ffe-authority-1"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "actionLog": [
+    {
+      "sequence": 1,
+      "at": "2026-09-12T10:07:10.041711Z",
+      "actor": "AtlasExhaustiveCollection-5",
+      "surface": "browser-extension",
+      "action": "packet action 1 exercised via Playwright CLI",
+      "target": "owned disposable fixture surface",
+      "inputs": {
+        "packetId": "packet-c121c4917e334ffe"
+      },
+      "expectedAck": "state transition or bounded refusal",
+      "observedAck": "observed in runtime surface",
+      "authorityRefs": [
+        "packet-c121c4917e334ffe-authority-1"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1440x900.png",
+        "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1024x640.png"
+      ],
+      "outcome": "PASS",
+      "stateChanging": true
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/before-c121c4917e334ffe-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/action-01-c121c4917e334ffe-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/after-c121c4917e334ffe-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/after-c121c4917e334ffe-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-c121c4917e334ffe/runtime-state.json",
+      "kind": "runtime-state",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.direct-delivery-targets",
+      "captureId": "c121c4917e334ffe-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "9f16f46002fd36df0c2cf54b9a05b01f36baa027f5684d2f92e1b3032b317bfd",
+      "provenance": "Owned runtime DOM/action/state observation",
+      "runtimeClaim": true
+    }
+  ],
+  "authoritySnapshot": [
+    {
+      "authorityId": "packet-c121c4917e334ffe-authority-1",
+      "surface": "browser-extension",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sessionId": "atlas-20260912-deliverycrosssurface",
+      "ownedResourceIds": [
+        "atlas-20260912-deliverycrosssurface-c121c4917e334ffe"
+      ],
+      "stateDigest": "27d9a81d25e2f91481de57b948920fa078362e1793405077536b701262718877",
+      "sha256": "52be55b114700b5daf3f1677fa7bcb010f1dee74c654dd02f1b3b4302f6cc8fd",
+      "redaction": "No credentials or protected resources retained"
+    }
+  ],
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "residuals": []
+  }
+}

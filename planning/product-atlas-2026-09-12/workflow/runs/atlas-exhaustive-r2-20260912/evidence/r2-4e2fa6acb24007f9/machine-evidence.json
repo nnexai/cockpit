@@ -1,0 +1,130 @@
+{
+  "surface": [
+    "command menu"
+  ],
+  "route": "http://127.0.0.1:49372/",
+  "title": "Cockpit",
+  "activeElement": "button Commands",
+  "commandRegistry": [
+    "Commands",
+    "Files",
+    "Context",
+    "Review",
+    "FeedbackPanel"
+  ],
+  "runtimeIdentity": {
+    "runId": "atlas-exhaustive-r2-20260912",
+    "spaceIds": [
+      "w1",
+      "w2"
+    ],
+    "tabIds": [
+      "w1:t1",
+      "w1:t2",
+      "w2:t1",
+      "w2:t2"
+    ],
+    "paneIds": [
+      "w1:p1",
+      "w1:p2",
+      "w1:p3",
+      "w1:p4",
+      "w2:p1",
+      "w2:p2",
+      "w2:p3",
+      "w2:p4"
+    ],
+    "agentIds": [
+      "agent-alpha-review",
+      "agent-alpha-context",
+      "agent-beta-delivery",
+      "agent-beta-recovery"
+    ]
+  },
+  "states": [
+    {
+      "stateId": "before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:56:12.316Z",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-4e2fa6acb24007f9/before-4e2fa6acb24007f9-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "action-01",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:56:12.584Z",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-4e2fa6acb24007f9/action-01-4e2fa6acb24007f9-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:56:12.781Z",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-4e2fa6acb24007f9/after-4e2fa6acb24007f9-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:56:14.106Z",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-4e2fa6acb24007f9/before-4e2fa6acb24007f9-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "action-01",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:56:14.353Z",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-4e2fa6acb24007f9/action-01-4e2fa6acb24007f9-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:56:14.538Z",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu",
+        "actual Cockpit chrome visible"
+      ],
+      "artifactRefs": [
+        "evidence/r2-4e2fa6acb24007f9/after-4e2fa6acb24007f9-1024x640.png"
+      ],
+      "result": "PASS"
+    }
+  ]
+}

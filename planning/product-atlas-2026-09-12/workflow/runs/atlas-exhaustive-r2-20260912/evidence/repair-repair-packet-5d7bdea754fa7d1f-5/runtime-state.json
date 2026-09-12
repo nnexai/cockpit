@@ -1,0 +1,24 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-e3602c54ca486a8e",
+  "scenarioId": "annotation.tool-text-comment",
+  "surface": [
+    "page",
+    "capture",
+    "Review",
+    "FeedbackPanel"
+  ],
+  "surfaces": [
+    "page",
+    "capture",
+    "Review",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Choose + Text"
+  ]
+}

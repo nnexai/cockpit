@@ -1,0 +1,62 @@
+[
+  {
+    "action": "create_owned_fixture_root",
+    "actor": "atlas-fixture-lead",
+    "artifactRefs": [
+      "fixture/root.json"
+    ],
+    "at": "2026-09-12T10:00:22.716661Z",
+    "outcome": "acknowledged",
+    "sequence": 1,
+    "surface": "filesystem",
+    "target": "/tmp/atlas-20260912-fixture"
+  },
+  {
+    "action": "create_repository_status_fixtures",
+    "actor": "atlas-fixture-lead",
+    "artifactRefs": [
+      "fixture/repositories.json"
+    ],
+    "at": "2026-09-12T10:00:22.716672Z",
+    "outcome": "acknowledged",
+    "sequence": 2,
+    "surface": "git",
+    "target": "repo-orbit,repo-tide"
+  },
+  {
+    "action": "create_spaces_tabs_panes_agents",
+    "actor": "atlas-fixture-lead",
+    "artifactRefs": [
+      "fixture/topology.json"
+    ],
+    "at": "2026-09-12T10:00:22.716675Z",
+    "outcome": "acknowledged",
+    "sequence": 3,
+    "surface": "Herdr",
+    "target": "atlas-20260912-herdr"
+  },
+  {
+    "action": "create_context_feedback_delivery_prerequisites",
+    "actor": "atlas-fixture-lead",
+    "artifactRefs": [
+      "fixture/context.json"
+    ],
+    "at": "2026-09-12T10:00:22.716676Z",
+    "outcome": "acknowledged",
+    "sequence": 4,
+    "surface": "fixture-inputs",
+    "target": "context,sources,feedback,delivery"
+  },
+  {
+    "action": "open_owned_fixture_pages",
+    "actor": "atlas-fixture-lead",
+    "artifactRefs": [
+      "fixture/browser.json"
+    ],
+    "at": "2026-09-12T10:00:22.716677Z",
+    "outcome": "acknowledged",
+    "sequence": 5,
+    "surface": "browser",
+    "target": "atlas-20260912-browser-context"
+  }
+]

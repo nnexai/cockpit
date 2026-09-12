@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-326126255bad20b6",
+  "scenarioId": "extension.annotation-tools",
+  "surface": [
+    "browser-extension"
+  ],
+  "surfaces": [
+    "browser-extension"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "element-region-freehand"
+  ]
+}

@@ -1,0 +1,235 @@
+{
+  "manifest": {
+    "actionLog": [
+      {
+        "action": "repository-status",
+        "actor": "fixturecomplexityproof",
+        "artifactRefs": [
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/action-01-repository-status-1024x640.png",
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/action-01-repository-status-1440x900.png"
+        ],
+        "at": "2026-09-12T10:12:00+00:00",
+        "authorityRefs": [
+          "fixturecomplexityproof-d8643ac51016ad02-environment"
+        ],
+        "expectedAck": "fixture surface visible",
+        "inputs": {
+          "scenario": "environment.repository-status"
+        },
+        "observedAck": "fixture surface visible",
+        "outcome": "PASS",
+        "sequence": 1,
+        "stateChanging": true,
+        "surface": "environment",
+        "target": "Atlas fixture app"
+      }
+    ],
+    "artifacts": [
+      {
+        "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/action-01-repository-status-1024x640.png",
+        "provenance": "Owned Chrome headless capture of Atlas fixture app at configured viewport",
+        "runtimeClaim": true,
+        "scenarioId": "environment.repository-status",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/action-01-repository-status-1440x900.png",
+        "provenance": "Owned Chrome headless capture of Atlas fixture app at configured viewport",
+        "runtimeClaim": true,
+        "scenarioId": "environment.repository-status",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/after-repository-status-1024x640.png",
+        "provenance": "Owned Chrome headless capture of Atlas fixture app at configured viewport",
+        "runtimeClaim": true,
+        "scenarioId": "environment.repository-status",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/after-repository-status-1440x900.png",
+        "provenance": "Owned Chrome headless capture of Atlas fixture app at configured viewport",
+        "runtimeClaim": true,
+        "scenarioId": "environment.repository-status",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/before-repository-status-1024x640.png",
+        "provenance": "Owned Chrome headless capture of Atlas fixture app at configured viewport",
+        "runtimeClaim": true,
+        "scenarioId": "environment.repository-status",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/before-repository-status-1440x900.png",
+        "provenance": "Owned Chrome headless capture of Atlas fixture app at configured viewport",
+        "runtimeClaim": true,
+        "scenarioId": "environment.repository-status",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "fixturecomplexityproof-d8643ac51016ad02-environment",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "ownedResourceIds": [
+          "atlas-20260912-fixture",
+          "atlas-20260912-herdr",
+          "atlas-20260912-browser-profile",
+          "atlas-20260912-browser-context"
+        ],
+        "redaction": "none",
+        "sessionId": "atlas-20260912-fixturecomplexityproof",
+        "sha256": "35af0b8df6f99b3b68a15320fcdea243d2000be9df389836cad6fbbf3b030a2f",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "35af0b8df6f99b3b68a15320fcdea243d2000be9df389836cad6fbbf3b030a2f",
+        "surface": "environment"
+      },
+      {
+        "authorityId": "fixturecomplexityproof-d8643ac51016ad02-browser",
+        "capturedAt": "2026-09-12T10:12:00+00:00",
+        "ownedResourceIds": [
+          "atlas-20260912-fixture",
+          "atlas-20260912-herdr",
+          "atlas-20260912-browser-profile",
+          "atlas-20260912-browser-context"
+        ],
+        "redaction": "none",
+        "sessionId": "atlas-20260912-fixturecomplexityproof",
+        "sha256": "e1ec515b21ed94ec6a4aa1659ba13aaa965a84c2cbc5f24634ef1cb50f62e7c0",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "e1ec515b21ed94ec6a4aa1659ba13aaa965a84c2cbc5f24634ef1cb50f62e7c0",
+        "surface": "browser"
+      }
+    ],
+    "browserProfile": {
+      "id": "atlas-20260912-fixturecomplexityproof-profile",
+      "path": "/tmp/atlas-20260912-fixturecomplexityproof-profile"
+    },
+    "captureId": "fixturecomplexityproof-d8643ac51016ad02",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "proof": "Owned disposable browser profile closed after capture; fixture resources retained by fixture owner.",
+      "residuals": [],
+      "resources": [
+        "atlas-20260912-fixturecomplexityproof-profile"
+      ]
+    },
+    "disposableSession": {
+      "isolated": true,
+      "owner": "fixturecomplexityproof",
+      "sessionId": "atlas-20260912-fixturecomplexityproof"
+    },
+    "finishedAt": "2026-09-12T10:12:00+00:00",
+    "fixtureIdentity": {
+      "owner": "atlas-20260912-fixture",
+      "resourceNamespace": "atlas-20260912-fixture"
+    },
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "fixture",
+      "owner": "fixturecomplexityproof",
+      "runId": "atlas-exhaustive-20260912"
+    },
+    "scenarioId": "environment.repository-status",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:12:00+00:00",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/before-repository-status-1024x640.png",
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/before-repository-status-1440x900.png"
+        ],
+        "authorityRefs": [
+          "fixturecomplexityproof-d8643ac51016ad02-environment",
+          "fixturecomplexityproof-d8643ac51016ad02-browser"
+        ],
+        "observedAt": "2026-09-12T10:12:00+00:00",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "fixturecomplexityproof-d8643ac51016ad02-before",
+        "surface": "environment",
+        "visibleAssertions": [
+          "environment.repository-status asserted fixture state visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/action-01-repository-status-1024x640.png",
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/action-01-repository-status-1440x900.png"
+        ],
+        "authorityRefs": [
+          "fixturecomplexityproof-d8643ac51016ad02-environment",
+          "fixturecomplexityproof-d8643ac51016ad02-browser"
+        ],
+        "observedAt": "2026-09-12T10:12:00+00:00",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "fixturecomplexityproof-d8643ac51016ad02-action",
+        "surface": "environment",
+        "visibleAssertions": [
+          "environment.repository-status asserted fixture state visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/after-repository-status-1024x640.png",
+          "evidence/fixturecomplexityproof/fixturecomplexityproof-d8643ac51016ad02/after-repository-status-1440x900.png"
+        ],
+        "authorityRefs": [
+          "fixturecomplexityproof-d8643ac51016ad02-environment",
+          "fixturecomplexityproof-d8643ac51016ad02-browser"
+        ],
+        "observedAt": "2026-09-12T10:12:00+00:00",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "fixturecomplexityproof-d8643ac51016ad02-after",
+        "surface": "environment",
+        "visibleAssertions": [
+          "environment.repository-status asserted fixture state visible"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "width": 1024
+      }
+    ]
+  }
+}

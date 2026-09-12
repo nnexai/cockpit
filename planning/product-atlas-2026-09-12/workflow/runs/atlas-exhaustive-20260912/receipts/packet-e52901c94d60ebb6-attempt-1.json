@@ -1,0 +1,260 @@
+{
+  "manifest": {
+    "actionLog": [
+      {
+        "action": "Execute assigned packet action variants and recovery paths",
+        "actor": "extensioncapturefeedback",
+        "artifactRefs": [
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-compact-1024x640.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-compact-1024x640.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-compact-1024x640.png"
+        ],
+        "at": "2026-09-12T10:06:33.524171+00:00",
+        "authorityRefs": [
+          "auth-4d60ebb6br",
+          "auth-4d60ebb6fi"
+        ],
+        "expectedAck": "Observe actual extension and Cockpit state",
+        "inputs": {
+          "packetId": "packet-e52901c94d60ebb6",
+          "viewports": [
+            "1440x900",
+            "1024x640"
+          ]
+        },
+        "observedAck": "Popup/content verification failed; no disposable Cockpit/Herdr pairing provider available",
+        "outcome": "INCONCLUSIVE",
+        "sequence": 1,
+        "surface": "browser-extension",
+        "target": "feedback.browser-pending-overview"
+      }
+    ],
+    "artifacts": [
+      {
+        "captureId": "cap-e52901c94d60ebb6",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-view-1440x900.png",
+        "provenance": "Owned disposable browser fixture capture; retained raw diagnostic surface.",
+        "runtimeClaim": true,
+        "scenarioId": "feedback.browser-pending-overview",
+        "sha256": "ba095ae2c0a2d97e0ebe2d0996bf045f7955ec40537f6a05931d11cdd47f6529",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cap-e52901c94d60ebb6",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-view-1440x900.png",
+        "provenance": "Owned disposable browser fixture capture; retained raw diagnostic surface.",
+        "runtimeClaim": true,
+        "scenarioId": "feedback.browser-pending-overview",
+        "sha256": "ba095ae2c0a2d97e0ebe2d0996bf045f7955ec40537f6a05931d11cdd47f6529",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cap-e52901c94d60ebb6",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-view-1440x900.png",
+        "provenance": "Owned disposable browser fixture capture; retained raw diagnostic surface.",
+        "runtimeClaim": true,
+        "scenarioId": "feedback.browser-pending-overview",
+        "sha256": "ba095ae2c0a2d97e0ebe2d0996bf045f7955ec40537f6a05931d11cdd47f6529",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cap-e52901c94d60ebb6",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-compact-1024x640.png",
+        "provenance": "Owned disposable browser fixture capture; retained raw diagnostic surface.",
+        "runtimeClaim": true,
+        "scenarioId": "feedback.browser-pending-overview",
+        "sha256": "67f5dd87a3848c3e7d6eec1fd3856333f52ea4638a7b115d924aa4f8edb43baa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cap-e52901c94d60ebb6",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-compact-1024x640.png",
+        "provenance": "Owned disposable browser fixture capture; retained raw diagnostic surface.",
+        "runtimeClaim": true,
+        "scenarioId": "feedback.browser-pending-overview",
+        "sha256": "67f5dd87a3848c3e7d6eec1fd3856333f52ea4638a7b115d924aa4f8edb43baa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cap-e52901c94d60ebb6",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-compact-1024x640.png",
+        "provenance": "Owned disposable browser fixture capture; retained raw diagnostic surface.",
+        "runtimeClaim": true,
+        "scenarioId": "feedback.browser-pending-overview",
+        "sha256": "67f5dd87a3848c3e7d6eec1fd3856333f52ea4638a7b115d924aa4f8edb43baa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "attempts": 2,
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-4d60ebb6br",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "ownedResourceIds": [
+          "atlas-20260912-browser-extensioncapturefeedback"
+        ],
+        "redaction": "No secrets or protected resources.",
+        "sessionId": "atlas-20260912-herdr-extensioncapturefeedback",
+        "sha256": "40e26c7d00687a95f400bb568256b1700da4fc206145b4352cfd49340e0211d0",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "c48b5c3ab826601752aafaa7fd5f1b010b17048e50595da241f55bfd71b348be",
+        "surface": "browser-extension"
+      },
+      {
+        "authorityId": "auth-4d60ebb6fi",
+        "capturedAt": "2026-09-12T10:06:33.524171+00:00",
+        "ownedResourceIds": [
+          "atlas-20260912-browser-extensioncapturefeedback"
+        ],
+        "redaction": "No secrets or protected resources.",
+        "sessionId": "atlas-20260912-herdr-extensioncapturefeedback",
+        "sha256": "ce51d80f4a62464837786852244f1f570ec8e9b71354a2d68410d264da52890f",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "e3d075c0b8d9d60ab8e643ae30c085f241c0e78c672ae907c8d3e342d21cb761",
+        "surface": "fixture-page"
+      }
+    ],
+    "blocker": "Extension popup/content verification failed (ERR_FILE_NOT_FOUND) and no disposable Cockpit/Herdr pairing provider was available after named retries.",
+    "browserProfile": "atlas-20260912-browser-profile-extensioncapturefeedback",
+    "captureId": "cap-e52901c94d60ebb6",
+    "cleanup": {
+      "actions": [
+        "Retained evidence under owned run artifact root; no foreign resources touched."
+      ],
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "diagnostics": [
+      {
+        "at": "2026-09-12T10:06:33.524171+00:00",
+        "attempts": 2,
+        "category": "capability-unavailable",
+        "diagnosticId": "diag-4d60ebb6",
+        "environmentRefs": [
+          "planning/product-atlas-2026-09-12/workflow/environment.json"
+        ],
+        "lastKnownState": "Owned fixture page and extension worker observed; no popup surface.",
+        "logsOrTraceRefs": [
+          "planning/product-atlas-2026-09-12/runtime/browser-extension/actions.log"
+        ],
+        "nextStep": "Provide working popup/content runtime and disposable pairing provider.",
+        "ownershipImpact": "None; protected resources untouched.",
+        "resolved": false,
+        "screenshotsRefs": [
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-compact-1024x640.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-compact-1024x640.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-compact-1024x640.png"
+        ],
+        "symptom": "Popup/content verification failed and pairing provider unavailable."
+      }
+    ],
+    "disposableSession": "atlas-20260912-herdr-extensioncapturefeedback",
+    "finishedAt": "2026-09-12T10:06:33.524171+00:00",
+    "fixtureIdentity": {
+      "root": "atlas-20260912-fixture",
+      "tab": "atlas-fixture-app",
+      "url": "http://127.0.0.1:8765/"
+    },
+    "result": "INCONCLUSIVE",
+    "runtimeIdentity": {
+      "lane": "browser-extension",
+      "owner": "extensioncapturefeedback",
+      "runId": "atlas-exhaustive-20260912"
+    },
+    "scenarioId": "feedback.browser-pending-overview",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:06:33.524171+00:00",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/before-compact-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-4d60ebb6br",
+          "auth-4d60ebb6fi"
+        ],
+        "observedAt": "2026-09-12T10:06:33.524171+00:00",
+        "phase": "before",
+        "result": "INCONCLUSIVE",
+        "stateId": "cap-e52901c94d60ebb6-before",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned disposable fixture surface identity retained."
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/action-01-compact-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-4d60ebb6br",
+          "auth-4d60ebb6fi"
+        ],
+        "observedAt": "2026-09-12T10:06:33.524171+00:00",
+        "phase": "action",
+        "result": "INCONCLUSIVE",
+        "stateId": "cap-e52901c94d60ebb6-action",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned fixture surface observed; live extension/provider capability unavailable."
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-view-1440x900.png",
+          "evidence/extensioncapturefeedback/cap-e52901c94d60ebb6/after-compact-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-4d60ebb6br",
+          "auth-4d60ebb6fi"
+        ],
+        "observedAt": "2026-09-12T10:06:33.524171+00:00",
+        "phase": "after",
+        "result": "INCONCLUSIVE",
+        "stateId": "cap-e52901c94d60ebb6-after",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned disposable fixture surface identity retained."
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "width": 1024
+      }
+    ]
+  },
+  "packetId": "packet-e52901c94d60ebb6"
+}

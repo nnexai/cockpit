@@ -1,0 +1,22 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-5258f369802c6f94",
+  "scenarioId": "capture.visible-tab-save",
+  "surface": [
+    "capture",
+    "popup",
+    "FeedbackPanel"
+  ],
+  "surfaces": [
+    "capture",
+    "popup",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Capture from overlay"
+  ]
+}

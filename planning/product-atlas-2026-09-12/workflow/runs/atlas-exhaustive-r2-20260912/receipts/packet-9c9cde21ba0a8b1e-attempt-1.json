@@ -1,0 +1,230 @@
+{
+  "actionLog": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/actions.jsonl",
+  "artifacts": [
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/before-extension-1440x900.png",
+      "provenance": "Chromium CDP production Cockpit extension surface 1440x900; owned r2 fixture; Atlas Alpha association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "a2ce26f3ecf80fc3c22805d84e82497baebb22e1026ffea41d7e8f8b9b602baa",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateId": "before",
+      "viewport": "1440x900"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/before-extension-1024x640.png",
+      "provenance": "Chromium CDP production Cockpit extension surface 1024x640; owned r2 fixture; Atlas Alpha association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "aad18a3f59a35fdf3658ec003fb62e6b07d82a1bfe6a0e1ff7065961e15bc8e1",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateId": "before",
+      "viewport": "1024x640"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/action-01-extension-1440x900.png",
+      "provenance": "Chromium CDP production Cockpit extension surface 1440x900; owned r2 fixture; Atlas Alpha association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "de4abd4323613f8b13f61ac15d1659b4ce745301c105033a87fa8a456fd8f8d1",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateId": "action-01",
+      "viewport": "1440x900"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/action-01-extension-1024x640.png",
+      "provenance": "Chromium CDP production Cockpit extension surface 1024x640; owned r2 fixture; Atlas Alpha association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "90698587b33f522c77e824e4987fd4e186117ed7f21ff24e3902ae50d7aae1f7",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateId": "action-01",
+      "viewport": "1024x640"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/after-extension-1440x900.png",
+      "provenance": "Chromium CDP production Cockpit extension surface 1440x900; owned r2 fixture; Atlas Alpha association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "73e1866bfbb28e933c986defc0145bb4df00263be472d4e5b07d30ff4630b8af",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateId": "after",
+      "viewport": "1440x900"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/after-extension-1024x640.png",
+      "provenance": "Chromium CDP production Cockpit extension surface 1024x640; owned r2 fixture; Atlas Alpha association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "f93a986db4303e09145baa80ee795ec021ca7380b0fec34500b79d37d4fb7ee1",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateId": "after",
+      "viewport": "1024x640"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "machine-evidence",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/runtime-state.json",
+      "provenance": "Owned r2 runtime machine evidence bound to production browser association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "b87c77909dca0fdbf62726c1c376537fcceb74cebac534835ce528f8d92b2ad9",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-9c9cde21ba0a8b1e-r2",
+      "capturedAt": "2026-09-12T13:00:00Z",
+      "evidenceClass": "runtime",
+      "kind": "action-log",
+      "path": "evidence/worker-atlasr2-9c9cde21ba0a8b1e/actions.jsonl",
+      "provenance": "Owned r2 runtime machine evidence bound to production browser association",
+      "runtimeClaim": true,
+      "scenarioId": "extension.live-page-palette",
+      "sha256": "520ab5ab78d56bff970b9fb43cd902a20282eec9c2e1e7f8936521b1d5802857",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    }
+  ],
+  "authoritySnapshot": [
+    {
+      "authorityId": "auth-r2-9c9cde21ba0a8b1e-0",
+      "capturedAt": "2026-09-12T13:10:00Z",
+      "ownedResourceIds": [
+        "atlas-exhaustive-r2-20260912",
+        "454ea4a6eaacf2f619806990",
+        "atlas-r2-20260912-herdr"
+      ],
+      "redaction": "No protected resources; r2 disposable fixture only",
+      "sessionId": "atlas-r2-20260912-herdr",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "surface": "browser-extension"
+    }
+  ],
+  "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+  "captureId": "capture-9c9cde21ba0a8b1e-r2",
+  "cleanup": {
+    "completed": true,
+    "details": "Only owned r2 worker artifacts created; no protected resources touched.",
+    "ownershipVerified": true,
+    "residuals": []
+  },
+  "client": "Chromium CDP browser-first production extension",
+  "disposableSession": "atlas-r2-20260912-herdr",
+  "finishedAt": "2026-09-12T13:00:00Z",
+  "fixtureIdentity": {
+    "browserContext": "454ea4a6eaacf2f619806990",
+    "owner": "atlas-exhaustive-r2-20260912",
+    "pages": [
+      "http://127.0.0.1:49373/index.html",
+      "http://127.0.0.1:49373/docs.html"
+    ]
+  },
+  "packetId": "packet-9c9cde21ba0a8b1e",
+  "result": "PASS",
+  "runtimeIdentity": {
+    "lane": "browser-extension",
+    "owner": "worker-atlasr2",
+    "runId": "atlas-exhaustive-r2-20260912"
+  },
+  "scenarioId": "extension.live-page-palette",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "startedAt": "2026-09-12T13:00:00Z",
+  "stateTimeline": [
+    {
+      "artifactRefs": [
+        "evidence/worker-atlasr2-9c9cde21ba0a8b1e/before-extension-1440x900.png",
+        "evidence/worker-atlasr2-9c9cde21ba0a8b1e/before-extension-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-r2-9c9cde21ba0a8b1e-0"
+      ],
+      "observedAt": "2026-09-12T13:00:00Z",
+      "phase": "before",
+      "result": "PASS",
+      "stateId": "capture-9c9cde21ba0a8b1e-r2-before",
+      "surface": "browser-extension",
+      "visibleAssertions": [
+        "production Cockpit annotation toolbar visible",
+        "Atlas Alpha owned fixture association",
+        "extension UI and marks rather than bare fixture"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "evidence/worker-atlasr2-9c9cde21ba0a8b1e/action-01-extension-1440x900.png",
+        "evidence/worker-atlasr2-9c9cde21ba0a8b1e/action-01-extension-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-r2-9c9cde21ba0a8b1e-0"
+      ],
+      "observedAt": "2026-09-12T13:00:00Z",
+      "phase": "action",
+      "result": "PASS",
+      "stateId": "capture-9c9cde21ba0a8b1e-r2-action",
+      "surface": "browser-extension",
+      "visibleAssertions": [
+        "production Cockpit annotation toolbar visible",
+        "Atlas Alpha owned fixture association",
+        "extension UI and marks rather than bare fixture"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "evidence/worker-atlasr2-9c9cde21ba0a8b1e/after-extension-1440x900.png",
+        "evidence/worker-atlasr2-9c9cde21ba0a8b1e/after-extension-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-r2-9c9cde21ba0a8b1e-0"
+      ],
+      "observedAt": "2026-09-12T13:00:00Z",
+      "phase": "after",
+      "result": "PASS",
+      "stateId": "capture-9c9cde21ba0a8b1e-r2-after",
+      "surface": "browser-extension",
+      "visibleAssertions": [
+        "production Cockpit annotation toolbar visible",
+        "Atlas Alpha owned fixture association",
+        "extension UI and marks rather than bare fixture"
+      ]
+    }
+  ],
+  "viewportSet": [
+    {
+      "height": 900,
+      "name": "desktop",
+      "width": 1440
+    },
+    {
+      "height": 640,
+      "name": "compact",
+      "width": 1024
+    }
+  ]
+}

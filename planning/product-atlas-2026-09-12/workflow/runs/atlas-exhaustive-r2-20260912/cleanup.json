@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "runId": "atlas-exhaustive-r2-20260912",
+  "capturedAt": "2026-09-12T11:25:00Z",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "cleanupOwner": "AtlasRepairLead",
+  "ownedResources": [
+    {
+      "id": "atlasr2-cockpit-gateway",
+      "kind": "Cockpit gateway service",
+      "action": "Stopped through named process owner",
+      "result": "PASS",
+      "detail": "Exited 0"
+    },
+    {
+      "id": "atlasr2-fixture-pages",
+      "kind": "Fixture HTTP server",
+      "action": "Stopped through named process owner",
+      "result": "PASS",
+      "detail": "Exited 143 after stop request"
+    },
+    {
+      "id": "atlasr2-herdr",
+      "kind": "Herdr service/session",
+      "action": "Stopped through named process owner",
+      "result": "PASS",
+      "detail": "Exited 1 after stop request"
+    },
+    {
+      "id": "cockpit-454ea4a6eaacf2f619806990",
+      "kind": "Playwright browser session",
+      "action": "Closed through named Playwright session",
+      "result": "PASS"
+    },
+    {
+      "id": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+      "kind": "Disposable browser profile",
+      "action": "Removed with owned disposable root",
+      "result": "PASS"
+    },
+    {
+      "id": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/workspaces/454ea4a6eaacf2f619806990",
+      "kind": "Disposable browser workspace",
+      "action": "Removed with owned disposable root",
+      "result": "PASS"
+    },
+    {
+      "id": "/tmp/atlas-exhaustive-r2-20260912",
+      "kind": "Owned disposable runtime root",
+      "action": "Removed after all captures and validation",
+      "result": "PASS"
+    }
+  ],
+  "residuals": [],
+  "protectedResourcesTouched": false,
+  "ownershipVerified": true,
+  "result": "PASS"
+}

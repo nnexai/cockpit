@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-0d40f47453b89324",
+  "scenarioId": "extension.feedback-save-ack",
+  "surface": [
+    "browser-extension"
+  ],
+  "surfaces": [
+    "browser-extension"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "selective-ack"
+  ]
+}

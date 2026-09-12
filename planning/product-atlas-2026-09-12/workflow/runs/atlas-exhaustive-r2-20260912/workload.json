@@ -1,0 +1,3735 @@
+{
+  "packetCount": 57,
+  "packets": [
+    {
+      "actions": [
+        "Select each mark",
+        "Edit comment",
+        "Review positions after layout movement",
+        "Remove selected mark",
+        "Remove all marks one-by-one"
+      ],
+      "cellId": "annotation.mark-remove-review",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-review-feedbackpanel",
+        "pane",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "feedbackpanel",
+        "page",
+        "review"
+      ],
+      "key": "annotation.mark-remove-review",
+      "lane": "browser-extension",
+      "packetId": "packet-dffaaa1aacf942f5",
+      "phase": "capture-lanes",
+      "proof": [
+        "Selection is visibly outlined",
+        "Review identifies aligned/misaligned marks",
+        "Remove disables when nothing is selected and removes only selected mark"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "annotation.mark-remove-review",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-review-feedbackpanel",
+        "pane",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "page",
+        "Review",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Select Annotate",
+        "Select Browse",
+        "Scroll/click in Browse",
+        "Switch modes while a draft mark exists"
+      ],
+      "cellId": "annotation.page-browse-annotate-mode",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-feedbackpanel",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "feedbackpanel",
+        "page"
+      ],
+      "key": "annotation.page-browse-annotate-mode",
+      "lane": "browser-extension",
+      "packetId": "packet-4e4b0716032aec2d",
+      "phase": "capture-lanes",
+      "proof": [
+        "Toolbar announces current mode",
+        "Annotate captures pointer input",
+        "Browse passes page pointer/scroll through and does not create marks",
+        "Draft marks remain attached to the same document"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "annotation.page-browse-annotate-mode",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-feedbackpanel",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "page",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Pick heading",
+        "Pick button",
+        "Comment selected element",
+        "Navigate/resize then review anchor"
+      ],
+      "cellId": "annotation.tool-element-anchor",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "fixture-page",
+        "page",
+        "page-capture-context-review",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "capture",
+        "context",
+        "page",
+        "review"
+      ],
+      "key": "annotation.tool-element-anchor",
+      "lane": "browser-extension",
+      "packetId": "packet-f08be8b63fb0bbe8",
+      "phase": "capture-lanes",
+      "proof": [
+        "Selected element is visibly marked",
+        "Comment is positioned without intercepting page controls",
+        "Review resolves locator or clearly reports stale anchor"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "annotation.tool-element-anchor",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "fixture-page",
+        "page",
+        "page-capture-context-review",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources"
+      ],
+      "surfaces": [
+        "page",
+        "capture",
+        "Context",
+        "Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Draw short stroke",
+        "Draw long stroke near point cap",
+        "Enter comment",
+        "Enter multiline comment with Shift+Enter",
+        "Finish without comment"
+      ],
+      "cellId": "annotation.tool-freehand-comment",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-capture-feedbackpanel",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "capture",
+        "feedbackpanel",
+        "page"
+      ],
+      "key": "annotation.tool-freehand-comment",
+      "lane": "browser-extension",
+      "packetId": "packet-6843dfe80ac135c4",
+      "phase": "capture-lanes",
+      "proof": [
+        "Red freehand mark follows pointer",
+        "Editor opens and accepts up to 4000 characters",
+        "Done commits visible mark and comment",
+        "Empty comment remains a valid mark"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "annotation.tool-freehand-comment",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-capture-feedbackpanel",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "page",
+        "capture",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Drag region left-to-right",
+        "Drag right-to-left",
+        "Drag tiny region",
+        "Add comment and edit it"
+      ],
+      "cellId": "annotation.tool-region-comment",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "fixture-page",
+        "page",
+        "page-capture-review",
+        "review",
+        "review-setup",
+        "reviewsetup"
+      ],
+      "expectedSurfaceTypes": [
+        "capture",
+        "page",
+        "review"
+      ],
+      "key": "annotation.tool-region-comment",
+      "lane": "browser-extension",
+      "packetId": "packet-d181bfdbd28e3334",
+      "phase": "capture-lanes",
+      "proof": [
+        "Region fill/border matches selected bounds",
+        "Comment editor targets region",
+        "Review displays region geometry and editable comment"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "annotation.tool-region-comment",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "fixture-page",
+        "page",
+        "page-capture-review",
+        "review",
+        "review-setup",
+        "reviewsetup"
+      ],
+      "surfaces": [
+        "page",
+        "capture",
+        "Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Choose + Text",
+        "Place text at empty page point",
+        "Enter text and commit",
+        "Cancel text editor",
+        "Edit committed text"
+      ],
+      "cellId": "annotation.tool-text-comment",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-capture-review-feedbackpanel",
+        "pane",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "capture",
+        "feedbackpanel",
+        "page",
+        "review"
+      ],
+      "key": "annotation.tool-text-comment",
+      "lane": "browser-extension",
+      "packetId": "packet-e3602c54ca486a8e",
+      "phase": "capture-lanes",
+      "proof": [
+        "Text editor opens at the chosen page point",
+        "Committed text is visible and remains attached to document coordinates",
+        "Cancel creates no annotation",
+        "FeedbackPanel shows text annotation summary"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "annotation.tool-text-comment",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "page-capture-review-feedbackpanel",
+        "pane",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "page",
+        "capture",
+        "Review",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "edit-delete"
+      ],
+      "cellId": "edit-delete",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.annotation-edit-delete.edit-delete",
+      "lane": "browser-extension",
+      "packetId": "packet-e151b0ef69698f4c",
+      "phase": "capture-lanes",
+      "proof": [
+        "before/after annotation IDs and kinds",
+        "document_id and draft storage diff",
+        "remove/edit acknowledgements"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.annotation-edit-delete",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "element-region-freehand"
+      ],
+      "cellId": "element-region-freehand",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.annotation-tools.element-region-freehand",
+      "lane": "browser-extension",
+      "packetId": "packet-326126255bad20b6",
+      "phase": "capture-lanes",
+      "proof": [
+        "annotations array kinds element/region/freehand",
+        "anchors/bounds/points and document_id",
+        "pointer event completion"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.annotation-tools",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "text-editor"
+      ],
+      "cellId": "text-editor",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.annotation-tools.text-editor",
+      "lane": "browser-extension",
+      "packetId": "packet-9fbd4b285eeb9ee1",
+      "phase": "capture-lanes",
+      "proof": [
+        "editor value and annotation comment",
+        "draft storage record keyed by tab_id/document_id",
+        "save response"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.annotation-tools",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "capture-failure-retains"
+      ],
+      "cellId": "capture-failure-retains",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.capture-image.capture-failure-retains",
+      "lane": "browser-extension",
+      "packetId": "packet-85f9fb5ae272c0e9",
+      "phase": "capture-lanes",
+      "proof": [
+        "error class/message",
+        "draft annotations still present",
+        "pending capture state"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.capture-image",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "capture-success"
+      ],
+      "cellId": "capture-success",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.capture-image.capture-success",
+      "lane": "browser-extension",
+      "packetId": "packet-1c8d0858a278ccd7",
+      "phase": "capture-lanes",
+      "proof": [
+        "capture response/id/sha256/byte size",
+        "tab/url/document_id before and after",
+        "storage pending/draft record",
+        "PNG dimensions and decoded pixels"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.capture-image",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "eligible-direct-send"
+      ],
+      "cellId": "eligible-direct-send",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.direct-delivery-targets.eligible-direct-send",
+      "lane": "browser-extension",
+      "packetId": "packet-c121c4917e334ffe",
+      "phase": "capture-lanes",
+      "proof": [
+        "selected annotation IDs",
+        "Space/tab/pane/agent identity",
+        "paste length and submitted-turn receipt",
+        "pending count transition"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.direct-delivery-targets",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "ineligible-or-wrong-space"
+      ],
+      "cellId": "ineligible-or-wrong-space",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.direct-delivery-targets.ineligible-or-wrong-space",
+      "lane": "browser-extension",
+      "packetId": "packet-87f3c51f7457f975",
+      "phase": "capture-lanes",
+      "proof": [
+        "target eligibility and active Space",
+        "no-fallback assertion across all tabs",
+        "capture remains pending"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.direct-delivery-targets",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "rejected-unknown"
+      ],
+      "cellId": "rejected-unknown",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.direct-delivery-targets.rejected-unknown",
+      "lane": "browser-extension",
+      "packetId": "packet-62d1b94a6880d131",
+      "phase": "capture-lanes",
+      "proof": [
+        "OutcomeRejected/OutcomeUnknown receipt",
+        "artifact hash and retention expiry",
+        "retry attempts count exactly one"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.direct-delivery-targets",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "pending-overview"
+      ],
+      "cellId": "pending-overview",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.feedback-save-ack.pending-overview",
+      "lane": "browser-extension",
+      "packetId": "packet-2f84d3c637135e80",
+      "phase": "capture-lanes",
+      "proof": [
+        "pending IDs/count from API/store",
+        "image URLs and SHA-256",
+        "active Space/tab target"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.feedback-save-ack",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "selective-ack"
+      ],
+      "cellId": "selective-ack",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.feedback-save-ack.selective-ack",
+      "lane": "browser-extension",
+      "packetId": "packet-0d40f47453b89324",
+      "phase": "capture-lanes",
+      "proof": [
+        "ack request ID/result",
+        "pending set before/after",
+        "image file existence and retention timestamp"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.feedback-save-ack",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "movement-review"
+      ],
+      "cellId": "movement-review",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.live-page-palette.movement-review",
+      "lane": "browser-extension",
+      "packetId": "packet-9c9cde21ba0a8b1e",
+      "phase": "capture-lanes",
+      "proof": [
+        "scroll/viewport/devicePixelRatio",
+        "alignmentDirty/alignmentReason state",
+        "Review response and document_id"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.live-page-palette",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "palette-and-browse"
+      ],
+      "cellId": "palette-and-browse",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.live-page-palette.palette-and-browse",
+      "lane": "browser-extension",
+      "packetId": "packet-3196a8327008d46c",
+      "phase": "capture-lanes",
+      "proof": [
+        "shadow DOM controls and mode value",
+        "page click event target/count",
+        "annotation list unchanged in Browse"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.live-page-palette",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "connected-popup"
+      ],
+      "cellId": "connected-popup",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.load-popup-connection.connected-popup",
+      "lane": "browser-extension",
+      "packetId": "packet-0cede94998f18968",
+      "phase": "capture-lanes",
+      "proof": [
+        "popup DOM #connection=#Connected",
+        "context response with pairing source_version/association_key",
+        "tabs queried and selected tab id/url/document_id"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.load-popup-connection",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "reconnect-space-switch"
+      ],
+      "cellId": "reconnect-space-switch",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.load-popup-connection.reconnect-space-switch",
+      "lane": "browser-extension",
+      "packetId": "packet-02780ae270749c1b",
+      "phase": "capture-lanes",
+      "proof": [
+        "reconnect response",
+        "active Space identity",
+        "no protected session touched"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.load-popup-connection",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "reload-stale"
+      ],
+      "cellId": "reload-stale",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.stale-navigation-reload.reload-stale",
+      "lane": "browser-extension",
+      "packetId": "packet-7ccf625c0ccc51ff",
+      "phase": "capture-lanes",
+      "proof": [
+        "old/new document_id and URL",
+        "tabs.onUpdated events",
+        "draft records stale=true keyed by old identity"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.stale-navigation-reload",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "submission-after-close"
+      ],
+      "cellId": "submission-after-close",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-extension"
+      ],
+      "key": "browser.extension.stale-navigation-reload.submission-after-close",
+      "lane": "browser-extension",
+      "packetId": "packet-684675e85ac06b53",
+      "phase": "capture-lanes",
+      "proof": [
+        "captured PNG hash",
+        "submission receipt/error and retry token",
+        "no automatic second paste"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "extension.stale-navigation-reload",
+      "source": "browser-extension",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ],
+      "surfaces": [
+        "browser-extension"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Capture from overlay",
+        "Capture from popup",
+        "Capture after page scroll",
+        "Capture at both required viewports"
+      ],
+      "cellId": "capture.visible-tab-save",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "capture-popup-feedbackpanel",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "capture",
+        "feedbackpanel",
+        "popup"
+      ],
+      "key": "capture.visible-tab-save",
+      "lane": "browser-extension",
+      "packetId": "packet-5258f369802c6f94",
+      "phase": "capture-lanes",
+      "proof": [
+        "Capture button enters busy state",
+        "PNG is saved with annotation IDs",
+        "Popup shows saved status and pending count decreases"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "capture.visible-tab-save",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "capture-popup-feedbackpanel",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "capture",
+        "popup",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Submit eligible delivery, wait for receipt, then verify ineligible target remains blocked"
+      ],
+      "cellId": "deliver",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "annotation",
+        "annotation-rendering-and-paste-delivery",
+        "delivery",
+        "paste",
+        "rendering"
+      ],
+      "expectedSurfaceTypes": [
+        "annotation-rendering-and-paste-delivery"
+      ],
+      "key": "cockpit.annotation-paste-delivery.deliver",
+      "lane": "setup-context-review",
+      "packetId": "packet-6eb9ee688f689727",
+      "phase": "capture-lanes",
+      "proof": "Screenshots capture submit/progress/success/block/error at both sizes; machine evidence includes idempotency key, request/response, receipt, target eligibility and final state.",
+      "retryBudget": 2,
+      "scenarioId": "annotation-paste-delivery",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "annotation",
+        "annotation-rendering-and-paste-delivery",
+        "delivery",
+        "paste",
+        "rendering"
+      ],
+      "surfaces": [
+        "annotation rendering and paste/delivery"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Choose eligible target, open paste/delivery preview, copy/paste rendered annotated content, then cancel preview"
+      ],
+      "cellId": "paste-preview",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "annotation",
+        "annotation-rendering-and-paste-delivery",
+        "delivery",
+        "paste",
+        "rendering"
+      ],
+      "expectedSurfaceTypes": [
+        "annotation-rendering-and-paste-delivery"
+      ],
+      "key": "cockpit.annotation-paste-delivery.paste-preview",
+      "lane": "setup-context-review",
+      "packetId": "packet-83da8140e5c4b37b",
+      "phase": "capture-lanes",
+      "proof": "Capture preview, clipboard/paste result, and cancelled state at both sizes; machine evidence records target eligibility, payload hash, clipboard permission/error, and no-submit receipt.",
+      "retryBudget": 2,
+      "scenarioId": "annotation-paste-delivery",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "annotation",
+        "annotation-rendering-and-paste-delivery",
+        "delivery",
+        "paste",
+        "rendering"
+      ],
+      "surfaces": [
+        "annotation rendering and paste/delivery"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Render annotations in Files and Review, hover/focus callouts, toggle visibility, inspect long and empty ranges"
+      ],
+      "cellId": "render-annotations",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "annotation",
+        "annotation-rendering-and-paste-delivery",
+        "delivery",
+        "paste",
+        "rendering"
+      ],
+      "expectedSurfaceTypes": [
+        "annotation-rendering-and-paste-delivery"
+      ],
+      "key": "cockpit.annotation-paste-delivery.render-annotations",
+      "lane": "setup-context-review",
+      "packetId": "packet-e3ddd2156938f409",
+      "phase": "capture-lanes",
+      "proof": "Capture unannotated plus annotated screenshots at both sizes, including hover/focus and overflow; machine evidence maps each callout to source identity/range and renderer diagnostics.",
+      "retryBudget": 2,
+      "scenarioId": "annotation-paste-delivery",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "annotation",
+        "annotation-rendering-and-paste-delivery",
+        "delivery",
+        "paste",
+        "rendering"
+      ],
+      "surfaces": [
+        "annotation rendering and paste/delivery"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open browser feedback overview, inspect pending item, filter by status, open detail"
+      ],
+      "cellId": "feedback-open",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-feedback",
+        "browser-feedback-overview",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "overview",
+        "page"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-feedback-overview"
+      ],
+      "key": "cockpit.browser-feedback-overview.feedback-open",
+      "lane": "setup-context-review",
+      "packetId": "packet-11e232e13ce2babc",
+      "phase": "capture-lanes",
+      "proof": "Screenshots at both sizes show count/filter/detail and connection state; machine evidence records extension/session IDs, feedback ID, URL, and events.",
+      "retryBudget": 2,
+      "scenarioId": "browser-feedback-overview",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-feedback",
+        "browser-feedback-overview",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "overview",
+        "page"
+      ],
+      "surfaces": [
+        "browser feedback overview"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Acknowledge/resolve pending feedback, cancel a second action, then verify overview count"
+      ],
+      "cellId": "feedback-resolve",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "browser-feedback",
+        "browser-feedback-overview",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "overview",
+        "page"
+      ],
+      "expectedSurfaceTypes": [
+        "browser-feedback-overview"
+      ],
+      "key": "cockpit.browser-feedback-overview.feedback-resolve",
+      "lane": "setup-context-review",
+      "packetId": "packet-7aa17dd2e22b295b",
+      "phase": "capture-lanes",
+      "proof": "Capture before/after and cancellation; record confirmation, API result, and persisted status.",
+      "retryBudget": 2,
+      "scenarioId": "browser-feedback-overview",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "browser-feedback",
+        "browser-feedback-overview",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "overview",
+        "page"
+      ],
+      "surfaces": [
+        "browser feedback overview"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Use ArrowUp/ArrowDown, Enter, and Escape; submit a command that changes active view"
+      ],
+      "cellId": "navigate-submit",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "command",
+        "command-menu",
+        "commandmenu",
+        "menu",
+        "menus"
+      ],
+      "expectedSurfaceTypes": [
+        "command-menu"
+      ],
+      "key": "cockpit.command-menu.navigate-submit",
+      "lane": "setup-context-review",
+      "packetId": "packet-bc4e066321bd93c0",
+      "phase": "capture-lanes",
+      "proof": "Screenshots capture selection before submit and resulting view; state/API evidence proves one mutation or no mutation after cancel.",
+      "retryBudget": 2,
+      "scenarioId": "command-menu",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "command",
+        "command-menu",
+        "commandmenu",
+        "menu",
+        "menus"
+      ],
+      "surfaces": [
+        "command menu"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Press the documented command-menu shortcut, then type a known command prefix"
+      ],
+      "cellId": "open-keyboard",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "command",
+        "command-menu",
+        "commandmenu",
+        "menu",
+        "menus"
+      ],
+      "expectedSurfaceTypes": [
+        "command-menu"
+      ],
+      "key": "cockpit.command-menu.open-keyboard",
+      "lane": "setup-context-review",
+      "packetId": "packet-63ea5bbc0d551732",
+      "phase": "capture-lanes",
+      "proof": "Both viewport screenshots show focus ring, query, result count and command labels; machine evidence records active element and command registry.",
+      "retryBudget": 2,
+      "scenarioId": "command-menu",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "command",
+        "command-menu",
+        "commandmenu",
+        "menu",
+        "menus"
+      ],
+      "surfaces": [
+        "command menu"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Click command/menu affordance and select a command with pointer"
+      ],
+      "cellId": "open-pointer",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "command",
+        "command-menu",
+        "commandmenu",
+        "menu",
+        "menus"
+      ],
+      "expectedSurfaceTypes": [
+        "command-menu"
+      ],
+      "key": "cockpit.command-menu.open-pointer",
+      "lane": "setup-context-review",
+      "packetId": "packet-4e2fa6acb24007f9",
+      "phase": "capture-lanes",
+      "proof": "Screenshots show anchor, hover/selected row and resulting surface; machine trace records click coordinates and command event/result.",
+      "retryBudget": 2,
+      "scenarioId": "command-menu",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "command",
+        "command-menu",
+        "commandmenu",
+        "menu",
+        "menus"
+      ],
+      "surfaces": [
+        "command menu"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open Context browser, navigate document hierarchy, expand and select a context document"
+      ],
+      "cellId": "browse-context",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "imports",
+        "page",
+        "source",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "context-browser-and-source-imports"
+      ],
+      "key": "cockpit.context-browser.browse-context",
+      "lane": "setup-context-review",
+      "packetId": "packet-86f2dadfcb1b6830",
+      "phase": "capture-lanes",
+      "proof": "Screenshots show hierarchy and content at both sizes; DOM/accessibility and context IDs/content hash are retained.",
+      "retryBudget": 2,
+      "scenarioId": "context-browser",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "imports",
+        "page",
+        "source",
+        "sources"
+      ],
+      "surfaces": [
+        "Context browser and source imports"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Search context/source, use Arrow keys and Enter, then clear query"
+      ],
+      "cellId": "context-search",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "imports",
+        "page",
+        "source",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "context-browser-and-source-imports"
+      ],
+      "key": "cockpit.context-browser.context-search",
+      "lane": "setup-context-review",
+      "packetId": "packet-7febd1590d7118ef",
+      "phase": "capture-lanes",
+      "proof": "Screenshots show query/match/empty/error states; accessibility snapshot records announcements and IDs before/after.",
+      "retryBudget": 2,
+      "scenarioId": "context-browser",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "imports",
+        "page",
+        "source",
+        "sources"
+      ],
+      "surfaces": [
+        "Context browser and source imports"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open source-import view, inspect imported source and provenance, follow source link"
+      ],
+      "cellId": "source-import",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "imports",
+        "page",
+        "source",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "context-browser-and-source-imports"
+      ],
+      "key": "cockpit.context-browser.source-import",
+      "lane": "setup-context-review",
+      "packetId": "packet-677fd4d761499930",
+      "phase": "capture-lanes",
+      "proof": "Capture provenance and destination route; machine evidence records import job/status, source hash, and navigation event.",
+      "retryBudget": 2,
+      "scenarioId": "context-browser",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "imports",
+        "page",
+        "source",
+        "sources"
+      ],
+      "surfaces": [
+        "Context browser and source imports"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open changed file diff and toggle annotation rendering; select a line/callout"
+      ],
+      "cellId": "diff-annotation",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "viewer"
+      ],
+      "expectedSurfaceTypes": [
+        "files-viewer"
+      ],
+      "key": "cockpit.files-viewer.diff-annotation",
+      "lane": "setup-context-review",
+      "packetId": "packet-04fdc0a212081cc7",
+      "phase": "capture-lanes",
+      "proof": "Capture unannotated and annotated diff at both sizes; machine evidence maps callout numbers to file/line/range and records toggle state.",
+      "retryBudget": 2,
+      "scenarioId": "files-viewer",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "viewer"
+      ],
+      "surfaces": [
+        "Files viewer"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Focus file search, type exact and partial names, navigate results and clear query"
+      ],
+      "cellId": "file-search",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "viewer"
+      ],
+      "expectedSurfaceTypes": [
+        "files-viewer"
+      ],
+      "key": "cockpit.files-viewer.file-search",
+      "lane": "setup-context-review",
+      "packetId": "packet-23722939b942174f",
+      "phase": "capture-lanes",
+      "proof": "Screenshots capture query, no-match/loading/error and restored tree; record key events, result IDs and latency/error.",
+      "retryBudget": 2,
+      "scenarioId": "files-viewer",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "viewer"
+      ],
+      "surfaces": [
+        "Files viewer"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open Files, expand repository tree, select changed tracked file and untracked file"
+      ],
+      "cellId": "tree-open",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "viewer"
+      ],
+      "expectedSurfaceTypes": [
+        "files-viewer"
+      ],
+      "key": "cockpit.files-viewer.tree-open",
+      "lane": "setup-context-review",
+      "packetId": "packet-23cc1a956cfc509a",
+      "phase": "capture-lanes",
+      "proof": "Both screenshots show breadcrumb, tree/status badges and selected content; machine evidence includes file IDs, route, and filesystem/API response.",
+      "retryBudget": 2,
+      "scenarioId": "files-viewer",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "viewer"
+      ],
+      "surfaces": [
+        "Files viewer"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open Review, inspect changes, navigate annotations, select eligible delivery target, attempt ineligible target, submit eligible delivery"
+      ],
+      "cellId": "review-submit",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "setup-sources-and-review"
+      ],
+      "key": "cockpit.review-setup-sources.review-submit",
+      "lane": "setup-context-review",
+      "packetId": "packet-921586d2a0bf2b7c",
+      "phase": "capture-lanes",
+      "proof": "Capture review and annotated/unannotated states at both sizes; record change IDs, target eligibility, validation response, and delivery receipt.",
+      "retryBudget": 2,
+      "scenarioId": "review-setup-sources",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources"
+      ],
+      "surfaces": [
+        "setup, sources, and Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open setup, choose Repository A, configure project, submit, and observe workspace transition"
+      ],
+      "cellId": "setup-create",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "setup-sources-and-review"
+      ],
+      "key": "cockpit.review-setup-sources.setup-create",
+      "lane": "setup-context-review",
+      "packetId": "packet-1d9adf044601adf5",
+      "phase": "capture-lanes",
+      "proof": "Capture form, validation/loading/error, and resulting workspace at both sizes; record request payload/result and project ID.",
+      "retryBudget": 2,
+      "scenarioId": "review-setup-sources",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources"
+      ],
+      "surfaces": [
+        "setup, sources, and Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open Sources, inspect imported source, add/refresh a source, then remove only disposable source"
+      ],
+      "cellId": "sources-manage",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "setup-sources-and-review"
+      ],
+      "key": "cockpit.review-setup-sources.sources-manage",
+      "lane": "setup-context-review",
+      "packetId": "packet-9103a49208aa8fe5",
+      "phase": "capture-lanes",
+      "proof": "Screenshots show each state and confirmation; machine evidence records source IDs, status transitions, and no mutation after cancel.",
+      "retryBudget": 2,
+      "scenarioId": "review-setup-sources",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources"
+      ],
+      "surfaces": [
+        "setup, sources, and Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Cycle panes/agents by keyboard and click a pane header"
+      ],
+      "cellId": "pane-agent-focus",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "and",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "herdr",
+        "menus",
+        "navigation",
+        "pane",
+        "session",
+        "space",
+        "space-menus-and-tab-pane-navigation",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "space-menus-and-tab-pane-navigation"
+      ],
+      "key": "cockpit.space-menus.pane-agent-focus",
+      "lane": "setup-context-review",
+      "packetId": "packet-b91cf7670d08652f",
+      "phase": "capture-lanes",
+      "proof": "Screenshots show focus indicator and agent status; accessibility snapshot and event trace prove focus transition.",
+      "retryBudget": 2,
+      "scenarioId": "space-menus",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "and",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "herdr",
+        "menus",
+        "navigation",
+        "pane",
+        "session",
+        "space",
+        "space-menus-and-tab-pane-navigation",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "Space menus and tab/pane navigation"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open Space switcher, move between Spaces with keyboard, select second Space"
+      ],
+      "cellId": "space-switch-keyboard",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "and",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "herdr",
+        "menus",
+        "navigation",
+        "pane",
+        "session",
+        "space",
+        "space-menus-and-tab-pane-navigation",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "space-menus-and-tab-pane-navigation"
+      ],
+      "key": "cockpit.space-menus.space-switch-keyboard",
+      "lane": "setup-context-review",
+      "packetId": "packet-e54b394ee58e8827",
+      "phase": "capture-lanes",
+      "proof": "Screenshots at both sizes show Space identity, active tab and pane; machine evidence records Space/tab/pane IDs before and after.",
+      "retryBudget": 2,
+      "scenarioId": "space-menus",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "and",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "herdr",
+        "menus",
+        "navigation",
+        "pane",
+        "session",
+        "space",
+        "space-menus-and-tab-pane-navigation",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "Space menus and tab/pane navigation"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Click Space menu, choose a Space, open its tab menu and select each tab"
+      ],
+      "cellId": "space-switch-pointer",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "and",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "herdr",
+        "menus",
+        "navigation",
+        "pane",
+        "session",
+        "space",
+        "space-menus-and-tab-pane-navigation",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "space-menus-and-tab-pane-navigation"
+      ],
+      "key": "cockpit.space-menus.space-switch-pointer",
+      "lane": "setup-context-review",
+      "packetId": "packet-c712ba13b972c328",
+      "phase": "capture-lanes",
+      "proof": "Capture menu open, selected tab, and overflow/empty state; record click coordinates, active IDs, and tab list response.",
+      "retryBudget": 2,
+      "scenarioId": "space-menus",
+      "source": "cockpit-surfaces",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "and",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "herdr",
+        "menus",
+        "navigation",
+        "pane",
+        "session",
+        "space",
+        "space-menus-and-tab-pane-navigation",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "Space menus and tab/pane navigation"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open Markdown",
+        "Render Mermaid",
+        "Open image",
+        "Import source context",
+        "Switch context document"
+      ],
+      "cellId": "context.docs-source-import",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "context",
+        "context-browser",
+        "context-files-review",
+        "contextbrowser",
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "context",
+        "files",
+        "review"
+      ],
+      "key": "context.docs-source-import",
+      "lane": "setup-context-review",
+      "packetId": "packet-ad6b76188a0ee3dd",
+      "phase": "capture-lanes",
+      "proof": [
+        "Markdown headings/code are readable",
+        "Mermaid either renders or reports bounded error",
+        "Image has stable dimensions/alt text",
+        "Imported source retains origin and revision"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "context.docs-source-import",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "context",
+        "context-browser",
+        "context-files-review",
+        "contextbrowser",
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources"
+      ],
+      "surfaces": [
+        "Context",
+        "Files",
+        "Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Choose eligible agent from command menu",
+        "Send one annotation",
+        "Send batch",
+        "Attempt ineligible target",
+        "Switch active Space before send"
+      ],
+      "cellId": "delivery.terminal-eligible-ineligible",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser-feedback",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "menu",
+        "menus",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "terminal-feedbackpanel-command-menu",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "command-menu",
+        "feedbackpanel",
+        "terminal"
+      ],
+      "key": "delivery.terminal-eligible-ineligible",
+      "lane": "browser-extension",
+      "packetId": "packet-fa320f4365df67ec",
+      "phase": "capture-lanes",
+      "proof": [
+        "Eligible target shows delivery acknowledgement in correct pane",
+        "Ineligible target is refused with reason",
+        "Wrong active Space cannot receive delivery",
+        "Terminal focus/ownership is restored after send"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "delivery.terminal-eligible-ineligible",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser-feedback",
+        "command",
+        "command-menu",
+        "commandmenu",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "menu",
+        "menus",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "terminal-feedbackpanel-command-menu",
+        "workbench"
+      ],
+      "surfaces": [
+        "terminal",
+        "FeedbackPanel",
+        "command menu"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "browser-feedback"
+      ],
+      "cellId": "browser-feedback",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "environment"
+      ],
+      "expectedSurfaceTypes": [
+        "environment"
+      ],
+      "key": "environment.browser-feedback",
+      "lane": "fixture",
+      "packetId": "packet-0d09eb0ab084adbd",
+      "phase": "capture-lanes",
+      "proof": "two pending annotated feedback items are visible with their targets",
+      "retryBudget": 2,
+      "scenarioId": "environment.browser-feedback",
+      "source": "environment",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "environment"
+      ],
+      "surfaces": [
+        "environment"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "context-sources"
+      ],
+      "cellId": "context-sources",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "environment"
+      ],
+      "expectedSurfaceTypes": [
+        "environment"
+      ],
+      "key": "environment.context-sources",
+      "lane": "fixture",
+      "packetId": "packet-4186f4876299beab",
+      "phase": "capture-lanes",
+      "proof": "context documents and imported sources are visible and attributed to the active project",
+      "retryBudget": 2,
+      "scenarioId": "environment.context-sources",
+      "source": "environment",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "environment"
+      ],
+      "surfaces": [
+        "environment"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "delivery-eligibility"
+      ],
+      "cellId": "delivery-eligibility",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "environment"
+      ],
+      "expectedSurfaceTypes": [
+        "environment"
+      ],
+      "key": "environment.delivery-eligibility",
+      "lane": "fixture",
+      "packetId": "packet-7ca78f76ac97b409",
+      "phase": "capture-lanes",
+      "proof": "eligible target is actionable and ineligible target is visibly blocked with reason",
+      "retryBudget": 2,
+      "scenarioId": "environment.delivery-eligibility",
+      "source": "environment",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "environment"
+      ],
+      "surfaces": [
+        "environment"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "repository-status"
+      ],
+      "cellId": "repository-status",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "environment"
+      ],
+      "expectedSurfaceTypes": [
+        "environment"
+      ],
+      "key": "environment.repository-status",
+      "lane": "fixture",
+      "packetId": "packet-d8643ac51016ad02",
+      "phase": "capture-lanes",
+      "proof": "changed, untracked, binary, markdown, and code files are visible for both repositories",
+      "retryBudget": 2,
+      "scenarioId": "environment.repository-status",
+      "source": "environment",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "environment"
+      ],
+      "surfaces": [
+        "environment"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "spaces-tabs-panes"
+      ],
+      "cellId": "spaces-tabs-panes",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "environment"
+      ],
+      "expectedSurfaceTypes": [
+        "environment"
+      ],
+      "key": "environment.spaces-tabs-panes",
+      "lane": "fixture",
+      "packetId": "packet-d79a57e445c9e782",
+      "phase": "capture-lanes",
+      "proof": "both spaces, four tabs, active panes and agent badges are visible",
+      "retryBudget": 2,
+      "scenarioId": "environment.spaces-tabs-panes",
+      "source": "environment",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "environment"
+      ],
+      "surfaces": [
+        "environment"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open overview",
+        "Expand annotation",
+        "Acknowledge one",
+        "Acknowledge all eligible",
+        "Leave ineligible pending"
+      ],
+      "cellId": "feedback.browser-pending-overview",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "feedbackpanel-popup-review",
+        "herdr",
+        "pane",
+        "popup",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "feedbackpanel",
+        "popup",
+        "review"
+      ],
+      "key": "feedback.browser-pending-overview",
+      "lane": "browser-extension",
+      "packetId": "packet-e52901c94d60ebb6",
+      "phase": "capture-lanes",
+      "proof": [
+        "Panel groups by source tab/document",
+        "Annotation kind/comment/target is readable",
+        "Acknowledgement removes only acknowledged item",
+        "Ineligible target remains visibly blocked"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "feedback.browser-pending-overview",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "feedbackpanel-popup-review",
+        "herdr",
+        "pane",
+        "popup",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "FeedbackPanel",
+        "popup",
+        "Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Expand/collapse tree",
+        "Open changed file",
+        "Open untracked file",
+        "Search exact and partial text",
+        "Switch repository/project"
+      ],
+      "cellId": "files.tree-read-search-changes",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "file",
+        "files",
+        "files-context-review",
+        "files-viewer",
+        "filesviewer",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources"
+      ],
+      "expectedSurfaceTypes": [
+        "context",
+        "files",
+        "review"
+      ],
+      "key": "files.tree-read-search-changes",
+      "lane": "setup-context-review",
+      "packetId": "packet-d4093a5edc5a7034",
+      "phase": "capture-lanes",
+      "proof": [
+        "Tree shows repository identity and status badges",
+        "Read view shows path/line mapping",
+        "Search results identify file and line",
+        "Switching project does not leak files"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "files.tree-read-search-changes",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "file",
+        "files",
+        "files-context-review",
+        "files-viewer",
+        "filesviewer",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources"
+      ],
+      "surfaces": [
+        "Files",
+        "Context",
+        "Review"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open with toolbar/menu affordance",
+        "Open with keyboard shortcut",
+        "Type exact command",
+        "Type partial query and choose result",
+        "Escape without executing"
+      ],
+      "cellId": "menus.command-menu.open-search-execute",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "command",
+        "command-menu",
+        "command-menu-page-terminal",
+        "commandmenu",
+        "fixture-page",
+        "menu",
+        "menus",
+        "page",
+        "pane",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "command-menu",
+        "page",
+        "terminal"
+      ],
+      "key": "menus.command-menu.open-search-execute",
+      "lane": "browser-extension",
+      "packetId": "packet-6284e6217f19daec",
+      "phase": "capture-lanes",
+      "proof": [
+        "Menu is visibly anchored to active Cockpit surface",
+        "Search results narrow without losing focus",
+        "Chosen command closes menu and updates only the active target",
+        "Escape restores prior surface with no mutation"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "menus.command-menu.open-search-execute",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "command",
+        "command-menu",
+        "command-menu-page-terminal",
+        "commandmenu",
+        "fixture-page",
+        "menu",
+        "menus",
+        "page",
+        "pane",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "command menu",
+        "page",
+        "terminal"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "bootstrap"
+      ],
+      "cellId": "bootstrap",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "herdr",
+        "pane",
+        "session",
+        "space",
+        "tab"
+      ],
+      "expectedSurfaceTypes": [
+        "herdr"
+      ],
+      "key": "phase.bootstrap",
+      "lane": "bootstrap",
+      "packetId": "packet-7d03056470bc5b5b",
+      "phase": "bootstrap",
+      "proof": [],
+      "retryBudget": 2,
+      "scenarioId": "bootstrap",
+      "source": "orchestration",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "herdr",
+        "pane",
+        "session",
+        "space",
+        "tab"
+      ],
+      "surfaces": [
+        "Herdr"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "fixture"
+      ],
+      "cellId": "fixture",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "browser",
+        "fixture",
+        "fixture-page",
+        "page"
+      ],
+      "expectedSurfaceTypes": [
+        "fixture"
+      ],
+      "key": "phase.fixture",
+      "lane": "fixture",
+      "packetId": "packet-a4840cadf1afc7e4",
+      "phase": "fixture",
+      "proof": [],
+      "retryBudget": 2,
+      "scenarioId": "fixture",
+      "source": "orchestration",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "browser",
+        "fixture",
+        "fixture-page",
+        "page"
+      ],
+      "surfaces": [
+        "fixture"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Open popup offline",
+        "Reconnect",
+        "Select each tab",
+        "Expand stale draft",
+        "Discard stale draft",
+        "Retry pending evidence"
+      ],
+      "cellId": "popup.status-drafts-recovery",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "popup-feedbackpanel",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "feedbackpanel",
+        "popup"
+      ],
+      "key": "popup.status-drafts-recovery",
+      "lane": "browser-extension",
+      "packetId": "packet-e051aa8a87edacba",
+      "phase": "capture-lanes",
+      "proof": [
+        "Connected/Offline and Space label are explicit",
+        "Draft list shows URL/document and annotation summaries",
+        "Discard removes only selected stale draft",
+        "Retry changes pending state to saved or visible error"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "popup.status-drafts-recovery",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "popup-feedbackpanel",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "popup",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    },
+    {
+      "actions": [
+        "Create comments in two files",
+        "Edit one",
+        "Remove one",
+        "Preview batch",
+        "Paste into target",
+        "Submit batch"
+      ],
+      "cellId": "review.comments-draft-batch",
+      "expectedArtifactKinds": [
+        "screenshot",
+        "machine-evidence",
+        "action-log",
+        "authority-snapshot"
+      ],
+      "expectedSurfaceTokens": [
+        "agent",
+        "browser-feedback",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "feedback",
+        "feedbackpanel",
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "herdr",
+        "pane",
+        "review",
+        "review-files-context-feedbackpanel",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "sources",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "expectedSurfaceTypes": [
+        "context",
+        "feedbackpanel",
+        "files",
+        "review"
+      ],
+      "key": "review.comments-draft-batch",
+      "lane": "browser-extension",
+      "packetId": "packet-e74adb74a1d63747",
+      "phase": "capture-lanes",
+      "proof": [
+        "Draft count and file grouping are accurate",
+        "Preview shows exact comment text and line mapping",
+        "Edit/remove update only chosen draft",
+        "Submit yields per-comment acknowledgement"
+      ],
+      "retryBudget": 2,
+      "scenarioId": "review.comments-draft-batch",
+      "source": "coverage-matrix",
+      "status": "PENDING",
+      "surfaceTokens": [
+        "agent",
+        "browser-feedback",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "feedback",
+        "feedbackpanel",
+        "file",
+        "files",
+        "files-viewer",
+        "filesviewer",
+        "herdr",
+        "pane",
+        "review",
+        "review-files-context-feedbackpanel",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "sources",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ],
+      "surfaces": [
+        "Review",
+        "Files",
+        "Context",
+        "FeedbackPanel"
+      ],
+      "viewports": [
+        {
+          "height": 900,
+          "name": "desktop",
+          "width": 1440
+        },
+        {
+          "height": 640,
+          "name": "compact",
+          "width": 1024
+        }
+      ]
+    }
+  ],
+  "workloadDigest": "8848d6389c201ed09e8af13b301cdcec34ff36bf68ff5855d97a870569190864"
+}

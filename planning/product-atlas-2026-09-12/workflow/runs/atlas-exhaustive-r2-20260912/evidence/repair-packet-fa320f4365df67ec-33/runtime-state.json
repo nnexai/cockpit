@@ -1,0 +1,22 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-fa320f4365df67ec",
+  "scenarioId": "delivery.terminal-eligible-ineligible",
+  "surface": [
+    "terminal",
+    "FeedbackPanel",
+    "command menu"
+  ],
+  "surfaces": [
+    "terminal",
+    "FeedbackPanel",
+    "command menu"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Choose eligible agent from command menu"
+  ]
+}

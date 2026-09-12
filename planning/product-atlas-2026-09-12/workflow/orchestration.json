@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "atlas": "product-atlas-2026-09-12",
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "mode": "autonomous",
+  "safety": {
+    "protectedHerdrSessions": ["default"],
+    "disposableNaming": "atlas-{runId}-{lane}",
+    "browserProfiles": "one isolated profile per browser lane",
+    "ownership": "Every destructive action requires a resource-ledger owner match; never touch unrelated tabs, profiles, processes, worktrees, or providers."
+  },
+  "inputs": {
+    "scenarioIndexes": [
+      "workbench-terminal/index.json",
+      "browser-extension/index.json",
+      "setup-context-review/index.json"
+    ],
+    "rules": "audit/evidence-rules.json",
+    "taxonomy": "audit/coverage-taxonomy.json",
+    "fixtureContract": "Two Spaces, two tabs per Space where supported, multiple panes/agents, two disposable repositories/projects, changed and untracked files, context documents, source imports, pending browser feedback, and eligible plus ineligible delivery targets."
+  },
+  "scheduler": {
+    "readyRule": "Run a node when every dependency has a terminal artifact satisfying its completion predicate; independent capture lanes run concurrently.",
+    "handoffRule": "Workers consume only declared artifact paths and publish an immutable receipt before marking complete.",
+    "retryRule": "Retry only the node's named disposable resources, never a parent or foreign resource; preserve each attempt receipt and diagnostics.",
+    "inconclusiveRule": "INCONCLUSIVE is terminal for a cell only after its max attempts, named capability/provider blocker, retained diagnostics, and cleanup receipt are present.",
+    "stopConditions": [
+      "Stop the run as FAIL on any protected-session, unrelated-tab/profile, secret-retention, unauthorized-mutation, or cleanup-ownership violation.",
+      "Stop the run as INCONCLUSIVE when a required capability remains unavailable after escalation; do not relabel missing proof PASS.",
+      "Stop successfully only when every indexed scenario and every matrix cell is PASS, FAIL, or justified INCONCLUSIVE and the final validation and cleanup receipts exist."
+    ],
+    "escalation": "Escalate to the named Luna lead only for a genuine blocker (missing capability, contradictory authoritative evidence, unsafe ownership ambiguity, or repeated infrastructure failure); no escalation for ordinary assertion FAIL."
+  },
+  "phases": [
+    {
+      "id": "bootstrap",
+      "role": "luna-bootstrap",
+      "dependsOn": [],
+      "maxRetries": 1,
+      "actions": ["Pin baseline commit and inspect all scenario indexes/rules", "Create run ID, isolated roots, resource ledger, redaction policy, and artifact manifest", "Inventory default Herdr session read-only without focusing or mutating it"],
+      "completionPredicate": "bootstrap/receipt.json records commit, run ID, protected-session inventory, isolated resource identities, tool hashes, and an empty-of-secrets ledger; all resources are owned by this run.",
+      "failureEscalation": "Escalate only if ownership cannot be proven or an isolated profile/session cannot be created; stop on any protected-resource access.",
+      "artifacts": ["workflow/runs/{runId}/bootstrap/receipt.json", "workflow/runs/{runId}/resource-ledger.json"]
+    },
+    {
+      "id": "fixture",
+      "role": "luna-fixture",
+      "dependsOn": ["bootstrap"],
+      "maxRetries": 2,
+      "actions": ["Create the disposable Herdr session and two Spaces", "Create/open two tabs per Space where capability permits and populate multiple panes/agents", "Create two disposable repository/project roots with changed and untracked files, context docs, source imports, pending feedback, and eligible/ineligible delivery targets", "Record authoritative IDs and hashes without retaining credentials"],
+      "completionPredicate": "fixture/receipt.json proves each requested fixture component or records a capability-scoped INCONCLUSIVE with command output, IDs, and no foreign mutation; snapshot and cleanup ownership are recorded.",
+      "failureEscalation": "Retry once with fresh fixture names after transient provisioning failure; escalate only unsupported capability, contradictory IDs, or unsafe partial provisioning.",
+      "artifacts": ["workflow/runs/{runId}/fixture/receipt.json", "workflow/runs/{runId}/fixture/snapshot.json", "workflow/runs/{runId}/fixture/resource-ledger.json"]
+    },
+    {
+      "id": "capture-lanes",
+      "role": "luna-capture-dispatcher",
+      "dependsOn": ["fixture"],
+      "maxRetries": 0,
+      "dispatch": "Run every lane below concurrently; each lane owns a separate disposable browser/native/Herdr resource namespace and writes only its lane directory.",
+      "lanes": [
+        {
+          "id": "workbench",
+          "role": "luna-workbench-capture",
+          "scenarios": "workbench-terminal/index.json",
+          "matrix": [
+            {"cell":"startup-and-spaces","observableProof":"Startup selects the owned session and sidebar shows both Spaces, tabs, agents, and selection persistence.","screenshots":["1440x900","1024x640"],"machineEvidence":"session snapshot, authoritative IDs, DOM/accessibility dump, action log.","retryEscalation":"Retry once after reconnect; escalate only if session capability or IDs contradict."},
+            {"cell":"tabs-panes-menus","observableProof":"Both tabs and multiple panes render; command/pane menus open, select, and close without losing ownership.","screenshots":["1440x900","1024x640"],"machineEvidence":"menu action log, focus events, pane/tab snapshot.","retryEscalation":"Retry with fresh tab; escalate only on persistent input-routing or capability blocker."},
+            {"cell":"terminal-rendering-input","observableProof":"Terminal scrollback, redraw, resize, keyboard, mouse/wheel, paste framing, and focus ownership are visible and correct.","screenshots":["1440x900","1024x640"],"machineEvidence":"raw terminal transcript, resize dimensions, input/focus trace, renderer identity.","retryEscalation":"Retry once with a fresh pane; escalate only if renderer or focus capability is unavailable."}
+          ],
+          "completionPredicate":"Every indexed workbench scenario has a receipt with PASS/FAIL/INCONCLUSIVE, required viewport captures, machine evidence, and cleanup result."
+        },
+        {
+          "id": "setup-context-review",
+          "role": "luna-setup-capture",
+          "scenarios": "setup-context-review/index.json",
+          "matrix": [
+            {"cell":"setup-lifecycle","observableProof":"Repository/artifact setup creates the owned workspace, shows canonical repo identity, and handles partial failure/recovery and teardown without deleting dirty data.","screenshots":["1440x900","1024x640"],"machineEvidence":"operation records, workspace snapshot, repo status, resource ledger, cleanup receipt.","retryEscalation":"Retry with a new repository root once; escalate only unsupported method or ownership ambiguity."},
+            {"cell":"context-files-sources","observableProof":"Tree/read/search, source import/refresh/remove, Markdown/Mermaid/image rendering, and containment/symlink behavior are observable.","screenshots":["1440x900","1024x640"],"machineEvidence":"source hashes, file bounds, import records, DOM dump, redacted request log.","retryEscalation":"Retry once with reduced fixture payload; escalate only unavailable source/provider capability."},
+            {"cell":"review-comments","observableProof":"Multi-file draft comments can be previewed, edited, removed, and safely handled when source is stale or paste delivery is pending.","screenshots":["1440x900","1024x640"],"machineEvidence":"comment IDs/state transitions, stale-source response, pending-feedback log.","retryEscalation":"Retry once with a fresh draft; escalate only contradictory state or unavailable delivery target."}
+          ],
+          "completionPredicate":"Every indexed setup/context/review scenario has complete receipts, both viewport captures, machine evidence, and cleanup result."
+        },
+        {
+          "id": "browser-extension",
+          "role": "luna-browser-capture",
+          "scenarios": "browser-extension/index.json",
+          "matrix": [
+            {"cell":"pairing-and-pane-detection","observableProof":"Owned extension/browser pairing becomes authoritative; Context, Review, and Terminal panes are detected and same-title false matches are rejected.","screenshots":["1440x900","1024x640"],"machineEvidence":"tab identity, extension worker log, process provenance, pairing receipt.","retryEscalation":"Reload owned extension once; escalate only if worker/capability remains unavailable."},
+            {"cell":"capture-annotation-delivery","observableProof":"Visible-tab capture has stable anchors, annotation pairing, pending browser feedback, and eligible target delivery; ineligible target is refused.","screenshots":["1440x900","1024x640"],"machineEvidence":"capture metadata, anchor coordinates, target eligibility decision, redacted message trace.","retryEscalation":"Retry once after tab stabilization; escalate only if target capability or pairing is unavailable."},
+            {"cell":"browser-recovery","observableProof":"Close/reopen, disconnect, timeout, and resync preserve safe state and report unknown outcomes without duplicate delivery.","screenshots":["1440x900","1024x640"],"machineEvidence":"lifecycle event trace, operation IDs, retry count, preserved draft and cleanup receipts.","retryEscalation":"Induce each failure once, retry one recovery; escalate only contradictory at-most-once evidence."}
+          ],
+          "completionPredicate":"Every indexed browser scenario has complete receipts, both viewport captures, machine evidence, target eligibility proof, and cleanup result."
+        },
+        {
+          "id": "provider-read-only",
+          "role": "luna-provider-capture",
+          "scenarios": "provider scenarios across all indexes",
+          "matrix": [
+            {"cell":"hydration-pagination","observableProof":"Authorized disposable/read-only fixture hydrates issue/PR/wiki sources with bounded pagination and visible freshness/revision state.","screenshots":["1440x900","1024x640"],"machineEvidence":"redacted request bounds, revision IDs, page counts, no-mutation audit.","retryEscalation":"Retry once on timeout; escalate only absent credentials/capability, then mark INCONCLUSIVE."}
+          ],
+          "completionPredicate":"Each provider assertion is PASS/FAIL/INCONCLUSIVE with authorization, bounds, freshness, and no-mutation evidence."
+        }
+      ]
+    },
+    {
+      "id": "cross-surface-joins",
+      "role": "luna-join-auditor",
+      "dependsOn": ["capture-lanes"],
+      "maxRetries": 1,
+      "actions": ["Join receipts by scenario ID, fixture identity, source commit, viewport, and operation ID", "Compare browser/native/extension pane identity, context/review feedback, delivery eligibility, and cleanup ownership", "Flag missing, stale, contradictory, or cross-resource evidence"],
+      "completionPredicate":"joins.json maps every scenario and matrix cell to supporting artifacts and emits a discrepancy list with no silently dropped cells.",
+      "failureEscalation":"Retry join once after manifest refresh; escalate only irreconcilable authoritative contradiction.",
+      "artifacts":["workflow/runs/{runId}/joins.json"]
+    },
+    {
+      "id": "adversarial-audit",
+      "role": "luna-adversarial-auditor",
+      "dependsOn": ["cross-surface-joins"],
+      "maxRetries": 1,
+      "actions": ["Check protected-session and unrelated-tab non-interference", "Check secret redaction, source/runtime freshness, viewport dimensions, ownership, bounded calls, and cleanup", "Attempt safe negative cases: ineligible target, stale source, timeout/disconnect, same-title false match, dirty teardown"],
+      "completionPredicate":"audit.json records each invariant and negative case as PASS/FAIL/INCONCLUSIVE with retained diagnostics and points every issue to a cell or artifact.",
+      "failureEscalation":"Retry only an audit instrumentation failure; escalate genuine safety ambiguity immediately and stop on violation.",
+      "artifacts":["workflow/runs/{runId}/audit.json"]
+    },
+    {
+      "id": "targeted-repair-loop",
+      "role": "luna-repair-coordinator",
+      "dependsOn": ["adversarial-audit"],
+      "maxRetries": 3,
+      "loop": {"until":"coverage report has no unclassified/missing cells and every INCONCLUSIVE has named blocker and diagnostics", "actions":["Select highest-impact actionable gap from audit", "Retry only that cell with fresh disposable resources or collect missing machine evidence", "Re-run joins and adversarial checks for affected cells", "Record attempt, reason, artifacts, and whether coverage improved"], "noOpRule":"Do not repair ordinary product FAILs or alter source code; record them as behavior results.", "escalation":"Escalate after three targeted attempts, or immediately for safety/ownership contradiction; mark only affected cells INCONCLUSIVE with blocker."},
+      "completionPredicate":"repair-log.json proves loop termination by coverage closure, max retries, or explicit blocker; no unresolved unclassified cell remains.",
+      "artifacts":["workflow/runs/{runId}/repair-log.json","workflow/runs/{runId}/coverage.json"]
+    },
+    {
+      "id": "validation",
+      "role": "luna-validation",
+      "dependsOn": ["targeted-repair-loop"],
+      "maxRetries": 1,
+      "actions":["Validate JSON/schemaVersion and scenario IDs", "Validate required provenance fields, both viewport captures, evidence classes, hashes, redaction, and result states", "Validate coverage counts and artifact references against indexes"],
+      "completionPredicate":"validation.json is PASS only when all structural and evidence rules pass; otherwise it identifies exact cells and leaves run non-success.",
+      "failureEscalation":"Retry after manifest-only correction once; escalate contradictory data or schema defect to Main.",
+      "artifacts":["workflow/runs/{runId}/validation.json"]
+    },
+    {
+      "id": "cleanup",
+      "role": "luna-cleanup",
+      "dependsOn": ["validation"],
+      "maxRetries": 1,
+      "actions":["Verify ownership from ledger", "Stop/delete only run-created Herdr session, browser profile, fixture repositories, servers, tabs, panes, and worktrees", "Retain immutable receipts and diagnostics; record residuals and cleanup failures"],
+      "completionPredicate":"cleanup.json lists every owned resource and action/result; no unowned resource was touched and residuals are explicit.",
+      "failureEscalation":"Retry only the owned resource action once; escalate residual cleanup failure and never broaden deletion scope.",
+      "artifacts":["workflow/runs/{runId}/cleanup.json"]
+    }
+  ],
+  "finalPredicate":"validation.json and cleanup.json pass; coverage.json contains one terminal result for every indexed scenario and matrix cell; all retained artifacts have provenance, SHA-256, redaction, and ownership evidence.",
+  "finalStates":{"PASS":"All assertions and invariants pass.","FAIL":"A required assertion or safety invariant is contradicted.","INCONCLUSIVE":"Only named unavailable capability, credentials, stale/contradictory evidence, or bounded exhausted attempts remain; diagnostics and cleanup are retained."}
+}

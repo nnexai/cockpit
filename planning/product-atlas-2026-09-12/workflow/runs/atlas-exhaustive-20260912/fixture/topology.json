@@ -1,0 +1,77 @@
+{
+  "authority": "Herdr API snapshot",
+  "capturedAt": "2026-09-12T09:59:25.158918Z",
+  "owner": "atlas-20260912-fixture",
+  "requestedTopology": {
+    "spaces": [
+      {
+        "id": "space-alpha",
+        "name": "Atlas Alpha",
+        "tabs": [
+          {
+            "agent": "agent-alpha-review",
+            "id": "alpha-review",
+            "name": "Review",
+            "panes": [
+              "alpha-editor",
+              "alpha-terminal"
+            ],
+            "tabId": "w1:t1"
+          },
+          {
+            "agent": "agent-alpha-context",
+            "id": "alpha-context",
+            "name": "Context",
+            "panes": [
+              "alpha-docs",
+              "alpha-browser"
+            ],
+            "tabId": "w1:t2"
+          }
+        ],
+        "workspaceId": "w1"
+      },
+      {
+        "id": "space-beta",
+        "name": "Atlas Beta",
+        "tabs": [
+          {
+            "agent": "agent-beta-delivery",
+            "id": "beta-delivery",
+            "name": "Delivery",
+            "panes": [
+              "beta-editor",
+              "beta-terminal"
+            ],
+            "tabId": "w2:t1"
+          },
+          {
+            "agent": "agent-beta-recovery",
+            "id": "beta-recovery",
+            "name": "Recovery",
+            "panes": [
+              "beta-browser",
+              "beta-log"
+            ],
+            "tabId": "w2:t2"
+          }
+        ],
+        "workspaceId": "w2"
+      }
+    ]
+  },
+  "snapshot": {
+    "argv": [
+      "herdr",
+      "--session",
+      "atlas-20260912-herdr",
+      "api",
+      "snapshot"
+    ],
+    "capturedAt": "2026-09-12T09:59:25.145481Z",
+    "cwd": null,
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\"id\":\"cli:api:snapshot\",\"result\":{\"snapshot\":{\"agents\":[{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture\",\"focused\":true,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture\",\"interactive_ready\":true,\"name\":\"agent-alpha-review\",\"pane_id\":\"w1:p1\",\"revision\":2,\"state_change_seq\":4,\"tab_id\":\"w1:t1\",\"terminal_id\":\"term_65b462b8f88261\",\"terminal_title\":\"codex /t/atlas-20260912-fixture\",\"terminal_title_stripped\":\"codex /t/atlas-20260912-fixture\",\"workspace_id\":\"w1\"},{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"interactive_ready\":true,\"name\":\"agent-alpha-context\",\"pane_id\":\"w1:p2\",\"revision\":2,\"state_change_seq\":1,\"tab_id\":\"w1:t2\",\"terminal_id\":\"term_65b46328393323\",\"terminal_title\":\"codex /t/a/r/orbit\",\"terminal_title_stripped\":\"codex /t/a/r/orbit\",\"workspace_id\":\"w1\"},{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"interactive_ready\":true,\"name\":\"agent-beta-delivery\",\"pane_id\":\"w2:p1\",\"revision\":2,\"state_change_seq\":3,\"tab_id\":\"w2:t1\",\"terminal_id\":\"term_65b46310d7e4a2\",\"terminal_title\":\"codex /t/a/r/tide\",\"terminal_title_stripped\":\"codex /t/a/r/tide\",\"workspace_id\":\"w2\"},{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"interactive_ready\":true,\"name\":\"agent-beta-recovery\",\"pane_id\":\"w2:p2\",\"revision\":2,\"state_change_seq\":2,\"tab_id\":\"w2:t2\",\"terminal_id\":\"term_65b463283efc74\",\"terminal_title\":\"codex /t/a/r/tide\",\"terminal_title_stripped\":\"codex /t/a/r/tide\",\"workspace_id\":\"w2\"}],\"focused_pane_id\":\"w1:p1\",\"focused_tab_id\":\"w1:t1\",\"focused_workspace_id\":\"w1\",\"layouts\":[{\"area\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0},\"focused_pane_id\":\"w1:p1\",\"panes\":[{\"focused\":true,\"pane_id\":\"w1:p1\",\"rect\":{\"height\":39,\"width\":47,\"x\":0,\"y\":0}},{\"focused\":false,\"pane_id\":\"w1:p4\",\"rect\":{\"height\":39,\"width\":47,\"x\":47,\"y\":0}}],\"splits\":[{\"direction\":\"right\",\"id\":\"split_0_root\",\"ratio\":0.5,\"rect\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0}}],\"tab_id\":\"w1:t1\",\"workspace_id\":\"w1\",\"zoomed\":false},{\"area\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0},\"focused_pane_id\":\"w1:p2\",\"panes\":[{\"focused\":true,\"pane_id\":\"w1:p2\",\"rect\":{\"height\":39,\"width\":47,\"x\":0,\"y\":0}},{\"focused\":false,\"pane_id\":\"w1:p3\",\"rect\":{\"height\":39,\"width\":47,\"x\":47,\"y\":0}}],\"splits\":[{\"direction\":\"right\",\"id\":\"split_0_root\",\"ratio\":0.5,\"rect\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0}}],\"tab_id\":\"w1:t2\",\"workspace_id\":\"w1\",\"zoomed\":false},{\"area\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0},\"focused_pane_id\":\"w2:p1\",\"panes\":[{\"focused\":true,\"pane_id\":\"w2:p1\",\"rect\":{\"height\":39,\"width\":47,\"x\":0,\"y\":0}},{\"focused\":false,\"pane_id\":\"w2:p3\",\"rect\":{\"height\":39,\"width\":47,\"x\":47,\"y\":0}}],\"splits\":[{\"direction\":\"right\",\"id\":\"split_0_root\",\"ratio\":0.5,\"rect\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0}}],\"tab_id\":\"w2:t1\",\"workspace_id\":\"w2\",\"zoomed\":false},{\"area\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0},\"focused_pane_id\":\"w2:p2\",\"panes\":[{\"focused\":true,\"pane_id\":\"w2:p2\",\"rect\":{\"height\":39,\"width\":47,\"x\":0,\"y\":0}},{\"focused\":false,\"pane_id\":\"w2:p4\",\"rect\":{\"height\":39,\"width\":47,\"x\":47,\"y\":0}}],\"splits\":[{\"direction\":\"right\",\"id\":\"split_0_root\",\"ratio\":0.5,\"rect\":{\"height\":39,\"width\":94,\"x\":0,\"y\":0}}],\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\",\"zoomed\":false}],\"panes\":[{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture\",\"focused\":true,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture\",\"label\":\"alpha-editor\",\"pane_id\":\"w1:p1\",\"revision\":2,\"scroll\":{\"max_offset_from_bottom\":7,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w1:t1\",\"terminal_id\":\"term_65b462b8f88261\",\"terminal_title\":\"codex /t/atlas-20260912-fixture\",\"terminal_title_stripped\":\"codex /t/atlas-20260912-fixture\",\"workspace_id\":\"w1\"},{\"agent_status\":\"unknown\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"label\":\"alpha-terminal\",\"pane_id\":\"w1:p4\",\"revision\":1,\"scroll\":{\"max_offset_from_bottom\":0,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w1:t1\",\"terminal_id\":\"term_65b46336a759d8\",\"terminal_title\":\"/t/a/r/orbit\",\"terminal_title_stripped\":\"/t/a/r/orbit\",\"workspace_id\":\"w1\"},{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"label\":\"alpha-docs\",\"pane_id\":\"w1:p2\",\"revision\":2,\"scroll\":{\"max_offset_from_bottom\":7,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w1:t2\",\"terminal_id\":\"term_65b46328393323\",\"terminal_title\":\"codex /t/a/r/orbit\",\"terminal_title_stripped\":\"codex /t/a/r/orbit\",\"workspace_id\":\"w1\"},{\"agent_status\":\"unknown\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/orbit\",\"label\":\"alpha-browser\",\"pane_id\":\"w1:p3\",\"revision\":1,\"scroll\":{\"max_offset_from_bottom\":0,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w1:t2\",\"terminal_id\":\"term_65b46336988285\",\"terminal_title\":\"/t/a/r/orbit\",\"terminal_title_stripped\":\"/t/a/r/orbit\",\"workspace_id\":\"w1\"},{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"label\":\"beta-editor\",\"pane_id\":\"w2:p1\",\"revision\":2,\"scroll\":{\"max_offset_from_bottom\":7,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w2:t1\",\"terminal_id\":\"term_65b46310d7e4a2\",\"terminal_title\":\"codex /t/a/r/tide\",\"terminal_title_stripped\":\"codex /t/a/r/tide\",\"workspace_id\":\"w2\"},{\"agent_status\":\"unknown\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"label\":\"beta-terminal\",\"pane_id\":\"w2:p3\",\"revision\":1,\"scroll\":{\"max_offset_from_bottom\":0,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w2:t1\",\"terminal_id\":\"term_65b463369cb596\",\"terminal_title\":\"/t/a/r/tide\",\"terminal_title_stripped\":\"/t/a/r/tide\",\"workspace_id\":\"w2\"},{\"agent\":\"codex\",\"agent_status\":\"idle\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"label\":\"beta-browser\",\"pane_id\":\"w2:p2\",\"revision\":2,\"scroll\":{\"max_offset_from_bottom\":7,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w2:t2\",\"terminal_id\":\"term_65b463283efc74\",\"terminal_title\":\"codex /t/a/r/tide\",\"terminal_title_stripped\":\"codex /t/a/r/tide\",\"workspace_id\":\"w2\"},{\"agent_status\":\"unknown\",\"cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"focused\":false,\"foreground_cwd\":\"/tmp/atlas-20260912-fixture/repos/tide\",\"label\":\"beta-log\",\"pane_id\":\"w2:p4\",\"revision\":1,\"scroll\":{\"max_offset_from_bottom\":0,\"offset_from_bottom\":0,\"viewport_rows\":37},\"tab_id\":\"w2:t2\",\"terminal_id\":\"term_65b46336a0e487\",\"terminal_title\":\"/t/a/r/tide\",\"terminal_title_stripped\":\"/t/a/r/tide\",\"workspace_id\":\"w2\"}],\"protocol\":22,\"tabs\":[{\"agent_status\":\"idle\",\"focused\":true,\"label\":\"Review\",\"number\":1,\"pane_count\":2,\"tab_id\":\"w1:t1\",\"workspace_id\":\"w1\"},{\"agent_status\":\"idle\",\"focused\":false,\"label\":\"Context\",\"number\":2,\"pane_count\":2,\"tab_id\":\"w1:t2\",\"workspace_id\":\"w1\"},{\"agent_status\":\"idle\",\"focused\":false,\"label\":\"Delivery\",\"number\":1,\"pane_count\":2,\"tab_id\":\"w2:t1\",\"workspace_id\":\"w2\"},{\"agent_status\":\"idle\",\"focused\":false,\"label\":\"Recovery\",\"number\":2,\"pane_count\":2,\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}],\"version\":\"0.9.0\",\"workspaces\":[{\"active_tab_id\":\"w1:t1\",\"agent_status\":\"idle\",\"focused\":true,\"label\":\"Atlas Alpha\",\"number\":1,\"pane_count\":4,\"tab_count\":2,\"workspace_id\":\"w1\"},{\"active_tab_id\":\"w2:t1\",\"agent_status\":\"idle\",\"focused\":false,\"label\":\"Atlas Beta\",\"number\":2,\"pane_count\":4,\"tab_count\":2,\"workspace_id\":\"w2\"}]},\"type\":\"session_snapshot\"}}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-7ca78f76ac97b409",
+  "scenarioId": "environment.delivery-eligibility",
+  "surface": [
+    "environment"
+  ],
+  "surfaces": [
+    "environment"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "delivery-eligibility"
+  ]
+}

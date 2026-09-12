@@ -1,0 +1,24 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-e74adb74a1d63747",
+  "scenarioId": "review.comments-draft-batch",
+  "surface": [
+    "Review",
+    "Files",
+    "Context",
+    "FeedbackPanel"
+  ],
+  "surfaces": [
+    "Review",
+    "Files",
+    "Context",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Create comments in two files"
+  ]
+}

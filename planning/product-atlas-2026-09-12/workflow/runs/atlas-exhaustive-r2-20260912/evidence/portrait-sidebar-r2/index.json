@@ -1,0 +1,15 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "surface": "actual Cockpit gateway",
+  "url": "http://127.0.0.1:49372/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "spaceLabels": ["Atlas Alpha", "Atlas Beta"],
+  "observationPath": "evidence/portrait-sidebar-r2/observation.json",
+  "observation": "Existing portrait captures truthfully record current behavior: sidebar remains visible with both Atlas Space labels and four agent rows at 800x1000, 600x900, and 480x900; at 480x900 terminal panes compress to narrow columns. No UI change is claimed.",
+  "screenshots": [
+    {"path":"evidence/portrait-sidebar-r2/cockpit-sidebar-800x1000.png","viewport":"800x1000","sha256":"2c1bedf498a242939f4f1dc762d9937789a112489a7cf4455c3741257ed5b814"},
+    {"path":"evidence/portrait-sidebar-r2/cockpit-sidebar-600x900.png","viewport":"600x900","sha256":"6407c1b595fef60ff0454ca7bfc8bb6dc942143d33e5f1f184e8617191534ca5"},
+    {"path":"evidence/portrait-sidebar-r2/cockpit-sidebar-480x900.png","viewport":"480x900","sha256":"7238497cd2c778be01c64195613878eb4f37119712b2549172d24c67926fe9ad"}
+  ],
+  "fixturePageUsedAsCockpitProof": false
+}

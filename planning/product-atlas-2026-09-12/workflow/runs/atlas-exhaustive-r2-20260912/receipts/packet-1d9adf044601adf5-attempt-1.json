@@ -1,0 +1,286 @@
+{
+  "manifest": {
+    "actionLog": "evidence/packet-1d9adf044601adf5/action-log.jsonl",
+    "artifacts": [
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/before-review-1440x900.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "625b480245d1974f38e64fe44ec8720a1a29a8c50e863a179396fbdef72384dc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/before-review-1024x640.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "815e7b3b290f07679eda7d57874555a9508ab802bc4cfcf4933c2d05c1ada13a",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/action-01-review-1440x900.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "78594b7a7f4d7c8cd99ee688d2c5ea80098e25545b558c68c320ffd7c207d452",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/action-01-review-1024x640.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "8ca6236dca0e5d76388d66f4ea097f2b2a45eb24fbb5966ca1a1f5bb6de89300",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/action-02-review-1440x900.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "310995b795e3069c43d4353b10d1b9b2aafd4ff87e3b4162cbcdd1afe6c590b1",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-02",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/action-02-review-1024x640.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "b3853ee01c648cbac29306f322005f86527490ffbf2a5686c63033f13811c920",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-02",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/after-review-1440x900.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "055d2abf87c5638230f656bf2b0275b1b2c392c18ed8741f2bb06a73dd9c6add",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/packet-1d9adf044601adf5/after-review-1024x640.png",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "b67d55cf591e6c258b2aecca2f8eb53ed4252754c85e3c3f4f0ad068bb1d6f97",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/packet-1d9adf044601adf5/machine-evidence.json",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "8a0b341f4ac920b90a085635b501bc72df0031c6c0098440a9c615f13e9a43d2",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/packet-1d9adf044601adf5/action-log.jsonl",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "b63de2a66448ef6867fa81bd0bbe16e503fa8f1eed7d29e42b4fb9cbd2969d3f",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "evidenceClass": "runtime",
+        "kind": "authority-snapshot",
+        "path": "evidence/packet-1d9adf044601adf5/authority.json",
+        "provenance": {
+          "sessionId": "atlas-r2-20260912-herdr",
+          "surface": "setup, sources, and Review"
+        },
+        "scenarioId": "review-setup-sources",
+        "sha256": "fcb2ad522f97cc2cdb72ed978f9b5e69fd4bf819bda91372698801056c15e9ab",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-packet-1d9adf044601adf5",
+        "capturedAt": "2026-09-12T10:57:01Z",
+        "ownedResourceIds": [
+          "atlas-r2-20260912-herdr",
+          "w1",
+          "w1:t1",
+          "w1:p1",
+          "w1:p3"
+        ],
+        "redaction": "Owned runtime Cockpit only; no credentials.",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "454ea4a6eaacf2f619806990",
+        "surface": "setup, sources, and Review"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "capture-1d9adf044601adf5",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "proof": "Only owned evidence artifacts created; live handoff retained.",
+      "residuals": []
+    },
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T10:57:02Z",
+    "fixtureIdentity": {
+      "associationKey": "454ea4a6eaacf2f619806990",
+      "spaceId": "w1"
+    },
+    "packetId": "packet-1d9adf044601adf5",
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "setup-context-review",
+      "owner": "AtlasR2RealSurfaces-4",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "review-setup-sources",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:57:01Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/packet-1d9adf044601adf5/before-review-1440x900.png",
+          "evidence/packet-1d9adf044601adf5/before-review-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-packet-1d9adf044601adf5"
+        ],
+        "observedAt": "2026-09-12T10:57:01Z",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "before",
+        "surface": "setup, sources, and Review",
+        "visibleAssertions": [
+          "Actual Cockpit chrome visible",
+          "Atlas Alpha and named tabs visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/packet-1d9adf044601adf5/action-01-review-1440x900.png",
+          "evidence/packet-1d9adf044601adf5/action-01-review-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-packet-1d9adf044601adf5"
+        ],
+        "observedAt": "2026-09-12T10:57:01Z",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "action",
+        "surface": "setup, sources, and Review",
+        "visibleAssertions": [
+          "Actual Cockpit chrome visible",
+          "Atlas Alpha and named tabs visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/packet-1d9adf044601adf5/after-review-1440x900.png",
+          "evidence/packet-1d9adf044601adf5/after-review-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-packet-1d9adf044601adf5"
+        ],
+        "observedAt": "2026-09-12T10:57:01Z",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "after",
+        "surface": "setup, sources, and Review",
+        "visibleAssertions": [
+          "Actual Cockpit chrome visible",
+          "Atlas Alpha and named tabs visible"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "width": 1024
+      }
+    ]
+  }
+}

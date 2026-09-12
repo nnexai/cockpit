@@ -1,0 +1,260 @@
+{
+  "actionLog": [
+    {
+      "action": "inspect/filter/open detail",
+      "actor": "cockpitfeedback",
+      "artifactRefs": [
+        "evidence/cockpitfeedback/before-feedback-1440x900.png",
+        "evidence/cockpitfeedback/before-feedback-1024x640.png",
+        "evidence/cockpitfeedback/action-01-feedback-1440x900.png",
+        "evidence/cockpitfeedback/action-01-feedback-1024x640.png",
+        "evidence/cockpitfeedback/after-feedback-1440x900.png",
+        "evidence/cockpitfeedback/after-feedback-1024x640.png"
+      ],
+      "at": "2026-09-12T10:05:53.218596Z",
+      "authorityRefs": [
+        "auth-browser-feedback"
+      ],
+      "expectedAck": "feedback API confirmation",
+      "inputs": {},
+      "observedAck": "HTTP 404 from /api/v1/status; no Cockpit feedback overview available",
+      "outcome": "INCONCLUSIVE",
+      "sequence": 1,
+      "stateChanging": true,
+      "surface": "browser feedback overview",
+      "target": "pending feedback item"
+    }
+  ],
+  "artifacts": [
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitfeedback/before-feedback-1440x900.png",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "ea9cf9da3da6383f9c9c37e5e3e5832c8c31962895ccafefefbde72d0fa6551c",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitfeedback/before-feedback-1024x640.png",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "ab8cb958a506f4f0cd40c3f75ab843cbdca865340cc9c11ba2e7a911651bfd32",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitfeedback/action-01-feedback-1440x900.png",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "ea9cf9da3da6383f9c9c37e5e3e5832c8c31962895ccafefefbde72d0fa6551c",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitfeedback/action-01-feedback-1024x640.png",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "ab8cb958a506f4f0cd40c3f75ab843cbdca865340cc9c11ba2e7a911651bfd32",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitfeedback/after-feedback-1440x900.png",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "ea9cf9da3da6383f9c9c37e5e3e5832c8c31962895ccafefefbde72d0fa6551c",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitfeedback/after-feedback-1024x640.png",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "ab8cb958a506f4f0cd40c3f75ab843cbdca865340cc9c11ba2e7a911651bfd32",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "feedback-open-20260912",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "evidenceClass": "runtime",
+      "kind": "dom-dump",
+      "path": "evidence/cockpitfeedback/runtime-state.json",
+      "provenance": "Owned disposable Atlas browser context atlas-20260912-browser-context at fixture tab http://127.0.0.1:49329/index.html",
+      "scenarioId": "browser-feedback-overview",
+      "sha256": "62a85c449a66a1f963f8c6398493d9aec651f5240f9649ee696befddca63a50d",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    }
+  ],
+  "attempts": 2,
+  "authoritySnapshot": [
+    {
+      "authorityId": "auth-browser-feedback",
+      "capturedAt": "2026-09-12T10:05:53.218596Z",
+      "ownedResourceIds": [
+        "atlas-20260912-browser-context",
+        "atlas-20260912-fixture"
+      ],
+      "redaction": "none",
+      "sessionId": "atlas-20260912-herdr",
+      "sha256": "62a85c449a66a1f963f8c6398493d9aec651f5240f9649ee696befddca63a50d",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateDigest": "62a85c449a66a1f963f8c6398493d9aec651f5240f9649ee696befddca63a50d",
+      "surface": "browser feedback overview"
+    }
+  ],
+  "blocker": "Cockpit host API /api/v1/status returned HTTP 404 after two named retries; browser feedback overview unavailable",
+  "browserProfile": {
+    "name": "atlas-20260912-browser-profile",
+    "owned": true
+  },
+  "captureId": "feedback-open-20260912",
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "proof": "Owned browser context closed by capture script; no protected resources touched",
+    "residuals": []
+  },
+  "diagnostics": [
+    {
+      "at": "2026-09-12T10:05:53.218596Z",
+      "attempts": 2,
+      "category": "capability-unavailable",
+      "diagnosticId": "diag-feedback-404",
+      "environmentRefs": [
+        "fixture/browser.json",
+        "fixture/context.json"
+      ],
+      "lastKnownState": "Owned fixture browser tab remained live; no feedback overview rendered",
+      "logsOrTraceRefs": [
+        "evidence/cockpitfeedback/runtime-state.json"
+      ],
+      "nextStep": "Provide a live Cockpit/Herdr pairing provider for feedback overview capture",
+      "ownershipImpact": "none; only owned disposable fixture resources used",
+      "resolved": true,
+      "screenshotsRefs": [
+        "evidence/cockpitfeedback/before-feedback-1440x900.png",
+        "evidence/cockpitfeedback/before-feedback-1024x640.png",
+        "evidence/cockpitfeedback/action-01-feedback-1440x900.png",
+        "evidence/cockpitfeedback/action-01-feedback-1024x640.png",
+        "evidence/cockpitfeedback/after-feedback-1440x900.png",
+        "evidence/cockpitfeedback/after-feedback-1024x640.png"
+      ],
+      "symptom": "Actual Cockpit host returned HTTP 404 for status endpoint, preventing feedback overview and mutation acknowledgement"
+    }
+  ],
+  "disposableSession": {
+    "owned": true,
+    "sessionId": "atlas-20260912-herdr"
+  },
+  "finishedAt": "2026-09-12T10:05:53.218596Z",
+  "fixtureIdentity": {
+    "owner": "atlas-20260912-fixture",
+    "root": "/tmp/atlas-20260912-fixture"
+  },
+  "result": "INCONCLUSIVE",
+  "runtimeIdentity": {
+    "lane": "setup-context-review",
+    "owner": "cockpitfeedback",
+    "runId": "atlas-exhaustive-20260912"
+  },
+  "scenarioId": "browser-feedback-overview",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "startedAt": "2026-09-12T10:05:53.218596Z",
+  "stateTimeline": [
+    {
+      "artifactRefs": [
+        "evidence/cockpitfeedback/before-feedback-1440x900.png",
+        "evidence/cockpitfeedback/before-feedback-1024x640.png",
+        "evidence/cockpitfeedback/action-01-feedback-1440x900.png",
+        "evidence/cockpitfeedback/action-01-feedback-1024x640.png",
+        "evidence/cockpitfeedback/after-feedback-1440x900.png",
+        "evidence/cockpitfeedback/after-feedback-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-browser-feedback"
+      ],
+      "observedAt": "2026-09-12T10:05:53.218596Z",
+      "phase": "before",
+      "result": "INCONCLUSIVE",
+      "stateId": "before-feedback",
+      "surface": "browser feedback overview",
+      "visibleAssertions": [
+        "fixture browser surface loaded",
+        "Cockpit feedback overview unavailable: API status endpoint returned HTTP 404"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "evidence/cockpitfeedback/before-feedback-1440x900.png",
+        "evidence/cockpitfeedback/before-feedback-1024x640.png",
+        "evidence/cockpitfeedback/action-01-feedback-1440x900.png",
+        "evidence/cockpitfeedback/action-01-feedback-1024x640.png",
+        "evidence/cockpitfeedback/after-feedback-1440x900.png",
+        "evidence/cockpitfeedback/after-feedback-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-browser-feedback"
+      ],
+      "observedAt": "2026-09-12T10:05:53.218596Z",
+      "phase": "action",
+      "result": "INCONCLUSIVE",
+      "stateId": "action-feedback",
+      "surface": "browser feedback overview",
+      "visibleAssertions": [
+        "fixture browser surface loaded",
+        "Cockpit feedback overview unavailable: API status endpoint returned HTTP 404"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "evidence/cockpitfeedback/before-feedback-1440x900.png",
+        "evidence/cockpitfeedback/before-feedback-1024x640.png",
+        "evidence/cockpitfeedback/action-01-feedback-1440x900.png",
+        "evidence/cockpitfeedback/action-01-feedback-1024x640.png",
+        "evidence/cockpitfeedback/after-feedback-1440x900.png",
+        "evidence/cockpitfeedback/after-feedback-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-browser-feedback"
+      ],
+      "observedAt": "2026-09-12T10:05:53.218596Z",
+      "phase": "after",
+      "result": "INCONCLUSIVE",
+      "stateId": "after-feedback",
+      "surface": "browser feedback overview",
+      "visibleAssertions": [
+        "fixture browser surface loaded",
+        "Cockpit feedback overview unavailable: API status endpoint returned HTTP 404"
+      ]
+    }
+  ],
+  "viewportSet": [
+    {
+      "height": 900,
+      "width": 1440
+    },
+    {
+      "height": 640,
+      "width": 1024
+    }
+  ]
+}

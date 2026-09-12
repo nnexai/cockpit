@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 1,
+  "contractId": "product-atlas.evidence-contract.v1",
+  "purpose": "Machine-checkable contract for collecting and judging cross-surface runtime evidence.",
+  "decisionStates": ["PASS", "FAIL", "INCONCLUSIVE"],
+  "artifactNaming": {
+    "root": "evidence/<scenarioId>/<captureId>/",
+    "captureIdPattern": "^[a-z0-9][a-z0-9-]{7,63}$",
+    "requiredFiles": [
+      "manifest.json",
+      "actions.jsonl",
+      "authority.json",
+      "states.json",
+      "diagnostics.json",
+      "cleanup.json"
+    ],
+    "screenshotPattern": "^(before|action-[0-9]{2}|after)-[a-z0-9-]+-(1440x900|1024x640)\\.png$",
+    "noAmbiguousNames": true,
+    "requiredArtifactFields": [
+      "path",
+      "kind",
+      "evidenceClass",
+      "scenarioId",
+      "captureId",
+      "capturedAt",
+      "sourceCommit",
+      "sha256",
+      "provenance"
+    ],
+    "allowedEvidenceClasses": ["runtime", "static", "mock", "historical"],
+    "runtimeClaimsRequire": "runtime"
+  },
+  "captureManifest": {
+    "requiredFields": [
+      "scenarioId",
+      "captureId",
+      "startedAt",
+      "finishedAt",
+      "sourceCommit",
+      "client",
+      "runtimeIdentity",
+      "viewportSet",
+      "disposableSession",
+      "browserProfile",
+      "fixtureIdentity",
+      "authoritySnapshot",
+      "actionLog",
+      "stateTimeline",
+      "artifacts",
+      "result",
+      "cleanup"
+    ],
+    "disposableOnly": true,
+    "protectedResourcesMustNotAppear": [
+      "Herdr session default",
+      "user active agent/session",
+      "unrelated browser tabs or profiles"
+    ],
+    "timestampFormat": "RFC3339-with-timezone",
+    "hashAlgorithm": "sha256",
+    "hashPattern": "^[a-f0-9]{64}$"
+  },
+  "screenshots": {
+    "requiredViewports": [
+      {"width": 1440, "height": 900, "name": "desktop"},
+      {"width": 1024, "height": 640, "name": "compact"}
+    ],
+    "requiredPerViewport": ["before", "after"],
+    "requiredActionScreens": "one for every state-changing action",
+    "dimensionsMustMatchFilename": true,
+    "captureActualSurfaceOnly": true,
+    "mustIdentify": ["scenarioId", "captureId", "stateId", "viewport", "capturedAt", "sha256"],
+    "forbiddenAsProof": [
+      "mock or static image",
+      "design reference",
+      "first picture without before/action/after continuity",
+      "screenshot from another commit or session",
+      "cropped image that omits the asserted surface"
+    ],
+    "crossSurfacePairing": {
+      "required": true,
+      "rule": "Each screenshot assertion must link to matching browser/native/extension/Herdr authority and action records where applicable.",
+      "unpairedIs": "INCONCLUSIVE"
+    }
+  },
+  "stateProtocol": {
+    "requiredSequence": ["before", "action", "after"],
+    "stateRecordFields": [
+      "stateId",
+      "phase",
+      "observedAt",
+      "surface",
+      "visibleAssertions",
+      "authorityRefs",
+      "artifactRefs",
+      "result"
+    ],
+    "phaseRules": {
+      "before": "Record precondition and baseline before the action; no PASS may be assigned from this phase.",
+      "action": "Record exact action, target, actor, and observable acknowledgement; action receipt alone does not prove final state.",
+      "after": "Record settled visible state and authoritative backing state after the action; required for PASS."
+    },
+    "passRequires": [
+      "before, action, and after are present",
+      "all required assertions are visible in after",
+      "after has matching authority and artifact references",
+      "no unresolved diagnostics or contradictory observations"
+    ],
+    "firstPictureOnly": "reject",
+    "missingAfter": "reject",
+    "staticOrMockOnlyForRuntimeClaim": "reject"
+  },
+  "authoritySnapshots": {
+    "required": true,
+    "requiredFields": [
+      "authorityId",
+      "surface",
+      "capturedAt",
+      "sourceCommit",
+      "sessionId",
+      "ownedResourceIds",
+      "stateDigest",
+      "sha256",
+      "redaction"
+    ],
+    "mustCover": [
+      "Herdr session/space/tab/pane identifiers",
+      "browser tab/document identity when browser surface is involved",
+      "extension/native process identity when applicable",
+      "fixture repository and worktree identity when filesystem state is involved"
+    ],
+    "ownershipRule": "IDs, labels, or paths alone are insufficient; snapshot must establish disposable ownership and source/runtime identity.",
+    "crossSurfaceProvenanceRequired": true
+  },
+  "actionLog": {
+    "format": "JSONL",
+    "requiredFieldsPerEntry": [
+      "sequence",
+      "at",
+      "actor",
+      "surface",
+      "action",
+      "target",
+      "inputs",
+      "expectedAck",
+      "observedAck",
+      "authorityRefs",
+      "artifactRefs",
+      "outcome"
+    ],
+    "sequenceContiguous": true,
+    "redactSecrets": true,
+    "mustIncludeRetryAttempts": true,
+    "actionWithoutObservedAck": "INCONCLUSIVE"
+  },
+  "diagnostics": {
+    "requiredOn": ["FAIL", "INCONCLUSIVE", "retry"],
+    "requiredFields": [
+      "diagnosticId",
+      "at",
+      "category",
+      "symptom",
+      "attempts",
+      "logsOrTraceRefs",
+      "screenshotsRefs",
+      "environmentRefs",
+      "lastKnownState",
+      "ownershipImpact",
+      "nextStep"
+    ],
+    "categories": ["timeout", "disconnect", "wrong-surface", "stale-evidence", "ownership", "cleanup", "assertion-mismatch", "capability-unavailable"],
+    "retainRawEvidence": true,
+    "redactSecrets": true
+  },
+  "retryPolicy": {
+    "defaultBudget": 2,
+    "perAttemptMustRecord": ["actionLog", "observedState", "diagnostics", "artifactHashes"],
+    "retryMustUse": "same disposable fixture only when ownership remains verified; otherwise create a new capture",
+    "escalateAfterBudget": true,
+    "inconclusiveAllowedOnlyWhen": [
+      "named retry budget is exhausted",
+      "required runtime capability is unavailable",
+      "safe collection cannot continue",
+      "evidence remains contradictory or corrupted after named attempts"
+    ],
+    "prematureInconclusive": "reject"
+  },
+  "resultRules": {
+    "PASS": {
+      "requiresAll": [
+        "complete before/action/after timeline",
+        "required screenshots at both viewports",
+        "runtime evidence for every live claim",
+        "authority snapshots and cross-surface provenance",
+        "matching timestamps, source commit, and hashes",
+        "all actions acknowledged",
+        "cleanup completed with no residual unowned resources",
+        "no unresolved diagnostics"
+      ],
+      "forbiddenIf": ["first-picture-only", "mock/static-only", "missing-authority", "missing-cross-surface-provenance", "pending-retry", "unverified-cleanup"]
+    },
+    "FAIL": {
+      "requires": ["observed contradiction or safety/ownership violation", "supporting diagnostics"],
+      "mustNotBeUsedFor": "missing evidence"
+    },
+    "INCONCLUSIVE": {
+      "requires": ["named attempts", "retained diagnostics", "explicit blocker", "partial state and artifact inventory"],
+      "forbiddenWithout": ["retry budget exhausted or named capability blocker", "timestamps and hashes", "cleanup outcome"]
+    }
+  },
+  "validationRejections": [
+    "first-picture-only capture",
+    "mock/static evidence presented as live proof",
+    "missing browser/native/extension/Herdr provenance for a cross-surface claim",
+    "PASS before after-state is observed",
+    "PASS with missing viewport or hash",
+    "INCONCLUSIVE before named retries/escalation",
+    "artifact without source commit, capture timestamp, or SHA-256",
+    "capture using protected/default session or unrelated profile"
+  ]
+}

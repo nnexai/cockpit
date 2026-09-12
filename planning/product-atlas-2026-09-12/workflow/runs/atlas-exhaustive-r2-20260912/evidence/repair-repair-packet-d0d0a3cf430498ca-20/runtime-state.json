@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-677fd4d761499930",
+  "scenarioId": "context-browser",
+  "surface": [
+    "Context browser and source imports"
+  ],
+  "surfaces": [
+    "Context browser and source imports"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Open source-import view, inspect imported source and provenance, follow source link"
+  ]
+}

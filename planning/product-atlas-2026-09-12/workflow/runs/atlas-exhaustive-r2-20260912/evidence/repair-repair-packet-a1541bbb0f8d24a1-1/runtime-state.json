@@ -1,0 +1,20 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-4e4b0716032aec2d",
+  "scenarioId": "annotation.page-browse-annotate-mode",
+  "surface": [
+    "page",
+    "FeedbackPanel"
+  ],
+  "surfaces": [
+    "page",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Select Annotate"
+  ]
+}

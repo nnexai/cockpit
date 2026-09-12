@@ -1,0 +1,225 @@
+{
+  "manifest": {
+    "actionLog": [
+      {
+        "action": "Open Review and inspect changes",
+        "actor": "cockpitreviewsetup",
+        "artifactRefs": [
+          "before-cockpit-1440x900.png",
+          "before-cockpit-1024x640.png"
+        ],
+        "at": "2026-09-12T10:06:45Z",
+        "authorityRefs": [
+          "authority-cockpitreviewsetup-9"
+        ],
+        "expectedAck": "Review surface opens",
+        "inputs": {},
+        "observedAck": "No spaces or panes; setup controls disabled",
+        "outcome": "BLOCKED",
+        "sequence": 1,
+        "stateChanging": true,
+        "surface": "Cockpit",
+        "target": "Review control"
+      }
+    ],
+    "artifacts": [
+      {
+        "captureId": "cockpitreviewsetup-comments-01",
+        "capturedAt": "2026-09-12T10:06:30Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/cockpitreviewsetup/before-cockpit-1440x900.png",
+        "provenance": "Playwright CLI owned session atlas-20260912-cockpitreviewsetup-9 actual Cockpit",
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "a3b96d72f00e7840be0444322b9813460a3883afe9fd55c46d7cdb45cf9646c3",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cockpitreviewsetup-comments-01",
+        "capturedAt": "2026-09-12T10:06:30Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/cockpitreviewsetup/before-cockpit-1024x640.png",
+        "provenance": "Playwright CLI owned session",
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "8d73859b0f213b8b469946a35a91f225ce565637214bc726eae3acf246449277",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cockpitreviewsetup-comments-01",
+        "capturedAt": "2026-09-12T10:06:45Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/cockpitreviewsetup/action-01-cockpit-1440x900.png",
+        "provenance": "Playwright CLI owned session",
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "1d2cbcc8cb7b3e99853cdb1eba99d44052c609939aeded2f81a9073902d16684",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cockpitreviewsetup-comments-01",
+        "capturedAt": "2026-09-12T10:06:45Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/cockpitreviewsetup/action-01-cockpit-1024x640.png",
+        "provenance": "Playwright CLI owned session",
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "f837e0477815272f8ea800f4b20b1286689989bb721a2ff2a28dbb2cbd3638b4",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cockpitreviewsetup-comments-01",
+        "capturedAt": "2026-09-12T10:07:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/cockpitreviewsetup/after-cockpit-1440x900.png",
+        "provenance": "Playwright CLI owned session",
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "cb54c25145cfa7bb63e0e731ec464cb479adc5ca83315d445cb6e9d3c9881ddb",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "cockpitreviewsetup-comments-01",
+        "capturedAt": "2026-09-12T10:07:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/cockpitreviewsetup/after-cockpit-1024x640.png",
+        "provenance": "Playwright CLI owned session",
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "b8dc6975522f34b7384cd2b503bc28e30d4d1b33bb79173fc0fe792c0955dfda",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "attempts": 2,
+    "authoritySnapshot": [
+      {
+        "authorityId": "authority-cockpitreviewsetup-9",
+        "capturedAt": "2026-09-12T10:06:30Z",
+        "ownedResourceIds": [
+          "atlas-20260912-browser-context"
+        ],
+        "redaction": "Synthetic fixture only",
+        "sessionId": "atlas-20260912-herdr",
+        "sha256": "a6e33692fef8c68026a331d80387a22b611bd6b66e178eff6c872f31888c95cb",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "no-spaces-no-panes",
+        "surface": "Cockpit actual browser UI"
+      },
+      {
+        "authorityId": "authority-extension-cockpitreviewsetup-9",
+        "capturedAt": "2026-09-12T10:06:30Z",
+        "ownedResourceIds": [
+          "atlas-20260912-browser-profile"
+        ],
+        "redaction": "Synthetic fixture only",
+        "sessionId": "atlas-20260912-herdr",
+        "sha256": "a6e33692fef8c68026a331d80387a22b611bd6b66e178eff6c872f31888c95cb",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "extension-unavailable",
+        "surface": "Browser extension FeedbackPanel"
+      }
+    ],
+    "blocker": "Actual Cockpit served but disposable setup context has no spaces or panes; Review surface unavailable after named retries.",
+    "browserProfile": "atlas-20260912-browser-profile",
+    "captureId": "cockpitreviewsetup-comments-01",
+    "cleanup": {
+      "completed": true,
+      "details": "Owned Playwright session retained for packet capture; no protected resources touched.",
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "diagnostics": [
+      {
+        "at": "2026-09-12T10:07:00Z",
+        "attempts": 2,
+        "category": "capability-unavailable",
+        "diagnosticId": "diag-review-no-space",
+        "environmentRefs": [
+          "fixture/browser.json"
+        ],
+        "lastKnownState": "No spaces; no panes",
+        "logsOrTraceRefs": [
+          ".playwright-cli/console-2026-09-12T10-05-12-814Z.log"
+        ],
+        "nextStep": "Provide disposable Cockpit pairing with hydrated setup surface",
+        "ownershipImpact": "none",
+        "resolved": false,
+        "screenshotsRefs": [
+          "evidence/cockpitreviewsetup/before-cockpit-1440x900.png"
+        ],
+        "symptom": "Review control unavailable"
+      }
+    ],
+    "disposableSession": "atlas-20260912-herdr",
+    "finishedAt": "2026-09-12T10:07:00Z",
+    "fixtureIdentity": "atlas-20260912-fixture",
+    "result": "INCONCLUSIVE",
+    "runtimeIdentity": {
+      "lane": "setup-context-review",
+      "owner": "cockpitreviewsetup",
+      "runId": "atlas-exhaustive-20260912"
+    },
+    "scenarioId": "review.comments-draft-batch",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:06:30Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "before-cockpit-1440x900.png",
+          "before-cockpit-1024x640.png"
+        ],
+        "authorityRefs": [
+          "authority-cockpitreviewsetup-9"
+        ],
+        "observedAt": "2026-09-12T10:06:30Z",
+        "phase": "before",
+        "result": "INCONCLUSIVE",
+        "stateId": "before",
+        "surface": "Cockpit",
+        "visibleAssertions": [
+          "Cockpit loaded",
+          "No spaces",
+          "No panes"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "action-01-cockpit-1440x900.png",
+          "action-01-cockpit-1024x640.png"
+        ],
+        "authorityRefs": [
+          "authority-cockpitreviewsetup-9"
+        ],
+        "observedAt": "2026-09-12T10:06:45Z",
+        "phase": "action",
+        "result": "INCONCLUSIVE",
+        "stateId": "action-01",
+        "surface": "Cockpit",
+        "visibleAssertions": [
+          "Review unavailable because no spaces exist"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "after-cockpit-1440x900.png",
+          "after-cockpit-1024x640.png"
+        ],
+        "authorityRefs": [
+          "authority-cockpitreviewsetup-9"
+        ],
+        "observedAt": "2026-09-12T10:07:00Z",
+        "phase": "after",
+        "result": "INCONCLUSIVE",
+        "stateId": "after",
+        "surface": "Cockpit",
+        "visibleAssertions": [
+          "No state transition; no spaces or panes"
+        ]
+      }
+    ],
+    "viewportSet": [
+      "1440x900",
+      "1024x640"
+    ]
+  }
+}

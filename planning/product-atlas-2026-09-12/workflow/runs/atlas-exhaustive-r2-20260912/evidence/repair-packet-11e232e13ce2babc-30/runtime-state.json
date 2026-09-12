@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-11e232e13ce2babc",
+  "scenarioId": "browser-feedback-overview",
+  "surface": [
+    "browser feedback overview"
+  ],
+  "surfaces": [
+    "browser feedback overview"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Open browser feedback overview, inspect pending item, filter by status, open detail"
+  ]
+}

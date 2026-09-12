@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-1d9adf044601adf5",
+  "scenarioId": "review-setup-sources",
+  "surface": [
+    "setup, sources, and Review"
+  ],
+  "surfaces": [
+    "setup, sources, and Review"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Open setup, choose Repository A, configure project, submit, and observe workspace transition"
+  ]
+}

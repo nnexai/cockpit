@@ -1,0 +1,297 @@
+{
+  "lanes": {
+    "bootstrap": {
+      "claimId": "claim-8d124cebc8bee154",
+      "owner": "atlas-fixture-lead",
+      "packetId": "packet-7d03056470bc5b5b"
+    },
+    "browser-extension": {
+      "claimId": "claim-e6d3470439645c92",
+      "owner": "extensionpalettetools",
+      "owners": {
+        "packet-02780ae270749c1b": {
+          "claimId": "claim-ca84f2454797b2b7",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensionpopuprecovery",
+          "worker": "extensionpopuprecovery"
+        },
+        "packet-0cede94998f18968": {
+          "claimId": "claim-bead3983367bf4a5",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensionpopuprecovery",
+          "worker": "extensionpopuprecovery"
+        },
+        "packet-0d40f47453b89324": {
+          "claimId": "claim-ebb1c6facd4a4236",
+          "resourceNamespace": "atlas-20260912-extensioncapturefeedback",
+          "worker": "AtlasExhaustiveCollection-4"
+        },
+        "packet-1c8d0858a278ccd7": {
+          "claimId": "claim-435c329c115f0ba6",
+          "resourceNamespace": "atlas-20260912-extensioncapturefeedback",
+          "worker": "AtlasExhaustiveCollection-4"
+        },
+        "packet-2f84d3c637135e80": {
+          "claimId": "claim-c04fe61347802f28",
+          "resourceNamespace": "atlas-20260912-extensioncapturefeedback",
+          "worker": "AtlasExhaustiveCollection-4"
+        },
+        "packet-4e4b0716032aec2d": {
+          "claimId": "claim-446843c8fb2462bb",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensionpalettetools",
+          "worker": "extensionpalettetools"
+        },
+        "packet-5258f369802c6f94": {
+          "claimId": "claim-98713d1edad38cbd",
+          "resourceNamespace": "atlas-20260912-extensioncapturefeedback",
+          "worker": "AtlasExhaustiveCollection-4"
+        },
+        "packet-6284e6217f19daec": {
+          "claimId": "claim-df5fefb05328045f",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-cockpitcommandmenus",
+          "worker": "cockpitcommandmenus"
+        },
+        "packet-62d1b94a6880d131": {
+          "claimId": "claim-d37f2faf6dc6a392",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface-62d1",
+          "worker": "AtlasExhaustiveCollection-5"
+        },
+        "packet-6843dfe80ac135c4": {
+          "claimId": "claim-ac0a8d5b3b16a9fa",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensiontooldetails",
+          "worker": "extensiontooldetails"
+        },
+        "packet-684675e85ac06b53": {
+          "claimId": "claim-f272731c3ac1e606",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensionpopuprecovery",
+          "worker": "extensionpopuprecovery"
+        },
+        "packet-7ccf625c0ccc51ff": {
+          "claimId": "claim-16049a71687f0861",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensionpopuprecovery",
+          "worker": "extensionpopuprecovery"
+        },
+        "packet-85f9fb5ae272c0e9": {
+          "claimId": "claim-7e20340599a432e7",
+          "resourceNamespace": "atlas-20260912-extensioncapturefeedback",
+          "worker": "AtlasExhaustiveCollection-4"
+        },
+        "packet-87f3c51f7457f975": {
+          "claimId": "claim-106863343f0dbd46",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface-87f3",
+          "worker": "AtlasExhaustiveCollection-5"
+        },
+        "packet-c121c4917e334ffe": {
+          "claimId": "claim-b3feabdbe7e21811",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface",
+          "worker": "AtlasExhaustiveCollection-5"
+        },
+        "packet-d181bfdbd28e3334": {
+          "claimId": "claim-2500a5a519df7d8d",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensiontooldetails",
+          "worker": "extensiontooldetails"
+        },
+        "packet-dffaaa1aacf942f5": {
+          "claimId": "claim-6d8eb71638b157e4",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensiontooldetails",
+          "worker": "extensiontooldetails"
+        },
+        "packet-e051aa8a87edacba": {
+          "claimId": "claim-7f0fe0d419a9f6b6",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensionpopuprecovery",
+          "worker": "extensionpopuprecovery"
+        },
+        "packet-e151b0ef69698f4c": {
+          "claimId": "claim-7f393070decf1941",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensiontooldetails",
+          "worker": "extensiontooldetails"
+        },
+        "packet-e3602c54ca486a8e": {
+          "claimId": "claim-2d8538047673b9a7",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensiontooldetails",
+          "worker": "extensiontooldetails"
+        },
+        "packet-e52901c94d60ebb6": {
+          "claimId": "claim-ae2980664efb6a33",
+          "resourceNamespace": "atlas-20260912-extensioncapturefeedback",
+          "worker": "AtlasExhaustiveCollection-4"
+        },
+        "packet-e74adb74a1d63747": {
+          "claimId": "claim-60b6d57ad340f496",
+          "resourceNamespace": "atlas-20260912-cockpitreviewsetup-9-comments2",
+          "worker": "cockpitreviewsetup"
+        },
+        "packet-f08be8b63fb0bbe8": {
+          "claimId": "claim-4c5345d0078d5663",
+          "resourceNamespace": "atlas-exhaustive-20260912-browser-extension-extensiontooldetails",
+          "worker": "extensiontooldetails"
+        },
+        "packet-fa320f4365df67ec": {
+          "claimId": "claim-3070b64d65c65d5a",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface-fa32-retry",
+          "worker": "AtlasExhaustiveCollection-5"
+        }
+      },
+      "packetId": "packet-9c9cde21ba0a8b1e"
+    },
+    "fixture": {
+      "claimId": "claim-8ecca5918da2957e",
+      "owner": "fixturecomplexityproof",
+      "packetId": "packet-d79a57e445c9e782"
+    },
+    "setup-context-review": {
+      "claimId": "claim-c56b7d7ef60d612f",
+      "owner": "cockpitfeedback",
+      "owners": {
+        "packet-04fdc0a212081cc7": {
+          "claimId": "claim-9aa68bec56cd6836",
+          "resourceNamespace": "atlas-exhaustive-20260912-cockpitfiles-7",
+          "worker": "cockpitfiles-7"
+        },
+        "packet-11e232e13ce2babc": {
+          "claimId": "claim-c56b7d7ef60d612f",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitfeedback",
+          "worker": "cockpitfeedback"
+        },
+        "packet-1d9adf044601adf5": {
+          "claimId": "claim-0ace8c2f83e561cf",
+          "resourceNamespace": "atlas-20260912-cockpitreviewsetup-9-setup",
+          "worker": "cockpitreviewsetup"
+        },
+        "packet-23722939b942174f": {
+          "claimId": "claim-8a97f9aa26fe144d",
+          "resourceNamespace": "atlas-exhaustive-20260912-cockpitfiles-7b",
+          "worker": "cockpitfiles-7"
+        },
+        "packet-23cc1a956cfc509a": {
+          "claimId": "claim-c26968193bac4482",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitfiles",
+          "worker": "cockpitfiles"
+        },
+        "packet-4e2fa6acb24007f9": {
+          "claimId": "claim-eefdb0031f581707",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitcommandmenus-4e2f",
+          "worker": "cockpitcommandmenus"
+        },
+        "packet-63ea5bbc0d551732": {
+          "claimId": "claim-1bd54b63443a41c4",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitcommandmenus-63ea",
+          "worker": "cockpitcommandmenus"
+        },
+        "packet-677fd4d761499930": {
+          "claimId": "claim-c7fea81a4e6a5de0",
+          "resourceNamespace": "atlas-20260912-cockpitcontextsources-677",
+          "worker": "cockpitcontextsources"
+        },
+        "packet-6eb9ee688f689727": {
+          "claimId": "claim-e69879a455d28cb1",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface-6eb9",
+          "worker": "AtlasExhaustiveCollection-5"
+        },
+        "packet-7aa17dd2e22b295b": {
+          "claimId": "claim-08c70e960dff0b62",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitfeedback",
+          "worker": "cockpitfeedback"
+        },
+        "packet-7febd1590d7118ef": {
+          "claimId": "claim-fe972e404915683b",
+          "resourceNamespace": "atlas-20260912-cockpitcontextsources-7f",
+          "worker": "cockpitcontextsources"
+        },
+        "packet-83da8140e5c4b37b": {
+          "claimId": "claim-1d60933e31783ace",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface-83da",
+          "worker": "AtlasExhaustiveCollection-5"
+        },
+        "packet-86f2dadfcb1b6830": {
+          "claimId": "claim-e50a592f291a6b3d",
+          "resourceNamespace": "atlas-20260912-cockpitcontextsources",
+          "worker": "cockpitcontextsources"
+        },
+        "packet-9103a49208aa8fe5": {
+          "claimId": "claim-ff0975e565cc58ba",
+          "resourceNamespace": "atlas-20260912-cockpitreviewsetup-9-sources",
+          "worker": "cockpitreviewsetup"
+        },
+        "packet-921586d2a0bf2b7c": {
+          "claimId": "claim-1e48b4c7b6ff493e",
+          "resourceNamespace": "atlas-20260912-cockpitreviewsetup-9-review",
+          "worker": "cockpitreviewsetup"
+        },
+        "packet-ad6b76188a0ee3dd": {
+          "claimId": "claim-8642a86dd8a58835",
+          "resourceNamespace": "atlas-20260912-cockpitcontextsources-ad6",
+          "worker": "cockpitcontextsources"
+        },
+        "packet-b91cf7670d08652f": {
+          "claimId": "claim-fd7b5df06aaa488b",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitcommandmenus-b91c",
+          "worker": "cockpitcommandmenus"
+        },
+        "packet-bc4e066321bd93c0": {
+          "claimId": "claim-f6ec2fdc055d5640",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitcommandmenus",
+          "worker": "cockpitcommandmenus"
+        },
+        "packet-c712ba13b972c328": {
+          "claimId": "claim-8fc3a2443e750192",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitcommandmenus-c712",
+          "worker": "cockpitcommandmenus"
+        },
+        "packet-d4093a5edc5a7034": {
+          "claimId": "claim-54c7bb12e6cd25f8",
+          "resourceNamespace": "atlas-exhaustive-20260912-cockpitfiles-7d",
+          "worker": "cockpitfiles-7"
+        },
+        "packet-e3ddd2156938f409": {
+          "claimId": "claim-48c29634cf4d2ded",
+          "resourceNamespace": "atlas-20260912-deliverycrosssurface-e3dd",
+          "worker": "AtlasExhaustiveCollection-5"
+        },
+        "packet-e54b394ee58e8827": {
+          "claimId": "claim-f7d1ca82c0b84827",
+          "resourceNamespace": "atlas-exhaustive-20260912-setup-context-review-cockpitcommandmenus-e54b",
+          "worker": "cockpitcommandmenus"
+        }
+      },
+      "packetId": "packet-11e232e13ce2babc"
+    }
+  },
+  "owner": "workflow-collector-2026-09-12",
+  "protected": [
+    "default",
+    "user-browser-profile",
+    "unrelated-tabs"
+  ],
+  "resources": [
+    {
+      "id": "atlas-20260912-fixture",
+      "kind": "fixture-root",
+      "owner": "atlas-20260912-fixture",
+      "path": "/tmp/atlas-20260912-fixture"
+    },
+    {
+      "id": "atlas-20260912-herdr",
+      "kind": "herdr-session",
+      "owner": "atlas-20260912-fixture",
+      "path": "/tmp/atlas-20260912-herdr"
+    },
+    {
+      "id": "atlas-20260912-browser-profile",
+      "kind": "browser-profile",
+      "owner": "atlas-20260912-fixture",
+      "path": "/tmp/atlas-20260912-browser-profile"
+    },
+    {
+      "debugEndpoint": "http://127.0.0.1:49229",
+      "id": "atlas-20260912-browser-context",
+      "kind": "browser-context",
+      "owner": "atlas-20260912-fixture"
+    },
+    {
+      "endpoint": "http://127.0.0.1:49329",
+      "id": "atlas-20260912-fixture-pages",
+      "kind": "fixture-page-server",
+      "owner": "atlas-20260912-fixture"
+    }
+  ],
+  "runId": "atlas-exhaustive-20260912"
+}

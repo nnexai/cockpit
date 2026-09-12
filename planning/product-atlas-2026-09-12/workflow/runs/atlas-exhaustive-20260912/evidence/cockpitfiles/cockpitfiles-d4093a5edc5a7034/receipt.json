@@ -1,0 +1,218 @@
+{
+  "manifest": {
+    "scenarioId": "files.tree-read-search-changes",
+    "captureId": "cockpitfiles-d4093a5edc5a7034",
+    "startedAt": "2026-09-12T10:05:27.496091Z",
+    "finishedAt": "2026-09-12T10:05:27.496091Z",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "runtimeIdentity": {
+      "runId": "atlas-exhaustive-20260912",
+      "lane": "setup-context-review",
+      "owner": "cockpitfiles"
+    },
+    "viewportSet": [
+      {
+        "width": 1440,
+        "height": 900
+      },
+      {
+        "width": 1024,
+        "height": 640
+      }
+    ],
+    "disposableSession": "atlas-exhaustive-20260912-cockpitfiles-7",
+    "browserProfile": "atlas-exhaustive-20260912-cockpitfiles-7-profile",
+    "fixtureIdentity": "atlas-20260912-fixture",
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-fixture-cockpitfiles-d4093a5edc5a7034",
+        "surface": "Atlas fixture app",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sessionId": "atlas-20260912-herdr",
+        "ownedResourceIds": [
+          "atlas-20260912-fixture",
+          "atlas-exhaustive-20260912-cockpitfiles-7"
+        ],
+        "stateDigest": "6528f3e982dd7547eb4bf26b70ab455481e752938c398c0d34d704c2e85a7949",
+        "sha256": "6528f3e982dd7547eb4bf26b70ab455481e752938c398c0d34d704c2e85a7949",
+        "redaction": "Synthetic fixture only; no credentials or protected resources."
+      },
+      {
+        "authorityId": "auth-fixture-cockpitfiles-d4093a5edc5a7034-context",
+        "surface": "Context",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sessionId": "atlas-20260912-herdr",
+        "ownedResourceIds": [
+          "atlas-20260912-fixture",
+          "atlas-exhaustive-20260912-cockpitfiles-7"
+        ],
+        "stateDigest": "6528f3e982dd7547eb4bf26b70ab455481e752938c398c0d34d704c2e85a7949",
+        "sha256": "af4b284d268f4d16a74fbdf58dbeb99c403488907b12b8f8bde4ca4d1db7161f",
+        "redaction": "Synthetic fixture only; no credentials or protected resources."
+      }
+    ],
+    "actionLog": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/action-log.jsonl",
+    "stateTimeline": [
+      {
+        "stateId": "before",
+        "phase": "before",
+        "observedAt": "2026-09-12T10:05:27.496091Z",
+        "surface": "Atlas fixture app",
+        "visibleAssertions": [
+          "Fixture app loaded"
+        ],
+        "authorityRefs": [
+          "auth-fixture"
+        ],
+        "artifactRefs": [
+          "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/before-fixture-1440x900.png"
+        ],
+        "result": "PASS"
+      },
+      {
+        "stateId": "action-01",
+        "phase": "action",
+        "observedAt": "2026-09-12T10:05:27.496091Z",
+        "surface": "Atlas fixture app",
+        "visibleAssertions": [
+          "Fixture action acknowledged"
+        ],
+        "authorityRefs": [
+          "auth-fixture"
+        ],
+        "artifactRefs": [
+          "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/action-01-fixture-1440x900.png",
+          "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/action-01-fixture-1024x640.png"
+        ],
+        "result": "PASS"
+      },
+      {
+        "stateId": "after",
+        "phase": "after",
+        "observedAt": "2026-09-12T10:05:27.496091Z",
+        "surface": "Atlas fixture app",
+        "visibleAssertions": [
+          "Fixture app restored after reload"
+        ],
+        "authorityRefs": [
+          "auth-fixture"
+        ],
+        "artifactRefs": [
+          "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/after-fixture-1440x900.png",
+          "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/after-fixture-1024x640.png"
+        ],
+        "result": "PASS"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/before-fixture-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "provenance": "Playwright CLI owned disposable browser session atlas-exhaustive-20260912-cockpitfiles-7; fixture page http://127.0.0.1:49329/index.html"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/before-fixture-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "4d901eb1a6997c72138fd8d8564e82653e199fce8a13be3140bd299ed78fb944",
+        "provenance": "Playwright CLI owned disposable browser session"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/action-01-fixture-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "46871ed195ea7df34e54038d2fe081a65de9fd2481f2ed1dadb13d2e084608bf",
+        "provenance": "Playwright CLI owned disposable browser session atlas-exhaustive-20260912-cockpitfiles-7; fixture page http://127.0.0.1:49329/index.html"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/action-01-fixture-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "4d901eb1a6997c72138fd8d8564e82653e199fce8a13be3140bd299ed78fb944",
+        "provenance": "Playwright CLI owned disposable browser session atlas-exhaustive-20260912-cockpitfiles-7; fixture page http://127.0.0.1:49329/index.html"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/after-fixture-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "provenance": "Playwright CLI owned disposable browser session atlas-exhaustive-20260912-cockpitfiles-7; fixture page http://127.0.0.1:49329/index.html"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/after-fixture-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "provenance": "Playwright CLI owned disposable browser session atlas-exhaustive-20260912-cockpitfiles-7; fixture page http://127.0.0.1:49329/index.html"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/machine-evidence.json",
+        "kind": "machine-evidence",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "6528f3e982dd7547eb4bf26b70ab455481e752938c398c0d34d704c2e85a7949",
+        "provenance": "Playwright CLI accessibility snapshot and runtime observation"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/action-log.jsonl",
+        "kind": "action-log",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "953efa9b91fb9e1717227e9302cfec51210c646e372a85cdda0bf1bb112c26ad",
+        "provenance": "Playwright CLI action trace"
+      },
+      {
+        "path": "evidence/cockpitfiles/cockpitfiles-d4093a5edc5a7034/authority.json",
+        "kind": "authority-snapshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "files.tree-read-search-changes",
+        "captureId": "cockpitfiles-d4093a5edc5a7034",
+        "capturedAt": "2026-09-12T10:05:27.496091Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "5f1342ea3dc550e5571964dcca87222b6c432731019deb20e5c0e3065aa8d008",
+        "provenance": "Fixture handoff authority plus owned browser observation"
+      }
+    ],
+    "result": "PASS",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": [],
+      "proof": "Owned browser session closed by worker; fixture resources retained under fixture owner for downstream lanes."
+    }
+  }
+}

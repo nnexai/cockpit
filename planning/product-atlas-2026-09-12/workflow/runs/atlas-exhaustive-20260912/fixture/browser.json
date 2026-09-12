@@ -1,0 +1,43 @@
+{
+  "allowedFixturePages": [
+    "http://127.0.0.1:49329/index.html",
+    "http://127.0.0.1:49329/docs.html"
+  ],
+  "browserContext": "atlas-20260912-browser-context",
+  "browserProfile": "/tmp/atlas-20260912-browser-profile",
+  "capturedAt": "2026-09-12T09:59:42.179023Z",
+  "debugEndpoint": "http://127.0.0.1:49229",
+  "owner": "atlas-20260912-fixture",
+  "pageTargets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c/inspector.html?ws=127.0.0.1:49229/devtools/page/D59EE3359B42CD48680F6D77BC6011A5",
+      "id": "D59EE3359B42CD48680F6D77BC6011A5",
+      "title": "Atlas fixture app",
+      "type": "page",
+      "url": "http://127.0.0.1:49329/index.html",
+      "webSocketDebuggerUrl": "ws://127.0.0.1:49229/devtools/page/D59EE3359B42CD48680F6D77BC6011A5"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c/inspector.html?ws=127.0.0.1:49229/devtools/page/816B31AA5E5974FCEBBB4883F18647D8",
+      "id": "816B31AA5E5974FCEBBB4883F18647D8",
+      "title": "Atlas fixture docs",
+      "type": "page",
+      "url": "http://127.0.0.1:49329/docs.html",
+      "webSocketDebuggerUrl": "ws://127.0.0.1:49229/devtools/page/816B31AA5E5974FCEBBB4883F18647D8"
+    }
+  ],
+  "viewportEvidence": [
+    {
+      "method": "Browser CDP page viewport observed during browser-first verification",
+      "surface": "Atlas fixture app",
+      "viewport": "1440x900"
+    },
+    {
+      "method": "Browser direct page viewport set and observed",
+      "surface": "Atlas fixture docs",
+      "viewport": "1024x640"
+    }
+  ]
+}

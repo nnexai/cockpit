@@ -1,0 +1,292 @@
+{
+  "manifest": {
+    "actionLog": "evidence/environment-delivery-eligibility-actions.jsonl",
+    "artifacts": [
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/before-feedback-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "c17549a05d495d1f152066721e01ac1304c3cb81358c5f3728873a377a59957d",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/action-01-feedback-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "c17549a05d495d1f152066721e01ac1304c3cb81358c5f3728873a377a59957d",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/after-feedback-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "c17549a05d495d1f152066721e01ac1304c3cb81358c5f3728873a377a59957d",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/before-feedback-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "d92bf1f3c7029e5db4a14418480918cbd1546a9a07e0e7056c3258115f139558",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/action-01-feedback-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "d77a457b75f556530f63e7d923e2df63a36c5fecd589318c2453b3e33eabd88a",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/after-feedback-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "d92bf1f3c7029e5db4a14418480918cbd1546a9a07e0e7056c3258115f139558",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/environment-delivery-eligibility-machine.json",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "f6add0bf413d121f86cbabec83a477d1eec005e046cc5ee007b431a7b1be4c12",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/environment-delivery-eligibility-actions.jsonl",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49372/",
+          "surface": [
+            "environment",
+            "FeedbackPanel"
+          ]
+        },
+        "scenarioId": "environment.delivery-eligibility",
+        "sha256": "1690bec45285a2ce198c6bcbbb047f78e18d44f9eb55c9f16e05b85ab74c6798",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-environment-delivery-eligibility",
+        "capturedAt": "2026-09-12T10:57:45.709578Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages"
+        ],
+        "redaction": "none",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "53c9772c24d83f0bf6879f865acd2975dad18851b873b7a72c4469826e480f6f",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "00bb9fb556fbe0ed4b01ec8f5415e819de44131117f1291b780816191e8691ad",
+        "surface": "environment"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "capture-environment-delivery-eligibility",
+    "cleanup": {
+      "completed": true,
+      "ownedArtifactsOnly": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "diagnostics": [
+      {
+        "at": "2026-09-12T10:57:45.709578Z",
+        "attempts": 2,
+        "category": "assertion-mismatch",
+        "diagnosticId": "diag-environment-delivery-eligibility",
+        "environmentRefs": [
+          "evidence/environment-delivery-eligibility-machine.json"
+        ],
+        "lastKnownState": "Browser: open; No pending browser annotations.",
+        "logsOrTraceRefs": [
+          "evidence/environment-delivery-eligibility-machine.json"
+        ],
+        "nextStep": "Create owned pending annotation targets then repeat capture",
+        "ownershipImpact": "none; owned r2 resources remain active",
+        "resolved": false,
+        "screenshotsRefs": [
+          "evidence/action-01-feedback-1440x900.png",
+          "evidence/action-01-feedback-1024x640.png"
+        ],
+        "symptom": "FeedbackPanel has zero pending annotations, so requested target eligibility/targets cannot be shown."
+      }
+    ],
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T10:57:45.709578Z",
+    "fixtureIdentity": {
+      "associationKey": "454ea4a6eaacf2f619806990",
+      "cockpitGateway": "http://127.0.0.1:49372/",
+      "fixturePages": [
+        "http://127.0.0.1:49373/index.html",
+        "http://127.0.0.1:49373/docs.html"
+      ],
+      "space": "w1 Atlas Alpha"
+    },
+    "packetId": "packet-7ca78f76ac97b409",
+    "result": "FAIL",
+    "runtimeIdentity": {
+      "lane": "fixture",
+      "owner": "AtlasR2RealSurfaces-5",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "environment.delivery-eligibility",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:57:45.709578Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/before-feedback-1440x900.png",
+          "evidence/before-feedback-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-environment-delivery-eligibility"
+        ],
+        "observedAt": "2026-09-12T10:57:45.709578Z",
+        "phase": "before",
+        "result": "observed",
+        "stateId": "before",
+        "surface": "environment",
+        "visibleAssertions": [
+          "Cockpit chrome",
+          "FeedbackPanel not yet opened"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/action-01-feedback-1440x900.png",
+          "evidence/action-01-feedback-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-environment-delivery-eligibility"
+        ],
+        "observedAt": "2026-09-12T10:57:45.709578Z",
+        "phase": "action",
+        "result": "observed",
+        "stateId": "action-01",
+        "surface": "environment",
+        "visibleAssertions": [
+          "Commands exposes Browser feedback",
+          "FeedbackPanel reports Browser: open",
+          "No pending browser annotations"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/after-feedback-1440x900.png",
+          "evidence/after-feedback-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-environment-delivery-eligibility"
+        ],
+        "observedAt": "2026-09-12T10:57:45.709578Z",
+        "phase": "after",
+        "result": "observed",
+        "stateId": "after",
+        "surface": "environment",
+        "visibleAssertions": [
+          "Requested targets absent; current breakage truthfully recorded"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "name": "desktop",
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "name": "compact",
+        "width": 1024
+      }
+    ]
+  }
+}

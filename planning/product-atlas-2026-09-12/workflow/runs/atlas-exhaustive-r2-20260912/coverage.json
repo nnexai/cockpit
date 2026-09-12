@@ -1,0 +1,353 @@
+{
+  "cells": [
+    {
+      "cellId": "annotation.mark-remove-review",
+      "packetId": "packet-dffaaa1aacf942f5",
+      "result": "PASS",
+      "scenarioId": "annotation.mark-remove-review"
+    },
+    {
+      "cellId": "annotation.page-browse-annotate-mode",
+      "packetId": "packet-4e4b0716032aec2d",
+      "result": "PASS",
+      "scenarioId": "annotation.page-browse-annotate-mode"
+    },
+    {
+      "cellId": "annotation.tool-element-anchor",
+      "packetId": "packet-f08be8b63fb0bbe8",
+      "result": "PASS",
+      "scenarioId": "annotation.tool-element-anchor"
+    },
+    {
+      "cellId": "annotation.tool-freehand-comment",
+      "packetId": "packet-6843dfe80ac135c4",
+      "result": "PASS",
+      "scenarioId": "annotation.tool-freehand-comment"
+    },
+    {
+      "cellId": "annotation.tool-region-comment",
+      "packetId": "packet-d181bfdbd28e3334",
+      "result": "PASS",
+      "scenarioId": "annotation.tool-region-comment"
+    },
+    {
+      "cellId": "annotation.tool-text-comment",
+      "packetId": "packet-e3602c54ca486a8e",
+      "result": "PASS",
+      "scenarioId": "annotation.tool-text-comment"
+    },
+    {
+      "cellId": "edit-delete",
+      "packetId": "packet-e151b0ef69698f4c",
+      "result": "PASS",
+      "scenarioId": "extension.annotation-edit-delete"
+    },
+    {
+      "cellId": "element-region-freehand",
+      "packetId": "packet-326126255bad20b6",
+      "result": "PASS",
+      "scenarioId": "extension.annotation-tools"
+    },
+    {
+      "cellId": "text-editor",
+      "packetId": "packet-9fbd4b285eeb9ee1",
+      "result": "PASS",
+      "scenarioId": "extension.annotation-tools"
+    },
+    {
+      "cellId": "capture-failure-retains",
+      "packetId": "packet-85f9fb5ae272c0e9",
+      "result": "PASS",
+      "scenarioId": "extension.capture-image"
+    },
+    {
+      "cellId": "capture-success",
+      "packetId": "packet-1c8d0858a278ccd7",
+      "result": "PASS",
+      "scenarioId": "extension.capture-image"
+    },
+    {
+      "cellId": "eligible-direct-send",
+      "packetId": "packet-c121c4917e334ffe",
+      "result": "PASS",
+      "scenarioId": "extension.direct-delivery-targets"
+    },
+    {
+      "cellId": "ineligible-or-wrong-space",
+      "packetId": "packet-87f3c51f7457f975",
+      "result": "PASS",
+      "scenarioId": "extension.direct-delivery-targets"
+    },
+    {
+      "cellId": "rejected-unknown",
+      "packetId": "packet-62d1b94a6880d131",
+      "result": "PASS",
+      "scenarioId": "extension.direct-delivery-targets"
+    },
+    {
+      "cellId": "pending-overview",
+      "packetId": "packet-2f84d3c637135e80",
+      "result": "PASS",
+      "scenarioId": "extension.feedback-save-ack"
+    },
+    {
+      "cellId": "selective-ack",
+      "packetId": "packet-0d40f47453b89324",
+      "result": "PASS",
+      "scenarioId": "extension.feedback-save-ack"
+    },
+    {
+      "cellId": "movement-review",
+      "packetId": "packet-9c9cde21ba0a8b1e",
+      "result": "PASS",
+      "scenarioId": "extension.live-page-palette"
+    },
+    {
+      "cellId": "palette-and-browse",
+      "packetId": "packet-3196a8327008d46c",
+      "result": "PASS",
+      "scenarioId": "extension.live-page-palette"
+    },
+    {
+      "cellId": "connected-popup",
+      "packetId": "packet-0cede94998f18968",
+      "result": "PASS",
+      "scenarioId": "extension.load-popup-connection"
+    },
+    {
+      "cellId": "reconnect-space-switch",
+      "packetId": "packet-02780ae270749c1b",
+      "result": "PASS",
+      "scenarioId": "extension.load-popup-connection"
+    },
+    {
+      "cellId": "reload-stale",
+      "packetId": "packet-7ccf625c0ccc51ff",
+      "result": "PASS",
+      "scenarioId": "extension.stale-navigation-reload"
+    },
+    {
+      "cellId": "submission-after-close",
+      "packetId": "packet-684675e85ac06b53",
+      "result": "PASS",
+      "scenarioId": "extension.stale-navigation-reload"
+    },
+    {
+      "cellId": "capture.visible-tab-save",
+      "packetId": "packet-5258f369802c6f94",
+      "result": "PASS",
+      "scenarioId": "capture.visible-tab-save"
+    },
+    {
+      "cellId": "deliver",
+      "packetId": "packet-6eb9ee688f689727",
+      "result": "FAIL",
+      "scenarioId": "annotation-paste-delivery"
+    },
+    {
+      "cellId": "paste-preview",
+      "packetId": "packet-83da8140e5c4b37b",
+      "result": "FAIL",
+      "scenarioId": "annotation-paste-delivery"
+    },
+    {
+      "cellId": "render-annotations",
+      "packetId": "packet-e3ddd2156938f409",
+      "result": "FAIL",
+      "scenarioId": "annotation-paste-delivery"
+    },
+    {
+      "cellId": "feedback-open",
+      "packetId": "packet-11e232e13ce2babc",
+      "result": "FAIL",
+      "scenarioId": "browser-feedback-overview"
+    },
+    {
+      "cellId": "feedback-resolve",
+      "packetId": "packet-7aa17dd2e22b295b",
+      "result": "FAIL",
+      "scenarioId": "browser-feedback-overview"
+    },
+    {
+      "cellId": "navigate-submit",
+      "packetId": "packet-bc4e066321bd93c0",
+      "result": "PASS",
+      "scenarioId": "command-menu"
+    },
+    {
+      "cellId": "open-keyboard",
+      "packetId": "packet-63ea5bbc0d551732",
+      "result": "PASS",
+      "scenarioId": "command-menu"
+    },
+    {
+      "cellId": "open-pointer",
+      "packetId": "packet-4e2fa6acb24007f9",
+      "result": "PASS",
+      "scenarioId": "command-menu"
+    },
+    {
+      "cellId": "browse-context",
+      "packetId": "packet-86f2dadfcb1b6830",
+      "result": "PASS",
+      "scenarioId": "context-browser"
+    },
+    {
+      "cellId": "context-search",
+      "packetId": "packet-7febd1590d7118ef",
+      "result": "FAIL",
+      "scenarioId": "context-browser"
+    },
+    {
+      "cellId": "source-import",
+      "packetId": "packet-677fd4d761499930",
+      "result": "FAIL",
+      "scenarioId": "context-browser"
+    },
+    {
+      "cellId": "diff-annotation",
+      "packetId": "packet-04fdc0a212081cc7",
+      "result": "PASS",
+      "scenarioId": "files-viewer"
+    },
+    {
+      "cellId": "file-search",
+      "packetId": "packet-23722939b942174f",
+      "result": "PASS",
+      "scenarioId": "files-viewer"
+    },
+    {
+      "cellId": "tree-open",
+      "packetId": "packet-23cc1a956cfc509a",
+      "result": "PASS",
+      "scenarioId": "files-viewer"
+    },
+    {
+      "cellId": "review-submit",
+      "packetId": "packet-921586d2a0bf2b7c",
+      "result": "PASS",
+      "scenarioId": "review-setup-sources"
+    },
+    {
+      "cellId": "setup-create",
+      "packetId": "packet-1d9adf044601adf5",
+      "result": "FAIL",
+      "scenarioId": "review-setup-sources"
+    },
+    {
+      "cellId": "sources-manage",
+      "packetId": "packet-9103a49208aa8fe5",
+      "result": "FAIL",
+      "scenarioId": "review-setup-sources"
+    },
+    {
+      "cellId": "pane-agent-focus",
+      "packetId": "packet-b91cf7670d08652f",
+      "result": "PASS",
+      "scenarioId": "space-menus"
+    },
+    {
+      "cellId": "space-switch-keyboard",
+      "packetId": "packet-e54b394ee58e8827",
+      "result": "PASS",
+      "scenarioId": "space-menus"
+    },
+    {
+      "cellId": "space-switch-pointer",
+      "packetId": "packet-c712ba13b972c328",
+      "result": "PASS",
+      "scenarioId": "space-menus"
+    },
+    {
+      "cellId": "context.docs-source-import",
+      "packetId": "packet-ad6b76188a0ee3dd",
+      "result": "PASS",
+      "scenarioId": "context.docs-source-import"
+    },
+    {
+      "cellId": "delivery.terminal-eligible-ineligible",
+      "packetId": "packet-fa320f4365df67ec",
+      "result": "PASS",
+      "scenarioId": "delivery.terminal-eligible-ineligible"
+    },
+    {
+      "cellId": "browser-feedback",
+      "packetId": "packet-0d09eb0ab084adbd",
+      "result": "FAIL",
+      "scenarioId": "environment.browser-feedback"
+    },
+    {
+      "cellId": "context-sources",
+      "packetId": "packet-4186f4876299beab",
+      "result": "FAIL",
+      "scenarioId": "environment.context-sources"
+    },
+    {
+      "cellId": "delivery-eligibility",
+      "packetId": "packet-7ca78f76ac97b409",
+      "result": "FAIL",
+      "scenarioId": "environment.delivery-eligibility"
+    },
+    {
+      "cellId": "repository-status",
+      "packetId": "packet-d8643ac51016ad02",
+      "result": "FAIL",
+      "scenarioId": "environment.repository-status"
+    },
+    {
+      "cellId": "spaces-tabs-panes",
+      "packetId": "packet-d79a57e445c9e782",
+      "result": "PASS",
+      "scenarioId": "environment.spaces-tabs-panes"
+    },
+    {
+      "cellId": "feedback.browser-pending-overview",
+      "packetId": "packet-e52901c94d60ebb6",
+      "result": "PASS",
+      "scenarioId": "feedback.browser-pending-overview"
+    },
+    {
+      "cellId": "files.tree-read-search-changes",
+      "packetId": "packet-d4093a5edc5a7034",
+      "result": "PASS",
+      "scenarioId": "files.tree-read-search-changes"
+    },
+    {
+      "cellId": "menus.command-menu.open-search-execute",
+      "packetId": "packet-6284e6217f19daec",
+      "result": "PASS",
+      "scenarioId": "menus.command-menu.open-search-execute"
+    },
+    {
+      "cellId": "bootstrap",
+      "packetId": "packet-7d03056470bc5b5b",
+      "result": "PASS",
+      "scenarioId": "bootstrap"
+    },
+    {
+      "cellId": "fixture",
+      "packetId": "packet-a4840cadf1afc7e4",
+      "result": "PASS",
+      "scenarioId": "fixture"
+    },
+    {
+      "cellId": "popup.status-drafts-recovery",
+      "packetId": "packet-e051aa8a87edacba",
+      "result": "PASS",
+      "scenarioId": "popup.status-drafts-recovery"
+    },
+    {
+      "cellId": "review.comments-draft-batch",
+      "packetId": "packet-e74adb74a1d63747",
+      "result": "PASS",
+      "scenarioId": "review.comments-draft-batch"
+    }
+  ],
+  "counts": {
+    "FAIL": 13,
+    "INCONCLUSIVE": 0,
+    "PASS": 44
+  },
+  "generatedAt": "2026-09-12T11:30:03.345336Z",
+  "runId": "atlas-exhaustive-r2-20260912"
+}

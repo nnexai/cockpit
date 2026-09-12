@@ -1,0 +1,362 @@
+{
+  "manifest": {
+    "actionLog": "evidence/repair-packet-e74adb74a1d63747-37/actions.jsonl",
+    "artifacts": [
+      {
+        "artifactId": "before-packet-e74adb74a1d63747-1440x900",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:32.202781Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/before-review-comments-draft-batch-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "b1d767538747140ed70d53ff2bedaaa1327efca1f6485cbccc9f64fe38eba34c",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "action-01-packet-e74adb74a1d63747-1440x900",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:33.228986Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/action-01-review-comments-draft-batch-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "a2534132a831a42c84ef921c74f568290dd4b70ed539f9f80d26f53e5b0a924f",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "after-packet-e74adb74a1d63747-1440x900",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:34.255046Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/after-review-comments-draft-batch-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "ec8e5140624d75f71b3cf58307fbd5680183ac39d14f235aa6c9e17078d767cd",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "before-packet-e74adb74a1d63747-1024x640",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:35.268968Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/before-review-comments-draft-batch-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "dc6de92dfbead90f87d2dadb5e0612f1841c0667baa5310aea2ad5cb166e4efd",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "action-01-packet-e74adb74a1d63747-1024x640",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:36.281065Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/action-01-review-comments-draft-batch-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "921b443d0253f99a2685eb7c870e6c0ef69ff5fa06165ffb27aa572bba3c1411",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "after-packet-e74adb74a1d63747-1024x640",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:37.292898Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/after-review-comments-draft-batch-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "7d63b01b387881670e2d5ed2246f8a5123b9645eb4cd7f963f5e81ffca6dd68b",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "machine-packet-e74adb74a1d63747",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:38.293303Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/runtime-state.json",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "e0c3d0f932b6a218fb92d74c1d677e90def7c6348820c59a1b0b068c29dc6def",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "artifactId": "actions-packet-e74adb74a1d63747",
+        "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+        "capturedAt": "2026-09-12T11:17:40.293505Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/repair-packet-e74adb74a1d63747-37/actions.jsonl",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "Review",
+            "Files",
+            "Context",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "review.comments-draft-batch",
+        "sha256": "c6bcc61a09157e8edc4809aeeb61cb7254916b0543aabc559422f288631fbf33",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-packet-e74adb74a1d63747-0",
+        "capturedAt": "2026-09-12T11:17:41.293531Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "ad4fc551c0fd59481fec5d0a1ecf634dc3ab7f1a52f2bf10b9d2a0fceb0fafef",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "34efd531461659e3fe7ce82ad1357285bde1abddcb23bee138ed7b5618c9320d",
+        "surface": "Review"
+      },
+      {
+        "authorityId": "auth-packet-e74adb74a1d63747-1",
+        "capturedAt": "2026-09-12T11:17:42.293541Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "cda9335a6e43e03b85ceb211488f81b03b7c411a9c44bef714e4cff8dad9d5b6",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "065c1caa4ff1b40a071267c8d52bb84c6c8033ee19682975a353855b2e79c5cf",
+        "surface": "Files"
+      },
+      {
+        "authorityId": "auth-packet-e74adb74a1d63747-2",
+        "capturedAt": "2026-09-12T11:17:43.293547Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "8790937b080534ff1028eba5affb55b3e534bfbe84a9b80d5c4d14a29e30cf62",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "d40866c78dbea0ee1c0812cde054ea253aa0efbfd477e42a774c465c9ca6f7a1",
+        "surface": "Context"
+      },
+      {
+        "authorityId": "auth-packet-e74adb74a1d63747-3",
+        "capturedAt": "2026-09-12T11:17:44.293553Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "34fc4f38a4d9d9d5dd1e13fd385539c8353b005abd7ebec21601434b8ff54070",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "41968153727b8aa93d1b66722c018fdad3b0b551c1a9a0a18899b2a314d3e632",
+        "surface": "FeedbackPanel"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "capture-atlasr2-packet-e74adb74a1d63747-37",
+    "cleanup": {
+      "completed": true,
+      "ownedArtifactsOnly": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "diagnostics": [],
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T11:17:52.293578Z",
+    "fixtureIdentity": {
+      "associationKey": "454ea4a6eaacf2f619806990",
+      "cockpitGateway": "http://127.0.0.1:49372/",
+      "fixturePages": [
+        "http://127.0.0.1:49373/index.html"
+      ],
+      "owner": "atlas-exhaustive-r2-20260912"
+    },
+    "packetId": "packet-e74adb74a1d63747",
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "browser-extension",
+      "owner": "atlas-r2-repair",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "review.comments-draft-batch",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T11:17:32.293576Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/repair-packet-e74adb74a1d63747-37/before-review-comments-draft-batch-1440x900.png",
+          "evidence/repair-packet-e74adb74a1d63747-37/before-review-comments-draft-batch-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-packet-e74adb74a1d63747-0",
+          "auth-packet-e74adb74a1d63747-1",
+          "auth-packet-e74adb74a1d63747-2",
+          "auth-packet-e74adb74a1d63747-3"
+        ],
+        "observedAt": "2026-09-12T11:17:43.293562Z",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-packet-e74adb74a1d63747-37-before",
+        "surface": "Review",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/repair-packet-e74adb74a1d63747-37/action-01-review-comments-draft-batch-1440x900.png",
+          "evidence/repair-packet-e74adb74a1d63747-37/action-01-review-comments-draft-batch-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-packet-e74adb74a1d63747-0",
+          "auth-packet-e74adb74a1d63747-1",
+          "auth-packet-e74adb74a1d63747-2",
+          "auth-packet-e74adb74a1d63747-3"
+        ],
+        "observedAt": "2026-09-12T11:17:44.293568Z",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-packet-e74adb74a1d63747-37-action",
+        "surface": "Review",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/repair-packet-e74adb74a1d63747-37/after-review-comments-draft-batch-1440x900.png",
+          "evidence/repair-packet-e74adb74a1d63747-37/after-review-comments-draft-batch-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-packet-e74adb74a1d63747-0",
+          "auth-packet-e74adb74a1d63747-1",
+          "auth-packet-e74adb74a1d63747-2",
+          "auth-packet-e74adb74a1d63747-3"
+        ],
+        "observedAt": "2026-09-12T11:17:45.293571Z",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-packet-e74adb74a1d63747-37-after",
+        "surface": "Review",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "name": "desktop",
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "name": "compact",
+        "width": 1024
+      }
+    ]
+  }
+}

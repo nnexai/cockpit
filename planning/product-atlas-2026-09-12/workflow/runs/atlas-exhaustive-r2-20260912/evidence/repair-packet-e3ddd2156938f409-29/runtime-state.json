@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-e3ddd2156938f409",
+  "scenarioId": "annotation-paste-delivery",
+  "surface": [
+    "annotation rendering and paste/delivery"
+  ],
+  "surfaces": [
+    "annotation rendering and paste/delivery"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Render annotations in Files and Review, hover/focus callouts, toggle visibility, inspect long and empty ranges"
+  ]
+}

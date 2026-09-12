@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-09-12T10:50:00Z",
+  "surface": "actual Cockpit gateway",
+  "url": "http://127.0.0.1:49372/",
+  "spaceLabels": ["Atlas Alpha", "Atlas Beta"],
+  "viewports": [
+    {"width":800,"height":1000,"path":"cockpit-sidebar-800x1000.png"},
+    {"width":600,"height":900,"path":"cockpit-sidebar-600x900.png"},
+    {"width":480,"height":900,"path":"cockpit-sidebar-480x900.png"}
+  ],
+  "observation": "At all three owned portrait viewports the sidebar remains present with both Atlas Space labels and four agent rows. At 480x900, terminal panes compress to narrow columns while the sidebar stays visible; this records current behavior only and makes no UI change."
+}

@@ -1,0 +1,14 @@
+{
+  "authorityId": "auth-fixture-cockpitfiles-23722939b942174f",
+  "surface": "Atlas fixture app",
+  "capturedAt": "2026-09-12T10:05:27.496091Z",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "sessionId": "atlas-20260912-herdr",
+  "ownedResourceIds": [
+    "atlas-20260912-fixture",
+    "atlas-exhaustive-20260912-cockpitfiles-7"
+  ],
+  "stateDigest": "a1fe7a0e2ee3aad1aad3c70753bb34c92ae3d4245402b1a34332f71dd0ad2cd9",
+  "sha256": "a1fe7a0e2ee3aad1aad3c70753bb34c92ae3d4245402b1a34332f71dd0ad2cd9",
+  "redaction": "Synthetic fixture only; no credentials or protected resources."
+}

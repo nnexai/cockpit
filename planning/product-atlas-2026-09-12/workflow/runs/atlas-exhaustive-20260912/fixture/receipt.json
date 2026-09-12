@@ -1,0 +1,48 @@
+{
+  "actionLog": "fixture/action-log.json",
+  "authoritySnapshot": "fixture/snapshot.json",
+  "capturedAt": "2026-09-12T10:00:22.720526Z",
+  "cleanupOwnership": "Retained live for capture lanes; teardown owner is workflow-collector-2026-09-12.",
+  "handoffReceipt": "fixture/handoff.json",
+  "phase": "fixture",
+  "resourceLedger": "resource-ledger.json",
+  "resources": [
+    {
+      "id": "atlas-20260912-fixture",
+      "kind": "fixture-root",
+      "owner": "atlas-20260912-fixture",
+      "path": "/tmp/atlas-20260912-fixture"
+    },
+    {
+      "configPath": "/tmp/atlas-20260912-herdr/config.toml",
+      "id": "atlas-20260912-herdr",
+      "kind": "herdr-session",
+      "owner": "atlas-20260912-fixture"
+    },
+    {
+      "id": "atlas-20260912-browser-profile",
+      "kind": "browser-profile",
+      "owner": "atlas-20260912-fixture",
+      "path": "/tmp/atlas-20260912-browser-profile"
+    },
+    {
+      "id": "atlas-20260912-browser-context",
+      "kind": "browser-context",
+      "owner": "atlas-20260912-fixture",
+      "pageServer": "http://127.0.0.1:49329"
+    }
+  ],
+  "result": "PASS",
+  "runtimeIdentity": {
+    "lane": "fixture",
+    "owner": "atlas-20260912-fixture",
+    "runId": "atlas-exhaustive-20260912"
+  },
+  "setupReceipts": [
+    "fixture/root.json",
+    "fixture/repositories.json",
+    "fixture/topology.json",
+    "fixture/context.json",
+    "fixture/browser.json"
+  ]
+}

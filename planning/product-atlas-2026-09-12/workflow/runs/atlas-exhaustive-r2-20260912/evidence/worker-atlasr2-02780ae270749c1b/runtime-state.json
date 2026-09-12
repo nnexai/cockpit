@@ -1,0 +1,13 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-02780ae270749c1b",
+  "surface": "browser-extension",
+  "browserAssociation": "454ea4a6eaacf2f619806990",
+  "fixtureUrl": "http://127.0.0.1:49373/index.html",
+  "observed": "production annotation toolbar visible; popup connected Atlas Alpha; owned runtime",
+  "capturedAt": "2026-09-12T13:00:00Z",
+  "surfaces": [
+    "browser-extension"
+  ],
+  "url": "http://127.0.0.1:49373/index.html"
+}

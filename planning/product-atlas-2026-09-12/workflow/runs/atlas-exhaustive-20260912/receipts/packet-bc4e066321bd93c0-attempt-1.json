@@ -1,0 +1,219 @@
+{
+  "actionLog": [
+    {
+      "action": "exercise assigned command-menu action",
+      "actor": "cockpitcommandmenus",
+      "artifactRefs": [
+        "before-command-menu-1440x900.png",
+        "before-command-menu-1024x640.png",
+        "action-01-command-menu-1440x900.png",
+        "action-01-command-menu-1024x640.png",
+        "after-command-menu-1440x900.png",
+        "after-command-menu-1024x640.png"
+      ],
+      "at": "2026-09-12T10:05:19.173871Z",
+      "authorityRefs": [
+        "auth-cockpitcommandmenus-bc4e066321bd"
+      ],
+      "expectedAck": "command-menu-state-updated",
+      "inputs": {
+        "negativeRecovery": true,
+        "viewportSet": [
+          "1440x900",
+          "1024x640"
+        ]
+      },
+      "observedAck": "command-menu-state-updated",
+      "outcome": "PASS",
+      "sequence": 1,
+      "stateChanging": true,
+      "surface": "command menu",
+      "target": "active fixture surface"
+    }
+  ],
+  "artifacts": [
+    {
+      "captureId": "cockpitcommandmenus-bc4e066321bd",
+      "capturedAt": "2026-09-12T10:05:19.138252Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcommandmenus/before-command-menu-1440x900.png",
+      "provenance": "CDP-owned disposable fixture surface atlas-20260912",
+      "runtimeClaim": true,
+      "scenarioId": "command-menu",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "cockpitcommandmenus-bc4e066321bd",
+      "capturedAt": "2026-09-12T10:05:19.143549Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcommandmenus/before-command-menu-1024x640.png",
+      "provenance": "CDP-owned disposable fixture surface atlas-20260912",
+      "runtimeClaim": true,
+      "scenarioId": "command-menu",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "cockpitcommandmenus-bc4e066321bd",
+      "capturedAt": "2026-09-12T10:05:19.153424Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcommandmenus/action-01-command-menu-1440x900.png",
+      "provenance": "CDP-owned disposable fixture surface atlas-20260912",
+      "runtimeClaim": true,
+      "scenarioId": "command-menu",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "cockpitcommandmenus-bc4e066321bd",
+      "capturedAt": "2026-09-12T10:05:19.159081Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcommandmenus/action-01-command-menu-1024x640.png",
+      "provenance": "CDP-owned disposable fixture surface atlas-20260912",
+      "runtimeClaim": true,
+      "scenarioId": "command-menu",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "cockpitcommandmenus-bc4e066321bd",
+      "capturedAt": "2026-09-12T10:05:19.168631Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcommandmenus/after-command-menu-1440x900.png",
+      "provenance": "CDP-owned disposable fixture surface atlas-20260912",
+      "runtimeClaim": true,
+      "scenarioId": "command-menu",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "cockpitcommandmenus-bc4e066321bd",
+      "capturedAt": "2026-09-12T10:05:19.173815Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcommandmenus/after-command-menu-1024x640.png",
+      "provenance": "CDP-owned disposable fixture surface atlas-20260912",
+      "runtimeClaim": true,
+      "scenarioId": "command-menu",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    }
+  ],
+  "authoritySnapshot": [
+    {
+      "authorityId": "auth-cockpitcommandmenus-bc4e066321bd-0",
+      "capturedAt": "2026-09-12T10:05:19.173879Z",
+      "ownedResourceIds": [
+        "atlas-20260912-fixture",
+        "atlas-20260912-browser-context"
+      ],
+      "redaction": "none",
+      "sessionId": "atlas-20260912-herdr",
+      "sha256": "170bf4b13267e994f399dece99c0f9b51032911af0f9e348da72be855f16b480",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateDigest": "99152c612b901b5f68bf1514bb43d15d914412d666eff5233bb1c4d871b3e176",
+      "surface": "command menu"
+    }
+  ],
+  "browserProfile": "atlas-20260912-browser-profile",
+  "captureId": "cockpitcommandmenus-bc4e066321bd",
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "proof": "owned disposable browser context and fixture resources released after evidence flush",
+    "residuals": []
+  },
+  "disposableSession": true,
+  "finishedAt": "2026-09-12T10:05:19.173884Z",
+  "fixtureIdentity": "atlas-20260912-fixture",
+  "result": "PASS",
+  "runtimeIdentity": {
+    "lane": "setup-context-review",
+    "owner": "cockpitcommandmenus",
+    "runId": "atlas-exhaustive-20260912"
+  },
+  "scenarioId": "command-menu",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "startedAt": "2026-09-12T10:05:19.173883Z",
+  "stateTimeline": [
+    {
+      "artifactRefs": [
+        "before-command-menu-1440x900.png",
+        "before-command-menu-1024x640.png",
+        "action-01-command-menu-1440x900.png",
+        "action-01-command-menu-1024x640.png",
+        "after-command-menu-1440x900.png",
+        "after-command-menu-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-cockpitcommandmenus-bc4e066321bd"
+      ],
+      "observedAt": "2026-09-12T10:05:19.173862Z",
+      "phase": "before",
+      "result": "PASS",
+      "stateId": "cockpitcommandmenus-bc4e066321bd-before",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu visible",
+        "active target identity",
+        "focus and command labels"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "before-command-menu-1440x900.png",
+        "before-command-menu-1024x640.png",
+        "action-01-command-menu-1440x900.png",
+        "action-01-command-menu-1024x640.png",
+        "after-command-menu-1440x900.png",
+        "after-command-menu-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-cockpitcommandmenus-bc4e066321bd"
+      ],
+      "observedAt": "2026-09-12T10:05:19.173866Z",
+      "phase": "action",
+      "result": "PASS",
+      "stateId": "cockpitcommandmenus-bc4e066321bd-action-01",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu visible",
+        "active target identity",
+        "focus and command labels"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "before-command-menu-1440x900.png",
+        "before-command-menu-1024x640.png",
+        "action-01-command-menu-1440x900.png",
+        "action-01-command-menu-1024x640.png",
+        "after-command-menu-1440x900.png",
+        "after-command-menu-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-cockpitcommandmenus-bc4e066321bd"
+      ],
+      "observedAt": "2026-09-12T10:05:19.173868Z",
+      "phase": "after",
+      "result": "PASS",
+      "stateId": "cockpitcommandmenus-bc4e066321bd-after",
+      "surface": "command menu",
+      "visibleAssertions": [
+        "command menu visible",
+        "active target identity",
+        "focus and command labels"
+      ]
+    }
+  ],
+  "viewportSet": [
+    "1440x900",
+    "1024x640"
+  ]
+}

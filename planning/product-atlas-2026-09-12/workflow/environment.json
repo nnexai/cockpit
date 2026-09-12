@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "id": "workflow.environment.complex-disposable-fixture",
+  "purpose": "Deterministic disposable Cockpit fixture for exhaustive browser-first evidence collection.",
+  "ownership": {
+    "owner": "workflow-collector-2026-09-12",
+    "sessionPrefix": "atlas-20260912",
+    "resourceNamespace": "atlas-20260912-fixture",
+    "herdrSession": "atlas-20260912-herdr",
+    "protectedSessions": ["default"],
+    "browserProfile": "atlas-20260912-browser-profile",
+    "browserContext": "atlas-20260912-browser-context",
+    "allowedTabs": ["atlas-fixture-app", "atlas-fixture-docs"],
+    "neverTouch": ["default", "user-browser-profile", "unrelated-tabs"]
+  },
+  "prerequisites": [
+    {"id":"p1","check":"collector_process_is_named_with_prefix","proof":"process name and owner token equal atlas-20260912","onFailure":"STOP; retain process listing and do not open browser"},
+    {"id":"p2","check":"isolated_browser_profile_exists","proof":"profile path is atlas-20260912-browser-profile and is not the user profile","onFailure":"STOP; retain profile path diagnostic"},
+    {"id":"p3","check":"isolated_herdr_session_exists","proof":"session id is atlas-20260912-herdr and protected session default is untouched","onFailure":"STOP; retain session inventory"},
+    {"id":"p4","check":"viewport_matrix_supported","proof":"browser can set 1440x900 and 1024x640 device viewport","onFailure":"STOP; no screenshots; retain viewport error"},
+    {"id":"p5","check":"fixture_root_is_empty_or_owned","proof":"fixture root marker owner=atlas-20260912-fixture; no unowned files","onFailure":"STOP and escalate; never delete unowned files"}
+  ],
+  "topology": {
+    "spaces": [
+      {
+        "id":"space-alpha","name":"Atlas Alpha","projectId":"project-orbit","tabs":[
+          {"id":"alpha-review","name":"Review","activePane":"alpha-editor","panes":["alpha-editor","alpha-terminal"],"agents":["agent-alpha-review"]},
+          {"id":"alpha-context","name":"Context","activePane":"alpha-docs","panes":["alpha-docs","alpha-browser"],"agents":["agent-alpha-context"]}
+        ]
+      },
+      {
+        "id":"space-beta","name":"Atlas Beta","projectId":"project-tide","tabs":[
+          {"id":"beta-delivery","name":"Delivery","activePane":"beta-editor","panes":["beta-editor","beta-terminal"],"agents":["agent-beta-delivery"]},
+          {"id":"beta-recovery","name":"Recovery","activePane":"beta-browser","panes":["beta-browser","beta-log"],"agents":["agent-beta-recovery"]}
+        ]
+      }
+    ],
+    "projects":[
+      {"id":"project-orbit","name":"Orbit","repositoryId":"repo-orbit","spaceId":"space-alpha"},
+      {"id":"project-tide","name":"Tide","repositoryId":"repo-tide","spaceId":"space-beta"}
+    ],
+    "repositories":[
+      {"id":"repo-orbit","root":"fixture/repos/orbit","branch":"atlas/fixture-orbit","status":{"changed":["src/orbit.ts","README.md"],"untracked":["notes/orbit.md"],"binary":["assets/orbit.bin"],"staged":[]}},
+      {"id":"repo-tide","root":"fixture/repos/tide","branch":"atlas/fixture-tide","status":{"changed":["src/tide.ts"],"untracked":["docs/tide.md","assets/tide.bin"],"binary":["assets/tide.bin"],"staged":[]}}
+    ],
+    "files":[
+      "fixture/repos/orbit/src/orbit.ts","fixture/repos/orbit/README.md","fixture/repos/orbit/notes/orbit.md","fixture/repos/orbit/assets/orbit.bin",
+      "fixture/repos/tide/src/tide.ts","fixture/repos/tide/docs/tide.md","fixture/repos/tide/assets/tide.bin"
+    ],
+    "context": {
+      "documents":["fixture/context/architecture.md","fixture/context/review.md"],
+      "sources":["fixture/sources/orbit-source.ts","fixture/sources/tide-source.ts"],
+      "imports":["orbit-source.ts","tide-source.ts"]
+    },
+    "browserFeedback":[
+      {"id":"feedback-orbit","target":"space-alpha","state":"pending","annotation":"Needs orbit API evidence"},
+      {"id":"feedback-tide","target":"space-beta","state":"pending","annotation":"Confirm tide delivery target"}
+    ],
+    "deliveryTargets":[
+      {"id":"target-eligible","label":"Eligible review target","eligible":true,"reason":"repository and context are available"},
+      {"id":"target-ineligible","label":"Ineligible target","eligible":false,"reason":"target lacks required source permission"}
+    ]
+  },
+  "setup": {
+    "actions":[
+      {"id":"setup-1","action":"create_owned_root","receipt":"fixture/root.json","assert":"marker.owner == atlas-20260912-fixture"},
+      {"id":"setup-2","action":"create_repositories_and_files","receipt":"fixture/repositories.json","assert":"all topology.repositories and topology.files exist with declared status"},
+      {"id":"setup-3","action":"create_spaces_tabs_panes_agents","receipt":"fixture/topology.json","assert":"exactly 2 spaces, 4 tabs, 8 panes, 4 agents, 2 projects"},
+      {"id":"setup-4","action":"create_context_sources_feedback_targets","receipt":"fixture/context.json","assert":"documents, imports, pending feedback, and both eligibility states exist"},
+      {"id":"setup-5","action":"open_isolated_browser_tabs","receipt":"fixture/browser.json","assert":"only allowedTabs are open in browserContext"}
+    ],
+    "readinessChecks":[
+      {"id":"ready-counts","assert":"spaces=2 && projects=2 && tabs=4 && panes=8 && agents=4"},
+      {"id":"ready-repos","assert":"repositories=2 && every repository has changed, untracked, binary, markdown, and code fixtures"},
+      {"id":"ready-context","assert":"documents=2 && sources=2 && imports=2"},
+      {"id":"ready-feedback","assert":"pendingFeedback=2 && eligibleTargets=1 && ineligibleTargets=1"},
+      {"id":"ready-browser","assert":"browserContext == atlas-20260912-browser-context && openTabs subsetOf allowedTabs"}
+    ],
+    "setupReceiptRequired": true
+  },
+  "collectionMatrix": {
+    "viewports":[{"width":1440,"height":900},{"width":1024,"height":640}],
+    "requiredScreenshots":"Each matrix cell requires one screenshot at each viewport; filename includes cell id and viewport.",
+    "cells":[
+      {"id":"spaces-tabs-panes","observableProof":"both spaces, four tabs, active panes and agent badges are visible","retry":"reload once, then reselect space; if counts remain wrong retain DOM snapshot and mark INCONCLUSIVE"},
+      {"id":"repository-status","observableProof":"changed, untracked, binary, markdown, and code files are visible for both repositories","retry":"refresh repository view once; if status differs retain repository receipt and mark INCONCLUSIVE"},
+      {"id":"context-sources","observableProof":"context documents and imported sources are visible and attributed to the active project","retry":"reopen context panel once; if imports absent retain event log and mark INCONCLUSIVE"},
+      {"id":"browser-feedback","observableProof":"two pending annotated feedback items are visible with their targets","retry":"navigate only via fixture tab once; if pending state changes retain network/state dump and mark INCONCLUSIVE"},
+      {"id":"delivery-eligibility","observableProof":"eligible target is actionable and ineligible target is visibly blocked with reason","retry":"reopen delivery chooser once; if eligibility is ambiguous retain chooser state and mark INCONCLUSIVE"}
+    ]
+  },
+  "machineEvidence": [
+    "fixture/root.json","fixture/repositories.json","fixture/topology.json","fixture/context.json","fixture/browser.json",
+    "fixture/dom-snapshots/","fixture/events.ndjson","fixture/network.ndjson","fixture/console.ndjson","fixture/screenshots/"
+  ],
+  "failurePolicy": {
+    "inconclusiveAllowedOnlyAfter":["named cell retry exhausted","diagnostics retained","unrelated resources confirmed untouched"],
+    "diagnosticsRequired":["failure timestamp","cell id","viewport","visible state","receipt paths","last action","error text or timeout"],
+    "escalateWhen":["ownership marker mismatch","protected session appears in touched resources","unowned file would be deleted","browser tab cannot be proven fixture-owned"]
+  },
+  "teardown": {
+    "owner":"workflow-collector-2026-09-12",
+    "gates":[
+      "all screenshots and machine evidence flushed",
+      "collector process stopped",
+      "browserContext has no open tabs",
+      "herdrSession atlas-20260912-herdr is closed",
+      "protected session default remains present and unchanged",
+      "fixture root marker and ownership receipts still readable"
+    ],
+    "actions":[
+      {"id":"teardown-1","action":"close_fixture_tabs_and_context","receipt":"fixture/teardown-browser.json"},
+      {"id":"teardown-2","action":"close_owned_herdr_session","receipt":"fixture/teardown-herdr.json"},
+      {"id":"teardown-3","action":"delete_only_owned_fixture_root","receipt":"fixture/teardown-files.json","assert":"delete only paths under fixture root with matching owner marker"},
+      {"id":"teardown-4","action":"write_final_receipt","receipt":"fixture/teardown.json","assert":"all gates=true and protected resources untouched"}
+    ],
+    "abortIfAnyGateFalse": true,
+    "cleanupReceiptRequired": true
+  }
+}

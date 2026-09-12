@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-0cede94998f18968",
+  "scenarioId": "extension.load-popup-connection",
+  "surface": [
+    "browser-extension"
+  ],
+  "surfaces": [
+    "browser-extension"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "connected-popup"
+  ]
+}

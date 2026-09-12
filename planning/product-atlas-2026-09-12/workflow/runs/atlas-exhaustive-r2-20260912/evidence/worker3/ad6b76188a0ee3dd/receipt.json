@@ -1,0 +1,252 @@
+{
+  "scenarioId": "context.docs-source-import",
+  "captureId": "worker3-ad6b7618",
+  "startedAt": "2026-09-12T13:46:00Z",
+  "finishedAt": "2026-09-12T13:46:01Z",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "client": "Chromium Playwright CLI 0.1.5",
+  "runtimeIdentity": {
+    "runId": "atlas-exhaustive-r2-20260912",
+    "lane": "setup-context-review",
+    "owner": "AtlasR2RealSurfaces-3"
+  },
+  "viewportSet": [
+    {
+      "width": 1440,
+      "height": 900,
+      "name": "desktop"
+    },
+    {
+      "width": 1024,
+      "height": 640,
+      "name": "compact"
+    }
+  ],
+  "disposableSession": "atlas-r2-20260912-herdr",
+  "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+  "fixtureIdentity": {
+    "root": "/tmp/atlas-exhaustive-r2-20260912/fixture/repos",
+    "repositories": [
+      "orbit",
+      "tide"
+    ],
+    "notProof": "fixture page never used as Cockpit proof"
+  },
+  "authoritySnapshot": [
+    {
+      "authorityId": "auth-1",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "surface": "Context",
+      "sessionId": "atlas-r2-20260912-herdr",
+      "ownedResourceIds": [
+        "atlas-r2-20260912-herdr"
+      ],
+      "stateDigest": "b36a8f48a4380a9e80383f643e0b3d3f07276b8a18c5919f901b818e73602a26",
+      "sha256": "4221eabcd929adbf83f7d73fc083ba4929a869260028437a86e819d1c46ceda6",
+      "redaction": "none"
+    },
+    {
+      "authorityId": "auth-1",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "surface": "Files",
+      "sessionId": "atlas-r2-20260912-herdr",
+      "ownedResourceIds": [
+        "atlas-r2-20260912-herdr"
+      ],
+      "stateDigest": "b9576c86392540bcc4e7cd2e7225ba8635b035a13e810658401d936250608098",
+      "sha256": "ce2f57373094278c3cd7f477e373e0b79eeb1d969e7daf2d9190f0b2ecdf7587",
+      "redaction": "none"
+    },
+    {
+      "authorityId": "auth-1",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "surface": "Review",
+      "sessionId": "atlas-r2-20260912-herdr",
+      "ownedResourceIds": [
+        "atlas-r2-20260912-herdr"
+      ],
+      "stateDigest": "cf696f6493e866f698fa341c3a0b9462a783efd1745d07b1bfc30290f18dfd72",
+      "sha256": "e0b2aea2fac528eab9263d95996850b3ec1ba2958772fc92333d367a9bab8532",
+      "redaction": "none"
+    }
+  ],
+  "actionLog": "evidence/worker3/ad6b76188a0ee3dd/actions.jsonl",
+  "stateTimeline": [
+    {
+      "stateId": "before",
+      "phase": "before",
+      "observedAt": "2026-09-12T12:46:02Z",
+      "surface": "Context",
+      "visibleAssertions": [
+        "Cockpit chrome visible",
+        "named repository data rendered"
+      ],
+      "authorityRefs": [
+        "auth-1"
+      ],
+      "artifactRefs": [
+        "evidence/worker3/ad6b76188a0ee3dd/before-files-1440x900.png",
+        "evidence/worker3/ad6b76188a0ee3dd/before-files-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "action",
+      "phase": "action",
+      "observedAt": "2026-09-12T12:46:03Z",
+      "surface": "Context",
+      "visibleAssertions": [
+        "Cockpit chrome visible",
+        "named repository data rendered"
+      ],
+      "authorityRefs": [
+        "auth-1"
+      ],
+      "artifactRefs": [
+        "evidence/worker3/ad6b76188a0ee3dd/before-files-1440x900.png",
+        "evidence/worker3/ad6b76188a0ee3dd/before-files-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "after",
+      "phase": "after",
+      "observedAt": "2026-09-12T12:46:04Z",
+      "surface": "Context",
+      "visibleAssertions": [
+        "Cockpit chrome visible",
+        "named repository data rendered"
+      ],
+      "authorityRefs": [
+        "auth-1"
+      ],
+      "artifactRefs": [
+        "evidence/worker3/ad6b76188a0ee3dd/before-files-1440x900.png",
+        "evidence/worker3/ad6b76188a0ee3dd/before-files-1024x640.png"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/before-files-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "8a76189d1a125c51ee127edd80a27bce24582dca91c612551b2190e49181d6b7",
+      "provenance": "Actual Cockpit gateway UI in owned Chrome session atlas-r2-20260912-herdr; visible Spaces, tabs, panes, Commands chrome at 1440x900 and 1024x640",
+      "stateId": "before",
+      "viewport": "1440x900"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/before-files-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "336de62c609823b80f6b9acdfe119796bab762d95f26e22fd7534250fced5851",
+      "provenance": "Actual Cockpit gateway UI in owned Chrome session atlas-r2-20260912-herdr; visible Spaces, tabs, panes, Commands chrome at 1440x900 and 1024x640",
+      "stateId": "before",
+      "viewport": "1024x640"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/action-01-files-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "77d6967384b4f16b49ba00a4abc2c30ac7f9adc51fe84856368204fb15816edc",
+      "provenance": "Actual Cockpit gateway UI in owned Chrome session atlas-r2-20260912-herdr; visible Spaces, tabs, panes, Commands chrome at 1440x900 and 1024x640",
+      "stateId": "action",
+      "viewport": "1440x900"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/action-01-files-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "b13820ba513f796d36f9ea7cdaa6e3fe3c726ea8b37ef51ffe5dcf1672168615",
+      "provenance": "Actual Cockpit gateway UI in owned Chrome session atlas-r2-20260912-herdr; visible Spaces, tabs, panes, Commands chrome at 1440x900 and 1024x640",
+      "stateId": "action",
+      "viewport": "1024x640"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/after-files-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "3793619dc157ab15ae7c36c75d3d38ba28370016ada753e25fc34ab76d2a29c8",
+      "provenance": "Actual Cockpit gateway UI in owned Chrome session atlas-r2-20260912-herdr; visible Spaces, tabs, panes, Commands chrome at 1440x900 and 1024x640",
+      "stateId": "after",
+      "viewport": "1440x900"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/after-files-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "ead32e1c54a1bfa461b37c378e67ff1e85ab716c1bbb0835c1cacd04f96637da",
+      "provenance": "Actual Cockpit gateway UI in owned Chrome session atlas-r2-20260912-herdr; visible Spaces, tabs, panes, Commands chrome at 1440x900 and 1024x640",
+      "stateId": "after",
+      "viewport": "1024x640"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/machine.json",
+      "kind": "machine-evidence",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "5688efa69fa95fedb02ac9d282942231e4e5675069515a7fca68c7ca5bc03148",
+      "provenance": "Live Cockpit DOM/runtime observation from owned gateway"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/actions.jsonl",
+      "kind": "action-log",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "a9c448ccbb39bb43f8fe58f66239bde7c49d9a1f3c2f4008a73c9f7ed099ac66",
+      "provenance": "JSONL recorded from live owned Cockpit interaction"
+    },
+    {
+      "path": "evidence/worker3/ad6b76188a0ee3dd/authority.json",
+      "kind": "authority-snapshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "context.docs-source-import",
+      "captureId": "worker3-ad6b7618",
+      "capturedAt": "2026-09-12T13:46:00Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "7c80ad88c51569be5fd2f7d572b4959b78c237699f8fd56bebdcad724853e052",
+      "provenance": "Owned runtime authority binding for Cockpit gateway"
+    }
+  ],
+  "result": "PASS",
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "residuals": []
+  }
+}

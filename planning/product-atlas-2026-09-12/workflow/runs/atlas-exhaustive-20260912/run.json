@@ -1,0 +1,15 @@
+{
+  "baselineCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "createdAt": "2026-09-12T09:49:34.355021Z",
+  "dryRunFixture": false,
+  "fragments": [
+    "browser-extension.json",
+    "cockpit-surfaces.json",
+    "environment.json",
+    "evidence-contract.json",
+    "orchestration.json",
+    "coverage-matrix.json"
+  ],
+  "runId": "atlas-exhaustive-20260912",
+  "state": "OPEN"
+}

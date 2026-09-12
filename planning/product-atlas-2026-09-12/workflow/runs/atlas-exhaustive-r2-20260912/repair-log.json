@@ -1,0 +1,2767 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "cellId": "annotation.page-browse-annotate-mode",
+      "createdAt": "2026-09-12T11:12:42.421658Z",
+      "originalPacketId": "packet-4e4b0716032aec2d",
+      "packet": {
+        "cellId": "annotation.page-browse-annotate-mode",
+        "packetId": "packet-4e4b0716032aec2d",
+        "scenarioId": "annotation.page-browse-annotate-mode",
+        "surfaces": [
+          "page",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-4e4b0716032aec2d",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-4e4b0716032aec2d",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-a1541bbb0f8d24a1",
+      "repairPacketId": "repair-packet-a1541bbb0f8d24a1",
+      "scenarioId": "annotation.page-browse-annotate-mode",
+      "status": "FAILED",
+      "supersedes": "652b9ecc14dd97e6ed85abbfc6039aa6c9f05038d079320dedf23d8583ccb0cc",
+      "surfaceTokens": [
+        "agent",
+        "annotate",
+        "annotation",
+        "annotation-page-browse-annotate-mode",
+        "browse",
+        "browser",
+        "browser-feedback",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "mode",
+        "page",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "annotation.tool-element-anchor",
+      "createdAt": "2026-09-12T11:12:42.421954Z",
+      "originalPacketId": "packet-f08be8b63fb0bbe8",
+      "packet": {
+        "cellId": "annotation.tool-element-anchor",
+        "packetId": "packet-f08be8b63fb0bbe8",
+        "scenarioId": "annotation.tool-element-anchor",
+        "surfaces": [
+          "page",
+          "capture",
+          "Context",
+          "Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-f08be8b63fb0bbe8",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-f08be8b63fb0bbe8",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-b2ab06cb4b129af7",
+      "repairPacketId": "repair-packet-b2ab06cb4b129af7",
+      "scenarioId": "annotation.tool-element-anchor",
+      "status": "FAILED",
+      "supersedes": "f8e033c6b166b4b9ce3550a5b0537ce4f2ae9fa1d7b6260e47a9a52c925ea9bc",
+      "surfaceTokens": [
+        "anchor",
+        "annotation",
+        "annotation-tool-element-anchor",
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "element",
+        "fixture-page",
+        "page",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources",
+        "tool"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "annotation.tool-freehand-comment",
+      "createdAt": "2026-09-12T11:12:42.422191Z",
+      "originalPacketId": "packet-6843dfe80ac135c4",
+      "packet": {
+        "cellId": "annotation.tool-freehand-comment",
+        "packetId": "packet-6843dfe80ac135c4",
+        "scenarioId": "annotation.tool-freehand-comment",
+        "surfaces": [
+          "page",
+          "capture",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-6843dfe80ac135c4",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-6843dfe80ac135c4",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-a6c25e6a6369e916",
+      "repairPacketId": "repair-packet-a6c25e6a6369e916",
+      "scenarioId": "annotation.tool-freehand-comment",
+      "status": "FAILED",
+      "supersedes": "4f41dfb7d7947d677808f82bb171cc3014009158a802c4612ced2280e2b01949",
+      "surfaceTokens": [
+        "agent",
+        "annotation",
+        "annotation-tool-freehand-comment",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "comment",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "freehand",
+        "herdr",
+        "page",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "tool",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "annotation.tool-region-comment",
+      "createdAt": "2026-09-12T11:12:42.422425Z",
+      "originalPacketId": "packet-d181bfdbd28e3334",
+      "packet": {
+        "cellId": "annotation.tool-region-comment",
+        "packetId": "packet-d181bfdbd28e3334",
+        "scenarioId": "annotation.tool-region-comment",
+        "surfaces": [
+          "page",
+          "capture",
+          "Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-d181bfdbd28e3334",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-d181bfdbd28e3334",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-bc1c87dcad3cf3d4",
+      "repairPacketId": "repair-packet-bc1c87dcad3cf3d4",
+      "scenarioId": "annotation.tool-region-comment",
+      "status": "FAILED",
+      "supersedes": "fb96ea3ec76467dd57b6e0188037de9f3304af603b8063c2ff0527a9704d8f2b",
+      "surfaceTokens": [
+        "annotation",
+        "annotation-tool-region-comment",
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "comment",
+        "fixture-page",
+        "page",
+        "region",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "tool"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "annotation.tool-text-comment",
+      "createdAt": "2026-09-12T11:12:42.422693Z",
+      "originalPacketId": "packet-e3602c54ca486a8e",
+      "packet": {
+        "cellId": "annotation.tool-text-comment",
+        "packetId": "packet-e3602c54ca486a8e",
+        "scenarioId": "annotation.tool-text-comment",
+        "surfaces": [
+          "page",
+          "capture",
+          "Review",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-e3602c54ca486a8e",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-e3602c54ca486a8e",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-5d7bdea754fa7d1f",
+      "repairPacketId": "repair-packet-5d7bdea754fa7d1f",
+      "scenarioId": "annotation.tool-text-comment",
+      "status": "FAILED",
+      "supersedes": "9d285d961ccc85d2e349b2335222bafbbb86bd18b953823267982bd1f36da0c3",
+      "surfaceTokens": [
+        "agent",
+        "annotation",
+        "annotation-tool-text-comment",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "comment",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "pane",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "text",
+        "tool",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "edit-delete",
+      "createdAt": "2026-09-12T11:12:42.422833Z",
+      "originalPacketId": "packet-e151b0ef69698f4c",
+      "packet": {
+        "cellId": "edit-delete",
+        "packetId": "packet-e151b0ef69698f4c",
+        "scenarioId": "extension.annotation-edit-delete",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-e151b0ef69698f4c",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-e151b0ef69698f4c",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-19b1668af18ca054",
+      "repairPacketId": "repair-packet-19b1668af18ca054",
+      "scenarioId": "extension.annotation-edit-delete",
+      "status": "FAILED",
+      "supersedes": "d84c058e896c1c0eaf04628ad9d8474f2c4c43fbabcd52ec574e276d01fcdd6b",
+      "surfaceTokens": [
+        "annotation",
+        "browser",
+        "browser-extension",
+        "delete",
+        "edit",
+        "edit-delete",
+        "extension",
+        "extension-annotation-edit-delete",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "element-region-freehand",
+      "createdAt": "2026-09-12T11:12:42.422974Z",
+      "originalPacketId": "packet-326126255bad20b6",
+      "packet": {
+        "cellId": "element-region-freehand",
+        "packetId": "packet-326126255bad20b6",
+        "scenarioId": "extension.annotation-tools",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-326126255bad20b6",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-326126255bad20b6",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-4cf0724563a69ead",
+      "repairPacketId": "repair-packet-4cf0724563a69ead",
+      "scenarioId": "extension.annotation-tools",
+      "status": "FAILED",
+      "supersedes": "2b2e2bc68f2a6fcbabc3140547d195c3b4b4964be8c745e90f82577fbae8b579",
+      "surfaceTokens": [
+        "annotation",
+        "browser",
+        "browser-extension",
+        "element",
+        "element-region-freehand",
+        "extension",
+        "extension-annotation-tools",
+        "extension-popup",
+        "fixture-page",
+        "freehand",
+        "page",
+        "popup",
+        "region",
+        "tools"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "text-editor",
+      "createdAt": "2026-09-12T11:12:42.423114Z",
+      "originalPacketId": "packet-9fbd4b285eeb9ee1",
+      "packet": {
+        "cellId": "text-editor",
+        "packetId": "packet-9fbd4b285eeb9ee1",
+        "scenarioId": "extension.annotation-tools",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-9fbd4b285eeb9ee1",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-9fbd4b285eeb9ee1",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-45de407621b0107c",
+      "repairPacketId": "repair-packet-45de407621b0107c",
+      "scenarioId": "extension.annotation-tools",
+      "status": "FAILED",
+      "supersedes": "5279883e5115547dfe1c74e0ee7757fcba3a3b2e6c310129056f6c0ad22183c8",
+      "surfaceTokens": [
+        "annotation",
+        "browser",
+        "browser-extension",
+        "editor",
+        "extension",
+        "extension-annotation-tools",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup",
+        "text",
+        "text-editor",
+        "tools"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "capture-failure-retains",
+      "createdAt": "2026-09-12T11:12:42.423252Z",
+      "originalPacketId": "packet-85f9fb5ae272c0e9",
+      "packet": {
+        "cellId": "capture-failure-retains",
+        "packetId": "packet-85f9fb5ae272c0e9",
+        "scenarioId": "extension.capture-image",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-85f9fb5ae272c0e9",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-85f9fb5ae272c0e9",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-380fad6f3e39d98e",
+      "repairPacketId": "repair-packet-380fad6f3e39d98e",
+      "scenarioId": "extension.capture-image",
+      "status": "FAILED",
+      "supersedes": "31372281503d109e233d307eb92a7b2aa2c8ee013c90f5db5ed853b5a01b30cd",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "capture",
+        "capture-failure-retains",
+        "capture-pipeline",
+        "extension",
+        "extension-capture-image",
+        "extension-popup",
+        "failure",
+        "fixture-page",
+        "image",
+        "page",
+        "popup",
+        "retains"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "capture-success",
+      "createdAt": "2026-09-12T11:12:42.423401Z",
+      "originalPacketId": "packet-1c8d0858a278ccd7",
+      "packet": {
+        "cellId": "capture-success",
+        "packetId": "packet-1c8d0858a278ccd7",
+        "scenarioId": "extension.capture-image",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-1c8d0858a278ccd7",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-1c8d0858a278ccd7",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-8d0110c2fba6decf",
+      "repairPacketId": "repair-packet-8d0110c2fba6decf",
+      "scenarioId": "extension.capture-image",
+      "status": "FAILED",
+      "supersedes": "6438f1ca87e1767261af9e8ae8761cc6e560138209063cc6039b22cc40ec6a82",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "capture",
+        "capture-pipeline",
+        "capture-success",
+        "extension",
+        "extension-capture-image",
+        "extension-popup",
+        "fixture-page",
+        "image",
+        "page",
+        "popup",
+        "success"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "pending-overview",
+      "createdAt": "2026-09-12T11:12:42.423620Z",
+      "originalPacketId": "packet-2f84d3c637135e80",
+      "packet": {
+        "cellId": "pending-overview",
+        "packetId": "packet-2f84d3c637135e80",
+        "scenarioId": "extension.feedback-save-ack",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-2f84d3c637135e80",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-2f84d3c637135e80",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-e6d8993664cb0e0f",
+      "repairPacketId": "repair-packet-e6d8993664cb0e0f",
+      "scenarioId": "extension.feedback-save-ack",
+      "status": "FAILED",
+      "supersedes": "b75a711ba9712aa37e6b36f0ca13c58fa76b0f5c659d4c7fee97bbb67f03f962",
+      "surfaceTokens": [
+        "ack",
+        "browser",
+        "browser-extension",
+        "browser-feedback",
+        "extension",
+        "extension-feedback-save-ack",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "overview",
+        "page",
+        "pending",
+        "pending-overview",
+        "popup",
+        "save"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "selective-ack",
+      "createdAt": "2026-09-12T11:12:42.423759Z",
+      "originalPacketId": "packet-0d40f47453b89324",
+      "packet": {
+        "cellId": "selective-ack",
+        "packetId": "packet-0d40f47453b89324",
+        "scenarioId": "extension.feedback-save-ack",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-0d40f47453b89324",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-0d40f47453b89324",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-88f03f7589b4bf52",
+      "repairPacketId": "repair-packet-88f03f7589b4bf52",
+      "scenarioId": "extension.feedback-save-ack",
+      "status": "FAILED",
+      "supersedes": "b3bd71fae9da757d2357269c34e5f47af3b694cec46c792b193fea71f158a095",
+      "surfaceTokens": [
+        "ack",
+        "browser",
+        "browser-extension",
+        "browser-feedback",
+        "extension",
+        "extension-feedback-save-ack",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "page",
+        "popup",
+        "save",
+        "selective",
+        "selective-ack"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "movement-review",
+      "createdAt": "2026-09-12T11:12:42.423897Z",
+      "originalPacketId": "packet-9c9cde21ba0a8b1e",
+      "packet": {
+        "cellId": "movement-review",
+        "packetId": "packet-9c9cde21ba0a8b1e",
+        "scenarioId": "extension.live-page-palette",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-9c9cde21ba0a8b1e",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-9c9cde21ba0a8b1e",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-a45fbb270c10e0e7",
+      "repairPacketId": "repair-packet-a45fbb270c10e0e7",
+      "scenarioId": "extension.live-page-palette",
+      "status": "FAILED",
+      "supersedes": "e72366fc4c4c9cb7bd5d71e3483d58fd90febc93a37948987ba1d9a73f88718a",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-live-page-palette",
+        "extension-popup",
+        "fixture-page",
+        "live",
+        "movement",
+        "movement-review",
+        "page",
+        "palette",
+        "popup",
+        "review",
+        "review-setup",
+        "reviewsetup"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "palette-and-browse",
+      "createdAt": "2026-09-12T11:12:42.424038Z",
+      "originalPacketId": "packet-3196a8327008d46c",
+      "packet": {
+        "cellId": "palette-and-browse",
+        "packetId": "packet-3196a8327008d46c",
+        "scenarioId": "extension.live-page-palette",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-3196a8327008d46c",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-3196a8327008d46c",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-6f0304eeccdc98e4",
+      "repairPacketId": "repair-packet-6f0304eeccdc98e4",
+      "scenarioId": "extension.live-page-palette",
+      "status": "FAILED",
+      "supersedes": "146385090173e2283f8a8099b17b18cb5fa71327383c1e5e911d0dd43d2ed7fa",
+      "surfaceTokens": [
+        "and",
+        "browse",
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-live-page-palette",
+        "extension-popup",
+        "fixture-page",
+        "live",
+        "page",
+        "palette",
+        "palette-and-browse",
+        "popup"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "connected-popup",
+      "createdAt": "2026-09-12T11:12:42.424207Z",
+      "originalPacketId": "packet-0cede94998f18968",
+      "packet": {
+        "cellId": "connected-popup",
+        "packetId": "packet-0cede94998f18968",
+        "scenarioId": "extension.load-popup-connection",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-0cede94998f18968",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-0cede94998f18968",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-a704cf8183116096",
+      "repairPacketId": "repair-packet-a704cf8183116096",
+      "scenarioId": "extension.load-popup-connection",
+      "status": "FAILED",
+      "supersedes": "9c71c2e3d0648d7869c2128913632831ce67324f058e96d0f8e60d2bcdeb47d8",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "connected",
+        "connected-popup",
+        "connection",
+        "extension",
+        "extension-load-popup-connection",
+        "extension-popup",
+        "fixture-page",
+        "load",
+        "page",
+        "popup"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "reconnect-space-switch",
+      "createdAt": "2026-09-12T11:12:42.424438Z",
+      "originalPacketId": "packet-02780ae270749c1b",
+      "packet": {
+        "cellId": "reconnect-space-switch",
+        "packetId": "packet-02780ae270749c1b",
+        "scenarioId": "extension.load-popup-connection",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-02780ae270749c1b",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-02780ae270749c1b",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-d317f4f891924ef5",
+      "repairPacketId": "repair-packet-d317f4f891924ef5",
+      "scenarioId": "extension.load-popup-connection",
+      "status": "FAILED",
+      "supersedes": "0e9396dbcbdb8abdbadc4b58b51e5d81f9f2424e1d8c460e5f894e4ff4ecd422",
+      "surfaceTokens": [
+        "agent",
+        "browser",
+        "browser-extension",
+        "connection",
+        "extension",
+        "extension-load-popup-connection",
+        "extension-popup",
+        "fixture-page",
+        "herdr",
+        "load",
+        "page",
+        "pane",
+        "popup",
+        "reconnect",
+        "reconnect-space-switch",
+        "session",
+        "space",
+        "switch",
+        "tab"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "reload-stale",
+      "createdAt": "2026-09-12T11:12:42.424794Z",
+      "originalPacketId": "packet-7ccf625c0ccc51ff",
+      "packet": {
+        "cellId": "reload-stale",
+        "packetId": "packet-7ccf625c0ccc51ff",
+        "scenarioId": "extension.stale-navigation-reload",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-7ccf625c0ccc51ff",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-7ccf625c0ccc51ff",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-4b1f2200827b011c",
+      "repairPacketId": "repair-packet-4b1f2200827b011c",
+      "scenarioId": "extension.stale-navigation-reload",
+      "status": "FAILED",
+      "supersedes": "b0538cd9c46aaa598ef1cb6d2ea6f23383aeea023e171eb2e2cb0cfd68e7ddd5",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "extension-stale-navigation-reload",
+        "fixture-page",
+        "navigation",
+        "page",
+        "popup",
+        "reload",
+        "reload-stale",
+        "stale"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "submission-after-close",
+      "createdAt": "2026-09-12T11:12:42.425130Z",
+      "originalPacketId": "packet-684675e85ac06b53",
+      "packet": {
+        "cellId": "submission-after-close",
+        "packetId": "packet-684675e85ac06b53",
+        "scenarioId": "extension.stale-navigation-reload",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-684675e85ac06b53",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-684675e85ac06b53",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-2009a34242b1f05a",
+      "repairPacketId": "repair-packet-2009a34242b1f05a",
+      "scenarioId": "extension.stale-navigation-reload",
+      "status": "FAILED",
+      "supersedes": "9be0688d5530820791f69fa0377758c02020424200563208269e50565f3ce211",
+      "surfaceTokens": [
+        "after",
+        "browser",
+        "browser-extension",
+        "close",
+        "extension",
+        "extension-popup",
+        "extension-stale-navigation-reload",
+        "fixture-page",
+        "navigation",
+        "page",
+        "popup",
+        "reload",
+        "stale",
+        "submission",
+        "submission-after-close"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "capture.visible-tab-save",
+      "createdAt": "2026-09-12T11:12:42.425507Z",
+      "originalPacketId": "packet-5258f369802c6f94",
+      "packet": {
+        "cellId": "capture.visible-tab-save",
+        "packetId": "packet-5258f369802c6f94",
+        "scenarioId": "capture.visible-tab-save",
+        "surfaces": [
+          "capture",
+          "popup",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-5258f369802c6f94",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-5258f369802c6f94",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-ca7de7b19022eb44",
+      "repairPacketId": "repair-packet-ca7de7b19022eb44",
+      "scenarioId": "capture.visible-tab-save",
+      "status": "FAILED",
+      "supersedes": "a9bb07d4d830a167d1c0d7a518b029789d2795c4b5113c9de7746cb002a3d961",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "capture-visible-tab-save",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "save",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "visible",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "source-import",
+      "createdAt": "2026-09-12T11:12:42.425760Z",
+      "originalPacketId": "packet-677fd4d761499930",
+      "packet": {
+        "cellId": "source-import",
+        "packetId": "packet-677fd4d761499930",
+        "scenarioId": "context-browser",
+        "surfaces": [
+          "Context browser and source imports"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-677fd4d761499930",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-86f2dadfcb1b6830",
+          "packetId": "packet-677fd4d761499930",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-86f2dadfcb1b6830",
+      "repairId": "repair-d0d0a3cf430498ca",
+      "repairPacketId": "repair-packet-d0d0a3cf430498ca",
+      "scenarioId": "context-browser",
+      "status": "FAILED",
+      "supersedes": "f98269062fb32762dab83d7ad9cc19effbc85f1344dda39026f2ffb2907c64d2",
+      "surfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "import",
+        "imports",
+        "page",
+        "source",
+        "source-import",
+        "sources"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "setup-create",
+      "createdAt": "2026-09-12T11:12:42.425908Z",
+      "originalPacketId": "packet-1d9adf044601adf5",
+      "packet": {
+        "cellId": "setup-create",
+        "packetId": "packet-1d9adf044601adf5",
+        "scenarioId": "review-setup-sources",
+        "surfaces": [
+          "setup, sources, and Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-1d9adf044601adf5",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+          "packetId": "packet-1d9adf044601adf5",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+      "repairId": "repair-80405fea6c880391",
+      "repairPacketId": "repair-packet-80405fea6c880391",
+      "scenarioId": "review-setup-sources",
+      "status": "FAILED",
+      "supersedes": "28ea77a93d47ee060a23d161c224925fb13751440485d6391e936407ff8b0da8",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "create",
+        "review",
+        "review-setup",
+        "review-setup-sources",
+        "reviewsetup",
+        "setup",
+        "setup-create",
+        "setup-sources-and-review",
+        "sources"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "sources-manage",
+      "createdAt": "2026-09-12T11:12:42.426050Z",
+      "originalPacketId": "packet-9103a49208aa8fe5",
+      "packet": {
+        "cellId": "sources-manage",
+        "packetId": "packet-9103a49208aa8fe5",
+        "scenarioId": "review-setup-sources",
+        "surfaces": [
+          "setup, sources, and Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-9103a49208aa8fe5",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+          "packetId": "packet-9103a49208aa8fe5",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+      "repairId": "repair-3507e2f8cb2d4282",
+      "repairPacketId": "repair-packet-3507e2f8cb2d4282",
+      "scenarioId": "review-setup-sources",
+      "status": "FAILED",
+      "supersedes": "14a29083bee3761804d19f5df73a2d0108ec6f7796d252fb5cde64fcb8591da9",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "manage",
+        "review",
+        "review-setup",
+        "review-setup-sources",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources",
+        "sources-manage"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "popup.status-drafts-recovery",
+      "createdAt": "2026-09-12T11:12:42.426303Z",
+      "originalPacketId": "packet-e051aa8a87edacba",
+      "packet": {
+        "cellId": "popup.status-drafts-recovery",
+        "packetId": "packet-e051aa8a87edacba",
+        "scenarioId": "popup.status-drafts-recovery",
+        "surfaces": [
+          "popup",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-e051aa8a87edacba",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-e051aa8a87edacba",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-e9d4561393bbb0cf",
+      "repairPacketId": "repair-packet-e9d4561393bbb0cf",
+      "scenarioId": "popup.status-drafts-recovery",
+      "status": "FAILED",
+      "supersedes": "f2d3f451faea48992f4d990c0755a4d908afd6179afefc709df0658de538f37d",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "drafts",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "popup-status-drafts-recovery",
+        "recovery",
+        "session",
+        "space",
+        "status",
+        "tab",
+        "terminal",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "annotation.page-browse-annotate-mode",
+      "createdAt": "2026-09-12T11:17:21.553705Z",
+      "originalPacketId": "packet-4e4b0716032aec2d",
+      "packet": {
+        "cellId": "annotation.page-browse-annotate-mode",
+        "packetId": "packet-4e4b0716032aec2d",
+        "scenarioId": "annotation.page-browse-annotate-mode",
+        "surfaces": [
+          "page",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-4e4b0716032aec2d",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-4e4b0716032aec2d",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-678bf683d196b3e1",
+      "repairPacketId": "repair-packet-678bf683d196b3e1",
+      "scenarioId": "annotation.page-browse-annotate-mode",
+      "status": "READY",
+      "supersedes": "652b9ecc14dd97e6ed85abbfc6039aa6c9f05038d079320dedf23d8583ccb0cc",
+      "surfaceTokens": [
+        "agent",
+        "annotate",
+        "annotation",
+        "annotation-page-browse-annotate-mode",
+        "browse",
+        "browser",
+        "browser-feedback",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "mode",
+        "page",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "annotation.tool-element-anchor",
+      "createdAt": "2026-09-12T11:17:21.840066Z",
+      "originalPacketId": "packet-f08be8b63fb0bbe8",
+      "packet": {
+        "cellId": "annotation.tool-element-anchor",
+        "packetId": "packet-f08be8b63fb0bbe8",
+        "scenarioId": "annotation.tool-element-anchor",
+        "surfaces": [
+          "page",
+          "capture",
+          "Context",
+          "Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-f08be8b63fb0bbe8",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-f08be8b63fb0bbe8",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-e1efe2d5c16cad59",
+      "repairPacketId": "repair-packet-e1efe2d5c16cad59",
+      "scenarioId": "annotation.tool-element-anchor",
+      "status": "READY",
+      "supersedes": "f8e033c6b166b4b9ce3550a5b0537ce4f2ae9fa1d7b6260e47a9a52c925ea9bc",
+      "surfaceTokens": [
+        "anchor",
+        "annotation",
+        "annotation-tool-element-anchor",
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "element",
+        "fixture-page",
+        "page",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "sources",
+        "tool"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "annotation.tool-freehand-comment",
+      "createdAt": "2026-09-12T11:17:22.121394Z",
+      "originalPacketId": "packet-6843dfe80ac135c4",
+      "packet": {
+        "cellId": "annotation.tool-freehand-comment",
+        "packetId": "packet-6843dfe80ac135c4",
+        "scenarioId": "annotation.tool-freehand-comment",
+        "surfaces": [
+          "page",
+          "capture",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-6843dfe80ac135c4",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-6843dfe80ac135c4",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-24fdca2498992a83",
+      "repairPacketId": "repair-packet-24fdca2498992a83",
+      "scenarioId": "annotation.tool-freehand-comment",
+      "status": "READY",
+      "supersedes": "4f41dfb7d7947d677808f82bb171cc3014009158a802c4612ced2280e2b01949",
+      "surfaceTokens": [
+        "agent",
+        "annotation",
+        "annotation-tool-freehand-comment",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "comment",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "freehand",
+        "herdr",
+        "page",
+        "pane",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "tool",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "annotation.tool-region-comment",
+      "createdAt": "2026-09-12T11:17:22.395739Z",
+      "originalPacketId": "packet-d181bfdbd28e3334",
+      "packet": {
+        "cellId": "annotation.tool-region-comment",
+        "packetId": "packet-d181bfdbd28e3334",
+        "scenarioId": "annotation.tool-region-comment",
+        "surfaces": [
+          "page",
+          "capture",
+          "Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-d181bfdbd28e3334",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-d181bfdbd28e3334",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-1764db09f00e8179",
+      "repairPacketId": "repair-packet-1764db09f00e8179",
+      "scenarioId": "annotation.tool-region-comment",
+      "status": "READY",
+      "supersedes": "fb96ea3ec76467dd57b6e0188037de9f3304af603b8063c2ff0527a9704d8f2b",
+      "surfaceTokens": [
+        "annotation",
+        "annotation-tool-region-comment",
+        "browser",
+        "capture",
+        "capture-pipeline",
+        "comment",
+        "fixture-page",
+        "page",
+        "region",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "tool"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "annotation.tool-text-comment",
+      "createdAt": "2026-09-12T11:17:22.674216Z",
+      "originalPacketId": "packet-e3602c54ca486a8e",
+      "packet": {
+        "cellId": "annotation.tool-text-comment",
+        "packetId": "packet-e3602c54ca486a8e",
+        "scenarioId": "annotation.tool-text-comment",
+        "surfaces": [
+          "page",
+          "capture",
+          "Review",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-e3602c54ca486a8e",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-e3602c54ca486a8e",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-08aca9d35b10b477",
+      "repairPacketId": "repair-packet-08aca9d35b10b477",
+      "scenarioId": "annotation.tool-text-comment",
+      "status": "READY",
+      "supersedes": "9d285d961ccc85d2e349b2335222bafbbb86bd18b953823267982bd1f36da0c3",
+      "surfaceTokens": [
+        "agent",
+        "annotation",
+        "annotation-tool-text-comment",
+        "browser",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "comment",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "herdr",
+        "page",
+        "pane",
+        "review",
+        "review-setup",
+        "reviewsetup",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "text",
+        "tool",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "edit-delete",
+      "createdAt": "2026-09-12T11:17:22.956670Z",
+      "originalPacketId": "packet-e151b0ef69698f4c",
+      "packet": {
+        "cellId": "edit-delete",
+        "packetId": "packet-e151b0ef69698f4c",
+        "scenarioId": "extension.annotation-edit-delete",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-e151b0ef69698f4c",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-e151b0ef69698f4c",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-764d04436179dc72",
+      "repairPacketId": "repair-packet-764d04436179dc72",
+      "scenarioId": "extension.annotation-edit-delete",
+      "status": "READY",
+      "supersedes": "d84c058e896c1c0eaf04628ad9d8474f2c4c43fbabcd52ec574e276d01fcdd6b",
+      "surfaceTokens": [
+        "annotation",
+        "browser",
+        "browser-extension",
+        "delete",
+        "edit",
+        "edit-delete",
+        "extension",
+        "extension-annotation-edit-delete",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "element-region-freehand",
+      "createdAt": "2026-09-12T11:17:23.242017Z",
+      "originalPacketId": "packet-326126255bad20b6",
+      "packet": {
+        "cellId": "element-region-freehand",
+        "packetId": "packet-326126255bad20b6",
+        "scenarioId": "extension.annotation-tools",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-326126255bad20b6",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-326126255bad20b6",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-d6a34a9b5d2b69fe",
+      "repairPacketId": "repair-packet-d6a34a9b5d2b69fe",
+      "scenarioId": "extension.annotation-tools",
+      "status": "READY",
+      "supersedes": "2b2e2bc68f2a6fcbabc3140547d195c3b4b4964be8c745e90f82577fbae8b579",
+      "surfaceTokens": [
+        "annotation",
+        "browser",
+        "browser-extension",
+        "element",
+        "element-region-freehand",
+        "extension",
+        "extension-annotation-tools",
+        "extension-popup",
+        "fixture-page",
+        "freehand",
+        "page",
+        "popup",
+        "region",
+        "tools"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "text-editor",
+      "createdAt": "2026-09-12T11:17:23.533587Z",
+      "originalPacketId": "packet-9fbd4b285eeb9ee1",
+      "packet": {
+        "cellId": "text-editor",
+        "packetId": "packet-9fbd4b285eeb9ee1",
+        "scenarioId": "extension.annotation-tools",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-9fbd4b285eeb9ee1",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-9fbd4b285eeb9ee1",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-ed11a4ca77fee675",
+      "repairPacketId": "repair-packet-ed11a4ca77fee675",
+      "scenarioId": "extension.annotation-tools",
+      "status": "READY",
+      "supersedes": "5279883e5115547dfe1c74e0ee7757fcba3a3b2e6c310129056f6c0ad22183c8",
+      "surfaceTokens": [
+        "annotation",
+        "browser",
+        "browser-extension",
+        "editor",
+        "extension",
+        "extension-annotation-tools",
+        "extension-popup",
+        "fixture-page",
+        "page",
+        "popup",
+        "text",
+        "text-editor",
+        "tools"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "capture-failure-retains",
+      "createdAt": "2026-09-12T11:17:23.837028Z",
+      "originalPacketId": "packet-85f9fb5ae272c0e9",
+      "packet": {
+        "cellId": "capture-failure-retains",
+        "packetId": "packet-85f9fb5ae272c0e9",
+        "scenarioId": "extension.capture-image",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-85f9fb5ae272c0e9",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-85f9fb5ae272c0e9",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-46812f208f85d761",
+      "repairPacketId": "repair-packet-46812f208f85d761",
+      "scenarioId": "extension.capture-image",
+      "status": "READY",
+      "supersedes": "31372281503d109e233d307eb92a7b2aa2c8ee013c90f5db5ed853b5a01b30cd",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "capture",
+        "capture-failure-retains",
+        "capture-pipeline",
+        "extension",
+        "extension-capture-image",
+        "extension-popup",
+        "failure",
+        "fixture-page",
+        "image",
+        "page",
+        "popup",
+        "retains"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "capture-success",
+      "createdAt": "2026-09-12T11:17:24.129127Z",
+      "originalPacketId": "packet-1c8d0858a278ccd7",
+      "packet": {
+        "cellId": "capture-success",
+        "packetId": "packet-1c8d0858a278ccd7",
+        "scenarioId": "extension.capture-image",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-1c8d0858a278ccd7",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-1c8d0858a278ccd7",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-e2bd2c4d4e197851",
+      "repairPacketId": "repair-packet-e2bd2c4d4e197851",
+      "scenarioId": "extension.capture-image",
+      "status": "READY",
+      "supersedes": "6438f1ca87e1767261af9e8ae8761cc6e560138209063cc6039b22cc40ec6a82",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "capture",
+        "capture-pipeline",
+        "capture-success",
+        "extension",
+        "extension-capture-image",
+        "extension-popup",
+        "fixture-page",
+        "image",
+        "page",
+        "popup",
+        "success"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "pending-overview",
+      "createdAt": "2026-09-12T11:17:24.416605Z",
+      "originalPacketId": "packet-2f84d3c637135e80",
+      "packet": {
+        "cellId": "pending-overview",
+        "packetId": "packet-2f84d3c637135e80",
+        "scenarioId": "extension.feedback-save-ack",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-2f84d3c637135e80",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-2f84d3c637135e80",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-576df24cb2cd3dd9",
+      "repairPacketId": "repair-packet-576df24cb2cd3dd9",
+      "scenarioId": "extension.feedback-save-ack",
+      "status": "READY",
+      "supersedes": "b75a711ba9712aa37e6b36f0ca13c58fa76b0f5c659d4c7fee97bbb67f03f962",
+      "surfaceTokens": [
+        "ack",
+        "browser",
+        "browser-extension",
+        "browser-feedback",
+        "extension",
+        "extension-feedback-save-ack",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "overview",
+        "page",
+        "pending",
+        "pending-overview",
+        "popup",
+        "save"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "selective-ack",
+      "createdAt": "2026-09-12T11:17:24.712589Z",
+      "originalPacketId": "packet-0d40f47453b89324",
+      "packet": {
+        "cellId": "selective-ack",
+        "packetId": "packet-0d40f47453b89324",
+        "scenarioId": "extension.feedback-save-ack",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-0d40f47453b89324",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-0d40f47453b89324",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-c648c663012825f9",
+      "repairPacketId": "repair-packet-c648c663012825f9",
+      "scenarioId": "extension.feedback-save-ack",
+      "status": "READY",
+      "supersedes": "b3bd71fae9da757d2357269c34e5f47af3b694cec46c792b193fea71f158a095",
+      "surfaceTokens": [
+        "ack",
+        "browser",
+        "browser-extension",
+        "browser-feedback",
+        "extension",
+        "extension-feedback-save-ack",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "fixture-page",
+        "page",
+        "popup",
+        "save",
+        "selective",
+        "selective-ack"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "movement-review",
+      "createdAt": "2026-09-12T11:17:25.008615Z",
+      "originalPacketId": "packet-9c9cde21ba0a8b1e",
+      "packet": {
+        "cellId": "movement-review",
+        "packetId": "packet-9c9cde21ba0a8b1e",
+        "scenarioId": "extension.live-page-palette",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-9c9cde21ba0a8b1e",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-9c9cde21ba0a8b1e",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-d69b04d2f2b85c7e",
+      "repairPacketId": "repair-packet-d69b04d2f2b85c7e",
+      "scenarioId": "extension.live-page-palette",
+      "status": "READY",
+      "supersedes": "e72366fc4c4c9cb7bd5d71e3483d58fd90febc93a37948987ba1d9a73f88718a",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-live-page-palette",
+        "extension-popup",
+        "fixture-page",
+        "live",
+        "movement",
+        "movement-review",
+        "page",
+        "palette",
+        "popup",
+        "review",
+        "review-setup",
+        "reviewsetup"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "palette-and-browse",
+      "createdAt": "2026-09-12T11:17:25.303740Z",
+      "originalPacketId": "packet-3196a8327008d46c",
+      "packet": {
+        "cellId": "palette-and-browse",
+        "packetId": "packet-3196a8327008d46c",
+        "scenarioId": "extension.live-page-palette",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-3196a8327008d46c",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-3196a8327008d46c",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-9bb41c87bfc760da",
+      "repairPacketId": "repair-packet-9bb41c87bfc760da",
+      "scenarioId": "extension.live-page-palette",
+      "status": "READY",
+      "supersedes": "146385090173e2283f8a8099b17b18cb5fa71327383c1e5e911d0dd43d2ed7fa",
+      "surfaceTokens": [
+        "and",
+        "browse",
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-live-page-palette",
+        "extension-popup",
+        "fixture-page",
+        "live",
+        "page",
+        "palette",
+        "palette-and-browse",
+        "popup"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "connected-popup",
+      "createdAt": "2026-09-12T11:17:25.590904Z",
+      "originalPacketId": "packet-0cede94998f18968",
+      "packet": {
+        "cellId": "connected-popup",
+        "packetId": "packet-0cede94998f18968",
+        "scenarioId": "extension.load-popup-connection",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-0cede94998f18968",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-0cede94998f18968",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-880c316ec45817ad",
+      "repairPacketId": "repair-packet-880c316ec45817ad",
+      "scenarioId": "extension.load-popup-connection",
+      "status": "READY",
+      "supersedes": "9c71c2e3d0648d7869c2128913632831ce67324f058e96d0f8e60d2bcdeb47d8",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "connected",
+        "connected-popup",
+        "connection",
+        "extension",
+        "extension-load-popup-connection",
+        "extension-popup",
+        "fixture-page",
+        "load",
+        "page",
+        "popup"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "reconnect-space-switch",
+      "createdAt": "2026-09-12T11:17:25.883301Z",
+      "originalPacketId": "packet-02780ae270749c1b",
+      "packet": {
+        "cellId": "reconnect-space-switch",
+        "packetId": "packet-02780ae270749c1b",
+        "scenarioId": "extension.load-popup-connection",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-02780ae270749c1b",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-02780ae270749c1b",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-d89fe3874cbf26c5",
+      "repairPacketId": "repair-packet-d89fe3874cbf26c5",
+      "scenarioId": "extension.load-popup-connection",
+      "status": "READY",
+      "supersedes": "0e9396dbcbdb8abdbadc4b58b51e5d81f9f2424e1d8c460e5f894e4ff4ecd422",
+      "surfaceTokens": [
+        "agent",
+        "browser",
+        "browser-extension",
+        "connection",
+        "extension",
+        "extension-load-popup-connection",
+        "extension-popup",
+        "fixture-page",
+        "herdr",
+        "load",
+        "page",
+        "pane",
+        "popup",
+        "reconnect",
+        "reconnect-space-switch",
+        "session",
+        "space",
+        "switch",
+        "tab"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "reload-stale",
+      "createdAt": "2026-09-12T11:17:26.220566Z",
+      "originalPacketId": "packet-7ccf625c0ccc51ff",
+      "packet": {
+        "cellId": "reload-stale",
+        "packetId": "packet-7ccf625c0ccc51ff",
+        "scenarioId": "extension.stale-navigation-reload",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-7ccf625c0ccc51ff",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-7ccf625c0ccc51ff",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-f2b6fbe063f6fd62",
+      "repairPacketId": "repair-packet-f2b6fbe063f6fd62",
+      "scenarioId": "extension.stale-navigation-reload",
+      "status": "READY",
+      "supersedes": "b0538cd9c46aaa598ef1cb6d2ea6f23383aeea023e171eb2e2cb0cfd68e7ddd5",
+      "surfaceTokens": [
+        "browser",
+        "browser-extension",
+        "extension",
+        "extension-popup",
+        "extension-stale-navigation-reload",
+        "fixture-page",
+        "navigation",
+        "page",
+        "popup",
+        "reload",
+        "reload-stale",
+        "stale"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "submission-after-close",
+      "createdAt": "2026-09-12T11:17:26.540991Z",
+      "originalPacketId": "packet-684675e85ac06b53",
+      "packet": {
+        "cellId": "submission-after-close",
+        "packetId": "packet-684675e85ac06b53",
+        "scenarioId": "extension.stale-navigation-reload",
+        "surfaces": [
+          "browser-extension"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-684675e85ac06b53",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-684675e85ac06b53",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-29a8bee1166e2016",
+      "repairPacketId": "repair-packet-29a8bee1166e2016",
+      "scenarioId": "extension.stale-navigation-reload",
+      "status": "READY",
+      "supersedes": "9be0688d5530820791f69fa0377758c02020424200563208269e50565f3ce211",
+      "surfaceTokens": [
+        "after",
+        "browser",
+        "browser-extension",
+        "close",
+        "extension",
+        "extension-popup",
+        "extension-stale-navigation-reload",
+        "fixture-page",
+        "navigation",
+        "page",
+        "popup",
+        "reload",
+        "stale",
+        "submission",
+        "submission-after-close"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "capture.visible-tab-save",
+      "createdAt": "2026-09-12T11:17:26.849566Z",
+      "originalPacketId": "packet-5258f369802c6f94",
+      "packet": {
+        "cellId": "capture.visible-tab-save",
+        "packetId": "packet-5258f369802c6f94",
+        "scenarioId": "capture.visible-tab-save",
+        "surfaces": [
+          "capture",
+          "popup",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-5258f369802c6f94",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-5258f369802c6f94",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-53695c75c24abfca",
+      "repairPacketId": "repair-packet-53695c75c24abfca",
+      "scenarioId": "capture.visible-tab-save",
+      "status": "READY",
+      "supersedes": "a9bb07d4d830a167d1c0d7a518b029789d2795c4b5113c9de7746cb002a3d961",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "capture",
+        "capture-pipeline",
+        "capture-visible-tab-save",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "save",
+        "session",
+        "space",
+        "tab",
+        "terminal",
+        "visible",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "source-import",
+      "createdAt": "2026-09-12T11:17:27.161975Z",
+      "originalPacketId": "packet-677fd4d761499930",
+      "packet": {
+        "cellId": "source-import",
+        "packetId": "packet-677fd4d761499930",
+        "scenarioId": "context-browser",
+        "surfaces": [
+          "Context browser and source imports"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-677fd4d761499930",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-86f2dadfcb1b6830",
+          "packetId": "packet-677fd4d761499930",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-86f2dadfcb1b6830",
+      "repairId": "repair-3b54487ec636bc63",
+      "repairPacketId": "repair-packet-3b54487ec636bc63",
+      "scenarioId": "context-browser",
+      "status": "READY",
+      "supersedes": "f98269062fb32762dab83d7ad9cc19effbc85f1344dda39026f2ffb2907c64d2",
+      "surfaceTokens": [
+        "and",
+        "browser",
+        "context",
+        "context-browser",
+        "context-browser-and-source-imports",
+        "contextbrowser",
+        "fixture-page",
+        "import",
+        "imports",
+        "page",
+        "source",
+        "source-import",
+        "sources"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "setup-create",
+      "createdAt": "2026-09-12T11:17:27.473409Z",
+      "originalPacketId": "packet-1d9adf044601adf5",
+      "packet": {
+        "cellId": "setup-create",
+        "packetId": "packet-1d9adf044601adf5",
+        "scenarioId": "review-setup-sources",
+        "surfaces": [
+          "setup, sources, and Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-1d9adf044601adf5",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+          "packetId": "packet-1d9adf044601adf5",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+      "repairId": "repair-c1af93eb66c9e63f",
+      "repairPacketId": "repair-packet-c1af93eb66c9e63f",
+      "scenarioId": "review-setup-sources",
+      "status": "READY",
+      "supersedes": "28ea77a93d47ee060a23d161c224925fb13751440485d6391e936407ff8b0da8",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "create",
+        "review",
+        "review-setup",
+        "review-setup-sources",
+        "reviewsetup",
+        "setup",
+        "setup-create",
+        "setup-sources-and-review",
+        "sources"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "sources-manage",
+      "createdAt": "2026-09-12T11:17:27.784017Z",
+      "originalPacketId": "packet-9103a49208aa8fe5",
+      "packet": {
+        "cellId": "sources-manage",
+        "packetId": "packet-9103a49208aa8fe5",
+        "scenarioId": "review-setup-sources",
+        "surfaces": [
+          "setup, sources, and Review"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-9103a49208aa8fe5",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+          "packetId": "packet-9103a49208aa8fe5",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-921586d2a0bf2b7c",
+      "repairId": "repair-b08be8e1f958cbaf",
+      "repairPacketId": "repair-packet-b08be8e1f958cbaf",
+      "scenarioId": "review-setup-sources",
+      "status": "READY",
+      "supersedes": "14a29083bee3761804d19f5df73a2d0108ec6f7796d252fb5cde64fcb8591da9",
+      "surfaceTokens": [
+        "and",
+        "context",
+        "context-browser",
+        "contextbrowser",
+        "manage",
+        "review",
+        "review-setup",
+        "review-setup-sources",
+        "reviewsetup",
+        "setup",
+        "setup-sources-and-review",
+        "sources",
+        "sources-manage"
+      ]
+    },
+    {
+      "attempt": 2,
+      "cellId": "popup.status-drafts-recovery",
+      "createdAt": "2026-09-12T11:17:28.077340Z",
+      "originalPacketId": "packet-e051aa8a87edacba",
+      "packet": {
+        "cellId": "popup.status-drafts-recovery",
+        "packetId": "packet-e051aa8a87edacba",
+        "scenarioId": "popup.status-drafts-recovery",
+        "surfaces": [
+          "popup",
+          "FeedbackPanel"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-e051aa8a87edacba",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+          "packetId": "packet-e051aa8a87edacba",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-dffaaa1aacf942f5",
+      "repairId": "repair-7336cbc5c2feba89",
+      "repairPacketId": "repair-packet-7336cbc5c2feba89",
+      "scenarioId": "popup.status-drafts-recovery",
+      "status": "READY",
+      "supersedes": "f2d3f451faea48992f4d990c0755a4d908afd6179afefc709df0658de538f37d",
+      "surfaceTokens": [
+        "agent",
+        "browser-extension",
+        "browser-feedback",
+        "drafts",
+        "extension-popup",
+        "feedback",
+        "feedbackpanel",
+        "herdr",
+        "pane",
+        "popup",
+        "popup-status-drafts-recovery",
+        "recovery",
+        "session",
+        "space",
+        "status",
+        "tab",
+        "terminal",
+        "workbench"
+      ]
+    },
+    {
+      "attempt": 1,
+      "cellId": "delivery-eligibility",
+      "createdAt": "2026-09-12T11:23:00.556159Z",
+      "originalPacketId": "packet-7ca78f76ac97b409",
+      "packet": {
+        "cellId": "delivery-eligibility",
+        "packetId": "packet-7ca78f76ac97b409",
+        "scenarioId": "environment.delivery-eligibility",
+        "surfaces": [
+          "environment"
+        ],
+        "viewports": [
+          {
+            "height": 900,
+            "name": "desktop",
+            "width": 1440
+          },
+          {
+            "height": 640,
+            "name": "compact",
+            "width": 1024
+          }
+        ]
+      },
+      "packetId": "packet-7ca78f76ac97b409",
+      "predicate": "screenshot.cross-packet-reuse",
+      "predicates": [
+        {
+          "detail": "screenshot hash is already used by packet-0d09eb0ab084adbd",
+          "packetId": "packet-7ca78f76ac97b409",
+          "predicate": "screenshot.cross-packet-reuse"
+        }
+      ],
+      "reason": "screenshot hash is already used by packet-0d09eb0ab084adbd",
+      "repairId": "repair-ccd7155828c4f23a",
+      "repairPacketId": "repair-packet-ccd7155828c4f23a",
+      "scenarioId": "environment.delivery-eligibility",
+      "status": "READY",
+      "supersedes": "775debee7d5fa5884047a5150bc64ec106a73457f43b778a78adc514235b8d70",
+      "surfaceTokens": [
+        "delivery",
+        "delivery-eligibility",
+        "eligibility",
+        "environment",
+        "environment-delivery-eligibility"
+      ]
+    }
+  ],
+  "invalidated": [],
+  "runId": "atlas-exhaustive-r2-20260912",
+  "termination": "open"
+}

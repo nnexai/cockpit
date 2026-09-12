@@ -1,0 +1,19 @@
+{
+  "authoritySnapshot": "fixture/snapshot.json",
+  "capturedAt": "2026-09-12T10:00:22.716682Z",
+  "handoffRules": [
+    "Capture lanes may use only the named owned resources and the two fixture pages.",
+    "Retain fixture resources and all authority receipts until final cleanup.",
+    "No product journey has been captured in this phase."
+  ],
+  "owner": "atlas-20260912-fixture",
+  "resources": [
+    "atlas-20260912-fixture",
+    "atlas-20260912-herdr",
+    "atlas-20260912-browser-profile",
+    "atlas-20260912-browser-context",
+    "atlas-20260912-fixture-pages"
+  ],
+  "runId": "atlas-exhaustive-20260912",
+  "state": "live-for-capture-lanes"
+}

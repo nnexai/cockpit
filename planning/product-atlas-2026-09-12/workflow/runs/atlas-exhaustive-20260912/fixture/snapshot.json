@@ -1,0 +1,60 @@
+{
+  "artifacts": [
+    {
+      "bytes": 2510,
+      "path": "fixture/root.json",
+      "sha256": "e8007f7fe693559f8eb4ad0732a95188da2b0312724d0231eeb70ce280264614"
+    },
+    {
+      "bytes": 1260,
+      "path": "fixture/repositories.json",
+      "sha256": "d08ededc443af6d90352da73304f21643870cca7a3357b617a09b0a7c675d240"
+    },
+    {
+      "bytes": 10726,
+      "path": "fixture/topology.json",
+      "sha256": "6bbc2af149bc033cdd7b19f0cc009a867f718e9a6fd454b613544e56f3a58a7f"
+    },
+    {
+      "bytes": 1529,
+      "path": "fixture/context.json",
+      "sha256": "406c55a8380dfb4d540c1a87b33389305b78ef664c478c4a4b7c675e5d12e7a2"
+    },
+    {
+      "bytes": 1730,
+      "path": "fixture/browser.json",
+      "sha256": "7ed0b2adc0078e39f9f6fcbcade503317b39087977ce60bda55210c07b26c54b"
+    }
+  ],
+  "authorityArtifacts": [
+    "fixture/root.json",
+    "fixture/repositories.json",
+    "fixture/topology.json",
+    "fixture/context.json",
+    "fixture/browser.json"
+  ],
+  "capturedAt": "2026-09-12T10:00:22.716679Z",
+  "counts": {
+    "agents": 4,
+    "documents": 2,
+    "eligibleTargets": 1,
+    "fixtureBrowserPages": 2,
+    "imports": 2,
+    "ineligibleTargets": 1,
+    "panes": 8,
+    "pendingFeedback": 2,
+    "projects": 2,
+    "repositories": 2,
+    "sources": 2,
+    "spaces": 2,
+    "tabs": 4
+  },
+  "owner": "atlas-20260912-fixture",
+  "readiness": {
+    "ready-browser": true,
+    "ready-context": true,
+    "ready-counts": true,
+    "ready-feedback": true,
+    "ready-repos": true
+  }
+}

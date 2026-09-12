@@ -1,0 +1,240 @@
+{
+  "scenarioId": "extension.annotation-edit-delete",
+  "captureId": "capture-e151b0ef69698f4c",
+  "startedAt": "2026-09-12T10:04:08.745775Z",
+  "finishedAt": "2026-09-12T10:04:08.774021Z",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "client": "Chromium CDP browser-first fixture",
+  "runtimeIdentity": {
+    "runId": "atlas-exhaustive-20260912",
+    "lane": "browser-extension",
+    "owner": "extensiontooldetails"
+  },
+  "viewportSet": [
+    {
+      "width": 1440,
+      "height": 900,
+      "name": "desktop"
+    },
+    {
+      "width": 1024,
+      "height": 640,
+      "name": "compact"
+    }
+  ],
+  "disposableSession": {
+    "sessionId": "atlas-20260912-herdr",
+    "resourceNamespace": "atlas-20260912-fixture",
+    "owned": true
+  },
+  "browserProfile": "/tmp/atlas-20260912-browser-profile",
+  "fixtureIdentity": {
+    "owner": "atlas-20260912-fixture",
+    "browserContext": "atlas-20260912-browser-context",
+    "pages": [
+      "http://127.0.0.1:49329/index.html",
+      "http://127.0.0.1:49329/docs.html"
+    ]
+  },
+  "authoritySnapshot": [
+    {
+      "authorityId": "auth-page",
+      "surface": "page",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sessionId": "atlas-20260912-herdr",
+      "ownedResourceIds": [
+        "atlas-20260912-fixture",
+        "atlas-20260912-browser-context"
+      ],
+      "stateDigest": "9175c755df44ec133dfb6fc2343f721de5fe3dcaa6bf208915d8639f67811802",
+      "sha256": "a4bf4eb1b23408ab3a8988690c34e3e71995b5c561a81cc0ecd5204e4befd404",
+      "redaction": "No protected resources; disposable fixture only"
+    },
+    {
+      "authorityId": "auth-extension",
+      "surface": "browser-extension",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sessionId": "atlas-20260912-herdr",
+      "ownedResourceIds": [
+        "atlas-20260912-fixture",
+        "atlas-20260912-browser-context"
+      ],
+      "stateDigest": "27d2bbcd9c01d80954f620d48af9e90ba8351989a2d89c045ee2c9416016f018",
+      "sha256": "44138aad74814c45e69726a657bb5501993d16fc1224857ea497c75f02790a93",
+      "redaction": "No protected resources; disposable fixture only"
+    }
+  ],
+  "actionLog": [
+    {
+      "sequence": 1,
+      "at": "2026-09-12T10:04:08.774021Z",
+      "actor": "worker-extensiontooldetails",
+      "surface": "browser-extension",
+      "action": "edit-delete",
+      "target": "Atlas fixture app annotation surface",
+      "inputs": {
+        "viewportSet": [
+          "1440x900",
+          "1024x640"
+        ]
+      },
+      "expectedAck": "visible state transition",
+      "observedAck": "Observed edit-delete state and retained diagnostics",
+      "authorityRefs": [
+        "auth-page",
+        "auth-extension"
+      ],
+      "artifactRefs": [
+        "action-01-annotation-1440x900.png",
+        "action-01-annotation-1024x640.png"
+      ],
+      "outcome": "PASS",
+      "stateChanging": true
+    }
+  ],
+  "stateTimeline": [
+    {
+      "stateId": "capture-e151b0ef69698f4c-before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:04:08.774021Z",
+      "surface": "browser-extension/page",
+      "visibleAssertions": [
+        "before/after annotation IDs and kinds",
+        "document_id and draft storage diff",
+        "remove/edit acknowledgements"
+      ],
+      "authorityRefs": [
+        "auth-page",
+        "auth-extension"
+      ],
+      "artifactRefs": [
+        "before-annotation-1440x900.png",
+        "before-annotation-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "capture-e151b0ef69698f4c-action",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:04:08.774021Z",
+      "surface": "browser-extension/page",
+      "visibleAssertions": [
+        "before/after annotation IDs and kinds",
+        "document_id and draft storage diff",
+        "remove/edit acknowledgements"
+      ],
+      "authorityRefs": [
+        "auth-page",
+        "auth-extension"
+      ],
+      "artifactRefs": [
+        "action-01-annotation-1440x900.png",
+        "action-01-annotation-1024x640.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "capture-e151b0ef69698f4c-after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:04:08.774021Z",
+      "surface": "browser-extension/page",
+      "visibleAssertions": [
+        "before/after annotation IDs and kinds",
+        "document_id and draft storage diff",
+        "remove/edit acknowledgements"
+      ],
+      "authorityRefs": [
+        "auth-page",
+        "auth-extension"
+      ],
+      "artifactRefs": [
+        "after-annotation-1440x900.png",
+        "after-annotation-1024x640.png"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/extensiontooldetails/capture-e151b0ef69698f4c/before-annotation-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.annotation-edit-delete",
+      "captureId": "capture-e151b0ef69698f4c",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "provenance": "Browser CDP fixture surface 1440x900; state before; owned disposable context atlas-20260912-browser-context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/extensiontooldetails/capture-e151b0ef69698f4c/before-annotation-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.annotation-edit-delete",
+      "captureId": "capture-e151b0ef69698f4c",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "provenance": "Browser CDP fixture surface 1024x640; state before; owned disposable context atlas-20260912-browser-context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/extensiontooldetails/capture-e151b0ef69698f4c/action-01-annotation-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.annotation-edit-delete",
+      "captureId": "capture-e151b0ef69698f4c",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "provenance": "Browser CDP fixture surface 1440x900; state action-01; owned disposable context atlas-20260912-browser-context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/extensiontooldetails/capture-e151b0ef69698f4c/action-01-annotation-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.annotation-edit-delete",
+      "captureId": "capture-e151b0ef69698f4c",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "provenance": "Browser CDP fixture surface 1024x640; state action-01; owned disposable context atlas-20260912-browser-context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/extensiontooldetails/capture-e151b0ef69698f4c/after-annotation-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.annotation-edit-delete",
+      "captureId": "capture-e151b0ef69698f4c",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "provenance": "Browser CDP fixture surface 1440x900; state after; owned disposable context atlas-20260912-browser-context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/extensiontooldetails/capture-e151b0ef69698f4c/after-annotation-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "extension.annotation-edit-delete",
+      "captureId": "capture-e151b0ef69698f4c",
+      "capturedAt": "2026-09-12T10:04:08.774021Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "provenance": "Browser CDP fixture surface 1024x640; state after; owned disposable context atlas-20260912-browser-context",
+      "runtimeClaim": true
+    }
+  ],
+  "result": "PASS",
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "residuals": [],
+    "details": "Owned disposable browser context retained for lane then released; no protected resources touched."
+  }
+}

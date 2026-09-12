@@ -1,0 +1,261 @@
+{
+  "manifest": {
+    "actionLog": [
+      {
+        "action": "Open popup / execute configured recovery action",
+        "actor": "worker extensionpopuprecovery",
+        "artifactRefs": [],
+        "at": "2026-09-12T10:05:41.825Z",
+        "authorityRefs": [
+          "auth-browser",
+          "auth-popup"
+        ],
+        "expectedAck": "popup state or authoritative error",
+        "inputs": {
+          "ownedProfile": "/tmp/atlas-20260912-extensionpopuprecovery-profile",
+          "viewport": "1440x900"
+        },
+        "observedAck": {
+          "extensionWorker": false,
+          "popup": {
+            "connection": null,
+            "error": "Error: page.goto: net::ERR_BLOCKED_BY_CLIENT at chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/popup.html",
+            "status": null,
+            "url": "chrome-error://chromewebdata/"
+          },
+          "title": "Atlas fixture app",
+          "url": "http://127.0.0.1:49329/index.html"
+        },
+        "outcome": "INCONCLUSIVE capability blocker: popup target unavailable",
+        "sequence": 1,
+        "stateChanging": true,
+        "surface": "browser-extension",
+        "target": "extension.stale-navigation-reload"
+      }
+    ],
+    "artifacts": [
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:41.824Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/before-surface-1440x900.png",
+        "provenance": "Owned Playwright Chromium context /tmp/atlas-20260912-extensionpopuprecovery-profile",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:41.860Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/action-01-surface-1440x900.png",
+        "provenance": "Owned Playwright Chromium context /tmp/atlas-20260912-extensionpopuprecovery-profile",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:41.891Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/before-surface-1024x640.png",
+        "provenance": "Owned Playwright Chromium context /tmp/atlas-20260912-extensionpopuprecovery-profile",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:41.934Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/action-01-surface-1024x640.png",
+        "provenance": "Owned Playwright Chromium context /tmp/atlas-20260912-extensionpopuprecovery-profile",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:41.968Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/after-surface-1024x640.png",
+        "provenance": "Owned Playwright Chromium context /tmp/atlas-20260912-extensionpopuprecovery-profile",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:42.014Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/after-surface-1440x900.png",
+        "provenance": "Owned Playwright Chromium context /tmp/atlas-20260912-extensionpopuprecovery-profile",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "684675e85ac06b53-capture",
+        "capturedAt": "2026-09-12T10:05:42.015Z",
+        "evidenceClass": "runtime",
+        "kind": "authority",
+        "path": "evidence/extensionpopuprecovery/684675e85ac06b53-capture/authority.json",
+        "provenance": "CDP/Playwright owned browser observation",
+        "runtimeClaim": true,
+        "scenarioId": "extension.stale-navigation-reload",
+        "sha256": "7f9c97168c2ae50e396087b917c3ff7dda62d773b9f1d93bd56bdd83784be439",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "attempts": 2,
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-browser",
+        "capturedAt": "2026-09-12T10:05:42.015Z",
+        "ownedResourceIds": [
+          "atlas-20260912-extensionpopuprecovery-browser"
+        ],
+        "redaction": "No protected resources inspected.",
+        "sessionId": "atlas-20260912-extensionpopuprecovery",
+        "sha256": "7f9c97168c2ae50e396087b917c3ff7dda62d773b9f1d93bd56bdd83784be439",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "7f9c97168c2ae50e396087b917c3ff7dda62d773b9f1d93bd56bdd83784be439",
+        "surface": "browser-extension"
+      }
+    ],
+    "blocker": "Actual unpacked extension popup/pairing capability unavailable in owned runtime; configured retries exhausted.",
+    "browserProfile": "/tmp/atlas-20260912-extensionpopuprecovery-profile",
+    "captureId": "684675e85ac06b53-capture",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": [],
+      "resourcesReleased": [
+        "popup-page",
+        "owned-browser-context"
+      ]
+    },
+    "diagnostics": [
+      {
+        "at": "2026-09-12T10:05:42.015Z",
+        "attempts": 2,
+        "category": "capability-unavailable",
+        "diagnosticId": "diag-popup-capability",
+        "environmentRefs": [
+          "fixture/browser.json"
+        ],
+        "lastKnownState": "{\"url\":\"http://127.0.0.1:49329/index.html\",\"title\":\"Atlas fixture app\",\"extensionWorker\":false,\"popup\":{\"error\":\"Error: page.goto: net::ERR_BLOCKED_BY_CLIENT at chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/popup.html\",\"url\":\"chrome-error://chromewebdata/\",\"status\":null,\"connection\":null}}",
+        "logsOrTraceRefs": [],
+        "nextStep": "Provide live disposable Cockpit pairing provider and rerun.",
+        "ownershipImpact": "None; disposable namespace only.",
+        "resolved": false,
+        "screenshotsRefs": [
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/before-surface-1440x900.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/action-01-surface-1440x900.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/before-surface-1024x640.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/action-01-surface-1024x640.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/after-surface-1024x640.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/after-surface-1440x900.png"
+        ],
+        "symptom": "Error: page.goto: net::ERR_BLOCKED_BY_CLIENT at chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/popup.html"
+      }
+    ],
+    "disposableSession": {
+      "id": "atlas-20260912-extensionpopuprecovery",
+      "owned": true,
+      "protectedUntouched": true
+    },
+    "finishedAt": "2026-09-12T10:05:42.015Z",
+    "fixtureIdentity": {
+      "owner": "atlas-20260912-fixture",
+      "root": "http://127.0.0.1:49329"
+    },
+    "result": "INCONCLUSIVE",
+    "runtimeIdentity": {
+      "lane": "browser-extension",
+      "owner": "extensionpopuprecovery",
+      "runId": "atlas-exhaustive-20260912"
+    },
+    "scenarioId": "extension.stale-navigation-reload",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:05:42.015Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/before-surface-1440x900.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/before-surface-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-browser"
+        ],
+        "observedAt": "2026-09-12T10:05:42.015Z",
+        "phase": "before",
+        "result": "INCONCLUSIVE",
+        "stateId": "before",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "{\"url\":\"http://127.0.0.1:49329/index.html\",\"title\":\"Atlas fixture app\",\"extensionWorker\":false,\"popup\":{\"error\":\"Error: page.goto: net::ERR_BLOCKED_BY_CLIENT at chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/popup.html\",\"url\":\"chrome-error://chromewebdata/\",\"status\":null,\"connection\":null}}"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/action-01-surface-1440x900.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/action-01-surface-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-browser"
+        ],
+        "observedAt": "2026-09-12T10:05:42.015Z",
+        "phase": "action",
+        "result": "INCONCLUSIVE",
+        "stateId": "action",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Configured action variants attempted",
+          "Popup capability blocker observed"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/after-surface-1024x640.png",
+          "evidence/extensionpopuprecovery/684675e85ac06b53-capture/after-surface-1440x900.png"
+        ],
+        "authorityRefs": [
+          "auth-browser"
+        ],
+        "observedAt": "2026-09-12T10:05:42.015Z",
+        "phase": "after",
+        "result": "INCONCLUSIVE",
+        "stateId": "after",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned browser retained; no protected session touched"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "name": "desktop",
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "name": "compact",
+        "width": 1024
+      }
+    ]
+  }
+}

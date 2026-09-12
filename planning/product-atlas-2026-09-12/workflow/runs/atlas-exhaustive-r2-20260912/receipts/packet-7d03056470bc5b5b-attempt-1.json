@@ -1,0 +1,38 @@
+{
+  "evidence": [
+    "evidence/fixture-r2/cockpit-atlas-1440x900.png",
+    "evidence/fixture-r2/extension-popup-connected.png",
+    "evidence/fixture-r2/extension-overlay-visible.png"
+  ],
+  "phase": "bootstrap",
+  "resources": [
+    {
+      "id": "atlasr2-herdr",
+      "kind": "owned Herdr service",
+      "sessionId": "atlas-r2-20260912-herdr",
+      "socket": "/tmp/atlas-exhaustive-r2-20260912/config/herdr/sessions/atlas-r2-20260912-herdr/herdr.sock"
+    },
+    {
+      "id": "atlasr2-cockpit-gateway",
+      "kind": "owned Cockpit gateway",
+      "url": "http://127.0.0.1:49372/"
+    },
+    {
+      "id": "atlasr2-fixture-pages",
+      "kind": "owned HTTP fixture server",
+      "url": "http://127.0.0.1:49373/index.html"
+    },
+    {
+      "id": "atlas-r2-browser-profile",
+      "kind": "owned production browser profile",
+      "path": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990"
+    }
+  ],
+  "result": "PASS",
+  "runtimeIdentity": {
+    "lane": "bootstrap",
+    "owner": "workflow-collector-2026-09-12",
+    "runId": "atlas-exhaustive-r2-20260912"
+  },
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+}

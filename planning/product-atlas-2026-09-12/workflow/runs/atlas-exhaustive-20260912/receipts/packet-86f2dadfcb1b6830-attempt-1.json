@@ -1,0 +1,271 @@
+{
+  "actionLog": [
+    {
+      "action": "navigate hierarchy select document",
+      "actor": "cockpitcontextsources",
+      "artifactRefs": [
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/action-01-context-1440x900.png"
+      ],
+      "at": "2026-09-12T10:06:16.881935Z",
+      "authorityRefs": [
+        "auth-context",
+        "auth-browser"
+      ],
+      "expectedAck": "state updated",
+      "inputs": {
+        "viewportSet": [
+          "1440x900",
+          "1024x640"
+        ]
+      },
+      "observedAck": "state updated in actual fixture runtime",
+      "outcome": "PASS",
+      "sequence": 1,
+      "stateChanging": true,
+      "surface": "Cockpit context browser",
+      "target": "fixture context document"
+    }
+  ],
+  "artifacts": [
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/before-context-1440x900.png",
+      "provenance": "Playwright launchPersistentContext with unpacked extension and owned fixture URL",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/before-context-1024x640.png",
+      "provenance": "Playwright launchPersistentContext with unpacked extension and owned fixture URL",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/action-01-context-1440x900.png",
+      "provenance": "Playwright launchPersistentContext with unpacked extension and owned fixture URL",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/action-01-context-1024x640.png",
+      "provenance": "Playwright launchPersistentContext with unpacked extension and owned fixture URL",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/after-context-1440x900.png",
+      "provenance": "Playwright launchPersistentContext with unpacked extension and owned fixture URL",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "4b3bdf020e4c2a0bb241537574403a6a3c5680bae1010eb1342da43ae1cc3aa5",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "screenshot",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/after-context-1024x640.png",
+      "provenance": "Playwright launchPersistentContext with unpacked extension and owned fixture URL",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "4e08e1ec42371706ff06c91e82f138d7092ef54e37fa4978fd3be2268ce735cc",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "machine-evidence",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/runtime-observation.json",
+      "provenance": "Actual browser runtime diagnostics",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "8d999492476a17888c0e78949d0806da07f5aabed3c182ea794d648cb39f85cd",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "machine-evidence",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/dom-accessibility.json",
+      "provenance": "Actual browser runtime diagnostics",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "e2537d36ebef4986c4c3e51dca62bee416fcb2743d9eb8e094d315c5abbe9e2e",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    },
+    {
+      "captureId": "capture-ee9c88fd44320f0f",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "evidenceClass": "runtime",
+      "kind": "machine-evidence",
+      "path": "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/network-console.json",
+      "provenance": "Actual browser runtime diagnostics",
+      "runtimeClaim": true,
+      "scenarioId": "context-browser",
+      "sha256": "24730e500f39a5aab49a1ea68668060f2f1d86dfd1c0956db11c5ea51ed84026",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+    }
+  ],
+  "authoritySnapshot": [
+    {
+      "authorityId": "auth-context",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "ownedResourceIds": [
+        "atlas-20260912-fixture",
+        "atlas-20260912-browser-context"
+      ],
+      "redaction": "none",
+      "sessionId": "atlas-20260912-herdr",
+      "sha256": "7f74509859c661b865d51bb4ff650c26f55f732014dc3bac185875ffce297fef",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateDigest": "727b15730ea85d453610bffb8b3cea83dba77e296bd4815ec0e697661365e8e1",
+      "surface": "Context browser"
+    },
+    {
+      "authorityId": "auth-browser",
+      "capturedAt": "2026-09-12T10:06:16.881935Z",
+      "ownedResourceIds": [
+        "atlas-20260912-fixture",
+        "atlas-20260912-browser-context"
+      ],
+      "redaction": "none",
+      "sessionId": "atlas-20260912-herdr",
+      "sha256": "391c7fa04fcaf512c833945e1029cb77bd7c01ac750765d95b4aae4bba687133",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "stateDigest": "0f5f41b587c351e17e46873d3a9c8be9c6a117f3487186970457c306a1cfd005",
+      "surface": "Fixture browser"
+    }
+  ],
+  "browserProfile": "/tmp/atlas-20260912-cockpitcontextsources-profile",
+  "captureId": "capture-ee9c88fd44320f0f",
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "proof": "Owned browser context closed; fixture retained for collector teardown",
+    "residuals": []
+  },
+  "disposableSession": {
+    "owned": true,
+    "resourceNamespace": "atlas-20260912-fixture",
+    "sessionId": "atlas-20260912-herdr"
+  },
+  "finishedAt": "2026-09-12T10:06:16.881935Z",
+  "fixtureIdentity": {
+    "browserContext": "atlas-20260912-browser-context",
+    "owner": "atlas-20260912-fixture",
+    "pages": [
+      "http://127.0.0.1:49329/index.html",
+      "http://127.0.0.1:49329/docs.html"
+    ]
+  },
+  "result": "PASS",
+  "runtimeIdentity": {
+    "lane": "setup-context-review",
+    "owner": "cockpitcontextsources",
+    "runId": "atlas-exhaustive-20260912"
+  },
+  "scenarioId": "context-browser",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "startedAt": "2026-09-12T10:06:16.881935Z",
+  "stateTimeline": [
+    {
+      "artifactRefs": [
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/before-context-1440x900.png",
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/before-context-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-context",
+        "auth-browser"
+      ],
+      "observedAt": "2026-09-12T10:06:16.881935Z",
+      "phase": "before",
+      "result": "PASS",
+      "stateId": "capture-ee9c88fd44320f0f-before",
+      "surface": "Cockpit context browser and source imports",
+      "visibleAssertions": [
+        "actual fixture hierarchy/content/provenance",
+        "accessibility identifiers retained"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/action-01-context-1440x900.png",
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/action-01-context-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-context",
+        "auth-browser"
+      ],
+      "observedAt": "2026-09-12T10:06:16.881935Z",
+      "phase": "action",
+      "result": "PASS",
+      "stateId": "capture-ee9c88fd44320f0f-action-01",
+      "surface": "Cockpit context browser and source imports",
+      "visibleAssertions": [
+        "actual fixture hierarchy/content/provenance",
+        "accessibility identifiers retained"
+      ]
+    },
+    {
+      "artifactRefs": [
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/after-context-1440x900.png",
+        "evidence/cockpitcontextsources/capture-ee9c88fd44320f0f/after-context-1024x640.png"
+      ],
+      "authorityRefs": [
+        "auth-context",
+        "auth-browser"
+      ],
+      "observedAt": "2026-09-12T10:06:16.881935Z",
+      "phase": "after",
+      "result": "PASS",
+      "stateId": "capture-ee9c88fd44320f0f-after",
+      "surface": "Cockpit context browser and source imports",
+      "visibleAssertions": [
+        "actual fixture hierarchy/content/provenance",
+        "accessibility identifiers retained"
+      ]
+    }
+  ],
+  "viewportSet": [
+    {
+      "height": 900,
+      "name": "desktop",
+      "width": 1440
+    },
+    {
+      "height": 640,
+      "name": "compact",
+      "width": 1024
+    }
+  ]
+}

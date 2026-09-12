@@ -1,0 +1,19 @@
+{
+  "surface": "environment",
+  "surfaces": [
+    "environment",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "feedbackEndpoint": "http://127.0.0.1:45275",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "spaceId": "w1",
+  "spaceLabel": "Atlas Alpha",
+  "connection": "open",
+  "pendingCount": 0,
+  "targets": {
+    "eligible": false,
+    "ineligible": false
+  },
+  "observation": "Actual Cockpit FeedbackPanel showed Browser: open and No pending browser annotations; requested targets were absent."
+}

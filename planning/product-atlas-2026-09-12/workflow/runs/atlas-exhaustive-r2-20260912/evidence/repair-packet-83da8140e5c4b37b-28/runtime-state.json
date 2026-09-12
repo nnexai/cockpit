@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-83da8140e5c4b37b",
+  "scenarioId": "annotation-paste-delivery",
+  "surface": [
+    "annotation rendering and paste/delivery"
+  ],
+  "surfaces": [
+    "annotation rendering and paste/delivery"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Choose eligible target, open paste/delivery preview, copy/paste rendered annotated content, then cancel preview"
+  ]
+}

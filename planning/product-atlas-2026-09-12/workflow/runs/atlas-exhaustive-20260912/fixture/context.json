@@ -1,0 +1,54 @@
+{
+  "capturedAt": "2026-09-12T09:59:25.158935Z",
+  "deliveryTargets": [
+    {
+      "eligible": true,
+      "id": "target-eligible",
+      "label": "Eligible review target",
+      "reason": "repository and context are available"
+    },
+    {
+      "eligible": false,
+      "id": "target-ineligible",
+      "label": "Ineligible target",
+      "reason": "target lacks required source permission"
+    }
+  ],
+  "documents": [
+    {
+      "path": "/tmp/atlas-20260912-fixture/context/architecture.md",
+      "sha256": "f261b1d4fc488a0bba62ac6ddee126794ec86a40176d3b3536a2b5cd29158d7f"
+    },
+    {
+      "path": "/tmp/atlas-20260912-fixture/context/review.md",
+      "sha256": "bfc10a718853c8a453947510291905116df3e86a4864636afdce3b7b53d26fd3"
+    }
+  ],
+  "feedback": [
+    {
+      "annotation": "Needs orbit API evidence",
+      "id": "feedback-orbit",
+      "state": "pending",
+      "target": "space-alpha"
+    },
+    {
+      "annotation": "Confirm tide delivery target",
+      "id": "feedback-tide",
+      "state": "pending",
+      "target": "space-beta"
+    }
+  ],
+  "owner": "atlas-20260912-fixture",
+  "sources": [
+    {
+      "importName": "orbit-source.ts",
+      "path": "/tmp/atlas-20260912-fixture/sources/orbit-source.ts",
+      "sha256": "9e1c877be3cbf99af1ebee102fce6d00d18cc5794ce96ee484f2f625a8966d5c"
+    },
+    {
+      "importName": "tide-source.ts",
+      "path": "/tmp/atlas-20260912-fixture/sources/tide-source.ts",
+      "sha256": "ba11801a59eab7db8adc52abc86e75463fce59cffdef966c33adf2facc508458"
+    }
+  ]
+}

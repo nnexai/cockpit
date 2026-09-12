@@ -1,0 +1,287 @@
+{
+  "manifest": {
+    "actionLog": "evidence/r2-4e2fa6acb24007f9/action-log.jsonl",
+    "artifacts": [
+      {
+        "artifactId": "action-01-4e2fa6acb24007f9-1024x640",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-4e2fa6acb24007f9/action-01-4e2fa6acb24007f9-1024x640.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "f4b9530f3321dc0dc7536cc7a62b6b485b578da588ebac8eefcc9a305cb7c464",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "action-01-4e2fa6acb24007f9-1440x900",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-4e2fa6acb24007f9/action-01-4e2fa6acb24007f9-1440x900.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "e62fd70ff1e2e886dc1755f93603f83ef483d863c29ebfb1212c32476504df31",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "action-log",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/r2-4e2fa6acb24007f9/action-log.jsonl",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "35626c9e5facb0761c0b000e2108a6b42a6f055f3199b77ee9607d5b0e4f1d88",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "artifactId": "after-4e2fa6acb24007f9-1024x640",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-4e2fa6acb24007f9/after-4e2fa6acb24007f9-1024x640.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "c333e983adead5636499b80cf4a4921cc5734e639a33325fb4f8a20b161724ea",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "after-4e2fa6acb24007f9-1440x900",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-4e2fa6acb24007f9/after-4e2fa6acb24007f9-1440x900.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "7cdd27bd2b001f22c57d8bb5649911d39fa6e98ab8315aa6849b80a04b2b0cc2",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "before-4e2fa6acb24007f9-1024x640",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-4e2fa6acb24007f9/before-4e2fa6acb24007f9-1024x640.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "120c4c3f0b85b2f8d3b26421612a926fafc6fb66f546e58801b46090eeb72157",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "before-4e2fa6acb24007f9-1440x900",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-4e2fa6acb24007f9/before-4e2fa6acb24007f9-1440x900.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "0513d9d9e432169353c291e378e8d929f1a0974475c09dd177a4888b5326db24",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "machine-evidence",
+        "captureId": "r2-4e2fa6acb24007f9-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/r2-4e2fa6acb24007f9/machine-evidence.json",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "command menu"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "command-menu",
+        "sha256": "4b9f72289b3a1038b8104aa97f14c11ad390f8ab43d6dbfa99eb1668533e2d51",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-4e2fa6acb24007f9-1",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "ownedResourceIds": [
+          "atlas-r2-20260912-herdr",
+          "atlasr2-cockpit-gateway",
+          "r2-2-4e2f"
+        ],
+        "redaction": "none",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "2f6ec3f9bddc06cfd8f41818fdc29d176faa5aa33b251ce04929c8486b8e2761",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "4b9f72289b3a1038b8104aa97f14c11ad390f8ab43d6dbfa99eb1668533e2d51",
+        "surface": "command menu"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "r2-4e2fa6acb24007f9-capture",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T10:57:16.558610Z",
+    "fixtureIdentity": {
+      "gateway": "http://127.0.0.1:49372/",
+      "root": "atlas-exhaustive-r2-20260912",
+      "surface": [
+        "command menu"
+      ]
+    },
+    "packetId": "packet-4e2fa6acb24007f9",
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "setup-context-review",
+      "owner": "AtlasR2RealSurfaces-2",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "command-menu",
+    "schemaVersion": 1,
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:57:16.558610Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/r2-4e2fa6acb24007f9/before-4e2fa6acb24007f9-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-4e2fa6acb24007f9-1"
+        ],
+        "observedAt": "2026-09-12T10:58:00.096238Z",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "before",
+        "surface": "command menu",
+        "visibleAssertions": [
+          "Actual Cockpit chrome",
+          "Commands",
+          "Files",
+          "Context",
+          "Review",
+          "FeedbackPanel",
+          "command menu"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/r2-4e2fa6acb24007f9/action-01-4e2fa6acb24007f9-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-4e2fa6acb24007f9-1"
+        ],
+        "observedAt": "2026-09-12T10:58:00.096238Z",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "action",
+        "surface": "command menu",
+        "visibleAssertions": [
+          "Actual Cockpit chrome",
+          "Commands",
+          "Files",
+          "Context",
+          "Review",
+          "FeedbackPanel",
+          "command menu"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/r2-4e2fa6acb24007f9/after-4e2fa6acb24007f9-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-4e2fa6acb24007f9-1"
+        ],
+        "observedAt": "2026-09-12T10:58:00.096238Z",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "after",
+        "surface": "command menu",
+        "visibleAssertions": [
+          "Actual Cockpit chrome",
+          "Commands",
+          "Files",
+          "Context",
+          "Review",
+          "FeedbackPanel",
+          "command menu"
+        ]
+      }
+    ],
+    "viewportSet": [
+      "1440x900",
+      "1024x640"
+    ]
+  }
+}

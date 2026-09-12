@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "id": "workflow.browser-extension.actual-extension",
+  "surface": "browser-extension",
+  "client": "extension",
+  "purpose": "Executable browser-first evidence journeys for the unpacked Cockpit Space feedback extension.",
+  "safety": {
+    "session": "Create a unique disposable Herdr/browser session name for this run; never use default.",
+    "profile": "Create a unique isolated Chrome profile and unpack the extension from the current checkout.",
+    "tabs": "Use only fixture tabs created by this workflow; do not navigate or capture unrelated user tabs.",
+    "cleanupOwner": "collector"
+  },
+  "fixture": {
+    "spaces": ["atlas-space-a", "atlas-space-b"],
+    "tabsPerSpace": 2,
+    "pages": ["project-a fixture with changed and untracked files", "project-b fixture with changed and untracked files"],
+    "content": ["multiple panes and agents", "context documents", "source imports", "pending browser feedback", "one eligible delivery target", "one ineligible delivery target"],
+    "pageControls": ["non-destructive payment-like button", "text block", "scrollable region", "modal/dialog trigger"],
+    "documentIdentity": "Record tab id, URL, title and content document_id before every mutation and after navigation/reload."
+  },
+  "viewports": ["1440x900", "1024x640"],
+  "proofContract": {
+    "screenshots": "Every matrix cell captures the actual extension surface in both viewports. Label whether pixels show page overlay, extension popup, captured image, or Cockpit rendering; browser chrome is not evidence.",
+    "machine": "Every matrix cell retains event log, tab/url/document_id, extension/runtime responses, storage snapshot, and relevant network/dispatch receipt.",
+    "retryEscalation": "Retry the named action once after restoring the stated precondition. On a second failure retain console/network/storage diagnostics and mark INCONCLUSIVE; never silently substitute another tab, Space, document, or delivery target."
+  },
+  "journeys": [
+    {
+      "id": "extension.load-popup-connection",
+      "title": "Load extension and verify popup connection",
+      "prerequisites": ["fixture created", "Cockpit gateway for atlas-space-a reachable", "extension loaded unpacked in isolated profile"],
+      "actions": ["Open extension action popup", "wait for Loading pairing… to settle", "record Space label, connection badge, selected visible HTTP(S) page and pending count", "switch to atlas-space-b and reconnect"],
+      "expectedVisibleStates": ["popup: Cockpit Space label and Connected badge", "popup: page selector contains only fixture HTTP(S) tabs", "popup: No pending capture or accurate pending count", "popup: reconnect reports success or explicit error"],
+      "failureStates": ["popup: Pairing unavailable/Disconnected", "popup: no eligible HTTP(S) page", "stale pairing candidate is not treated as connected"],
+      "evidenceMatrix": [
+        {"cell":"connected-popup", "screenshots":["popup at 1440x900", "popup at 1024x640"], "machineProof":["popup DOM #connection=#Connected", "context response with pairing source_version/association_key", "tabs queried and selected tab id/url/document_id"], "retryEscalation":"reopen popup once; then capture service-worker console, pairing response and storage pairing record; INCONCLUSIVE if unresolved"},
+        {"cell":"reconnect-space-switch", "screenshots":["popup after reconnect at 1440x900", "popup after reconnect at 1024x640"], "machineProof":["reconnect response", "active Space identity", "no protected session touched"], "retryEscalation":"retry once with gateway available; retain endpoint status and popup error text; INCONCLUSIVE, no fallback Space"}
+      ],
+      "cleanup": "collector closes popup and owned disposable browser; preserve logs"
+    },
+    {
+      "id": "extension.live-page-palette",
+      "title": "Activate live-page palette and mode pass-through",
+      "prerequisites": ["connected popup", "selected fixture tab", "document identity recorded"],
+      "actions": ["click Annotate page", "inspect live page overlay controls", "exercise Browse mode on a harmless page click, then Annotate mode", "scroll, resize viewport, zoom, and move page layout; invoke Review"],
+      "expectedVisibleStates": ["page overlay: fixed Cockpit annotation tools with Browse/Annotate selector", "page overlay: Browse click reaches page and creates no mark", "page overlay: geometry-dirty/review state is visible after movement", "page overlay: Review permits capture only after alignment review or explicit capture-anyway"],
+      "failureStates": ["overlay absent or controls intercept Browse click", "overlay drifts, is clipped, or covers modal top layer", "document changes without warning"],
+      "evidenceMatrix": [
+        {"cell":"palette-and-browse", "screenshots":["page overlay at 1440x900", "page overlay at 1024x640"], "machineProof":["shadow DOM controls and mode value", "page click event target/count", "annotation list unchanged in Browse"], "retryEscalation":"toggle mode and repeat once; retain DOM/event trace and screenshot; INCONCLUSIVE if pass-through or overlay cannot be established"},
+        {"cell":"movement-review", "screenshots":["overlay after scroll/resize at 1440x900", "overlay after zoom/layout move at 1024x640"], "machineProof":["scroll/viewport/devicePixelRatio", "alignmentDirty/alignmentReason state", "Review response and document_id"], "retryEscalation":"restore viewport and retry one movement; retain geometry diagnostics; INCONCLUSIVE if stale geometry is captured"}
+      ],
+      "cleanup": "collector returns page to Browse mode"
+    },
+    {
+      "id": "extension.annotation-tools",
+      "title": "Create element, region, freehand and text annotations",
+      "prerequisites": ["live palette in Annotate mode", "fixture controls visible", "document identity recorded"],
+      "actions": ["select Element tool and click button", "select Region tool and drag rectangle", "select Freehand tool and draw a bounded stroke", "select + Text and place comment", "save text inline beside freehand mark"],
+      "expectedVisibleStates": ["page overlay: each mark has distinct visual geometry and tool identity", "page overlay: text editor appears, accepts bounded comment and saves", "page overlay: marks remain attached while scrolling within same document"],
+      "failureStates": ["off-viewport or invalid geometry rejected with visible reason", "pointer capture leaves a partial mark", "text save fails but existing marks remain"],
+      "evidenceMatrix": [
+        {"cell":"element-region-freehand", "screenshots":["page overlay with three marks at 1440x900", "page overlay with three marks at 1024x640"], "machineProof":["annotations array kinds element/region/freehand", "anchors/bounds/points and document_id", "pointer event completion"], "retryEscalation":"repeat only failed tool once on visible fixture target; retain serialized annotations and console; INCONCLUSIVE after second failure"},
+        {"cell":"text-editor", "screenshots":["text editor and saved comment at 1440x900", "text editor and saved comment at 1024x640"], "machineProof":["editor value and annotation comment", "draft storage record keyed by tab_id/document_id", "save response"], "retryEscalation":"reopen editor once; retain input/error and storage snapshot; INCONCLUSIVE without deleting marks"}
+      ],
+      "cleanup": "collector owns and later removes all fixture marks"
+    },
+    {
+      "id": "extension.annotation-edit-delete",
+      "title": "Edit and delete marks without retargeting",
+      "prerequisites": ["one annotation of every kind exists", "same document active"],
+      "actions": ["select element comment and edit text", "edit freehand/text comment inline", "remove region and one text mark", "inspect remaining summary before capture"],
+      "expectedVisibleStates": ["page overlay: edited content replaces old text", "page overlay: removed marks disappear and remaining marks stay", "popup: draft count/summary reflects only remaining annotations"],
+      "failureStates": ["delete removes wrong mark", "edit reattaches to another element", "storage write error leaves misleading UI"],
+      "evidenceMatrix": [
+        {"cell":"edit-delete", "screenshots":["overlay before/after edit-delete at 1440x900", "overlay before/after edit-delete at 1024x640"], "machineProof":["before/after annotation IDs and kinds", "document_id and draft storage diff", "remove/edit acknowledgements"], "retryEscalation":"repeat failed operation once using same annotation ID; retain before/after storage and console; INCONCLUSIVE if identity changes"}
+      ],
+      "cleanup": "collector removes all remaining annotations after capture journey"
+    },
+    {
+      "id": "extension.capture-image",
+      "title": "Capture visible page and save durable PNG",
+      "prerequisites": ["at least one remaining freehand and optional comment", "page visible and geometry reviewed", "capture limits under 64 annotations/8192 points"],
+      "actions": ["click Capture and save in popup or palette", "observe capture progress and completion", "read the saved PNG with image tooling", "compare to page state"],
+      "expectedVisibleStates": ["popup: saved/pending capture summary", "captured image: page plus marks/comment; no palette/editor/+ Text/browser chrome", "Cockpit rendering: pending browser feedback card when submitted/available"],
+      "failureStates": ["pixel capture rejected due to document switch, size or timeout", "PNG exceeds configured 4 MiB/6 MiB request limits", "captured pixels are from another active tab"],
+      "evidenceMatrix": [
+        {"cell":"capture-success", "screenshots":["popup completion at 1440x900", "popup completion at 1024x640", "captured image rendered at 1440x900", "captured image rendered at 1024x640"], "machineProof":["capture response/id/sha256/byte size", "tab/url/document_id before and after", "storage pending/draft record", "PNG dimensions and decoded pixels"], "retryEscalation":"retry once with unchanged selected tab; retain capture request, response and PNG diagnostics; INCONCLUSIVE if identity or contents mismatch"},
+        {"cell":"capture-failure-retains", "screenshots":["popup error with draft at 1440x900", "popup error with draft at 1024x640"], "machineProof":["error class/message", "draft annotations still present", "pending capture state"], "retryEscalation":"retry once after restoring visibility; retain storage and console; offer discard only explicitly"}
+      ],
+      "cleanup": "collector retains PNG and metadata until retention journey, then deletes disposable artifacts"
+    },
+    {
+      "id": "extension.stale-navigation-reload",
+      "title": "Detect stale draft after navigation or reload",
+      "prerequisites": ["unsaved marks and saved draft on fixture document", "popup can be closed/reopened"],
+      "actions": ["close popup while edits exist", "reload selected tab", "navigate same tab to second fixture project and perform same-document URL change", "reopen popup and inspect recovery", "attempt capture and retry captured pixels after tab closure"],
+      "expectedVisibleStates": ["popup: Saved drafts and Stale draft recovery identify old document", "popup: stale summary offers inspect/discard, never silently attaches to new page", "popup: failed submission retains captured pixels and explicit retry"],
+      "failureStates": ["old marks appear on new document", "duplicate URL is treated as same document", "stale draft silently evicted at capacity"],
+      "evidenceMatrix": [
+        {"cell":"reload-stale", "screenshots":["stale recovery popup at 1440x900", "stale recovery popup at 1024x640"], "machineProof":["old/new document_id and URL", "tabs.onUpdated events", "draft records stale=true keyed by old identity"], "retryEscalation":"reload once more and compare identities; retain event timeline/storage; INCONCLUSIVE if no explicit recovery"},
+        {"cell":"submission-after-close", "screenshots":["retry/error popup at 1440x900", "retry/error popup at 1024x640"], "machineProof":["captured PNG hash", "submission receipt/error and retry token", "no automatic second paste"], "retryEscalation":"one explicit Retry pending capture; retain network/receipt diagnostics and mark INCONCLUSIVE on unknown outcome"}
+      ],
+      "cleanup": "collector discards stale drafts only after evidence is retained"
+    },
+    {
+      "id": "extension.feedback-save-ack",
+      "title": "Saved feedback, acknowledgement and retention",
+      "prerequisites": ["one or more saved captures pending in Cockpit", "Cockpit feedback view available in atlas-space-a"],
+      "actions": ["open Cockpit Browser feedback", "verify pending cards and image rendering", "acknowledge only first capture", "refresh/reopen and verify newer capture remains pending", "repeat acknowledgement and inspect image retention"],
+      "expectedVisibleStates": ["Cockpit rendering: image card shows page/comment and pending state", "Cockpit rendering: acknowledgement removes only selected pending card", "Cockpit rendering: No pending browser annotations only when all are acknowledged", "captured image remains readable during configured grace period"],
+      "failureStates": ["acknowledgement removes wrong/newer ID", "duplicate acknowledgement changes state", "image disappears immediately or unknown receipt is pruned"],
+      "evidenceMatrix": [
+        {"cell":"pending-overview", "screenshots":["Cockpit feedback rendering at 1440x900", "Cockpit feedback rendering at 1024x640"], "machineProof":["pending IDs/count from API/store", "image URLs and SHA-256", "active Space/tab target"], "retryEscalation":"refresh once without refetch-destructive UI; retain response and image hashes; INCONCLUSIVE if IDs differ"},
+        {"cell":"selective-ack", "screenshots":["Cockpit after first acknowledgement at 1440x900", "Cockpit after first acknowledgement at 1024x640"], "machineProof":["ack request ID/result", "pending set before/after", "image file existence and retention timestamp"], "retryEscalation":"repeat same ack once; retain receipt and storage; INCONCLUSIVE if duplicate mutates another capture"}
+      ],
+      "cleanup": "collector acknowledges or expires only disposable fixture captures and removes feedback records"
+    },
+    {
+      "id": "extension.direct-delivery-targets",
+      "title": "Direct delivery to eligible and ineligible Cockpit targets",
+      "prerequisites": ["two Spaces with two tabs each where possible", "active tab Luna pane eligible in atlas-space-a", "ineligible target and wrong-Space target available"],
+      "actions": ["select Send to agent from feedback overview with selected IDs", "verify active-tab eligible target is selected without picker", "attempt standalone send with no selected IDs", "change active Space/destination during delivery", "attempt explicit rejection and unknown dispatch outcome"],
+      "expectedVisibleStates": ["Cockpit rendering: eligible target receives attachment and explicit delivery status", "Cockpit rendering: no eligible target reports refusal, no fallback to another tab", "Cockpit rendering: destination change is detected", "popup/overview: rejected or unknown outcome retains capture and offers explicit retry"],
+      "failureStates": ["paste is mistaken for submitted turn", "wrong Space receives image", "unknown outcome auto-pastes twice", "ineligible target receives delivery"],
+      "evidenceMatrix": [
+        {"cell":"eligible-direct-send", "screenshots":["Cockpit target and feedback overview at 1440x900", "Cockpit target and feedback overview at 1024x640"], "machineProof":["selected annotation IDs", "Space/tab/pane/agent identity", "paste length and submitted-turn receipt", "pending count transition"], "retryEscalation":"retry once only after explicit failure and unchanged target; retain dispatch trace; INCONCLUSIVE if submission cannot be distinguished from paste"},
+        {"cell":"ineligible-or-wrong-space", "screenshots":["refusal/status at 1440x900", "refusal/status at 1024x640"], "machineProof":["target eligibility and active Space", "no-fallback assertion across all tabs", "capture remains pending"], "retryEscalation":"restore eligible target and retry once explicitly; retain target enumeration and error; never auto-route"},
+        {"cell":"rejected-unknown", "screenshots":["retained failure card at 1440x900", "retained failure card at 1024x640"], "machineProof":["OutcomeRejected/OutcomeUnknown receipt", "artifact hash and retention expiry", "retry attempts count exactly one"], "retryEscalation":"one user-confirmed retry; retain receipt/network logs and mark INCONCLUSIVE if outcome remains unknown"}
+      ],
+      "cleanup": "collector clears disposable delivery messages, closes owned panes/browser, and leaves protected/default sessions untouched"
+    }
+  ],
+  "completionRule": "All journey matrix cells have both viewport screenshots, machine proof and a recorded retry/escalation outcome. Any unavailable live behavior remains INCONCLUSIVE with diagnostics and is not inferred from static or historical evidence."
+}

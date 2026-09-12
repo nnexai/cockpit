@@ -1,0 +1,11 @@
+{
+  "surface": "actual fixture page with unpacked Cockpit extension",
+  "capturedAt": "2026-09-12T10:05:06.463Z",
+  "observation": {
+    "url": "http://127.0.0.1:49329/index.html",
+    "title": "Atlas fixture app",
+    "body": "Atlas fixture app\nFixture action\n\nOrbit and Tide browser feedback fixture.\n\nScrollable fixture region\nOpen fixture dialog",
+    "documentId": null,
+    "host": false
+  }
+}

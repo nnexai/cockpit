@@ -1,0 +1,18 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-d8643ac51016ad02",
+  "scenarioId": "environment.repository-status",
+  "surface": [
+    "environment"
+  ],
+  "surfaces": [
+    "environment"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49372/",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "repository-status"
+  ]
+}

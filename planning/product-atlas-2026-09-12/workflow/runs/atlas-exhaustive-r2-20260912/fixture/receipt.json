@@ -1,0 +1,59 @@
+{
+  "artifacts": [
+    "evidence/fixture-r2/cockpit-atlas-1440x900.png",
+    "evidence/fixture-r2/extension-popup-connected.png",
+    "evidence/fixture-r2/extension-overlay-visible.png",
+    "evidence/fixture-r2/cockpit-feedback-panel.png",
+    "evidence/portrait-sidebar-r2/cockpit-sidebar-800x1000.png",
+    "evidence/portrait-sidebar-r2/cockpit-sidebar-600x900.png",
+    "evidence/portrait-sidebar-r2/cockpit-sidebar-480x900.png"
+  ],
+  "fixtureIdentity": {
+    "agents": [
+      "agent-alpha-review",
+      "agent-alpha-context",
+      "agent-beta-delivery",
+      "agent-beta-recovery"
+    ],
+    "allowedFixturePages": [
+      "http://127.0.0.1:49373/index.html",
+      "http://127.0.0.1:49373/docs.html"
+    ],
+    "associationKey": "454ea4a6eaacf2f619806990",
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "panes": [
+      "w1:p1 alpha-editor",
+      "w1:p3 alpha-terminal",
+      "w1:p2 alpha-docs",
+      "w1:p4 alpha-browser",
+      "w2:p1 beta-editor",
+      "w2:p4 beta-terminal",
+      "w2:p2 beta-browser",
+      "w2:p3 beta-log"
+    ],
+    "repositories": [
+      "orbit atlas/fixture-orbit",
+      "tide atlas/fixture-tide"
+    ],
+    "root": "/tmp/atlas-exhaustive-r2-20260912/fixture",
+    "sessionId": "atlas-r2-20260912-herdr",
+    "spaces": [
+      "w1: Atlas Alpha",
+      "w2: Atlas Beta"
+    ],
+    "tabs": [
+      "w1:t1 Review",
+      "w1:t2 Context",
+      "w2:t1 Delivery",
+      "w2:t2 Recovery"
+    ]
+  },
+  "phase": "fixture",
+  "result": "PASS",
+  "runtimeIdentity": {
+    "lane": "fixture",
+    "owner": "workflow-collector-2026-09-12",
+    "runId": "atlas-exhaustive-r2-20260912"
+  },
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+}

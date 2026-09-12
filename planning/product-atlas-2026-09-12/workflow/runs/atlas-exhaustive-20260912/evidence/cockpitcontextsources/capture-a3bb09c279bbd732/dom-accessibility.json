@@ -1,0 +1,13 @@
+{
+  "documentId": "atlas-fixture-context-document",
+  "accessible": true,
+  "assertions": [
+    "hierarchy",
+    "content",
+    "query states",
+    "provenance",
+    "markdown",
+    "mermaid",
+    "image alt text"
+  ]
+}

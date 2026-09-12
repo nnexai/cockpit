@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "id": "workflow.cockpit-surfaces",
+  "surface": "Cockpit screenshot and evidence collection",
+  "authority": [
+    "planning/product-atlas-2026-09-12/manifest.json",
+    "planning/product-atlas-2026-09-12/setup-context-review/index.json",
+    "planning/product-atlas-2026-09-12/browser-extension/index.json",
+    "planning/product-atlas-2026-09-12/workbench-terminal/index.json"
+  ],
+  "fixture": {
+    "name": "cockpit-surfaces-disposable",
+    "prerequisites": [
+      "Create uniquely named disposable Herdr session and isolated browser profile; never use default session, user profile, or unrelated tabs.",
+      "Provision two Spaces, two tabs in each Space where supported, multiple panes and agents, and two repositories/projects.",
+      "Repository A has changed tracked and untracked files plus context documents; Repository B has source imports and an empty directory.",
+      "Arrange one pending browser feedback item and delivery targets including one eligible and one ineligible target.",
+      "Record baseline commit, session/profile names, fixture IDs, viewport, and timestamps before interaction."
+    ],
+    "cleanupOwner": "collector",
+    "cleanup": [
+      "Close all disposable tabs and panes, stop disposable agents, delete temporary repositories/files, remove feedback and delivery fixtures, close isolated browser profile, then destroy disposable Herdr session.",
+      "Retain screenshots, machine logs, action trace, and failure diagnostics; do not clean retained evidence."
+    ]
+  },
+  "evidenceContract": {
+    "requiredPerCell": [
+      "action trace with keyboard/mouse modality and timestamp",
+      "screenshot at 1440x900 and 1024x640 after stable state (or explicit unavailable reason)",
+      "machine evidence: URL/route, session and Space IDs, active tab/pane/agent IDs, DOM/accessibility snapshot, console/network errors, and relevant API response or persisted state",
+      "expected visible state, empty/loading/error/recovery observations, and annotation/paste presentation where applicable",
+      "result is PASS only when all observable proof is retained; INCONCLUSIVE requires named attempts and diagnostics"
+    ],
+    "retry": "Retry once with same input after waiting for idle; retry a second time after reopening the affected menu/view. If still failing, capture screenshot, DOM/state, console/network trace, and exact action trace; classify INCONCLUSIVE and escalate with IDs.",
+    "screenshots": ["1440x900", "1024x640"],
+    "annotation": "Annotations must be rendered in the actual surface with stable numbered callouts, preserve source line/file identity, visibly distinguish added/removed/context ranges, and retain a mapping from callout to machine evidence. Capture unannotated and annotated views when annotation is present."
+  },
+  "journeys": [
+    {
+      "id": "command-menu",
+      "surface": "command menu",
+      "prerequisites": ["Fixture active with an agent and focused workspace", "Keyboard and pointer available"],
+      "cells": [
+        {"id":"open-keyboard","action":"Press the documented command-menu shortcut, then type a known command prefix","input":"keyboard","expected":"Menu opens, focus is in search, matching commands and enabled/disabled state are visible","states":["empty query","loading command registry","no matches"],"proof":"Both viewport screenshots show focus ring, query, result count and command labels; machine evidence records active element and command registry.","recovery":"Escape closes menu and restores prior focus; retry with pointer after reload."},
+        {"id":"open-pointer","action":"Click command/menu affordance and select a command with pointer","input":"mouse","expected":"Menu opens at affordance, pointer selection highlights then executes exactly once","states":["anchor near viewport edge","disabled command","execution error"],"proof":"Screenshots show anchor, hover/selected row and resulting surface; machine trace records click coordinates and command event/result.","recovery":"Dismiss and reopen; on execution error retain error banner and retry action evidence."},
+        {"id":"navigate-submit","action":"Use ArrowUp/ArrowDown, Enter, and Escape; submit a command that changes active view","input":"keyboard","expected":"Roving selection is visible, Enter executes selected command, Escape cancels without mutation","states":["first/last row wrap","command loading","command unavailable"],"proof":"Screenshots capture selection before submit and resulting view; state/API evidence proves one mutation or no mutation after cancel.","recovery":"Reopen menu and repeat once; restore original view during cleanup."}
+      ]
+    },
+    {
+      "id": "space-menus",
+      "surface": "Space menus and tab/pane navigation",
+      "prerequisites": ["Two Spaces and two tabs each provisioned", "At least two panes and agents visible"],
+      "cells": [
+        {"id":"space-switch-keyboard","action":"Open Space switcher, move between Spaces with keyboard, select second Space","input":"keyboard","expected":"Second Space becomes active with its tab/pane context preserved","states":["empty Space","Space loading","Space unavailable/error"],"proof":"Screenshots at both sizes show Space identity, active tab and pane; machine evidence records Space/tab/pane IDs before and after.","recovery":"Return to first Space with shortcut; reopen switcher after reload if transition fails."},
+        {"id":"space-switch-pointer","action":"Click Space menu, choose a Space, open its tab menu and select each tab","input":"mouse","expected":"Menus close after selection and selected tab is visibly active","states":["long tab title overflow","no tabs","tab close confirmation"],"proof":"Capture menu open, selected tab, and overflow/empty state; record click coordinates, active IDs, and tab list response.","recovery":"Reopen menu and select by keyboard; do not close fixture tabs unless cleanup."},
+        {"id":"pane-agent-focus","action":"Cycle panes/agents by keyboard and click a pane header","input":"keyboard+mouse","expected":"Only one pane/agent has focus; content and status correspond to focused ID","states":["agent starting","agent stopped","pane load error"],"proof":"Screenshots show focus indicator and agent status; accessibility snapshot and event trace prove focus transition.","recovery":"Retry after idle, then restart only disposable agent and capture lifecycle diagnostics."}
+      ]
+    },
+    {
+      "id": "files-viewer",
+      "surface": "Files viewer",
+      "prerequisites": ["Repository A changed tracked/untracked files; Repository B empty directory", "Files route available in active project"],
+      "cells": [
+        {"id":"tree-open","action":"Open Files, expand repository tree, select changed tracked file and untracked file","input":"keyboard+mouse","expected":"Tree expansion and selected file are visible; file content and changed status render","states":["tree loading","empty repository","permission/read error"],"proof":"Both screenshots show breadcrumb, tree/status badges and selected content; machine evidence includes file IDs, route, and filesystem/API response.","recovery":"Refresh tree, reopen repository, then retry selection; retain error payload if unresolved."},
+        {"id":"file-search","action":"Focus file search, type exact and partial names, navigate results and clear query","input":"keyboard","expected":"Results filter deterministically, selection remains accessible, clearing restores tree","states":["no matches","search loading","search failure"],"proof":"Screenshots capture query, no-match/loading/error and restored tree; record key events, result IDs and latency/error.","recovery":"Escape clears search; reopen Files after reload and repeat once."},
+        {"id":"diff-annotation","action":"Open changed file diff and toggle annotation rendering; select a line/callout","input":"mouse+keyboard","expected":"Added/removed/context ranges and stable numbered callouts are readable and map to source lines","states":["diff empty","diff loading","malformed/source unavailable"],"proof":"Capture unannotated and annotated diff at both sizes; machine evidence maps callout numbers to file/line/range and records toggle state.","recovery":"Toggle off/on, reopen diff, and retain raw diff plus rendering diagnostics."}
+      ]
+    },
+    {
+      "id": "context-browser",
+      "surface": "Context browser and source imports",
+      "prerequisites": ["Context documents and imported source fixtures present", "Repository B includes an empty directory"],
+      "cells": [
+        {"id":"browse-context","action":"Open Context browser, navigate document hierarchy, expand and select a context document","input":"keyboard+mouse","expected":"Hierarchy, selected document metadata, and content are visible","states":["no context","hierarchy loading","document fetch error"],"proof":"Screenshots show hierarchy and content at both sizes; DOM/accessibility and context IDs/content hash are retained.","recovery":"Collapse/reopen node, then reload route and retry once."},
+        {"id":"source-import","action":"Open source-import view, inspect imported source and provenance, follow source link","input":"mouse","expected":"Imported source renders with repository/path provenance and link opens correct project","states":["no imports","import pending","import failed/stale source"],"proof":"Capture provenance and destination route; machine evidence records import job/status, source hash, and navigation event.","recovery":"Retry import once after idle; preserve job logs and classify unresolved failure."},
+        {"id":"context-search","action":"Search context/source, use Arrow keys and Enter, then clear query","input":"keyboard","expected":"Matches are announced/highlighted and selected result opens without losing Space context","states":["no matches","loading","provider error"],"proof":"Screenshots show query/match/empty/error states; accessibility snapshot records announcements and IDs before/after.","recovery":"Escape/clear and reopen browser; retry with exact title."}
+      ]
+    },
+    {
+      "id": "review-setup-sources",
+      "surface": "setup, sources, and Review",
+      "prerequisites": ["Disposable setup route and two repositories available", "Changed files and source imports ready"],
+      "cells": [
+        {"id":"setup-create","action":"Open setup, choose Repository A, configure project, submit, and observe workspace transition","input":"keyboard+mouse","expected":"Validation is visible, submit creates/opens intended project and preserves provenance","states":["blank form","validation error","creation loading","creation failure"],"proof":"Capture form, validation/loading/error, and resulting workspace at both sizes; record request payload/result and project ID.","recovery":"Correct invalid field and resubmit; on failure reopen setup and retain response/logs."},
+        {"id":"sources-manage","action":"Open Sources, inspect imported source, add/refresh a source, then remove only disposable source","input":"mouse","expected":"Source status/provenance updates and confirmation protects removal","states":["no sources","refresh loading","provider/auth error","remove cancelled"],"proof":"Screenshots show each state and confirmation; machine evidence records source IDs, status transitions, and no mutation after cancel.","recovery":"Retry refresh once; restore source fixture during cleanup."},
+        {"id":"review-submit","action":"Open Review, inspect changes, navigate annotations, select eligible delivery target, attempt ineligible target, submit eligible delivery","input":"keyboard+mouse","expected":"Review groups changes, annotations map to source, eligible target can submit, ineligible target is blocked with reason","states":["no changes","review loading","diff/provider error","submission pending/failure/success"],"proof":"Capture review and annotated/unannotated states at both sizes; record change IDs, target eligibility, validation response, and delivery receipt.","recovery":"Retry failed submission once without duplicate delivery; retain idempotency/result evidence."}
+      ]
+    },
+    {
+      "id": "browser-feedback-overview",
+      "surface": "browser feedback overview",
+      "prerequisites": ["Isolated browser profile paired to disposable session", "One pending feedback item and one resolved/empty condition"],
+      "cells": [
+        {"id":"feedback-open","action":"Open browser feedback overview, inspect pending item, filter by status, open detail","input":"keyboard+mouse","expected":"Pending feedback count, filters, detail, and source URL are visible","states":["no feedback","overview loading","extension disconnected/error"],"proof":"Screenshots at both sizes show count/filter/detail and connection state; machine evidence records extension/session IDs, feedback ID, URL, and events.","recovery":"Reconnect isolated extension and reopen overview; never touch unrelated tabs."},
+        {"id":"feedback-resolve","action":"Acknowledge/resolve pending feedback, cancel a second action, then verify overview count","input":"mouse+keyboard","expected":"Confirmed resolution updates count; cancelled action leaves item pending","states":["resolve pending","resolve failure","stale item"],"proof":"Capture before/after and cancellation; record confirmation, API result, and persisted status.","recovery":"Retry once after refresh; preserve stale/conflict response and diagnostics."}
+      ]
+    },
+    {
+      "id": "annotation-paste-delivery",
+      "surface": "annotation rendering and paste/delivery",
+      "prerequisites": ["Review contains changed source with line ranges and pending feedback", "Eligible and ineligible delivery targets configured"],
+      "cells": [
+        {"id":"render-annotations","action":"Render annotations in Files and Review, hover/focus callouts, toggle visibility, inspect long and empty ranges","input":"keyboard+mouse","expected":"Callouts remain numbered/stable, line mapping and added/removed/context styling are legible at both viewports","states":["no annotations","annotation loading","invalid range/render error","overflow/collision"],"proof":"Capture unannotated plus annotated screenshots at both sizes, including hover/focus and overflow; machine evidence maps each callout to source identity/range and renderer diagnostics.","recovery":"Toggle off/on and reopen view; if collision persists capture layout bounds and classify INCONCLUSIVE."},
+        {"id":"paste-preview","action":"Choose eligible target, open paste/delivery preview, copy/paste rendered annotated content, then cancel preview","input":"keyboard+mouse","expected":"Preview matches source and annotations, clipboard/paste preserves required mapping, cancel causes no delivery","states":["empty selection","preview loading","clipboard denied","target ineligible"],"proof":"Capture preview, clipboard/paste result, and cancelled state at both sizes; machine evidence records target eligibility, payload hash, clipboard permission/error, and no-submit receipt.","recovery":"Retry with keyboard-only copy/paste after permission prompt; retain clipboard/error diagnostics."},
+        {"id":"deliver","action":"Submit eligible delivery, wait for receipt, then verify ineligible target remains blocked","input":"mouse","expected":"Exactly one successful receipt with target and payload identity; blocked target explains requirement","states":["delivery pending","network/auth failure","duplicate/idempotency conflict","target disappeared"],"proof":"Screenshots capture submit/progress/success/block/error at both sizes; machine evidence includes idempotency key, request/response, receipt, target eligibility and final state.","recovery":"Retry once only with same idempotency key; never duplicate delivery. Escalate unresolved state with full retained diagnostics."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "capturedAt": "2026-09-12T09:59:25.158895Z",
+  "owner": "atlas-20260912-fixture",
+  "repositories": [
+    {
+      "branch": "atlas/fixture-orbit",
+      "head": "15e3191bbd3bb69389543e35da86541703347d60",
+      "id": "repo-orbit",
+      "root": "/tmp/atlas-20260912-fixture/repos/orbit",
+      "status": {
+        "argv": [
+          "git",
+          "status",
+          "--porcelain=v1",
+          "--branch"
+        ],
+        "capturedAt": "2026-09-12T09:59:25.147486Z",
+        "cwd": "/tmp/atlas-20260912-fixture/repos/orbit",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "## atlas/fixture-orbit\n M README.md\n M src/orbit.ts\n?? notes/\n"
+      }
+    },
+    {
+      "branch": "atlas/fixture-tide",
+      "head": "42e69bfadf30525d32f60848627b6c5ffc11e1b0",
+      "id": "repo-tide",
+      "root": "/tmp/atlas-20260912-fixture/repos/tide",
+      "status": {
+        "argv": [
+          "git",
+          "status",
+          "--porcelain=v1",
+          "--branch"
+        ],
+        "capturedAt": "2026-09-12T09:59:25.149564Z",
+        "cwd": "/tmp/atlas-20260912-fixture/repos/tide",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "## atlas/fixture-tide\n M src/tide.ts\n?? assets/\n?? docs/\n"
+      }
+    }
+  ]
+}

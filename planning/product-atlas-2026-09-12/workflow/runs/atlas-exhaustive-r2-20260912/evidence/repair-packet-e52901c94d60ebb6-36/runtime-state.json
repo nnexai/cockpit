@@ -1,0 +1,22 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-e52901c94d60ebb6",
+  "scenarioId": "feedback.browser-pending-overview",
+  "surface": [
+    "FeedbackPanel",
+    "popup",
+    "Review"
+  ],
+  "surfaces": [
+    "FeedbackPanel",
+    "popup",
+    "Review"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Open overview"
+  ]
+}

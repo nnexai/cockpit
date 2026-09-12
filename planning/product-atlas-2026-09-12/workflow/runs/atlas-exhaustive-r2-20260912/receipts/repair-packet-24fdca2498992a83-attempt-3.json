@@ -1,0 +1,335 @@
+{
+  "manifest": {
+    "actionLog": "evidence/repair-repair-packet-24fdca2498992a83-3/actions.jsonl",
+    "artifacts": [
+      {
+        "artifactId": "before-repair-packet-24fdca2498992a83-1440x900",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:09.993543Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/before-annotation-tool-freehand-comment-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "f2f051b6b744e21298e018fb89dcef26e695202c6fb98c3e3e9dbb0e756fed41",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "action-01-repair-packet-24fdca2498992a83-1440x900",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:11.018899Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/action-01-annotation-tool-freehand-comment-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "92e0efaa06868da5887ffeb04231d86ed5bbdb3471dd6d540dce519a98a5f5e5",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "after-repair-packet-24fdca2498992a83-1440x900",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:12.046751Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/after-annotation-tool-freehand-comment-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "9b803aa26d4b36108996ecabd88a1bbad53a2b7e5f08ee3921e4f6e123c2ab22",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "before-repair-packet-24fdca2498992a83-1024x640",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:13.061030Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/before-annotation-tool-freehand-comment-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "761d5077372a76804237739e9cadb3c8b253eb0a7d4b45c8646f0267d43fe6db",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "action-01-repair-packet-24fdca2498992a83-1024x640",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:14.072637Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/action-01-annotation-tool-freehand-comment-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "95010e2ed284e3d80a3124b340874040b84e40377b6851cf891a5133b658f366",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "after-repair-packet-24fdca2498992a83-1024x640",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:15.085145Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/after-annotation-tool-freehand-comment-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "2838cbcf10b34414db4908addba10d52f64288a58d5aafce9e3e2ad563a04c8c",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "machine-repair-packet-24fdca2498992a83",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:16.085826Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/runtime-state.json",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "c8c17a1b5c5b1e66de732ae3688d0a1250f26e6881bfca3efd873fdb6e41b0e1",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "artifactId": "actions-repair-packet-24fdca2498992a83",
+        "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+        "capturedAt": "2026-09-12T11:18:18.085968Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/repair-repair-packet-24fdca2498992a83-3/actions.jsonl",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "page",
+            "capture",
+            "FeedbackPanel"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "annotation.tool-freehand-comment",
+        "sha256": "58d4ca9f4391d8eb823b28e1687d94caea1b9aedbf24cbe3ac00c0cf55c93ff4",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-repair-packet-24fdca2498992a83-0",
+        "capturedAt": "2026-09-12T11:18:19.085996Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "f3a18c5c14643115834603b0a37d346c3c3aebecd11492a422860d094cc85e2d",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "cb2db933691e7e79adbd49ea0bb40d557c4e7364f165338b0c27962c5f058838",
+        "surface": "page"
+      },
+      {
+        "authorityId": "auth-repair-packet-24fdca2498992a83-1",
+        "capturedAt": "2026-09-12T11:18:20.086011Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "9d6364df495ce19534fd8021c9f7e693a88070c09f2e7e0893c59a2f3ad0d8c2",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "19dbc8087eb5c994cd5b37e50d8c86287791781b34bbdceede0710966519a128",
+        "surface": "capture"
+      },
+      {
+        "authorityId": "auth-repair-packet-24fdca2498992a83-2",
+        "capturedAt": "2026-09-12T11:18:21.086018Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "38137341852e96ee8069db3b57444d22fea4032dca1a6a65b5bbbe4c62c6f21d",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "10db7d38a7c517cdff369c797e9a61787c592c1b4b342175c6713d7abf669b5a",
+        "surface": "FeedbackPanel"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "capture-atlasr2-repair-packet-24fdca2498992a83-3",
+    "cleanup": {
+      "completed": true,
+      "ownedArtifactsOnly": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "diagnostics": [],
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T11:18:30.086050Z",
+    "fixtureIdentity": {
+      "associationKey": "454ea4a6eaacf2f619806990",
+      "cockpitGateway": "http://127.0.0.1:49372/",
+      "fixturePages": [
+        "http://127.0.0.1:49373/index.html"
+      ],
+      "owner": "atlas-exhaustive-r2-20260912"
+    },
+    "packetId": "repair-packet-24fdca2498992a83",
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "browser-extension",
+      "owner": "atlas-r2-repair",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "annotation.tool-freehand-comment",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T11:18:10.086047Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/repair-repair-packet-24fdca2498992a83-3/before-annotation-tool-freehand-comment-1440x900.png",
+          "evidence/repair-repair-packet-24fdca2498992a83-3/before-annotation-tool-freehand-comment-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-repair-packet-24fdca2498992a83-0",
+          "auth-repair-packet-24fdca2498992a83-1",
+          "auth-repair-packet-24fdca2498992a83-2"
+        ],
+        "observedAt": "2026-09-12T11:18:21.086029Z",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-repair-packet-24fdca2498992a83-3-before",
+        "surface": "page",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/repair-repair-packet-24fdca2498992a83-3/action-01-annotation-tool-freehand-comment-1440x900.png",
+          "evidence/repair-repair-packet-24fdca2498992a83-3/action-01-annotation-tool-freehand-comment-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-repair-packet-24fdca2498992a83-0",
+          "auth-repair-packet-24fdca2498992a83-1",
+          "auth-repair-packet-24fdca2498992a83-2"
+        ],
+        "observedAt": "2026-09-12T11:18:22.086037Z",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-repair-packet-24fdca2498992a83-3-action",
+        "surface": "page",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/repair-repair-packet-24fdca2498992a83-3/after-annotation-tool-freehand-comment-1440x900.png",
+          "evidence/repair-repair-packet-24fdca2498992a83-3/after-annotation-tool-freehand-comment-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-repair-packet-24fdca2498992a83-0",
+          "auth-repair-packet-24fdca2498992a83-1",
+          "auth-repair-packet-24fdca2498992a83-2"
+        ],
+        "observedAt": "2026-09-12T11:18:23.086042Z",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-repair-packet-24fdca2498992a83-3-after",
+        "surface": "page",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "name": "desktop",
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "name": "compact",
+        "width": 1024
+      }
+    ]
+  }
+}

@@ -1,0 +1,287 @@
+{
+  "manifest": {
+    "actionLog": "evidence/r2-e54b394ee58e8827/action-log.jsonl",
+    "artifacts": [
+      {
+        "artifactId": "action-01-e54b394ee58e8827-1024x640",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-e54b394ee58e8827/action-01-e54b394ee58e8827-1024x640.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "cc32a10f230ad2522275ac322ea45d1beaca2333040fe655efee0586088e9044",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "action-01-e54b394ee58e8827-1440x900",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-e54b394ee58e8827/action-01-e54b394ee58e8827-1440x900.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "af5cf91a82c4894704a77ae20b1d7f5024f6c0b2357a9ef693302dbf7e61af5c",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "action-log",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/r2-e54b394ee58e8827/action-log.jsonl",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "9d23edda41eba4fbe7c485040c83514421b4a1855e3104df2f2350695e359cc7",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "artifactId": "after-e54b394ee58e8827-1024x640",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-e54b394ee58e8827/after-e54b394ee58e8827-1024x640.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "dfac3fd53f014808fced14a7f41ead27225f14532d7be870b986c304b3864824",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "after-e54b394ee58e8827-1440x900",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-e54b394ee58e8827/after-e54b394ee58e8827-1440x900.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "fe97b0ed3729298d050d010ab3ceb1c9d36995628b8c0a2a781f03bda713f026",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "before-e54b394ee58e8827-1024x640",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-e54b394ee58e8827/before-e54b394ee58e8827-1024x640.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "96a7caf9d12f53c0bcf324fc1e23e01ef6574b747b573378eef9dd32cc40d485",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "before-e54b394ee58e8827-1440x900",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/r2-e54b394ee58e8827/before-e54b394ee58e8827-1440x900.png",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "d255b501314d89d78a8bea868fa1797b7d588995f8241ada29b8d76ca313fb80",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "machine-evidence",
+        "captureId": "r2-e54b394ee58e8827-capture",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/r2-e54b394ee58e8827/machine-evidence.json",
+        "provenance": {
+          "route": "http://127.0.0.1:49372/",
+          "runtime": "actual hydrated Cockpit",
+          "surface": [
+            "Space menus and tab/pane navigation"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "space-menus",
+        "sha256": "2e22d7dfe97e7f43192df0fc59e2a679dd9b3bc1496f7bb1a5e2b4ba079199dd",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-e54b394ee58e8827-1",
+        "capturedAt": "2026-09-12T10:57:16.558610Z",
+        "ownedResourceIds": [
+          "atlas-r2-20260912-herdr",
+          "atlasr2-cockpit-gateway",
+          "r2-2-e54b"
+        ],
+        "redaction": "none",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "b8ca935a0153577db04c5026caacdcce4bd0cbae78e776182cdb1b493057d01f",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "2e22d7dfe97e7f43192df0fc59e2a679dd9b3bc1496f7bb1a5e2b4ba079199dd",
+        "surface": "Space menus and tab/pane navigation"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "r2-e54b394ee58e8827-capture",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T10:57:16.558610Z",
+    "fixtureIdentity": {
+      "gateway": "http://127.0.0.1:49372/",
+      "root": "atlas-exhaustive-r2-20260912",
+      "surface": [
+        "Space menus and tab/pane navigation"
+      ]
+    },
+    "packetId": "packet-e54b394ee58e8827",
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "setup-context-review",
+      "owner": "AtlasR2RealSurfaces-2",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "space-menus",
+    "schemaVersion": 1,
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T10:57:16.558610Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/r2-e54b394ee58e8827/before-e54b394ee58e8827-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-e54b394ee58e8827-1"
+        ],
+        "observedAt": "2026-09-12T10:58:00.096238Z",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "before",
+        "surface": "Space menus and tab/pane navigation",
+        "visibleAssertions": [
+          "Actual Cockpit chrome",
+          "Commands",
+          "Files",
+          "Context",
+          "Review",
+          "FeedbackPanel",
+          "Space menus and tab/pane navigation"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/r2-e54b394ee58e8827/action-01-e54b394ee58e8827-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-e54b394ee58e8827-1"
+        ],
+        "observedAt": "2026-09-12T10:58:00.096238Z",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "action",
+        "surface": "Space menus and tab/pane navigation",
+        "visibleAssertions": [
+          "Actual Cockpit chrome",
+          "Commands",
+          "Files",
+          "Context",
+          "Review",
+          "FeedbackPanel",
+          "Space menus and tab/pane navigation"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/r2-e54b394ee58e8827/after-e54b394ee58e8827-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-e54b394ee58e8827-1"
+        ],
+        "observedAt": "2026-09-12T10:58:00.096238Z",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "after",
+        "surface": "Space menus and tab/pane navigation",
+        "visibleAssertions": [
+          "Actual Cockpit chrome",
+          "Commands",
+          "Files",
+          "Context",
+          "Review",
+          "FeedbackPanel",
+          "Space menus and tab/pane navigation"
+        ]
+      }
+    ],
+    "viewportSet": [
+      "1440x900",
+      "1024x640"
+    ]
+  }
+}

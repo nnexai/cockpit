@@ -1,0 +1,13 @@
+{
+  "scenarioId": "files.tree-read-search-changes",
+  "session": "atlas-exhaustive-20260912-cockpitfiles-7",
+  "surface": "Atlas fixture app",
+  "url": "http://127.0.0.1:49329/index.html",
+  "viewportObservations": [
+    "1440x900",
+    "1024x640"
+  ],
+  "action": "Fixture action click; reload recovery",
+  "dom": "main heading Atlas fixture app; button Fixture action",
+  "console": "one fixture console error retained by CLI"
+}

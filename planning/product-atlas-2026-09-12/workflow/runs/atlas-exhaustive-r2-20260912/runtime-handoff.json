@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "runId": "atlas-exhaustive-r2-20260912",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "owner": "workflow-collector-2026-09-12",
+  "cleanupOwner": "workflow-collector-2026-09-12",
+  "state": "LIVE_HANDOFF",
+  "resources": {
+    "root": "/tmp/atlas-exhaustive-r2-20260912",
+    "herdrService": "atlasr2-herdr",
+    "herdrSession": "atlas-r2-20260912-herdr",
+    "herdrSocket": "/tmp/atlas-exhaustive-r2-20260912/config/herdr/sessions/atlas-r2-20260912-herdr/herdr.sock",
+    "cockpitGatewayService": "atlasr2-cockpit-gateway",
+    "cockpitGateway": "http://127.0.0.1:49372/",
+    "fixtureService": "atlasr2-fixture-pages",
+    "fixturePages": ["http://127.0.0.1:49373/index.html", "http://127.0.0.1:49373/docs.html"],
+    "cockpitConfig": "/tmp/atlas-exhaustive-r2-20260912/cockpit.toml",
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "browserWorkspace": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/workspaces/454ea4a6eaacf2f619806990"
+  },
+  "topology": {
+    "spaces": [{"id":"w1","label":"Atlas Alpha"},{"id":"w2","label":"Atlas Beta"}],
+    "tabs": [{"id":"w1:t1","label":"Review"},{"id":"w1:t2","label":"Context"},{"id":"w2:t1","label":"Delivery"},{"id":"w2:t2","label":"Recovery"}],
+    "panes": ["w1:p1","w1:p3","w1:p2","w1:p4","w2:p1","w2:p4","w2:p2","w2:p3"],
+    "agents": ["agent-alpha-review","agent-alpha-context","agent-beta-delivery","agent-beta-recovery"],
+    "repositories": ["/tmp/atlas-exhaustive-r2-20260912/fixture/repos/orbit","/tmp/atlas-exhaustive-r2-20260912/fixture/repos/tide"]
+  },
+  "browserAssociation": {
+    "associationKey": "454ea4a6eaacf2f619806990",
+    "ownerId": "3f7f0b4a-5fdd-4110-b01e-50cca0aff51d",
+    "spaceId": "w1",
+    "spaceLabel": "Atlas Alpha",
+    "playwrightSession": "cockpit-454ea4a6eaacf2f619806990",
+    "browserInstance": "99b8ad4a-4143-4213-957c-d5569317d0aa",
+    "feedbackEndpoint": "http://127.0.0.1:45275",
+    "popup": "Connected; Atlas Alpha; Atlas Orbit fixture",
+    "overlay": "visible production Cockpit annotation toolbar on owned HTTP fixture",
+    "feedbackPanel": "Cockpit Commands opened Browser feedback for Atlas Alpha and reported Browser: open",
+    "commands": "Cockpit Commands exposed Open/Show/Close browser, Browser feedback, and Send browser context for the same selected Atlas Alpha Space"
+  },
+  "verification": [
+    "target/debug/cockpit browser status --config /tmp/atlas-exhaustive-r2-20260912/cockpit.toml --herdr /home/linuxbrew/.linuxbrew/bin/herdr --herdr-session atlas-r2-20260912-herdr --herdr-socket /tmp/atlas-exhaustive-r2-20260912/config/herdr/sessions/atlas-r2-20260912-herdr/herdr.sock --space w1",
+    "target/debug/cockpit browser feedback --config /tmp/atlas-exhaustive-r2-20260912/cockpit.toml --herdr /home/linuxbrew/.linuxbrew/bin/herdr --herdr-session atlas-r2-20260912-herdr --herdr-socket /tmp/atlas-exhaustive-r2-20260912/config/herdr/sessions/atlas-r2-20260912-herdr/herdr.sock --space w1",
+    "python3 planning/product-atlas-2026-09-12/workflow/workflow.py --run-id atlas-exhaustive-r2-20260912 --json ready"
+  ],
+  "evidence": {
+    "cockpit": "evidence/fixture-r2/cockpit-atlas-1440x900.png",
+    "popup": "evidence/fixture-r2/extension-popup-connected.png",
+    "overlay": "evidence/fixture-r2/extension-overlay-visible.png",
+    "feedbackPanel": "evidence/fixture-r2/cockpit-feedback-panel.png",
+    "portraitSidebar": "evidence/portrait-sidebar-r2/observation.json"
+  },
+  "unresolved": [
+    "A production overlay draw/capture attempt completed without a persisted pending feedback item; CLI feedback remained pending_count=0. No substitute feedback receipt was created.",
+    "The visible Cockpit FeedbackPanel identifies the selected Space and browser connection rather than rendering the association key; parity is bound by the shared w1/Atlas Alpha association and extension storage pairing."
+  ],
+  "cleanup": "Do not stop or close these live owned resources before capture workers finish. Cleanup owner must stop atlasr2-cockpit-gateway, atlasr2-fixture-pages, and atlasr2-herdr, then delete only /tmp/atlas-exhaustive-r2-20260912."
+}

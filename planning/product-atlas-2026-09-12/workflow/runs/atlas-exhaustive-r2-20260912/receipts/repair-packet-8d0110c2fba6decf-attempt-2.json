@@ -1,0 +1,281 @@
+{
+  "manifest": {
+    "actionLog": "evidence/repair-repair-packet-8d0110c2fba6decf-10/actions.jsonl",
+    "artifacts": [
+      {
+        "artifactId": "before-repair-packet-8d0110c2fba6decf-1440x900",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:23.958825Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/before-capture-success-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "e1c3fe9a9330d751acac9a67e75bd4505cc1907814ce3e768f96a114725f2951",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "action-01-repair-packet-8d0110c2fba6decf-1440x900",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:24.985124Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/action-01-capture-success-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "54a3e951f8c36711f3084dfc3e8ba5b2637af2cc5656455ac14d6518ac5ce408",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "after-repair-packet-8d0110c2fba6decf-1440x900",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:26.012155Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/after-capture-success-1440x900.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "d1c897effdaa4ca020112db065e38c85ad0b47e9b4331ebae48f822ef9689d9c",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1440x900"
+      },
+      {
+        "artifactId": "before-repair-packet-8d0110c2fba6decf-1024x640",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:27.025152Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/before-capture-success-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "e780e0d81cbde39d69851ada2f2072932d92b36b4f39303043222e7ac4e4d3cf",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "before",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "action-01-repair-packet-8d0110c2fba6decf-1024x640",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:28.036284Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/action-01-capture-success-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "fa8e49c2da7d0534c0ed88743886463c04bb081f6f4e6f3cb8bdc57979f6f0e1",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "action-01",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "after-repair-packet-8d0110c2fba6decf-1024x640",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:29.048559Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/after-capture-success-1024x640.png",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "f4065159945d95214d370c68130c835e566efcbbe5b8a954e62fd015df7a070d",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateId": "after",
+        "viewport": "1024x640"
+      },
+      {
+        "artifactId": "machine-repair-packet-8d0110c2fba6decf",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:30.048842Z",
+        "evidenceClass": "runtime",
+        "kind": "machine-evidence",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/runtime-state.json",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "06deb360d4ad0409de63ee5c9199eba02db3d1e0cc16d638a28c8fb4df782e82",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "artifactId": "actions-repair-packet-8d0110c2fba6decf",
+        "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+        "capturedAt": "2026-09-12T11:17:32.048975Z",
+        "evidenceClass": "runtime",
+        "kind": "action-log",
+        "path": "evidence/repair-repair-packet-8d0110c2fba6decf-10/actions.jsonl",
+        "provenance": {
+          "runtimeUrl": "http://127.0.0.1:49373/index.html",
+          "surface": [
+            "browser-extension"
+          ]
+        },
+        "runtimeClaim": true,
+        "scenarioId": "extension.capture-image",
+        "sha256": "9c3a9c182414a97cefdd35cfd1382b754e8b193678241979e49ca7937ddabb7e",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-repair-packet-8d0110c2fba6decf-0",
+        "capturedAt": "2026-09-12T11:17:33.048999Z",
+        "ownedResourceIds": [
+          "atlasr2-herdr",
+          "atlasr2-cockpit-gateway",
+          "atlasr2-fixture-pages",
+          "atlas-r2-20260912-herdr"
+        ],
+        "redaction": "No protected resources; r2 disposable fixture only",
+        "sessionId": "atlas-r2-20260912-herdr",
+        "sha256": "022ca29ea3b09ac07e3c220e31fbd60f3422e1eb3ae6df683a0ab45c384b238c",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "cfa28028f7eadf77bfbefde33d03e5dc3c7240abd2e3fd5c4c2552b93b1e6731",
+        "surface": "browser-extension"
+      }
+    ],
+    "browserProfile": "/tmp/atlas-exhaustive-r2-20260912/cockpit-state/browser/profiles/454ea4a6eaacf2f619806990",
+    "captureId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10",
+    "cleanup": {
+      "completed": true,
+      "ownedArtifactsOnly": true,
+      "ownershipVerified": true,
+      "residuals": []
+    },
+    "diagnostics": [],
+    "disposableSession": "atlas-r2-20260912-herdr",
+    "finishedAt": "2026-09-12T11:17:44.049018Z",
+    "fixtureIdentity": {
+      "associationKey": "454ea4a6eaacf2f619806990",
+      "cockpitGateway": "http://127.0.0.1:49372/",
+      "fixturePages": [
+        "http://127.0.0.1:49373/index.html"
+      ],
+      "owner": "atlas-exhaustive-r2-20260912"
+    },
+    "packetId": "packet-1c8d0858a278ccd7",
+    "result": "PASS",
+    "runtimeIdentity": {
+      "lane": "browser-extension",
+      "owner": "atlas-r2-repair",
+      "runId": "atlas-exhaustive-r2-20260912"
+    },
+    "scenarioId": "extension.capture-image",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T11:17:24.049016Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/repair-repair-packet-8d0110c2fba6decf-10/before-capture-success-1440x900.png",
+          "evidence/repair-repair-packet-8d0110c2fba6decf-10/before-capture-success-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-repair-packet-8d0110c2fba6decf-0"
+        ],
+        "observedAt": "2026-09-12T11:17:35.049006Z",
+        "phase": "before",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10-before",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/repair-repair-packet-8d0110c2fba6decf-10/action-01-capture-success-1440x900.png",
+          "evidence/repair-repair-packet-8d0110c2fba6decf-10/action-01-capture-success-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-repair-packet-8d0110c2fba6decf-0"
+        ],
+        "observedAt": "2026-09-12T11:17:36.049010Z",
+        "phase": "action",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10-action",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/repair-repair-packet-8d0110c2fba6decf-10/after-capture-success-1440x900.png",
+          "evidence/repair-repair-packet-8d0110c2fba6decf-10/after-capture-success-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-repair-packet-8d0110c2fba6decf-0"
+        ],
+        "observedAt": "2026-09-12T11:17:37.049013Z",
+        "phase": "after",
+        "result": "PASS",
+        "stateId": "capture-atlasr2-repair-packet-8d0110c2fba6decf-10-after",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Owned r2 runtime capture",
+          "Named surface context recorded",
+          "Unique state marker visible"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "name": "desktop",
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "name": "compact",
+        "width": 1024
+      }
+    ]
+  }
+}

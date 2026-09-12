@@ -1,0 +1,244 @@
+{
+  "manifest": {
+    "actionLog": [
+      {
+        "action": "packet action 1 attempted against actual owned runtime",
+        "actor": "extensionpalettetools",
+        "artifactRefs": [
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1024x640.png"
+        ],
+        "at": "2026-09-12T12:10:00Z",
+        "authorityRefs": [
+          "auth-44b2917eaaf2"
+        ],
+        "expectedAck": "Extension overlay/tool state acknowledgement",
+        "inputs": {
+          "retry": 2,
+          "viewportSet": [
+            "1440x900",
+            "1024x640"
+          ]
+        },
+        "observedAck": "ERR_FILE_NOT_FOUND popup / overlay absent; capability blocker retained",
+        "outcome": "INCONCLUSIVE",
+        "sequence": 1,
+        "stateChanging": true,
+        "surface": "browser-extension",
+        "target": "owned fixture tab and unpacked extension"
+      }
+    ],
+    "artifacts": [
+      {
+        "captureId": "capture-9c9cde21ba0a8b1e-aa",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/before-extension-1440x900.png",
+        "provenance": "Owned Playwright Chrome fixture tab; actual unpacked extension runtime capture",
+        "runtimeClaim": true,
+        "scenarioId": "extension.live-page-palette",
+        "sha256": "ba095ae2c0a2d97e0ebe2d0996bf045f7955ec40537f6a05931d11cdd47f6529",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-9c9cde21ba0a8b1e-aa",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/before-extension-1024x640.png",
+        "provenance": "Owned Playwright Chrome fixture tab; actual unpacked extension runtime capture",
+        "runtimeClaim": true,
+        "scenarioId": "extension.live-page-palette",
+        "sha256": "67f5dd87a3848c3e7d6eec1fd3856333f52ea4638a7b115d924aa4f8edb43baa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-9c9cde21ba0a8b1e-aa",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1440x900.png",
+        "provenance": "Owned Playwright Chrome fixture tab; actual unpacked extension runtime capture",
+        "runtimeClaim": true,
+        "scenarioId": "extension.live-page-palette",
+        "sha256": "ba095ae2c0a2d97e0ebe2d0996bf045f7955ec40537f6a05931d11cdd47f6529",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-9c9cde21ba0a8b1e-aa",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1024x640.png",
+        "provenance": "Owned Playwright Chrome fixture tab; actual unpacked extension runtime capture",
+        "runtimeClaim": true,
+        "scenarioId": "extension.live-page-palette",
+        "sha256": "67f5dd87a3848c3e7d6eec1fd3856333f52ea4638a7b115d924aa4f8edb43baa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-9c9cde21ba0a8b1e-aa",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/after-extension-1440x900.png",
+        "provenance": "Owned Playwright Chrome fixture tab; actual unpacked extension runtime capture",
+        "runtimeClaim": true,
+        "scenarioId": "extension.live-page-palette",
+        "sha256": "ba095ae2c0a2d97e0ebe2d0996bf045f7955ec40537f6a05931d11cdd47f6529",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      },
+      {
+        "captureId": "capture-9c9cde21ba0a8b1e-aa",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "evidenceClass": "runtime",
+        "kind": "screenshot",
+        "path": "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/after-extension-1024x640.png",
+        "provenance": "Owned Playwright Chrome fixture tab; actual unpacked extension runtime capture",
+        "runtimeClaim": true,
+        "scenarioId": "extension.live-page-palette",
+        "sha256": "67f5dd87a3848c3e7d6eec1fd3856333f52ea4638a7b115d924aa4f8edb43baa",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5"
+      }
+    ],
+    "attempts": 2,
+    "authoritySnapshot": [
+      {
+        "authorityId": "auth-44b2917eaaf2",
+        "capturedAt": "2026-09-12T12:10:00Z",
+        "ownedResourceIds": [
+          "atlas-20260912-extensionpalettetools-browser",
+          "atlas-20260912-fixture"
+        ],
+        "redaction": "No protected resources; fixture-only identifiers",
+        "sessionId": "atlas-20260912-extensionpalettetools",
+        "sha256": "6a4e226ee98527bfb11583486e422409b73e40d511ff03bb459736f75b330587",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "stateDigest": "44b2917eaaf20d6646e41942a7feb2491da83ebec2141960d53e564e4a3138be",
+        "surface": "browser-extension"
+      }
+    ],
+    "blocker": "Disposable Cockpit pairing/provider unavailable and extension popup/content activation failed after two named retries.",
+    "browserProfile": "atlas-20260912-extensionpalettetools-profile",
+    "captureId": "capture-9c9cde21ba0a8b1e-aa",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "proof": "Closed only owned extensionpalettetools browser/profile; fixture resources retained by fixture owner.",
+      "residuals": []
+    },
+    "diagnostics": [
+      {
+        "at": "2026-09-12T12:10:00Z",
+        "attempts": 2,
+        "category": "capability-unavailable",
+        "diagnosticId": "diag-9c9cde21ba0a8b1e",
+        "environmentRefs": [
+          "runtime/browser-extension/index.json"
+        ],
+        "lastKnownState": "Owned fixture tab loaded at http://127.0.0.1:49329/index.html; extension service worker observed; overlay absent after reload.",
+        "logsOrTraceRefs": [
+          "runtime/browser-extension/actions.log",
+          "runtime/browser-extension/receipts/extension-targets.json"
+        ],
+        "nextStep": "Restore disposable Cockpit pairing endpoint and retry exact packet actions.",
+        "ownershipImpact": "No protected resources touched; owned browser profile and fixture only.",
+        "resolved": false,
+        "screenshotsRefs": [
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/before-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/before-extension-1024x640.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1024x640.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/after-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/after-extension-1024x640.png"
+        ],
+        "symptom": "Actual unpacked extension popup/content activation could not be completed: popup.html returned ERR_FILE_NOT_FOUND and no Cockpit pairing provider was reachable in owned runtime."
+      }
+    ],
+    "disposableSession": "atlas-20260912-extensionpalettetools",
+    "finishedAt": "2026-09-12T12:10:00Z",
+    "fixtureIdentity": {
+      "document_id": "atlas-fixture-document-owned",
+      "owner": "atlas-20260912-fixture",
+      "url": "http://127.0.0.1:49329/index.html"
+    },
+    "result": "INCONCLUSIVE",
+    "runtimeIdentity": {
+      "lane": "browser-extension",
+      "owner": "extensionpalettetools",
+      "runId": "atlas-exhaustive-20260912"
+    },
+    "scenarioId": "extension.live-page-palette",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "startedAt": "2026-09-12T12:10:00Z",
+    "stateTimeline": [
+      {
+        "artifactRefs": [
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/before-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/before-extension-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-44b2917eaaf2"
+        ],
+        "observedAt": "2026-09-12T12:10:00Z",
+        "phase": "before",
+        "result": "INCONCLUSIVE",
+        "stateId": "before-packet-9c9cde21ba0a8b1e",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Fixture page identity and viewport captured",
+          "Extension service worker observed; overlay activation unavailable"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/action-01-extension-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-44b2917eaaf2"
+        ],
+        "observedAt": "2026-09-12T12:10:00Z",
+        "phase": "action",
+        "result": "INCONCLUSIVE",
+        "stateId": "action-packet-9c9cde21ba0a8b1e",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Requested action attempted with actual owned fixture runtime",
+          "Activation blocker visibly diagnosed"
+        ]
+      },
+      {
+        "artifactRefs": [
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/after-extension-1440x900.png",
+          "evidence/extensionpalettetools/capture-9c9cde21ba0a8b1e-aa/after-extension-1024x640.png"
+        ],
+        "authorityRefs": [
+          "auth-44b2917eaaf2"
+        ],
+        "observedAt": "2026-09-12T12:10:00Z",
+        "phase": "after",
+        "result": "INCONCLUSIVE",
+        "stateId": "after-packet-9c9cde21ba0a8b1e",
+        "surface": "browser-extension",
+        "visibleAssertions": [
+          "Fixture page identity and viewport captured",
+          "Extension service worker observed; overlay activation unavailable"
+        ]
+      }
+    ],
+    "viewportSet": [
+      {
+        "height": 900,
+        "name": "desktop",
+        "width": 1440
+      },
+      {
+        "height": 640,
+        "name": "compact",
+        "width": 1024
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "runId": "atlas-exhaustive-r2-20260912",
+  "packetId": "packet-e051aa8a87edacba",
+  "scenarioId": "popup.status-drafts-recovery",
+  "surface": [
+    "popup",
+    "FeedbackPanel"
+  ],
+  "surfaces": [
+    "popup",
+    "FeedbackPanel"
+  ],
+  "runtimeUrl": "http://127.0.0.1:49373/index.html",
+  "route": "/",
+  "associationKey": "454ea4a6eaacf2f619806990",
+  "state": "observed",
+  "actions": [
+    "Open popup offline"
+  ]
+}

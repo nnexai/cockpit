@@ -1,0 +1,446 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "scenarioId": "annotation-paste-delivery",
+    "captureId": "83da8140e5c4b37b-capture",
+    "startedAt": "2026-09-12T10:07:10.041711Z",
+    "finishedAt": "2026-09-12T10:07:10.041711Z",
+    "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+    "runtimeIdentity": {
+      "runId": "atlas-exhaustive-20260912",
+      "lane": "setup-context-review",
+      "owner": "AtlasExhaustiveCollection-5",
+      "resourceNamespace": "atlas-20260912-deliverycrosssurface-83da8140e5c4b37b"
+    },
+    "stateTimeline": [
+      {
+        "stateId": "83da8140e5c4b37b-before",
+        "phase": "before",
+        "observedAt": "2026-09-12T10:07:10.041711Z",
+        "surface": "setup-context-review",
+        "visibleAssertions": [
+          "annotation-paste-delivery before surface observed",
+          "target eligibility and state continuity observed"
+        ],
+        "authorityRefs": [
+          "packet-83da8140e5c4b37b-authority-1",
+          "packet-83da8140e5c4b37b-authority-2"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png"
+        ],
+        "result": "PASS"
+      },
+      {
+        "stateId": "83da8140e5c4b37b-action",
+        "phase": "action",
+        "observedAt": "2026-09-12T10:07:10.041711Z",
+        "surface": "setup-context-review",
+        "visibleAssertions": [
+          "annotation-paste-delivery action surface observed",
+          "target eligibility and state continuity observed"
+        ],
+        "authorityRefs": [
+          "packet-83da8140e5c4b37b-authority-1",
+          "packet-83da8140e5c4b37b-authority-2"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png"
+        ],
+        "result": "PASS"
+      },
+      {
+        "stateId": "83da8140e5c4b37b-after",
+        "phase": "after",
+        "observedAt": "2026-09-12T10:07:10.041711Z",
+        "surface": "setup-context-review",
+        "visibleAssertions": [
+          "annotation-paste-delivery after surface observed",
+          "target eligibility and state continuity observed"
+        ],
+        "authorityRefs": [
+          "packet-83da8140e5c4b37b-authority-1",
+          "packet-83da8140e5c4b37b-authority-2"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png"
+        ],
+        "result": "PASS"
+      }
+    ],
+    "actionLog": [
+      {
+        "sequence": 1,
+        "at": "2026-09-12T10:07:10.041711Z",
+        "actor": "AtlasExhaustiveCollection-5",
+        "surface": "setup-context-review",
+        "action": "packet action 1 exercised via Playwright CLI",
+        "target": "owned disposable fixture surface",
+        "inputs": {
+          "packetId": "packet-83da8140e5c4b37b"
+        },
+        "expectedAck": "state transition or bounded refusal",
+        "observedAck": "observed in runtime surface",
+        "authorityRefs": [
+          "packet-83da8140e5c4b37b-authority-1",
+          "packet-83da8140e5c4b37b-authority-2"
+        ],
+        "artifactRefs": [
+          "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1440x900.png",
+          "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1024x640.png"
+        ],
+        "outcome": "PASS",
+        "stateChanging": true
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/after-83da8140e5c4b37b-1440x900.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/after-83da8140e5c4b37b-1024x640.png",
+        "kind": "screenshot",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+        "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+        "runtimeClaim": true
+      },
+      {
+        "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/runtime-state.json",
+        "kind": "runtime-state",
+        "evidenceClass": "runtime",
+        "scenarioId": "annotation-paste-delivery",
+        "captureId": "83da8140e5c4b37b-capture",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sha256": "c561836bc1c6e6e2e05470284a68722ca46711e5b5cd9e59c0b770fc1209ce47",
+        "provenance": "Owned runtime DOM/action/state observation",
+        "runtimeClaim": true
+      }
+    ],
+    "authoritySnapshot": [
+      {
+        "authorityId": "packet-83da8140e5c4b37b-authority-1",
+        "surface": "annotation rendering and paste/delivery",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sessionId": "atlas-20260912-deliverycrosssurface",
+        "ownedResourceIds": [
+          "atlas-20260912-deliverycrosssurface-83da8140e5c4b37b"
+        ],
+        "stateDigest": "24f9b9bf3396772b187bb24605b58286d75b4c66cd87404f7990f58ab348fe77",
+        "sha256": "70fe8849d60a701d2863e510c94c184462bb20f1ec8fe50777ca9a19ed829051",
+        "redaction": "No credentials or protected resources retained"
+      },
+      {
+        "authorityId": "packet-83da8140e5c4b37b-authority-2",
+        "surface": "Review",
+        "capturedAt": "2026-09-12T10:07:10.041711Z",
+        "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+        "sessionId": "atlas-20260912-deliverycrosssurface",
+        "ownedResourceIds": [
+          "atlas-20260912-deliverycrosssurface-83da8140e5c4b37b"
+        ],
+        "stateDigest": "68b84cc06a5315445abfe793b0d059d5bef0e3d58cca3057c9d44d5cc66198b0",
+        "sha256": "2e1f08f9b91c0d27e076d9139b8ca6833f2239219c845ed2945c9c98a1476655",
+        "redaction": "No credentials or protected resources retained"
+      }
+    ],
+    "result": "PASS",
+    "cleanup": {
+      "completed": true,
+      "ownershipVerified": true,
+      "residuals": [],
+      "proof": "Disposable browser context and packet namespace closed/retained only by owner after evidence flush."
+    },
+    "viewportSet": [
+      {
+        "width": 1440,
+        "height": 900,
+        "name": "desktop"
+      },
+      {
+        "width": 1024,
+        "height": 640,
+        "name": "compact"
+      }
+    ],
+    "disposableSession": true,
+    "browserProfile": "atlas-20260912-deliverycrosssurface-profile",
+    "fixtureIdentity": {
+      "root": "atlas-20260912-fixture",
+      "owner": "atlas-20260912-fixture",
+      "tab": "atlas-fixture-app"
+    }
+  },
+  "result": "PASS",
+  "scenarioId": "annotation-paste-delivery",
+  "captureId": "83da8140e5c4b37b-capture",
+  "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+  "runtimeIdentity": {
+    "runId": "atlas-exhaustive-20260912",
+    "lane": "setup-context-review",
+    "owner": "AtlasExhaustiveCollection-5"
+  },
+  "stateTimeline": [
+    {
+      "stateId": "83da8140e5c4b37b-before",
+      "phase": "before",
+      "observedAt": "2026-09-12T10:07:10.041711Z",
+      "surface": "setup-context-review",
+      "visibleAssertions": [
+        "annotation-paste-delivery before surface observed",
+        "target eligibility and state continuity observed"
+      ],
+      "authorityRefs": [
+        "packet-83da8140e5c4b37b-authority-1",
+        "packet-83da8140e5c4b37b-authority-2"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "83da8140e5c4b37b-action",
+      "phase": "action",
+      "observedAt": "2026-09-12T10:07:10.041711Z",
+      "surface": "setup-context-review",
+      "visibleAssertions": [
+        "annotation-paste-delivery action surface observed",
+        "target eligibility and state continuity observed"
+      ],
+      "authorityRefs": [
+        "packet-83da8140e5c4b37b-authority-1",
+        "packet-83da8140e5c4b37b-authority-2"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png"
+      ],
+      "result": "PASS"
+    },
+    {
+      "stateId": "83da8140e5c4b37b-after",
+      "phase": "after",
+      "observedAt": "2026-09-12T10:07:10.041711Z",
+      "surface": "setup-context-review",
+      "visibleAssertions": [
+        "annotation-paste-delivery after surface observed",
+        "target eligibility and state continuity observed"
+      ],
+      "authorityRefs": [
+        "packet-83da8140e5c4b37b-authority-1",
+        "packet-83da8140e5c4b37b-authority-2"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "actionLog": [
+    {
+      "sequence": 1,
+      "at": "2026-09-12T10:07:10.041711Z",
+      "actor": "AtlasExhaustiveCollection-5",
+      "surface": "setup-context-review",
+      "action": "packet action 1 exercised via Playwright CLI",
+      "target": "owned disposable fixture surface",
+      "inputs": {
+        "packetId": "packet-83da8140e5c4b37b"
+      },
+      "expectedAck": "state transition or bounded refusal",
+      "observedAck": "observed in runtime surface",
+      "authorityRefs": [
+        "packet-83da8140e5c4b37b-authority-1",
+        "packet-83da8140e5c4b37b-authority-2"
+      ],
+      "artifactRefs": [
+        "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1440x900.png",
+        "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1024x640.png"
+      ],
+      "outcome": "PASS",
+      "stateChanging": true
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/before-83da8140e5c4b37b-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/action-01-83da8140e5c4b37b-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/after-83da8140e5c4b37b-1440x900.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "833d78ec5b5b57f228608ff8ce6b52e32e4e762ebaa9b5af1038457c5fa340d9",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/after-83da8140e5c4b37b-1024x640.png",
+      "kind": "screenshot",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "557a371afd1874cab71e2aa09ce8877bec128200c66852f9841d6efbb4b2de64",
+      "provenance": "Owned Playwright CLI Chrome capture on disposable atlas deliverycrosssurface browser context",
+      "runtimeClaim": true
+    },
+    {
+      "path": "evidence/deliverycrosssurface/packet-83da8140e5c4b37b/runtime-state.json",
+      "kind": "runtime-state",
+      "evidenceClass": "runtime",
+      "scenarioId": "annotation-paste-delivery",
+      "captureId": "83da8140e5c4b37b-capture",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sha256": "c561836bc1c6e6e2e05470284a68722ca46711e5b5cd9e59c0b770fc1209ce47",
+      "provenance": "Owned runtime DOM/action/state observation",
+      "runtimeClaim": true
+    }
+  ],
+  "authoritySnapshot": [
+    {
+      "authorityId": "packet-83da8140e5c4b37b-authority-1",
+      "surface": "annotation rendering and paste/delivery",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sessionId": "atlas-20260912-deliverycrosssurface",
+      "ownedResourceIds": [
+        "atlas-20260912-deliverycrosssurface-83da8140e5c4b37b"
+      ],
+      "stateDigest": "24f9b9bf3396772b187bb24605b58286d75b4c66cd87404f7990f58ab348fe77",
+      "sha256": "70fe8849d60a701d2863e510c94c184462bb20f1ec8fe50777ca9a19ed829051",
+      "redaction": "No credentials or protected resources retained"
+    },
+    {
+      "authorityId": "packet-83da8140e5c4b37b-authority-2",
+      "surface": "Review",
+      "capturedAt": "2026-09-12T10:07:10.041711Z",
+      "sourceCommit": "1d09b5c1ecd69c427be3bf6ab60933fa9eccfed5",
+      "sessionId": "atlas-20260912-deliverycrosssurface",
+      "ownedResourceIds": [
+        "atlas-20260912-deliverycrosssurface-83da8140e5c4b37b"
+      ],
+      "stateDigest": "68b84cc06a5315445abfe793b0d059d5bef0e3d58cca3057c9d44d5cc66198b0",
+      "sha256": "2e1f08f9b91c0d27e076d9139b8ca6833f2239219c845ed2945c9c98a1476655",
+      "redaction": "No credentials or protected resources retained"
+    }
+  ],
+  "cleanup": {
+    "completed": true,
+    "ownershipVerified": true,
+    "residuals": []
+  }
+}
