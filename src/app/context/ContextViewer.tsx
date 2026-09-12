@@ -825,7 +825,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
             setDirectories((current) => {
               const key = keyFor(root.root_id, path);
               const previous = current[key]?.data;
-              const merged = pageOffset !== undefined && previous?.revision === data.revision
+              const merged = pageOffset !== undefined && previous !== undefined && previous.revision === data.revision
                 ? { ...data, entries: [...previous.entries, ...data.entries] }
                 : data;
               return retainDirectoryState(current, key, { status: "ready", data: merged }, protectedDirectoryKeysRef.current);
