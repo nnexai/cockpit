@@ -1,0 +1,33 @@
+{
+  "captured_at": "2026-09-12T20:03:00+02:00",
+  "source_head": "a089ffa3d3a00b8ac8c1ee57b970c14d26a6415f",
+  "workflow": "issue-4 automatic import -> Context -> Review draft -> refresh/reopen",
+  "status": "PASS_FROM_REAL_CHECKOUT_RECEIPT",
+  "real_workflow_evidence": {
+    "readme": "planning/agent-control-plane-2026-09-12/implementation/README.md",
+    "setup_receipt": "planning/agent-control-plane-2026-09-12/workflow/issue-4/setup-operation.json",
+    "review_annotations": "planning/agent-control-plane-2026-09-12/workflow/issue-4/saved-annotations.json",
+    "filesystem_proof": "planning/agent-control-plane-2026-09-12/workflow/issue-4/filesystem-proof.json",
+    "real_checkout_root": "/tmp/cockpit-real-20260912",
+    "issue": "nnexai/cockpit#4",
+    "comments": 3,
+    "draft_refresh_reopen": true
+  },
+  "current_readiness": {
+    "github_provider": "~/.config/cockpit/config.toml now contains id=github, base_url=https://github.com, executable=gh",
+    "authenticated_readonly_check": "gh api repos/nnexai/cockpit/issues/4 returned issue #4 with 3 comments",
+    "ordinary_relaunch": "required for PID 2523753 to load the installed bundle and provider configuration"
+  },
+  "latest_narrow_check": {
+    "viewport": "360x900",
+    "files_pane_px": 90,
+    "review_pane_px": 180,
+    "context_source_visible": true,
+    "snapshot": "/tmp/csu12-evidence/final-narrow-360.yml"
+  },
+  "shell_runtime_receipts": {
+    "production_capture": "/tmp/cshp12/cockpit-state/browser/feedback/capture-c77997e1-2067-4482-9e8b-ce7559dfeb5b.json",
+    "production_capture_png_bytes": 142295,
+    "paired_annotation": "3b6db49f-254f-4a3a-b8bc-7ccca6a2c676"
+  }
+}
