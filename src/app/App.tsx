@@ -196,6 +196,8 @@ type ContextTarget =
   | { kind: "tab"; id: string }
   | { kind: "pane"; id: string };
 type ContextMenuState = { target: ContextTarget; x: number; y: number };
+type DragIntent = { kind: "space" | "tab"; sourceId: string; order: string[] };
+type DropMark = { targetId: string; side: "before" | "after" } | null;
 type PaneDialog =
   | { kind: "rename"; paneId: string }
   | { kind: "swap"; paneId: string }
@@ -303,14 +305,20 @@ function InlineRename({ label, ariaLabel, onCommit, onCancel }: { label: string;
 
 function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; children: ReactNode; onDismiss: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const dismissAndRestore = useCallback(() => {
+    onDismiss();
+    window.setTimeout(() => opener.current?.focus({ preventScroll: true }), 0);
+  }, [onDismiss]);
   useEffect(() => {
-    const dismiss = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) onDismiss(); };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onDismiss(); };
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dismiss = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) dismissAndRestore(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") dismissAndRestore(); };
     window.addEventListener("pointerdown", dismiss);
     window.addEventListener("keydown", escape);
     ref.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", escape); };
-  }, [onDismiss, menu]);
+  }, [dismissAndRestore, onDismiss, menu]);
   const position = contextMenuPosition(menu.x, menu.y, window.innerWidth, window.innerHeight);
   return <div ref={ref} className="context-menu" role="menu" aria-label={`${menu.target.kind} actions`} style={{ left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -336,6 +344,9 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
   mutate: Mutate;
 }) {
   const [collapsedRepositoryKeys, setCollapsedRepositoryKeys] = useState<Set<string>>(() => new Set());
+  const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
+  const [dropMark, setDropMark] = useState<DropMark>(null);
+  const [dragMessage, setDragMessage] = useState<string | null>(null);
   const rows = projectSpaceTree(spaces, collapsedRepositoryKeys, selectedSpaceId);
   const toggleRepository = (repositoryKey: string) => {
     setCollapsedRepositoryKeys((current) => {
@@ -347,22 +358,32 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
   };
   return <section className="sidebar-section spaces-section" aria-labelledby="spaces-heading">
     <div className="sidebar-section-heading"><h2 id="spaces-heading">spaces</h2><button type="button" className="space-setup" aria-label="Set up a task Space" title="Set up a task Space" disabled={busy || !setupEnabled} onClick={onSetup}>+</button></div>
+    {dragMessage ? <p className="resource-inline-status" role="status">{dragMessage}</p> : null}
     <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row, index) => {
       const space = row.space;
       const status = spaceStatus(space.agent_status);
       const displayLabel = row.label;
-      return <div className={`resource-row space-tree-row space-tree-${row.kind}${row.branch && row.kind !== "child" ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
-        onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); } }}
+      const side = dropMark?.targetId === space.id ? dropMark.side : null;
+      return <div className={`resource-row space-tree-row space-tree-${row.kind}${row.branch && row.kind !== "child" ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
+        onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }}
+        onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
         onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
-        onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+        onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (dragIntent && dragIntent.sourceId !== space.id) setDropMark({ targetId: space.id, side: event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2 ? "after" : "before" }); } }}
         onDrop={(event) => {
           if (busy) return;
           event.preventDefault();
           const fallback = event.dataTransfer.getData("text/plain");
           const id = event.dataTransfer.getData("application/x-cockpit-space") || (fallback.startsWith("space:") ? fallback.slice(6) : "");
-          const beforeSpaceId = spaceDropBeforeId(spaces, id, space.id, event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2);
-          if (beforeSpaceId !== undefined) mutate(`space:${id}`, { type: "space_move_block", space_ids: [id], before_space_id: beforeSpaceId });
+          const afterTarget = event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2;
+          const intent = dragIntent?.sourceId === id ? dragIntent : { kind: "space" as const, sourceId: id, order: spaces.map((candidate) => candidate.id) };
+          const unchanged = intent.order.length === spaces.length && intent.order.every((candidate, position) => candidate === spaces[position]?.id);
+          const beforeSpaceId = unchanged ? spaceDropBeforeId(spaces, id, space.id, afterTarget) : undefined;
+          setDropMark(null);
+          if (!unchanged) setDragMessage("Space order changed while dragging. Start again.");
+          else if (beforeSpaceId !== undefined) mutate(`space:${id}`, { type: "space_move_block", space_ids: [id], before_space_id: beforeSpaceId });
         }}
+        onPointerLeave={() => { if (dropMark?.targetId === space.id) setDropMark(null); }}
+        onPointerMove={(event) => { if (dragIntent && dragIntent.sourceId !== space.id) setDropMark({ targetId: space.id, side: event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2 ? "after" : "before" }); }}
         onContextMenu={(event) => onContext(event, { kind: "space", id: space.id })}>
         {row.kind === "child" ? <span className={`space-connector${rows[index - 1]?.kind === "parent" ? " is-first" : ""}${row.connector === "└─" ? " is-last" : ""}`} aria-hidden="true" /> : null}
         {editingId === space.id
@@ -399,22 +420,32 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
   onCommands: () => void;
   mutate: Mutate;
 }) {
+  const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
+  const [dropMark, setDropMark] = useState<DropMark>(null);
+  const [dragMessage, setDragMessage] = useState<string | null>(null);
   return <nav className="tab-toolbar" aria-label="Tabs"><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
     const displayedNumber = index + 1;
     const redundantLabel = tabLabelIsRedundant(tab.label, displayedNumber);
     const accessibleLabel = redundantLabel ? `Tab ${displayedNumber}` : `Tab ${displayedNumber}: ${tab.label}`;
-    return <div className={`tab-item${tab.id === selectedTabId ? " is-selected" : ""}`} key={tab.id} draggable={!busy && editingId !== tab.id}
-      onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); } }}
+    const side = dropMark?.targetId === tab.id ? dropMark.side : null;
+    return <div className={`tab-item${tab.id === selectedTabId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={tab.id} draggable={!busy && editingId !== tab.id}
+      onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }}
+      onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
       onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
-      onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+      onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (dragIntent && dragIntent.sourceId !== tab.id) setDropMark({ targetId: tab.id, side: event.clientX >= event.currentTarget.getBoundingClientRect().left + event.currentTarget.getBoundingClientRect().width / 2 ? "after" : "before" }); } }}
       onDrop={(event) => {
         if (busy) return;
         event.preventDefault();
         const fallback = event.dataTransfer.getData("text/plain");
         const id = event.dataTransfer.getData("application/x-cockpit-tab") || (fallback.startsWith("tab:") ? fallback.slice(4) : "");
         if (!id || id === tab.id) return;
-        const insertion = tabDropInsertionIndex(tabs.findIndex((candidate) => candidate.id === id), index, event.clientX >= event.currentTarget.getBoundingClientRect().left + event.currentTarget.getBoundingClientRect().width / 2);
-        if (insertion !== null) mutate(`tab:${id}`, { type: "tab_move", tab_id: id, insert_index: insertion });
+        const afterTarget = event.clientX >= event.currentTarget.getBoundingClientRect().left + event.currentTarget.getBoundingClientRect().width / 2;
+        const intent = dragIntent?.sourceId === id ? dragIntent : { kind: "tab" as const, sourceId: id, order: tabs.map((candidate) => candidate.id) };
+        const unchanged = intent.order.length === tabs.length && intent.order.every((candidate, position) => candidate === tabs[position]?.id);
+        const insertion = unchanged ? tabDropInsertionIndex(tabs.findIndex((candidate) => candidate.id === id), index, afterTarget) : null;
+        setDropMark(null);
+        if (!unchanged) setDragMessage("Tab order changed while dragging. Start again.");
+        else if (insertion !== null) mutate(`tab:${id}`, { type: "tab_move", tab_id: id, insert_index: insertion });
       }}
       onContextMenu={(event) => onContext(event, { kind: "tab", id: tab.id })}>
       {editingId === tab.id
@@ -422,7 +453,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, onEdit, onSelect, onCo
         : <button type="button" disabled={busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div><div className="tab-strip-actions"><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 

@@ -1510,6 +1510,70 @@ summary:focus-visible {
   background: var(--surface-selected);
 }
 
+.resource-row.drop-before,
+.resource-row.drop-after {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.resource-row.drop-before::before,
+.resource-row.drop-after::after {
+  position: absolute;
+  right: 4px;
+  left: 4px;
+  height: 2px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+.resource-row.drop-before::before {
+  top: -1px;
+}
+
+.resource-row.drop-after::after {
+  bottom: -1px;
+}
+
+.tab-item.drop-before,
+.tab-item.drop-after {
+  position: relative;
+}
+
+.tab-item.drop-before::before,
+.tab-item.drop-after::after {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+.tab-item.drop-before::before {
+  left: -1px;
+}
+
+.tab-item.drop-after::after {
+  right: -1px;
+}
+
+.resource-inline-status {
+  margin: 0;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--working);
+  font-size: var(--font-size-xs);
+}
+
+.tab-drag-status {
+  flex: 0 1 auto;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .inline-rename {
   width: calc(100% - 14px);
   height: 25px;
