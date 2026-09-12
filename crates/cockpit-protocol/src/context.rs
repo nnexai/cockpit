@@ -71,6 +71,12 @@ pub struct ContextDirectoryRequest {
     pub binding_id: String,
     pub root_id: String,
     pub path: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -101,6 +107,15 @@ pub struct ContextDirectory {
     pub path: String,
     pub entries: Vec<ContextEntry>,
     pub truncated: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub next_offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub total_entries: Option<u32>,
     pub diagnostics: Vec<ProjectDiagnostic>,
 }
 
@@ -111,6 +126,9 @@ pub struct ContextDocumentRequest {
     pub root_id: String,
     pub path: String,
     pub expected_revision: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -125,6 +143,19 @@ pub struct ContextDocument {
     pub media_type: String,
     pub text: Option<String>,
     pub truncated: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub next_offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    #[ts(type = "number | null")]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub line_offset: Option<u32>,
     pub diagnostics: Vec<ProjectDiagnostic>,
 }
 

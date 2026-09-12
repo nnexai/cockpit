@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +27,7 @@ use crate::repositories::RepositoryCatalog;
 use crate::sources::{
     SourceAuthority, SourceFetchRequest, SourceService, source_authority_for_checkout,
 };
+const MAX_DIRECTORY_SCAN: usize = 100_000;
 
 #[derive(Clone)]
 pub struct ContextService {
@@ -411,16 +412,34 @@ impl ContextService {
         }
         revalidate_root(&authorized.dir, &authorized.root.root_id)?;
         let limit = self.configuration.limits.context_directory_entries as usize;
+        let offset = request.offset.unwrap_or(0) as usize;
+        if offset > MAX_DIRECTORY_SCAN {
+            return Err(InspectionError::new(
+                "context_directory_bounded",
+                "directory continuation offset exceeds its bounded scan limit",
+            ));
+        }
+        let directory_revision = metadata_revision(&metadata);
+        if let Some(expected) = request.revision.as_deref() {
+            if expected != directory_revision {
+                return Err(InspectionError::new(
+                    "context_stale_revision",
+                    "directory changed since it was listed",
+                ));
+            }
+        }
         let mut entries = Vec::new();
         let mut truncated = false;
+        let mut scanned_entries = 0usize;
         let read_dir = directory.entries().map_err(|error| {
             InspectionError::new("context_directory_unavailable", error.to_string())
         })?;
         for item in read_dir {
-            if entries.len() >= limit {
+            if scanned_entries >= MAX_DIRECTORY_SCAN {
                 truncated = true;
                 break;
             }
+            scanned_entries += 1;
             let item = match item {
                 Ok(item) => item,
                 Err(error) => {
@@ -484,17 +503,45 @@ impl ContextService {
                 refusal,
             });
         }
+        let after = directory.dir_metadata().map_err(|error| {
+            InspectionError::new("context_directory_unavailable", error.to_string())
+        })?;
+        if metadata_revision(&after) != directory_revision {
+            return Err(InspectionError::new(
+                "context_changed_during_read",
+                "directory changed while it was being listed",
+            ));
+        }
         entries.sort_by(|left, right| {
             let left_dir = left.kind == ContextEntryKind::Directory;
             let right_dir = right.kind == ContextEntryKind::Directory;
             right_dir.cmp(&left_dir).then(left.name.cmp(&right.name))
         });
+        let total_entries = if truncated {
+            None
+        } else {
+            Some(u32::try_from(entries.len()).unwrap_or(u32::MAX))
+        };
+        let page_end = offset.saturating_add(limit).min(entries.len());
+        let page = if offset < entries.len() {
+            entries[offset..page_end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let next_offset = if page_end < entries.len() {
+            Some(page_end as u32)
+        } else {
+            None
+        };
         Ok(ContextDirectory {
             binding_id: presentation.binding_id,
             root_id: authorized.root.root_id,
             path: relative.to_string_lossy().into_owned(),
-            entries,
+            entries: page,
             truncated,
+            revision: Some(directory_revision),
+            next_offset,
+            total_entries,
             diagnostics: presentation.diagnostics,
         })
     }
@@ -543,6 +590,10 @@ impl ContextService {
             media_type: media_type(&relative),
             text: None,
             truncated: false,
+            offset: Some(request.offset.unwrap_or(0)),
+            next_offset: None,
+            total_bytes: Some(before.len()),
+            line_offset: Some(0),
             diagnostics: Vec::new(),
         };
         if before.file_type().is_symlink() {
@@ -562,14 +613,12 @@ impl ContextService {
             return Ok(result);
         }
         let max_bytes = self.configuration.limits.context_preview_bytes as usize;
-        if before.len() > max_bytes as u64 {
-            result.truncated = true;
-            result.diagnostics.push(diagnostic(
-                "context_preview_bytes",
-                "file exceeds the configured preview byte limit",
-                Some(&result.path),
+        let offset = request.offset.unwrap_or(0) as u64;
+        if offset > before.len() {
+            return Err(InspectionError::new(
+                "context_invalid_request",
+                "document continuation offset exceeds the file",
             ));
-            return Ok(result);
         }
         revalidate_root(&authorized.dir, &authorized.root.root_id)?;
         let mut options = OpenOptions::new();
@@ -577,7 +626,7 @@ impl ContextService {
             .read(true)
             .follow(cap_fs_ext::FollowSymlinks::No)
             .nonblock(true);
-        let file = parent.open_with(&leaf, &options).map_err(|error| {
+        let mut file = parent.open_with(&leaf, &options).map_err(|error| {
             let code = if error.kind() == ErrorKind::WouldBlock || is_symlink_open_error(&error) {
                 "context_special_file_refused"
             } else if error.kind() == ErrorKind::NotFound {
@@ -607,8 +656,15 @@ impl ContextService {
                 "context file changed while opening",
             ));
         }
-        let mut content = Vec::with_capacity(before.len() as usize);
-        file.take(max_bytes.saturating_add(1) as u64)
+        file.seek(SeekFrom::Start(offset)).map_err(|error| {
+            InspectionError::new(
+                "context_file_unavailable",
+                format!("cannot seek context file: {error}"),
+            )
+        })?;
+        let mut content = Vec::with_capacity(max_bytes.min((before.len() - offset) as usize));
+        (&mut file)
+            .take(max_bytes as u64)
             .read_to_end(&mut content)
             .map_err(|error| {
                 InspectionError::new(
@@ -628,17 +684,20 @@ impl ContextService {
                 "context file changed while reading",
             ));
         }
-        if content.len() > max_bytes {
-            result.truncated = true;
+        let end = offset.saturating_add(content.len() as u64);
+        result.truncated = end < before.len();
+        result.next_offset = (end < before.len()).then_some(end as u32);
+        if result.truncated {
             result.diagnostics.push(diagnostic(
                 "context_preview_bytes",
-                "file grew beyond the configured preview byte limit",
+                "file exceeds the configured preview byte limit; continue reading for more",
                 Some(&result.path),
             ));
-            return Ok(result);
         }
         if content.contains(&0) || std::str::from_utf8(&content).is_err() {
-            result.content_hash = Some(hash_bytes(&content));
+            if !result.truncated {
+                result.content_hash = Some(hash_bytes(&content));
+            }
             refuse_document(
                 &mut result,
                 "context_binary",
@@ -647,8 +706,12 @@ impl ContextService {
             return Ok(result);
         }
         let max_lines = self.configuration.limits.context_preview_lines as usize;
-        let (text_bytes, line_truncated) = bounded_lines(&content, max_lines);
-        result.truncated = line_truncated;
+        let (text_bytes, line_truncated) = if offset == 0 && !result.truncated {
+            bounded_lines(&content, max_lines)
+        } else {
+            (&content[..], false)
+        };
+        result.truncated = result.truncated || line_truncated;
         if line_truncated {
             result.diagnostics.push(diagnostic(
                 "context_preview_lines",
@@ -2386,6 +2449,8 @@ mod review_checkout_tests {
                     binding_id: presentation.binding_id.clone(),
                     root_id: root.root_id.clone(),
                     path: String::new(),
+                    offset: None,
+                    revision: None,
                 },
             )
             .await
@@ -2407,11 +2472,87 @@ mod review_checkout_tests {
                     root_id: root.root_id.clone(),
                     path: "notes.md".to_owned(),
                     expected_revision: None,
+                    offset: None,
                 },
             )
             .await
             .expect("ordinary folder document");
         assert_eq!(document.text.as_deref(), Some("ordinary context\n"));
+        std::fs::write(
+            folder.join("large.txt"),
+            vec![b'x'; configuration.limits.context_preview_bytes as usize + 17],
+        )
+        .expect("write large context source");
+        let first_page = context
+            .document(
+                "session",
+                "pane",
+                &ContextDocumentRequest {
+                    binding_id: presentation.binding_id.clone(),
+                    root_id: root.root_id.clone(),
+                    path: "large.txt".to_owned(),
+                    expected_revision: None,
+                    offset: None,
+                },
+            )
+            .await
+            .expect("large first page");
+        assert!(first_page.truncated);
+        assert_eq!(
+            first_page.text.as_deref().map(str::len),
+            Some(configuration.limits.context_preview_bytes as usize)
+        );
+        let second_page = context
+            .document(
+                "session",
+                "pane",
+                &ContextDocumentRequest {
+                    binding_id: presentation.binding_id.clone(),
+                    root_id: root.root_id.clone(),
+                    path: "large.txt".to_owned(),
+                    expected_revision: Some(first_page.revision.clone()),
+                    offset: first_page.next_offset,
+                },
+            )
+            .await
+            .expect("large continuation page");
+        assert!(!second_page.truncated);
+        assert_eq!(second_page.text.as_deref(), Some("xxxxxxxxxxxxxxxxx"));
+        for index in 0..65 {
+            std::fs::write(folder.join(format!("entry-{index}.txt")), "entry")
+                .expect("write directory entry");
+        }
+        let first_directory_page = context
+            .directory(
+                "session",
+                "pane",
+                &ContextDirectoryRequest {
+                    binding_id: presentation.binding_id.clone(),
+                    root_id: root.root_id.clone(),
+                    path: String::new(),
+                    offset: None,
+                    revision: None,
+                },
+            )
+            .await
+            .expect("first directory page");
+        assert_eq!(first_directory_page.entries.len(), 64);
+        let second_directory_page = context
+            .directory(
+                "session",
+                "pane",
+                &ContextDirectoryRequest {
+                    binding_id: presentation.binding_id.clone(),
+                    root_id: root.root_id.clone(),
+                    path: String::new(),
+                    offset: first_directory_page.next_offset,
+                    revision: first_directory_page.revision.clone(),
+                },
+            )
+            .await
+            .expect("second directory page");
+        assert!(!second_directory_page.entries.is_empty());
+        assert!(second_directory_page.entries.len() < 64);
         let comments = crate::comments::CommentsService::new(configuration, context.clone())
             .expect("comments");
         let scope = cockpit_protocol::comments::CommentRequestScope {

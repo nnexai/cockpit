@@ -533,6 +533,7 @@ impl CommentsService {
                         root_id: evidence.root_id.clone(),
                         path: capture.path.clone(),
                         expected_revision: Some(capture.expected_revision.clone()),
+                        offset: None,
                     },
                 )
                 .await
@@ -725,6 +726,7 @@ impl CommentsService {
                             root_id: evidence.root_id.clone(),
                             path: draft.file_ref.path.clone(),
                             expected_revision: None,
+                            offset: None,
                         },
                     )
                     .await

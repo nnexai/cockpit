@@ -189,17 +189,17 @@ files_root_id: string | null, can_open_context: boolean,
  */
 can_open_review: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
-export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, };
+export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, offset?: number, revision?: string, };
 
 export type ContextEntryKind = "directory" | "file" | "symlink" | "other";
 
 export type ContextEntry = { entry_id: string, name: string, path: string | null, kind: ContextEntryKind, bytes: number | null, revision: string, refusal: string | null, };
 
-export type ContextDirectory = { binding_id: string, root_id: string, path: string, entries: Array<ContextEntry>, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
+export type ContextDirectory = { binding_id: string, root_id: string, path: string, entries: Array<ContextEntry>, truncated: boolean, revision?: string, next_offset?: number, total_entries?: number, diagnostics: Array<ProjectDiagnostic>, };
 
-export type ContextDocumentRequest = { binding_id: string, root_id: string, path: string, expected_revision: string | null, };
+export type ContextDocumentRequest = { binding_id: string, root_id: string, path: string, expected_revision: string | null, offset?: number, };
 
-export type ContextDocument = { binding_id: string, root_id: string, path: string, revision: string, content_hash: string | null, bytes: number, media_type: string, text: string | null, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
+export type ContextDocument = { binding_id: string, root_id: string, path: string, revision: string, content_hash: string | null, bytes: number, media_type: string, text: string | null, truncated: boolean, offset?: number, next_offset?: number, total_bytes?: number | null, line_offset?: number, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextMediaRequest = { binding_id: string, root_id: string, path: string, expected_revision: string | null, };
 

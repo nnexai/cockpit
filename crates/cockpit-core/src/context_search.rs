@@ -11,13 +11,13 @@ use cockpit_protocol::context_search::{
     ContextInvalidationState, ContextSearchRequest, ContextSearchResponse, ContextSearchResult,
 };
 
+use crate::context::{metadata_revision, AuthorizedRoot, ContextService};
 use crate::InspectionError;
-use crate::context::{AuthorizedRoot, ContextService, metadata_revision};
 
 const MAX_QUERY_BYTES: usize = 256;
-const MAX_RESULTS: usize = 100;
-const MAX_SCANNED_ENTRIES: usize = 256;
-const MAX_SEARCHED_FILE_BYTES: usize = 64 * 1024;
+const MAX_RESULTS: usize = 1_000;
+const MAX_SCANNED_ENTRIES: usize = 100_000;
+const MAX_SEARCHED_FILE_BYTES: usize = 1024 * 1024;
 const MAX_EXCERPT_BYTES: usize = 512;
 const MAX_KNOWN_REVISIONS: usize = 128;
 const SEARCH_TIMEOUT: Duration = Duration::from_millis(1500);
