@@ -1106,7 +1106,6 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setFeedbackOpen(false);
     setFeedbackLookup(null);
     setFeedbackImages({});
-    setFeedbackDrafts({});
     feedbackTargetPaneRef.current = null;
     setFeedbackTargetPaneId(null);
     setFeedbackSpaceId(null);
