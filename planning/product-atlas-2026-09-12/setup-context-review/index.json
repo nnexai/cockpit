@@ -188,6 +188,7 @@
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit."
       ],
       "result": "INCONCLUSIVE",
@@ -314,6 +315,7 @@
       ],
       "friction": [
         "Fallback and unknown-delivery branches remain open in the 2026-09-08 handoff; no screenshot proves them",
+        "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",
         "Evidence is not fresh for atlas baseline; runtime acceptance gap remains explicit.",

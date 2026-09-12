@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cockpit — polish study</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="mock.js" defer></script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true"><defs>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 6 6 6-6 6m9 0h7"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/></symbol>
+  <symbol id="i-comment" viewBox="0 0 24 24"><path d="M21 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3Z"/><path d="M7 8h10M7 12h7"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M6 7v10m12-10c0 7-12 4-12 10"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></symbol>
+  <symbol id="i-region" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M11 3h2m-2 18h2M3 11v2m18-2v2"/></symbol>
+  <symbol id="i-pointer" viewBox="0 0 24 24"><path d="m5 3 14 10-7 1-3 7Z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3 7h4l2-3h6l2 3h4v14H3Z"/><circle cx="12" cy="13" r="4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></symbol>
+  <symbol id="i-freehand" viewBox="0 0 24 24"><path d="M3 18c2-8 4-13 6-10s-1 9 2 8 4-13 7-10 1 6 3 5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+</defs></svg>
+<header class="study-header">
+  <div class="study-brand"><h1>Cockpit mock</h1></div>
+  <div class="study-links"><span class="proposal-label">Proposal · not the live app</span><a href="findings.md">Read findings <span aria-hidden="true">↗</span></a><a href="../current/index.html">Original atlas <span aria-hidden="true">↗</span></a></div>
+</header>
+<nav class="study-nav" aria-label="Design study scenes">
+  <div class="scene-buttons"><button data-scene="workbench" aria-pressed="true"><span>01</span> Workbench</button><button data-scene="review" aria-pressed="false"><span>02</span> Review</button><button data-scene="setup" aria-pressed="false"><span>03</span> Setup</button><button data-scene="browser" aria-pressed="false"><span>04</span> Browser</button></div>
+</nav>
+<main>
+<section class="scene active" id="scene-workbench" aria-label="Workbench design proposal">
+  <div class="mock-controls"><button class="subtle" id="expand-document"><svg><use href="#i-expand"/></svg> Expand document</button></div>
+  <div class="workbench app-frame" id="workbench-frame">
+    <aside class="sidebar" id="space-sidebar" aria-label="Spaces navigation">
+      <div class="session"><span class="status-dot"></span><strong>ca12</strong><span class="muted">Session</span><button class="icon-button push-right" data-dialog="session-dialog" aria-label="Choose session"><svg><use href="#i-down"/></svg></button><button class="icon-button drawer-close" id="close-sidebar" aria-label="Close Spaces drawer"><svg><use href="#i-close"/></svg></button></div>
+      <div class="sidebar-section"><div class="section-label">SPACES <span>2</span><button class="icon-button push-right" data-switch="setup" aria-label="Set up a Space"><svg><use href="#i-plus"/></svg></button></div>
+        <div class="tree-row parent"><svg><use href="#i-down"/></svg><svg><use href="#i-grid"/></svg><span>cockpit</span></div>
+        <div class="tree-row selected"><span class="tree-stem"></span><span class="small-square"></span><span>Atlas screenshots task</span></div>
+        <div class="space-detail"><svg><use href="#i-branch"/></svg> atlas-app-captures</div>
+      </div>
+      <div class="agents-section"><div class="section-label">AGENTS <span>0</span></div><p>No agents in this study.</p><span class="tiny muted">Agent order remains Herdr-owned.</span></div>
+      <div class="sidebar-bottom"><svg><use href="#i-info"/></svg><span>Illustrative session state</span></div>
+    </aside>
+    <div class="work-area">
+      <div class="tabbar"><button class="icon-button sidebar-toggle" id="toggle-sidebar" aria-label="Toggle Spaces sidebar"><svg><use href="#i-sidebar"/></svg></button><div class="app-tab"><span class="tab-number">1</span><svg><use href="#i-terminal"/></svg><span>Shell</span></div><div class="app-tab selected-tab"><span class="tab-number">2</span><span class="tab-name">Atlas screenshots task</span></div><div class="tab-actions"><button class="quiet" id="pane-button" aria-expanded="false">Pane <svg><use href="#i-down"/></svg></button><button class="quiet" data-dialog="commands-dialog"><svg><use href="#i-search"/></svg><span>Commands</span></button></div></div>
+      <div class="pane-scroll"><div class="pane-layout">
+        <section class="terminal-pane" aria-label="Unchanged captured terminal"><div class="pane-header"><svg><use href="#i-terminal"/></svg><span class="ellipsize">/t/c/w/cockpit-f8a47c77</span><span class="ownership push-right">Read-only capture</span></div><div class="terminal-viewport"><img src="assets/terminal-original.png" width="598" height="840" alt="Original terminal pixels from the Files source atlas screenshot; no simulated terminal text." class="terminal-image"></div></section>
+        <section class="context-pane focused-pane" aria-label="Context document proposal"><div class="pane-header"><svg><use href="#i-file"/></svg><strong>Files</strong><span class="muted">/ Context</span><span class="pane-focus push-right">Selected pane</span></div>
+          <div class="document-toolbar"><button class="quiet" id="viewer-files-button" aria-expanded="true"><svg><use href="#i-sidebar"/></svg> Files</button><button class="icon-button" data-dialog="files-dialog" aria-label="Go to file" title="Go to file"><svg><use href="#i-search"/></svg></button><div class="segmented push-right" aria-label="Document presentation"><button id="preview-button" aria-pressed="true">Preview</button><button id="source-button" aria-pressed="false">Source</button></div><button class="icon-button" id="document-details" aria-label="Show document details" aria-expanded="false"><svg><use href="#i-info"/></svg></button></div>
+          <div class="files-body" id="files-body"><aside class="viewer-files" id="viewer-files"><div class="section-label">FILES <span>1</span></div><div class="tree-row parent"><svg><use href="#i-down"/></svg><span>sources</span></div><button class="tree-row selected file-tree-entry" id="viewer-tree-issue"><svg><use href="#i-file"/></svg><span>cockpit #4</span></button></aside>
+          <div class="document-scroll"><div class="document-meta"><span class="source-label">ISSUE</span><span>nnexai/cockpit <strong>#4</strong></span><span class="muted push-right">Imported snapshot</span></div>
+          <div class="metadata-panel" id="metadata-panel" hidden><strong>Document details</strong><dl><dt>Source</dt><dd>github.com/nnexai/cockpit/issues/4</dd><dt>Storage</dt><dd>sources/provider-996e1f7…/asset-e9f032c24…</dd><dt>Evidence</dt><dd>8,993 B · capture-era metadata</dd></dl><p>Identifiers are abbreviated in this study; the product must expose exact copyable paths.</p></div>
+          <article class="document" id="document-preview"><h2>Fix OMP terminal cell-width drift in Cockpit xterm</h2><h3>Summary</h3><p>Cockpit’s xterm rendering of OMP showed a visible cell-metric mismatch against Herdr/Ghostty. The problem was most noticeable around the intentional blank cell between OMP’s inner vertical divider and the following horizontal rule.</p><p>Spaces, ordinary text, and box-drawing glyphs did not present a reliably uniform pitch.</p><h3>User-visible symptom</h3><ul><li>The frame appeared less dense than the Herdr/Ghostty frame.</li><li>The blank cell after the inner divider looked wider than the neighboring cells.</li><li>Horizontal rules appeared offset even with the same one-cell separator.</li></ul></article>
+          <pre class="source-preview" id="document-source" hidden># Fix OMP terminal cell-width drift in Cockpit xterm
+
+## Summary
+Cockpit's xterm rendering of OMP showed a visible
+cell-metric mismatch against Herdr/Ghostty.
+
+## User-visible symptom
+- The frame appeared less dense.
+- The blank cell after the divider looked wider.
+
+Illustrative shortened source, not a line-addressable original.</pre></div>
+          </div><div class="bottom-actions"><span class="muted ellipsize">Read-only document</span><button class="quiet push-right" data-switch="review"><svg><use href="#i-comment"/></svg> Comment example</button></div>
+        </section>
+      </div></div>
+    </div>
+    <div class="pane-menu floating-menu" id="pane-menu" hidden><div class="menu-heading">SELECTED PANE · FILES</div><button id="menu-expand"><svg><use href="#i-expand"/></svg> Expand / restore document</button><div class="menu-heading">OPEN VIEW · STUDY ONLY</div><button data-switch="review"><svg><use href="#i-file"/></svg> Review example <span class="push-right">↗</span></button><button data-dialog="files-dialog"><svg><use href="#i-search"/></svg> Go to file…</button><div class="menu-heading">ADVANCED</div><button id="menu-details"><svg><use href="#i-info"/></svg> Document details</button><div class="menu-separator"></div><button class="danger" disabled title="No live pane exists in this study">Close pane <span class="push-right tiny">Not live</span></button></div>
+  </div>
+</section>
+<section class="scene" id="scene-review" aria-label="Review design proposal" hidden>
+  <div class="review-frame app-frame"><div class="tabbar"><div class="app-tab selected-tab"><svg><use href="#i-file"/></svg><span>Atlas screenshots task</span></div><span class="push-right muted small">Pane / Review</span><button class="quiet" data-switch="workbench"><svg><use href="#i-expand"/></svg> Return to split study</button></div>
+    <div class="pane-header"><svg><use href="#i-file"/></svg><strong>Review</strong><span class="muted">/ Local changes</span><span class="ownership push-right">Illustrative source</span></div>
+    <div class="review-toolbar"><span class="scope-label">Unstaged changes</span><button class="quiet" id="review-files-button" aria-expanded="true"><svg><use href="#i-sidebar"/></svg> Files <span class="count">1</span></button><button class="icon-button" data-dialog="files-dialog" aria-label="Go to file" title="Go to file"><svg><use href="#i-search"/></svg></button><span class="muted review-path">CONTEXT.md</span><div class="segmented push-right"><button id="unified-button" aria-pressed="true">Diff</button><button id="full-source-button" aria-pressed="false">Full source</button></div></div>
+    <div class="review-content"><aside class="review-files" id="review-files"><div class="section-label">CHANGED FILES <span>1</span></div><div class="tree-row selected"><svg><use href="#i-file"/></svg><span>CONTEXT.md</span><span class="addition push-right">+2</span></div><p class="small muted">Working tree<br>One illustrative change.</p></aside><div class="diff-scroll"><div class="diff-heading"><strong>CONTEXT.md</strong><span class="muted">Modified</span><span class="addition push-right">+2</span></div><div class="hunk-heading">@@ −377 +377 @@ <span class="push-right">new side</span></div><div class="code-lines"><div class="source-line"><span>377</span><span>377</span><code>The subsequent user decision selects stable Herdr.</code></div><div class="source-line"><span>378</span><span>378</span><code></code></div><div class="source-line"><span>379</span><span>379</span><code>The user downgrades Herdr before implementation begins.</code></div><div class="source-line added"><span></span><span>380</span><code>+</code></div><button class="source-line added selected-line" id="selected-code-line" aria-label="Comment on CONTEXT.md line 381"><span></span><span>381</span><code>+&lt;!-- atlas app screenshot fixture --&gt;</code><svg><use href="#i-comment"/></svg></button><div class="source-line extra-source" hidden><span></span><span>382</span><code>Illustrative surrounding source for this mock only.</code></div></div>
+    <dialog id="comment-editor" class="comment-editor" aria-labelledby="comment-title"><form method="dialog" id="comment-form"><div class="comment-heading"><svg><use href="#i-comment"/></svg><strong id="comment-title">Comment on line 381</strong><button class="icon-button push-right" value="cancel" aria-label="Close comment editor"><svg><use href="#i-close"/></svg></button></div><p class="comment-location">CONTEXT.md <span>· new side · local study draft</span></p><label class="sr-only" for="comment-text">Comment text</label><textarea id="comment-text" placeholder="What should change, and why?" rows="4">Keep the fixture separate from the architecture reference.</textarea><div class="comment-footer"><span class="tiny muted">Enter for newline · Ctrl/⌘ Enter to save</span><div><button value="cancel" class="subtle">Cancel</button><button type="button" id="save-comment" class="primary">Save local draft</button></div></div></form></dialog>
+    <div class="saved-comment" id="saved-comment" hidden><div><svg><use href="#i-comment"/></svg><strong>Line 381</strong><span class="local-label">Local study draft</span><button class="quiet push-right" id="edit-comment">Edit</button><button class="quiet" id="delete-comment">Delete</button></div><p id="saved-comment-text"></p></div>
+    <div class="review-empty-space"><span class="tiny muted">Example source preserves the captured line range. No repository is being read or modified.</span></div></div></div>
+    <div class="bottom-actions review-bottom"><span>New side <span class="muted">· line 381</span></span><button class="quiet push-right" id="open-comment"><svg><use href="#i-comment"/></svg> Add comment <kbd>C</kbd></button><button class="quiet" id="show-drafts">Drafts <span class="count" id="draft-count">0</span></button></div>
+  </div>
+</section>
+<section class="scene" id="scene-setup" aria-label="Setup design proposal" hidden>
+  <div class="setup-stage app-frame">
+    <section class="quick-setup" aria-labelledby="setup-title">
+      <header><h2 id="setup-title">New Space</h2><span class="muted small">ca12</span></header>
+      <div class="quick-setup-fields">
+        <label for="setup-source">Issue / MR URL</label><input id="setup-source" list="setup-source-examples" placeholder="Optional URL" value="https://github.com/nnexai/cockpit/issues/4"><datalist id="setup-source-examples"><option value="https://github.com/nnexai/cockpit/issues/4">Issue example</option><option value="https://github.com/nnexai/cockpit/pull/7">PR example · mock metadata</option></datalist>
+        <label for="setup-repository">Repository</label><select id="setup-repository"><option value="">Select repository</option><option value="cockpit">cockpit</option></select>
+        <span class="field-label">Operation</span><div class="segmented"><button id="setup-new" aria-pressed="true">New worktree</button><button id="setup-existing" aria-pressed="false">Existing checkout</button></div>
+        <label for="setup-branch" id="setup-branch-label">Branch</label><input id="setup-branch" value="atlas-app-captures">
+        <label for="setup-name">Space name</label><input id="setup-name" value="atlas-app-captures" placeholder="Defaults to branch">
+      </div>
+      <details class="quick-advanced"><summary>Advanced</summary><div class="quick-setup-fields"><label for="setup-base">Base</label><input id="setup-base" value="main"><label for="setup-destination">Destination</label><input id="setup-destination" value="/tmp/ca12/worktrees/atlas-app-captures"></div></details>
+      <details class="quick-plan"><summary>Operation details</summary><dl><dt>Repository</dt><dd>/tmp/ca12/repos/cockpit</dd><dt>Effects</dt><dd id="setup-effects">Linked worktree, Herdr Space, companion context, separate context terminal.</dd><dt>Repository actions</dt><dd>Run configured actions automatically.</dd></dl></details>
+      <footer class="setup-footer"><span class="tiny muted">Mock · no operation</span><div><button class="subtle" data-switch="workbench">Cancel</button><button class="primary" id="setup-create" disabled>Create Space</button></div></footer>
+    </section>
+  </div>
+</section>
+<section class="scene" id="scene-browser" aria-label="Annotation toolbar mock" hidden>
+  <div class="quick-notes app-frame notes-hidden" id="notes-study">
+    <section class="annotation-page">
+      <div class="browser-address"><span class="browser-dot"></span><span>127.0.0.1:4205</span><button class="quiet push-right" id="toggle-notes" aria-expanded="false" title="Optional notes sidebar">Notes <span class="count" id="notes-count">0</span></button><button class="quiet" id="reopen-toolbar" hidden>Annotate</button></div>
+      <div class="idea-canvas">
+        <div class="page-surface">
+          <img src="assets/page-detail.png" width="1040" height="388" alt="Original atlas page detail showing Repository health, Context sources, and Next checkpoint.">
+          <svg class="drawing-layer" id="drawing-layer" viewBox="0 0 1040 388" preserveAspectRatio="none" aria-label="Freehand and region annotation overlay"></svg>
+          <div class="idea-toolbar" id="annotation-toolbar" aria-label="Annotation tools">
+            <button class="icon-button" data-mode="browse" aria-pressed="false" aria-label="Browse mode" title="Browse"><svg><use href="#i-pointer"/></svg></button>
+            <button class="icon-button" data-mode="freehand" aria-pressed="false" aria-label="Freehand drawing" title="Freehand"><svg><use href="#i-freehand"/></svg></button>
+            <button class="icon-button active-tool" data-mode="element" aria-pressed="true" aria-label="Element annotation mode" title="Element"><svg><use href="#i-target"/></svg></button>
+            <button class="icon-button" data-mode="region" aria-pressed="false" aria-label="Region annotation mode" title="Region"><svg><use href="#i-region"/></svg></button>
+            <button class="icon-button" id="clear-annotations" aria-label="Clear mock annotations" title="Clear annotations"><svg><use href="#i-trash"/></svg></button>
+            <button class="icon-button" data-dialog="capture-dialog" aria-label="Inspect original capture" title="Original capture"><svg><use href="#i-camera"/></svg></button>
+            <button class="icon-button" id="close-toolbar" aria-label="Close annotation toolbar" title="Close"><svg><use href="#i-close"/></svg></button>
+          </div>
+          <button class="idea-anchor" id="idea-anchor" aria-label="Add inline note on Repository health" title="Add note"></button>
+          <section class="idea-editor" id="annotation-editor" aria-label="Inline note">
+            <label class="sr-only" for="annotation-text">Note</label>
+            <textarea id="annotation-text" rows="3" placeholder="Add a comment…"></textarea>
+            <div class="idea-editor-footer"><span class="tiny muted">Ctrl/⌘ Enter</span><button class="subtle" id="annotation-cancel">Cancel</button><button class="primary" id="annotation-save">Done</button></div>
+          </section>
+          <button class="idea-summary" id="inline-note-summary" hidden><span class="annotation-number">1</span><span id="inline-note-text"></span></button>
+        </div>
+      </div>
+    </section>
+    <aside class="notes-sidebar" id="notes-sidebar" aria-label="Optional notes sidebar">
+      <header><h2>Notes <span class="count" id="sidebar-note-count">0</span></h2><button class="icon-button" id="close-notes" aria-label="Close notes sidebar"><svg><use href="#i-close"/></svg></button></header>
+      <div class="notes-list" id="notes-list"></div>
+    </aside>
+  </div>
+</section>
+</main>
+<dialog id="commands-dialog" class="command-dialog" aria-labelledby="commands-title"><div class="dialog-top"><strong id="commands-title">Commands</strong><button class="icon-button push-right" data-close aria-label="Close Commands"><svg><use href="#i-close"/></svg></button></div><div class="search-box"><svg><use href="#i-search"/></svg><label class="sr-only" for="command-search">Search study commands</label><input id="command-search" placeholder="Search commands…" autocomplete="off"></div><div class="command-results"><div class="menu-heading">NAVIGATE THE STUDY</div><button data-command="Expand document" id="command-expand"><svg><use href="#i-expand"/></svg><span>Expand / restore document</span><span class="push-right tiny muted">Workbench</span></button><button data-command="Review comment" data-switch="review"><svg><use href="#i-comment"/></svg><span>Open Review study</span></button><button data-command="Set up Space repository" data-switch="setup"><svg><use href="#i-plus"/></svg><span>Set up a Space</span></button><button data-command="Browser feedback annotations" data-switch="browser"><svg><use href="#i-target"/></svg><span>Inspect browser feedback</span></button><button data-command="Switch session" data-session-command><svg><use href="#i-grid"/></svg><span>Switch session…</span><span class="push-right tiny muted">Example only</span></button><p id="no-commands" hidden>No study commands match.</p></div><div class="dialog-bottom"><span>Tab to navigate · Enter to choose</span><span><kbd>Esc</kbd> Close</span></div></dialog>
+<dialog id="files-dialog" class="command-dialog" aria-labelledby="files-title"><div class="dialog-top"><strong id="files-title">Go to file</strong><button class="icon-button push-right" data-close aria-label="Close file picker"><svg><use href="#i-close"/></svg></button></div><div class="search-box"><svg><use href="#i-search"/></svg><label class="sr-only" for="file-search">Find a file</label><input id="file-search" placeholder="Find by title or path…" autocomplete="off"></div><div class="command-results"><button class="file-result" id="choose-issue"><svg><use href="#i-file"/></svg><span><strong>Fix OMP terminal cell-width drift</strong><small>nnexai/cockpit #4 · sources/provider-996e1f7…</small></span><span class="push-right tiny muted">Issue</span></button><p id="no-files" hidden>No files match this study.</p></div><div class="dialog-bottom">Readable identity first. Exact paths remain available in the product.</div></dialog>
+<dialog id="session-dialog" class="small-dialog" aria-labelledby="session-title"><div class="dialog-top"><strong id="session-title">Session</strong><button class="icon-button push-right" data-close aria-label="Close session selector"><svg><use href="#i-close"/></svg></button></div><div class="session-example"><svg><use href="#i-check"/></svg><strong>ca12</strong><span class="push-right muted">Illustrative</span></div><p>This study has no live session connection. Session switching and terminal ownership are not simulated.</p></dialog>
+<dialog id="capture-dialog" class="capture-dialog" aria-labelledby="capture-title"><div class="dialog-top"><strong id="capture-title">Original capture evidence</strong><button class="icon-button push-right" data-close aria-label="Close capture"><svg><use href="#i-close"/></svg></button></div><div class="capture-scroll"><img src="../current/screenshots/browser-cockpit-feedback.png" alt="Original Cockpit feedback screenshot showing outcome unknown, no eligible agent, and the pending annotation."></div><div class="dialog-bottom">Original atlas image, not a new capture or successful delivery.</div></dialog>
+<div class="study-toast" id="study-toast" role="status" hidden></div>
+<footer class="study-footer"><span>Design only. Captured terminal pixels are unchanged; all other study state is illustrative.</span><a href="verification.md">Verification record</a></footer>
+</body>
+</html>

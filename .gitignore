@@ -15,3 +15,7 @@ __pycache__/
 
 # Local operating-system metadata
 .DS_Store
+# Playwright CLI output (may contain credentials)
+# Product atlas disposable runtime captures
+/planning/product-atlas-2026-09-12/runtime/
+.playwright-cli/
