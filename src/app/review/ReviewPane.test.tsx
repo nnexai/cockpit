@@ -336,3 +336,30 @@ it("shows an unknown comment count while the review comment batch is loading", a
     host.remove();
   }
 });
+
+it("records user scrolling without writing it back or moving focus", async () => {
+  const host = window.document.createElement("div");
+  window.document.body.append(host);
+  const mounted = createRoot(host);
+  const onViewStateChange = vi.fn();
+  const readSnapshot = async () => snapshot;
+  const readFile = async () => diff;
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="review" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={readSnapshot} file={readFile} onViewStateChange={onViewStateChange} />));
+    const surface = host.querySelector<HTMLElement>(".review-diff")!;
+    const focusTarget = host.querySelector<HTMLButtonElement>(".review-file")!;
+    focusTarget.focus();
+    let position = 240;
+    const writeScroll = vi.fn((value: number) => { position = value; });
+    Object.defineProperty(surface, "scrollTop", { configurable: true, get: () => position, set: writeScroll });
+    await act(async () => surface.dispatchEvent(new Event("scroll", { bubbles: true })));
+    position = 480;
+    await act(async () => surface.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(onViewStateChange).toHaveBeenLastCalledWith(expect.objectContaining({ scrollTop: 480 }));
+    expect(writeScroll).not.toHaveBeenCalled();
+    expect(window.document.activeElement).toBe(focusTarget);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});

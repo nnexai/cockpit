@@ -1,3 +1,4 @@
+import { UiIcon } from "../UiIcon";
 import { useFileOverview } from "../input/useFileOverview";
 import { remarkBoundDiagrams } from "./markdownPolicy";
 import { SafeImage } from "./SafeImage";
@@ -466,14 +467,6 @@ class RenderErrorBoundary extends Component<{ fallback: ReactNode; children: Rea
     return this.state.error ? this.props.fallback : this.props.children;
   }
 }
-function entryIcon(entry: ContextEntry): string {
-  if (entry.refusal) return "!";
-  if (entry.kind === "directory") return "▸";
-  if (entry.kind === "symlink") return "↗";
-  if (entry.kind === "other") return "?";
-  return "·";
-}
-
 type ContextTreeRow = {
   entry: ContextEntry;
   path: string;
@@ -1038,14 +1031,14 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       return (
         <>
           <div className="context-document-header">
-            <strong title={selectedPath}>{metadata.canonicalId ? /^#\s+(.+)$/m.exec(document.text ?? "")?.[1] ?? documentName(selectedPath) : documentName(selectedPath)}</strong>
-            <span className="viewer-secondary-metadata">{document.bytes} B</span>
+            <span className="document-source-kind">{metadata.canonicalId ? "Issue" : "File"}</span><strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
+            {metadata.canonicalId ? <span className="viewer-secondary-metadata">Imported snapshot</span> : null}
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
-            {renderedMode ? <button type="button" aria-pressed={effectiveMode === "source"} onClick={() => updateFile({ mode: effectiveMode === "source" ? "auto" : "source" })}>{effectiveMode === "source" ? "Rendered preview" : "View source"}</button> : null}
+
             <details className="viewer-details">
-              <summary>Details</summary>
+              <summary aria-label="Document details" title="Document details"><UiIcon name="info" /></summary>
               <dl>
-                <dt>Full path</dt><dd><code>{root.path.replace(/\/$/, "")}/{selectedPath}</code></dd>
+                <dt>Size</dt><dd>{document.bytes} B</dd><dt>Full path</dt><dd><code>{root.path.replace(/\/$/, "")}/{selectedPath}</code></dd>
                 <dt>Relative path</dt><dd><code>{selectedPath}</code></dd>
                 <dt>Root identity</dt><dd><code>{root.root_id}</code></dd>
                 <dt>Provenance</dt><dd>{root.kind}{root.repository_id ? ` · repository ${root.repository_id}` : ""}{root.companion_id ? ` · companion ${root.companion_id}` : ""}</dd>
@@ -1116,22 +1109,23 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "2") { event.preventDefault(); focusContent(); }
     }}>
       <header className="context-toolbar">
-        <div className="context-breadcrumb" title={root.path}>{root.label}</div>
+
         {presentation.roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = presentation.roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{presentation.roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
-        <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={overviewId}>Overview</button>
-        <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file">Files</button>
+        <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={overviewId} aria-label="Toggle file overview"><UiIcon name="sidebar" /> Files</button>
+        <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file"><UiIcon name="search" /></button>
         {root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)} aria-expanded={resourcesOpen}>Resources</button> : null}
         <span className="context-toolbar-spacer" />
+        {document && selectedPath && (isMarkdown(document, selectedPath) || isHtml(document, selectedPath)) ? <div className="viewer-segmented" role="group" aria-label="Document presentation"><button type="button" aria-pressed={selectedFileState?.mode !== "source"} onClick={() => updateFile({ mode: "auto" })}>Preview</button><button type="button" aria-pressed={selectedFileState?.mode === "source"} onClick={() => updateFile({ mode: "source" })}>Source</button></div> : null}
 
-        <button type="button" onClick={refresh} aria-label="Refresh Context files">Refresh</button>
-        <button type="button" onClick={onTerminalView}>Show terminal</button>
+        <button type="button" onClick={refresh} aria-label="Refresh Context files" title="Refresh files"><UiIcon name="refresh" /></button>
+        <button type="button" onClick={onTerminalView} aria-label="Show terminal" title="Show terminal"><UiIcon name="terminal" /></button>
       </header>
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`}>
         {overview.narrow && overview.open ? <button type="button" className="viewer-overview-backdrop" aria-label="Close file overview" onClick={overview.close} /> : null}
         <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label="Context files" ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else onTreeKeyDown(event); }}>
           <div className="context-tree-header">FILES <span>{root.label}</span></div>
-        {root.kind === "companion" ? <ContextSearch
+        {root.kind === "companion" ? <details className="viewer-tree-search"><summary><UiIcon name="search" /> Search contents</summary><ContextSearch
           identity={identityKey}
           bindingId={bindingId}
           rootId={root.root_id}
@@ -1141,15 +1135,15 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           onSelect={selectSearchResult}
           onInvalidate={invalidateVisibleFiles}
           disabled={!controlAllowed}
-        /> : null}
+        /></details> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}
           {treeRows.map((row) => <div className="context-tree-node" key={row.entry.entry_id}>
             <button type="button" data-context-path={row.path} className={`context-tree-row${selectedPath === row.path ? " is-selected" : ""}`} style={{ paddingLeft: `${8 + row.depth * 16}px` }} disabled={!isTreeRowEnabled(row)} onClick={() => row.entry.kind === "directory" ? toggleDirectory(row.entry) : chooseEntry(row.entry)} aria-label={`${row.label}${row.entry.refusal ? `, refused: ${row.entry.refusal}` : ""}`}>
-              <span className="context-tree-disclosure">{row.entry.kind === "directory" ? (row.open ? "⌄" : "›") : " "}</span>
-              <span className="context-tree-icon" aria-hidden="true">{entryIcon(row.entry)}</span>
+              <span className="context-tree-disclosure">{row.entry.kind === "directory" ? <UiIcon name={row.open ? "down" : "right"} /> : null}</span>
+              <span className="context-tree-icon" aria-hidden="true">{row.entry.kind === "directory" ? null : <UiIcon name="file" />}</span>
               <span className="context-tree-name" title={row.path}>{row.label}</span>
-              <span className="context-tree-meta">{row.entry.refusal ?? (row.entry.bytes === null || row.entry.bytes === undefined ? "" : `${row.entry.bytes} B`)}</span>
+              <span className="context-tree-meta">{row.entry.refusal ?? ""}</span>
             </button>{row.entry.kind === "directory" && directories[keyFor(root.root_id, row.path)]?.data?.next_offset !== undefined ? <button type="button" className="context-tree-more" onClick={() => void loadDirectory(root, row.path)} aria-label={`Load more entries in ${row.path}`}>more</button> : null}
             {row.entry.refusal ? <div className="context-tree-refusal">{row.entry.refusal}</div> : null}
           </div>)}

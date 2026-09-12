@@ -890,15 +890,23 @@ impl ReviewService {
             let changes = self
                 .changes(checkout, comparison, base_revision.as_deref())
                 .await?;
+            let counts = self.change_statistics(checkout, comparison, base_revision.as_deref()).await?;
             for mut change in changes {
                 capture_inventory_revisions(checkout, &mut change, revisions)?;
                 let file_id = file_id(comparison, &change.old_path, &change.new_path);
-                files.push(change_file(
-                    &file_id,
-                    &change,
-                    revisions,
-                    base_revision.as_deref(),
-                ));
+                let mut file = change_file(&file_id, &change, revisions, base_revision.as_deref());
+                let path = change.new_path.as_deref().or(change.old_path.as_deref());
+                if let Some(statistics) = path.and_then(|path| counts.get(path)) {
+                    file.additions = statistics.additions;
+                    file.deletions = statistics.deletions;
+                    file.binary = statistics.binary;
+                } else if comparison == ReviewComparison::Untracked {
+                    if let Some(source) = path.and_then(|path| read_worktree_source(checkout, path).ok()) {
+                        file.additions = source.total_lines;
+                        file.deletions = source.total_lines.map(|_| 0);
+                    }
+                }
+                files.push(file);
                 changes_by_id.insert(file_id, change);
             }
         }
@@ -919,6 +927,28 @@ impl ReviewService {
             ));
         }
         Ok((files, changes_by_id, diagnostics, truncated, base_revision))
+    }
+
+    async fn change_statistics(
+        &self,
+        checkout: &Path,
+        comparison: ReviewComparison,
+        base: Option<&str>,
+    ) -> Result<BTreeMap<String, ChangeStatistics>, InspectionError> {
+        let mut args = vec!["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "--find-renames=50%"];
+        match comparison {
+            ReviewComparison::Staged => args.push("--cached"),
+            ReviewComparison::Branch => {
+                args.push(base.expect("validated branch base"));
+                args.push("HEAD");
+            }
+            ReviewComparison::Unstaged => {}
+            ReviewComparison::Untracked => return Ok(BTreeMap::new()),
+            ReviewComparison::AllLocal => unreachable!("collect expands all-local comparisons"),
+        }
+        args.push("--");
+        let output = self.git_with_limit(checkout, &args, MAX_FILE_LIST_BYTES).await?;
+        parse_numstat(&output.stdout)
     }
 
     async fn changes(
@@ -2107,6 +2137,38 @@ fn validate_snapshot_request(request: &ReviewSnapshotRequest) -> Result<(), Insp
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ChangeStatistics {
+    additions: Option<u32>,
+    deletions: Option<u32>,
+    binary: bool,
+}
+
+fn parse_numstat(bytes: &[u8]) -> Result<BTreeMap<String, ChangeStatistics>, InspectionError> {
+    let invalid = || InspectionError::new("review_numstat", "Git returned malformed line statistics");
+    let mut records = bytes.split(|byte| *byte == 0).peekable();
+    let mut result = BTreeMap::new();
+    while let Some(record) = records.next() {
+        if record.is_empty() && records.peek().is_none() { break; }
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let added = fields.next().ok_or_else(invalid)?;
+        let removed = fields.next().ok_or_else(invalid)?;
+        let mut path = fields.next().ok_or_else(invalid)?;
+        if path.is_empty() {
+            records.next().filter(|path| !path.is_empty()).ok_or_else(invalid)?;
+            path = records.next().filter(|path| !path.is_empty()).ok_or_else(invalid)?;
+        }
+        let parse = |value: &[u8]| -> Result<Option<u32>, InspectionError> {
+            if value == b"-" { return Ok(None); }
+            std::str::from_utf8(value).map_err(|_| invalid())?.parse().map(Some).map_err(|_| invalid())
+        };
+        result.insert(String::from_utf8(path.to_vec()).map_err(|_| invalid())?, ChangeStatistics {
+            additions: parse(added)?, deletions: parse(removed)?, binary: added == b"-" || removed == b"-",
+        });
+    }
+    Ok(result)
+}
+
 fn parse_name_status(
     bytes: &[u8],
     comparison: ReviewComparison,
@@ -2987,6 +3049,30 @@ mod tests {
             diffs.insert(file_id, diff);
         }
         diffs
+    }
+
+    #[tokio::test]
+    async fn inventory_includes_line_counts_before_opening_files() {
+        let root = fixture("inventory-counts");
+        std::fs::write(root.join("tracked.txt"), "one\ntwo\nthree\n").unwrap();
+        git_bytes(&root, &["add", "tracked.txt"]);
+        git_bytes(&root, &["commit", "-m", "count baseline"]);
+        std::fs::write(root.join("tracked.txt"), "one\nreplacement\nthree\nfour\n").unwrap();
+        std::fs::write(root.join("new.txt"), "new\nfile\n").unwrap();
+        let service = service(&root);
+        let revisions = service.revision_tokens(&root).await.unwrap();
+        let (files, _, _, _, _) = service.collect(&root, &ReviewSnapshotRequest {
+            binding_id: "binding".into(), repository_id: "repository".into(),
+            comparison: ReviewComparison::AllLocal, base_ref: None,
+        }, &revisions).await.unwrap();
+        let tracked = files.iter().find(|file| file.new_path.as_deref() == Some("tracked.txt")).unwrap();
+        assert_eq!((tracked.additions, tracked.deletions), (Some(2), Some(1)));
+        let new = files.iter().find(|file| file.new_path.as_deref() == Some("new.txt")).unwrap();
+        assert_eq!((new.additions, new.deletions), (Some(2), Some(0)));
+        let renamed = parse_numstat(b"2\t1\t\0old\tname\0new\nname\0-\t-\tbinary\0").unwrap();
+        assert_eq!(renamed["new\nname"].additions, Some(2));
+        assert!(renamed["binary"].binary);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

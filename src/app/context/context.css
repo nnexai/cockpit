@@ -13,13 +13,17 @@
 
 .context-toolbar {
   display: flex;
-  height: 36px;
-  min-height: 36px;
+  height: 43px;
+  min-height: 43px;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding-block: 4px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--terminal-bg);
+
+  padding: 6px 10px;
+
+  flex: 0 0 auto;
 }
 
 .context-breadcrumb,
@@ -72,7 +76,7 @@
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(0, min(232px, 38%)) minmax(0, 1fr);
+  grid-template-columns: minmax(0, min(160px, 30%)) minmax(0, 1fr);
 }
 .context-tree {
   min-width: 0;
@@ -85,15 +89,19 @@
   top: 0;
   z-index: 1;
   display: flex;
-  min-height: 28px;
+  min-height: 38px;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border);
+  justify-content: flex-start;
+  padding: 0 13px;
+  border-bottom: 0;
   background: var(--sidebar-bg);
   color: var(--text-secondary);
   font-weight: 600;
-  letter-spacing: .04em;
+  letter-spacing: .08em;
+
+  gap: 8px;
+
+  font-size: 10px;
 }
 .context-tree-header span { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; letter-spacing: 0; }
 .context-tree-row {
@@ -128,16 +136,22 @@
 .context-document { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
 .context-document-header {
   display: flex;
-  min-height: 36px;
+  min-height: 55px;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding-block: 6px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 0;
+  background: transparent;
   color: var(--text-secondary);
+
+  padding: 18px 24px 12px;
+
+  font-size: 10px;
+
+  flex: 0 0 auto;
 }
 .context-document-header code { min-width: 0; flex: 1; color: var(--text-primary); }
-.context-document-header strong { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.context-document-header strong { min-width: 0; overflow: hidden; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .context-state-warning { color: var(--warning, var(--working)); }
 .context-mode-switch { display: flex; gap: 4px; padding-block-start: 6px; background: var(--terminal-bg); }
 .context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: 4px 4px 0 0; color: var(--text-secondary); }
@@ -154,7 +168,9 @@
 .context-frontmatter summary { padding: 6px 8px; color: var(--text-secondary); cursor: pointer; }
 .context-frontmatter .context-source-scroll { max-height: 220px; border-top: 1px solid var(--border); }
 .context-frontmatter .context-source-lines { padding-bottom: 8px; }
-.context-markdown-body { width: 100%; box-sizing: border-box; padding-block: 16px 40px; color: var(--text-primary); }
+.context-markdown-body { width: 100%; box-sizing: border-box; padding-block: 0 30px; color: #c4cfdd;
+  max-width: 828px;
+}
 .context-markdown-body h1,
 .context-markdown-body h2,
 .context-markdown-body h3,

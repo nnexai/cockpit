@@ -1,5 +1,6 @@
+import { UiIcon } from "./UiIcon";
 import { ReviewViewer } from "./review/ReviewViewer";
-import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import {
   parseResourceMutationResponse,
   type CockpitClient,
@@ -247,7 +248,7 @@ export function contextMenuPosition(
   y: number,
   viewportWidth: number,
   viewportHeight: number,
-  menuWidth = 208,
+  menuWidth = 286,
   menuHeight = 320,
   gutter = 8,
 ): { x: number; y: number } {
@@ -319,7 +320,12 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
     ref.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", escape); };
   }, [dismissAndRestore, onDismiss, menu]);
-  const position = contextMenuPosition(menu.x, menu.y, window.innerWidth, window.innerHeight);
+  const [menuSize, setMenuSize] = useState({ width: 286, height: 320 });
+  useLayoutEffect(() => {
+    const bounds = ref.current?.getBoundingClientRect();
+    if (bounds) setMenuSize({ width: bounds.width, height: bounds.height });
+  }, [menu]);
+  const position = contextMenuPosition(menu.x, menu.y, window.innerWidth, window.innerHeight, menuSize.width, menuSize.height);
   return <div ref={ref} className="context-menu" role="menu" aria-label={`${menu.target.kind} actions`} style={{ left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
@@ -357,7 +363,7 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
     });
   };
   return <section className="sidebar-section spaces-section" aria-labelledby="spaces-heading">
-    <div className="sidebar-section-heading"><h2 id="spaces-heading">spaces</h2><button type="button" className="space-setup" aria-label="Set up a task Space" title="Set up a task Space" disabled={busy || !setupEnabled} onClick={onSetup}>+</button></div>
+    <div className="sidebar-section-heading"><h2 id="spaces-heading">Spaces</h2><span className="section-count">{spaces.length}</span><button type="button" className="space-setup" aria-label="Set up a task Space" title="Set up a task Space" disabled={busy || !setupEnabled} onClick={onSetup}><UiIcon name="plus" /></button></div>
     {dragMessage ? <p className="resource-inline-status" role="status">{dragMessage}</p> : null}
     <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row, index) => {
       const space = row.space;
@@ -389,26 +395,27 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
         {editingId === space.id
           ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
           : <button type="button" disabled={busy} draggable={!busy} className="resource-select" title={displayLabel} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
-            <span className="resource-icon" aria-hidden="true">{status.glyph}</span>
-            <span className="space-details"><span className="resource-label">{displayLabel}</span>{row.kind !== "child" && row.branch ? <span className="space-branch">{row.branch}</span> : null}</span>
+            <span className="resource-icon" title={status.className} aria-hidden="true">{row.kind === "parent" ? <UiIcon name="grid" /> : <span className="space-status-dot" />}</span>
+            <span className="space-details"><span className="resource-label">{displayLabel}</span></span>
           </button>}
         {row.kind === "parent" && row.repositoryKey
-          ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}>{row.expanded ? "⌄" : "›"}</button>
+          ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}><UiIcon name={row.expanded ? "down" : "right"} /></button>
           : null}
+        {space.id === selectedSpaceId && row.branch ? <div className="space-branch" title={row.branch}><UiIcon name="branch" />{row.branch}</div> : null}
       </div>;
     })}</div>
   </section>;
 }
 function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]; spaces: Space[]; tabs: Tab[]; selection: Selection; onSelect: (agent: Agent) => void }) {
   const orderedAgents = orderAgentsByHerdrPriority(agents);
-  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">agents</h2><span className="section-count">{orderedAgents.length}</span></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
+  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{orderedAgents.length}</span></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
     const location = [spaces.find((space) => space.id === agent.space_id)?.label, tabs.find((tab) => tab.id === agent.tab_id)?.label].filter(Boolean).join(" · ");
     const status = agent.status || "unknown";
     return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span><span className="agent-status">{status}</span></span></button>;
   })}</div></section>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, onEdit, onSelect, onContext, onCreate, onPaneMenu, onCommands, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, onEdit, onSelect, onContext, onCreate, onPaneMenu, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
@@ -420,12 +427,14 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, onEdit,
   onCreate: () => void;
   onPaneMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   onCommands: () => void;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
   mutate: Mutate;
 }) {
   const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
   const [dropMark, setDropMark] = useState<DropMark>(null);
   const [dragMessage, setDragMessage] = useState<string | null>(null);
-  return <nav className="tab-toolbar" aria-label="Tabs"><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
+  return <nav className="tab-toolbar" aria-label="Tabs"><button type="button" className="tab-sidebar-toggle" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="cockpit-sidebar" onClick={onToggleSidebar}><UiIcon name="sidebar" /></button><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
     const displayedNumber = index + 1;
     const redundantLabel = tabLabelIsRedundant(tab.label, displayedNumber);
     const accessibleLabel = redundantLabel ? `Tab ${displayedNumber}` : `Tab ${displayedNumber}: ${tab.label}`;
@@ -455,7 +464,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, onEdit,
         : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}>+</button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={busy || !paneAvailable} onClick={onPaneMenu}>Pane</button><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={busy || !paneAvailable} onClick={onPaneMenu}>Pane <UiIcon name="down" /></button><button type="button" className="tab-strip-action" onClick={onCommands}><UiIcon name="search" /> Commands</button></div>
   </nav>;
 }
 
@@ -507,10 +516,10 @@ function PaneView({ pane, label, selected, busy, controlAllowed, controlPending,
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     <header className="pane-header">
       <button type="button" className="pane-header-select" onClick={onSelect} title={title}>
-        <span className="pane-icon" aria-hidden="true">›</span><span className="pane-title">{title}</span>
+        <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{isGraphicalReview(renderer) ? "Review" : isGraphicalContext(renderer) ? "Files" : title}</span>{graphical ? <span className="pane-subtitle">/ {isGraphicalReview(renderer) ? "Local changes" : "Context"}</span> : null}
       </button>
       {controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null}
-      <button type="button" disabled={busy} className="pane-overflow" aria-label={`Pane actions for ${title}`} title="Pane actions" onClick={onMenu}>⋯</button>
+      <button type="button" disabled={busy} className="pane-overflow" aria-label={`Pane actions for ${title}`} title="Pane actions" onClick={onMenu}><UiIcon name="more" /></button>
     </header>
     {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
       onPointerDownCapture={(event) => {
@@ -611,10 +620,10 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => filtered.length === 0 ? 0 : (current + (event.key === "ArrowDown" ? 1 : filtered.length - 1)) % filtered.length); return; }
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
-  }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands">Esc</button></header><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
+  }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
     const groupActions = filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
-    return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => { const index = filtered.indexOf(action); return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><span className="command-row-label"><span>{action.label}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>; })}</section>;
+    return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => { const index = filtered.indexOf(action); return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{action.label}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>; })}</section>;
   })}</div><footer className="command-footer"><span>↑↓ move · Enter run · Esc close</span><button type="button" onClick={onSwitchSession}>Switch session…</button></footer></section></div>;
 }
 
@@ -720,13 +729,11 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
-function SidebarHeader({ session, sync, collapsed, narrow, onSession, onCollapse, onClose, closeRef }: {
+function SidebarHeader({ session, sync, narrow, onSession, onClose, closeRef }: {
   session: SessionSummary | undefined;
   sync: SessionState["sync"];
-  collapsed: boolean;
   narrow: boolean;
   onSession: () => void;
-  onCollapse: () => void;
   onClose: () => void;
   closeRef?: RefObject<HTMLButtonElement | null>;
 }) {
@@ -735,12 +742,11 @@ function SidebarHeader({ session, sync, collapsed, narrow, onSession, onCollapse
     <button type="button" className="session-selector" onClick={onSession} aria-label={`Switch session${session ? `, current ${session.label}` : ""}`} title={session?.label ?? "Switch session"}>
       <span className={`connection-mark ${sync === "live" ? "" : "is-disconnected"}`} aria-hidden="true">●</span>
       <span className="session-name">{session?.label ?? "No session"}</span>
-      <span className="session-state">{stateLabel}</span>
-      <span className="session-chevron" aria-hidden="true">⌄</span>
+      <span className="session-state">{sync === "live" ? "Session" : stateLabel}</span>
+      <span className="session-chevron" aria-hidden="true"><UiIcon name="down" /></span>
     </button>
     <div className="sidebar-header-actions">
-      <button type="button" className="sidebar-collapse" onClick={onCollapse} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button>
-      {narrow ? <button ref={closeRef} type="button" className="sidebar-close" onClick={onClose} aria-label="Close sidebar">×</button> : null}
+      {narrow ? <button ref={closeRef} type="button" className="sidebar-close" onClick={onClose} aria-label="Close sidebar"><UiIcon name="close" /></button> : null}
     </div>
   </header>;
 }
@@ -1193,34 +1199,34 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
       const browserReason = space.id === selection.spaceId ? undefined : "Select this Space first";
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}>Close</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}>Open browser</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}>Show browser</button><button role="menuitem" type="button" disabled={disabled || feedbackBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(openFeedback)}>Browser feedback</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} className="destructive" title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}>Close browser</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}>Review task cleanup…</button></ContextMenu>;
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}><UiIcon name="grid" />Open browser</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}><UiIcon name="grid" />Show browser</button><button role="menuitem" type="button" disabled={disabled || feedbackBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(openFeedback)}><UiIcon name="comment" />Browser feedback</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} className="destructive" title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}><UiIcon name="close" />Close browser</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Review task cleanup…</button></ContextMenu>;
     }
     if (menu.target.kind === "tab") {
       const tab = allTabs.find((candidate) => candidate.id === menu.target.id);
       if (!tab) return null;
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeTab(tab))}>Close</button></ContextMenu>;
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeTab(tab))}><UiIcon name="close" />Close</button></ContextMenu>;
     }
     const pane = snapshot?.panes.find((candidate) => candidate.id === menu.target.id);
     if (!pane) return null;
     const renderer = renderers.panes[pane.id];
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
       <p className="context-menu-heading" role="presentation">Pane</p>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}>Rename</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}>Split right</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}>Split down</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true))}><UiIcon name="sidebar" />Split right</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true))}><UiIcon name="sidebar" />Split down</button>
       <p className="context-menu-heading" role="presentation">Open view</p>
       {rendererActionDefinitions.map(({ id, label, direction, kind }) => {
         const capability = kind === "review" ? renderer?.presentation.can_open_review : kind === "files" ? renderer?.presentation.can_open_files : renderer?.presentation.can_open_context;
-        return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? "Select a pane with the required capability"} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}>{label}</button>;
+        return <button key={id} role="menuitem" type="button" disabled={disabled || !capability} title={renderer?.presentation.reason ?? "Select a pane with the required capability"} onClick={() => menuAction(() => { void renderers.open(pane.id, direction, kind === "context" ? undefined : kind); })}><UiIcon name="file" />{label}</button>;
       })}
       <p className="context-menu-heading" role="presentation">Advanced</p>
       <button role="menuitem" type="button" disabled={!renderer?.presentation.renderer} title={renderer?.presentation.reason} onClick={() => menuAction(() => renderers.choose(pane.id, (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? "terminal" : renderer?.presentation.renderer ?? "context"))}>{isGraphicalContext(renderer) || isGraphicalReview(renderer) ? "Show terminal view" : renderer?.presentation.renderer === "review" ? "Render as Review" : "Render as Context"}</button>
-      <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}>Refresh renderer detection</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}>Toggle zoom</button>
-      <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}>Swap...</button>
-      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}>Move...</button>
+      <button role="menuitem" type="button" onClick={() => menuAction(renderers.refresh)}><UiIcon name="refresh" />Refresh renderer detection</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" }))}><UiIcon name="expand" />Toggle zoom</button>
+      <button role="menuitem" type="button" disabled={disabled || panes.length < 2} onClick={() => menuAction(() => { setDialog({ kind: "swap", paneId: pane.id }); return true; })}><UiIcon name="right" />Swap...</button>
+      <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => { setDialog({ kind: "move", paneId: pane.id }); return true; })}><UiIcon name="right" />Move...</button>
       <div className="context-menu-separator" role="presentation" />
-      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}>Close</button>
+      <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closePane(pane))}><UiIcon name="close" />Close</button>
     </ContextMenu>;
   };
   const selectedRenderer = selection.paneId ? renderers.panes[selection.paneId] : undefined;
@@ -1246,21 +1252,21 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     }),
   ];
   const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;
-  const workbenchStyle: CSSProperties = { gridTemplateColumns: `${sidebarCollapsed ? 48 : sidebarWidth}px 5px minmax(0, 1fr)` };
+  const workbenchStyle: CSSProperties = { gridTemplateColumns: `${sidebarCollapsed ? 0 : sidebarWidth}px ${sidebarCollapsed ? 0 : 1}px minmax(0, 1fr)` };
   const sidebarClass = `sidebar${sidebarCollapsed ? " is-collapsed" : ""}`;
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
-    <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport && !drawerOpen}>
-      <SidebarHeader session={sidebarSession} sync={state.sync} collapsed={sidebarCollapsed} narrow={narrowViewport} onSession={openSessionChooser} onCollapse={toggleSidebarCollapsed} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} />
+    <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
+      <SidebarHeader session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} />
       <Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} />
       <Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={focusAgent} />
     </aside>
-    {!narrowViewport ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}
+    {!narrowViewport && !sidebarCollapsed ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}
       onKeyDown={(event) => { if (sidebarCollapsed) return; if (event.key === "Home") { event.preventDefault(); updateSidebarWidth(SIDEBAR_DEFAULT_WIDTH); } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateSidebarWidth(sidebarWidth + (event.key === "ArrowLeft" ? -8 : 8)); } }}
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
-      {narrowViewport ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={openDrawer}>☰ <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
+      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;

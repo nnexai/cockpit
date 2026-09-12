@@ -276,3 +276,37 @@
 @media (prefers-reduced-motion: reduce) {
   .setup-progress-track span { transition: none; }
 }
+
+.setup-dialog-compact { background: var(--surface); border-color: #3d4a5e; border-radius: 5px; }
+.setup-dialog-compact .setup-header { padding: 18px 20px; align-items: center; gap: 10px; }
+.setup-dialog-compact .setup-header h2 { font-size: 18px; line-height: 24px; letter-spacing: -.025em; }
+.setup-session { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 12px; }
+.setup-dialog-compact .setup-close { display: inline-flex; align-items: center; justify-content: center; min-height: 26px; width: 26px; padding: 4px; border: 0; background: transparent; color: var(--text-muted); }
+.setup-dialog-compact .setup-compact-form { padding: 18px 20px 0; }
+.setup-dialog-compact .setup-field { display: grid; grid-template-columns: 102px minmax(0, 1fr); align-items: center; gap: 12px; margin: 0 0 12px; }
+.setup-dialog-compact .setup-label { margin: 0; color: var(--text-secondary); font-size: 12px; font-weight: 400; }
+.setup-dialog-compact .setup-field input,
+.setup-dialog-compact .setup-field select { min-width: 0; min-height: 32px; padding: 7px 10px; font-size: 12px; }
+.setup-dialog-compact .setup-hint { display: none; }
+.setup-dialog-compact .setup-operation-choice button { min-height: 23px; padding: 2px 8px; }
+.setup-dialog-compact .setup-disclosure { margin: 0; padding: 11px 0; border: 0; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; }
+.setup-dialog-compact .setup-disclosure summary { padding: 0; border: 0; color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.setup-dialog-compact .setup-disclosure[open] > summary { margin-bottom: 14px; }
+.setup-dialog-compact .setup-disclosure .setup-field { margin: 0 0 12px; padding: 0; }
+.setup-dialog-compact .setup-actions { margin: 0 -20px; padding: 12px 20px; border-top: 1px solid var(--border); justify-content: flex-end; }
+.setup-dialog-compact .setup-actions button { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+.setup-dialog-compact .setup-actions button:first-child { margin-right: 0; }
+.setup-dialog-compact .setup-primary { background: #3568a8 !important; border-color: #5486c5 !important; color: white; }
+.setup-dialog-compact .setup-primary:hover:not(:disabled) { background: #4279bc !important; }
+.setup-dialog-compact .setup-primary:disabled { background: #283c54 !important; border-color: #3c516d !important; color: #c1ccdb; opacity: .62; }
+.setup-dialog-compact .setup-inline-status { margin: 0 0 12px 114px; font-size: 11px; }
+.setup-operation-summary { margin: 0 0 12px; line-height: 1.7; }
+.setup-dialog-compact .setup-config { border: 0; padding: 0; font-size: 11px; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .setup-overlay { padding: 12px; }
+  .setup-dialog-compact .setup-field { grid-template-columns: 1fr; gap: 6px; }
+  .setup-dialog-compact .setup-inline-status { margin-left: 0; }
+  .setup-dialog-compact .setup-header,
+  .setup-dialog-compact .setup-compact-form { padding-inline: 16px; }
+  .setup-dialog-compact .setup-actions { margin-inline: -16px; padding-inline: 16px; }
+}

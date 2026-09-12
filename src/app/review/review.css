@@ -10,12 +10,16 @@
 
 .review-toolbar {
   display: flex;
-  min-height: 36px;
+  min-height: 45px;
   align-items: center;
   gap: 6px;
   padding-block: 3px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--terminal-bg);
+
+  padding: 7px 12px;
+
+  flex: 0 0 auto;
 }
 .review-toolbar select,
 .review-toolbar input,
@@ -41,9 +45,17 @@
 .review-notice { margin: 0; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 .review-error { color: var(--blocked); }
 .review-warning { color: var(--working); }
-.review-body { display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(160px, 228px) minmax(0, 1fr); }
+.review-body { display: grid; min-height: 0; flex: 1; grid-template-columns: 204px minmax(0, 1fr); }
 .review-files { min-width: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--sidebar-bg); }
-.review-files > header { position: sticky; top: 0; z-index: 1; display: flex; min-height: 26px; align-items: center; justify-content: space-between; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--sidebar-bg); color: var(--text-secondary); }
+.review-files > header { position: sticky; top: 0; z-index: 1; display: flex; min-height: 38px; align-items: center; justify-content: flex-start; padding: 0 13px; border-bottom: 0; background: var(--sidebar-bg); color: var(--text-secondary);
+  font-size: 10px;
+
+  text-transform: uppercase;
+
+  letter-spacing: .08em;
+
+  gap: 8px;
+}
 .review-file-directory { margin: 0; }
 .review-file-directory > summary { height: auto; box-sizing: border-box; padding: 2px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); cursor: pointer; }
 .review-file-directory > summary::marker { color: var(--text-muted); }
@@ -57,13 +69,21 @@
 
 .review-diff { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: auto; outline: none; }
 .review-diff:focus-visible { box-shadow: inset 0 0 0 2px var(--focus-strong); }
-.review-diff > header { display: flex; min-height: 36px; align-items: center; gap: 10px; padding-block: 6px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.review-diff > header { display: flex; min-height: 45px; align-items: center; gap: 10px; padding-block: 6px; border-bottom: 1px solid var(--border); color: var(--text-secondary);
+  padding: 14px 20px;
+
+  flex: 0 0 auto;
+}
 .review-diff > header code { min-width: 0; flex: 1; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
 .review-diff > header strong { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .review-hunk { outline: none; }
 .review-hunk.is-current > header,
 .review-hunk:focus > header { background: var(--surface-selected); color: var(--text-primary); }
-.review-hunk > header { padding-block: 4px; background: var(--surface); color: var(--text-secondary); }
+.review-hunk > header { padding-block: 4px; background: #1c293a; color: #acbfd8;
+  padding: 8px 20px;
+
+  font: 11px ui-monospace, "DejaVu Sans Mono", monospace;
+}
 .review-line { display: grid; width: 100%; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .review-line:hover { background: var(--surface-hover); }
 .review-line.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
@@ -74,7 +94,7 @@
 .review-token.is-string { color: var(--idle); }
 .review-token.is-keyword { color: var(--accent); }
 .review-token.is-number { color: var(--working); }
-.review-line.is-added { background-color: color-mix(in srgb, var(--idle) 14%, transparent); }
+.review-line.is-added { background-color: #152c26; }
 .review-line.is-deleted { background-color: color-mix(in srgb, var(--blocked) 14%, transparent); }
 .review-line.is-added.is-selected,
 .review-line.is-deleted.is-selected { background: var(--surface-selected); }
@@ -102,14 +122,18 @@
 
 .review-status {
   display: flex;
-  min-height: 24px;
+  min-height: 43px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 8px;
+  padding: 5px 16px;
   border-top: 1px solid var(--border);
-  background: var(--surface);
+  background: #121923;
   color: var(--text-secondary);
+
+  font-size: 11px;
+
+  flex: 0 0 auto;
 }
 .review-status kbd { color: var(--text-primary); font: inherit; }
 .review-status-actions { display: flex; align-items: center; gap: 4px; }

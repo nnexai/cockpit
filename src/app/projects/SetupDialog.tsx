@@ -1,3 +1,4 @@
+import { UiIcon } from "../UiIcon";
 import {
   useCallback,
   useEffect,
@@ -567,41 +568,46 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
 
   const onTextField = (key: TextField, manuallyEdited = false) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => updateText(key, event.currentTarget.value, manuallyEdited);
   const onFocusChange = (event: ChangeEvent<HTMLInputElement>) => updateFocus(event.currentTarget.checked);
+  const selectedRepository = repositories.find((repository) => repository.repository_id === form.repositoryId);
   const sourceRepositories = sourceState.defaults?.repositories ?? repositories;
-  const parentRepository = selectedParent ? resolveParentRepository(repositories, selectedParent) : null;
   const diagnosticsWithLoad = loadError ? [{ code: "configuration_unavailable", message: loadError, path: null }] : diagnostics;
   const editingLocked = dispatchRef.current;
 
   if (!open) return null;
   return <div className="setup-overlay" role="presentation">
     <section className="setup-dialog setup-dialog-compact" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}>
-      <header className="setup-header"><div><span className="setup-eyebrow">New task Space</span><h2 id={titleId}>Set up a workspace</h2></div><button type="button" className="setup-close" onClick={handleClose} aria-label="Close setup dialog">Close</button></header>
+      <header className="setup-header"><h2 id={titleId}>New Space</h2><span className="setup-session">{sessionId}</span><button type="button" className="setup-close" onClick={handleClose} aria-label="Close setup dialog"><UiIcon name="close" /></button></header>
       <main className="setup-body"><section className="setup-step-content setup-compact-form">
-        <div className="setup-choice-grid setup-operation-choice">
-          <button type="button" className={form.mode === "create" ? "is-selected" : ""} aria-pressed={form.mode === "create"} onClick={() => setMode("create")} disabled={editingLocked}><strong>New worktree</strong><span>Create a linked task checkout.</span></button>
-          <button type="button" className={form.mode === "open" ? "is-selected" : ""} aria-pressed={form.mode === "open"} onClick={() => setMode("open")} disabled={editingLocked}><strong>Existing directory</strong><span>Open a directory as it is.</span></button>
-        </div>
+        {form.mode === "create" ? <>
+          <Field label="Issue / MR URL" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onTextField("artifactUrl")} placeholder="Optional URL" disabled={editingLocked} /></Field>
+          {sourceState.pending ? <p className="setup-inline-status">Resolving source defaults…</p> : null}
+          {sourceState.error ? <p className="setup-error" role="alert">{sourceState.error}</p> : null}
+          {loadState === "ready" ? <Field label="Repository" htmlFor="setup-repository"><select id="setup-repository" value={form.repositoryId} onChange={onTextField("repositoryId", true)} disabled={editingLocked}><option value="">Select repository</option>{sourceRepositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.name}</option>)}</select></Field> : null}
+        </> : null}
+        <div className="setup-field"><span className="setup-label" id="setup-operation-label">Operation</span><div className="viewer-segmented setup-operation-choice" role="group" aria-labelledby="setup-operation-label">
+          <button type="button" aria-pressed={form.mode === "create"} onClick={() => setMode("create")} disabled={editingLocked}>New worktree</button>
+          <button type="button" aria-pressed={form.mode === "open"} onClick={() => setMode("open")} disabled={editingLocked}>Existing directory</button>
+        </div></div>
         {form.mode === "open" ? <>
-          <Field label="Directory" htmlFor="setup-checkout"><input id="setup-checkout" value={form.openPath} onChange={onTextField("openPath", true)} placeholder="/absolute/path/to/directory" aria-invalid={Boolean(pathError)} aria-describedby={pathError ? "setup-path-error" : undefined} disabled={editingLocked} /></Field>
+          <Field label="Path" htmlFor="setup-checkout"><input id="setup-checkout" value={form.openPath} onChange={onTextField("openPath", true)} placeholder="/absolute/path/to/directory" aria-invalid={Boolean(pathError)} aria-describedby={pathError ? "setup-path-error" : undefined} disabled={editingLocked} /></Field>
           {pathError ? <p id="setup-path-error" className="setup-error" role="alert">{pathError}</p> : null}
-          <Field label="Space name" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder="Defaults to directory name" disabled={editingLocked} /></Field>
-          <p className="setup-inline-status">Uses this directory as-is.</p>
+          <Field label="Space name" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder="Defaults to directory name" disabled={editingLocked} /></Field>
+
         </> : <>
           {loadState === "loading" ? <p className="setup-empty">Loading local repositories…</p> : null}
           {loadState === "error" ? <div className="setup-empty setup-empty-error"><strong>Could not load project setup</strong><p>{loadError}</p><button type="button" onClick={() => setRequestRefresh((value) => value + 1)} disabled={editingLocked}>Reload</button></div> : null}
           {loadState === "empty" ? <p className="setup-empty">No configured local repositories are available.</p> : null}
-          {loadState === "ready" ? <Field label="Repository" htmlFor="setup-repository"><select id="setup-repository" value={form.repositoryId} onChange={onTextField("repositoryId", true)} disabled={editingLocked}><option value="">Choose a repository</option>{sourceRepositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.name} · {repository.root}</option>)}</select></Field> : null}
-          {selectedParent && loadState === "ready" ? <p className={`setup-selected-note${parentRepository ? "" : " setup-parent-warning"}`}>{parentRepository ? `Opened from ${selectedParent.label}.` : `No configured repository matches ${selectedParent.label}.`}</p> : null}
-          <Field label="Issue or review URL" hint="optional" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onTextField("artifactUrl")} placeholder="https://provider.example/owner/repository/issues/42" disabled={editingLocked} /></Field>
-          {sourceState.pending ? <p className="setup-inline-status">Resolving source defaults…</p> : null}
-          {sourceState.error ? <p className="setup-error" role="alert">{sourceState.error}</p> : null}
-          {sourceState.defaults?.artifact ? <p className="setup-inline-status is-valid">Resolved {sourceState.defaults.artifact.kind} · {sourceState.defaults.artifact.canonical_id}</p> : null}
-          <Field label="Branch" hint="optional" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onTextField("branch", true)} placeholder="Configured default" disabled={editingLocked} /></Field>
-          <Field label="Space name" hint="optional" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder={form.branch || "Defaults to branch"} disabled={editingLocked} /></Field>
-          <details className="setup-disclosure"><summary>Advanced</summary><Field label="Base revision" hint="optional" htmlFor="setup-base"><input id="setup-base" value={form.base} onChange={onTextField("base")} placeholder="Configured default" disabled={editingLocked} /></Field><Field label="Destination" hint="optional" htmlFor="setup-destination"><input id="setup-destination" value={form.checkoutPath} onChange={onTextField("checkoutPath", true)} placeholder="Automatic backend default" disabled={editingLocked} /></Field></details>
+          <Field label="Branch" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onTextField("branch", true)} placeholder="Configured default" disabled={editingLocked} /></Field>
+          <Field label="Space name" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder={form.branch || "Defaults to branch"} disabled={editingLocked} /></Field>
+          <details className="setup-disclosure"><summary>Advanced</summary><Field label="Base" htmlFor="setup-base"><input id="setup-base" value={form.base} onChange={onTextField("base")} placeholder="Configured default" disabled={editingLocked} /></Field><Field label="Destination" htmlFor="setup-destination"><input id="setup-destination" value={form.checkoutPath} onChange={onTextField("checkoutPath", true)} placeholder="Automatic backend default" disabled={editingLocked} /></Field></details>
         </>}
-        <label className="setup-focus"><input type="checkbox" checked={form.focus} onChange={onFocusChange} disabled={editingLocked} /> Focus the resulting Space and terminal</label>
-        {configuration || diagnosticsWithLoad.length > 0 ? <details className="setup-disclosure"><summary>Configuration</summary>{configuration ? <div className="setup-config">Worktrees <code>{configuration.worktree_root}</code></div> : null}<DiagnosticList diagnostics={diagnosticsWithLoad} /></details> : null}
+        <details className="setup-disclosure"><summary>Operation details</summary>
+          <p className="setup-operation-summary">{form.mode === "create" ? "Create a linked worktree, a Herdr Space, and companion context. Configured repository actions run automatically." : "Open this directory in a Herdr Space. The directory and its files remain yours."}</p>
+          {selectedRepository ? <p className="setup-selected-note"><code>{selectedRepository.root}</code></p> : null}
+          <label className="setup-focus"><input type="checkbox" checked={form.focus} onChange={onFocusChange} disabled={editingLocked} /> Focus the resulting Space and terminal</label>
+          {configuration ? <div className="setup-config">Worktrees <code>{configuration.worktree_root}</code></div> : null}
+          <DiagnosticList diagnostics={diagnosticsWithLoad} />
+        </details>
         {planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}
         {planState.plan ? <PlanDetails plan={planState.plan} /> : null}
         {operation ? <Progress operation={operation} readError={operationReadError} busy={actionPending} onCancel={cancel} onResume={resume} onReview={reconcile} /> : null}

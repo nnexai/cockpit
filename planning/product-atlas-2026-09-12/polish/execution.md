@@ -45,3 +45,11 @@ Provider matching, ambiguity, issue metadata and review source branches have fix
 Run `python3 scripts/verify/ui_polish_runtime.py start` for a disposable Herdr session, gateway, Git/plain files and HTTP annotation fixture. Read its `runtime.json` and gateway log for exact URLs. Copy installed Files/Review plugins into that root's isolated Herdr configuration for graphical viewer scenarios.
 
 Set `COCKPIT_EXTENSION_FIXTURE` to its `fixture_url`, optionally set `COCKPIT_EXTENSION_EVIDENCE`, then run `node scripts/verify/ui_polish_extension.mjs`. It uses the machine-installed Playwright CLI module and removes its own profile. Run `python3 scripts/verify/ui_polish_runtime.py stop /tmp/cpol-…` to stop only matching fixture processes; evidence remains on disk.
+
+## Visual correction, September 13
+
+The initial implementation did not follow the mock closely enough. This pass applies its 41px tab strip, 33px pane headers, sidebar hierarchy and typography, SVG icons, tab-bar sidebar toggle, menu proportions, file-tree widths, document typography, segmented viewer controls, and aligned compact setup fields. Companion content search and additional Review navigation remain available through disclosures.
+
+Review scroll events now record position without writing it back to the scroller. Focus restoration uses `preventScroll`. The initial file inventory now includes Git line counts, including renamed paths, and bounded readable untracked-file counts. Binary or unavailable counts remain unspecified.
+
+Validation was deliberately limited at the user's request: frontend production build, one focused scroll/focus regression, and one real-Git inventory-count regression passed. Final visual acceptance belongs to the user; no extended browser/native verification session was run.
