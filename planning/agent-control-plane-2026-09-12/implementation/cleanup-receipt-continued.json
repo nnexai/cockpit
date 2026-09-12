@@ -1,0 +1,18 @@
+{
+  "captured_at": "2026-09-12T20:11:00+02:00",
+  "action": "second pass over older run-owned proof browsers",
+  "stopped_playwright_daemons": [
+    {"session": "csu12-review", "pid": 3585593},
+    {"session": "csu12-review3", "pid": 3631523},
+    {"session": "csu12-review4", "pid": 3655679},
+    {"session": "csu12-setup", "pid": 3521310}
+  ],
+  "verified_preserved": {
+    "root_final_browser_session": "cf12",
+    "root_final_gateway_pid": 735066,
+    "root_final_herdr_pid": 733779,
+    "user_gateway_pid": 191105,
+    "user_app_pid": 2523753
+  },
+  "scope": "Only stale csu12 proof daemons were stopped; no files, fixtures, or evidence were deleted."
+}
