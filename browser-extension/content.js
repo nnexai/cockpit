@@ -3,7 +3,7 @@
   globalThis.__cockpitFeedbackLoaded = true;
   const runtime = chrome.runtime;
   const MAX_POINTS = 8192; const MAX_ANNOTATIONS = 64; const MAX_ANCHORS_PER_ANNOTATION = 4; const GEOMETRY_EPSILON = 1; const FREEHAND_TOLERANCE = 1.5;
-  const state = { documentId: null, tabId: null, mode: 'browse', tool: 'freehand', annotations: [], selected: null, editing: false, composing: false, alignmentDirty: false, reviewed: false, alignmentReason: null, captureAnyway: false, drawing: null, capture: null };
+  const state = { documentId: null, tabId: null, mode: 'browse', tool: 'freehand', annotations: [], selected: null, editing: false, composing: false, notesOpen: false, alignmentDirty: false, reviewed: false, alignmentReason: null, captureAnyway: false, drawing: null, capture: null };
   const anchorRefs = new Map();
   let capturedPointerId = null;
   let geometryBaseline = null;
@@ -75,7 +75,47 @@
   document.documentElement.append(host);
   if (typeof host.showPopover === 'function') { try { host.showPopover(); } catch {} }
   const controls = shadow.querySelector('.controls'); const textarea = shadow.querySelector('textarea'); const hint = shadow.querySelector('.hint'); const marks = shadow.querySelector('.marks'); const reviewButton = shadow.querySelector('.review'); const hoverOutline = shadow.querySelector('.hover-outline');
+  const polishStyles = document.createElement('style');
+  polishStyles.textContent = `
+    .controls { opacity: .45; transition: opacity 120ms ease; }
+    .controls:hover, .controls:has(:focus-visible) { opacity: 1; }
+    .mark { stroke-width: 3; }
+    .mark.region { stroke-width: 2; }
+    .notes-toggle, .notes-sidebar { position: fixed; z-index: 2147483647; pointer-events: auto; background: #fff; color: #17212b; border: 1px solid #91a0ae; border-radius: 6px; box-shadow: 0 4px 16px #0004; font: 12px/1.3 system-ui, sans-serif; }
+    .notes-toggle { top: 52px; right: 8px; padding: 6px 8px; cursor: pointer; }
+    .notes-toggle:hover, .notes-toggle:focus-visible { background: #edf2f8; }
+    .notes-sidebar { top: 52px; right: 8px; width: min(280px, calc(100vw - 16px)); max-height: min(460px, calc(100vh - 60px)); padding: 8px; overflow: auto; }
+    .notes-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; font-weight: 600; }
+    .notes-heading button, .notes-list button, .notes-clear { font: inherit; color: inherit; border: 1px solid #91a0ae; border-radius: 4px; background: #fff; cursor: pointer; }
+    .notes-heading button { padding: 3px 6px; }
+    .notes-list { display: grid; gap: 5px; }
+    .notes-list button { width: 100%; padding: 7px; text-align: left; }
+    .notes-list button:hover, .notes-list button:focus-visible, .notes-list button.selected { background: #edf2f8; border-color: #1769aa; }
+    .notes-list strong, .notes-list span { display: block; }
+    .notes-list strong { margin-bottom: 2px; font-size: 11px; text-transform: capitalize; }
+    .notes-list span { overflow: hidden; color: #526170; text-overflow: ellipsis; white-space: nowrap; }
+    .notes-empty { margin: 4px 0; color: #526170; }
+    .notes-clear { width: 100%; margin-top: 8px; padding: 6px; color: #9b2f2f; }
+    .notes-clear:disabled { cursor: default; opacity: .45; }
+  `;
+  shadow.append(polishStyles);
+  const notesToggle = document.createElement('button');
+  notesToggle.className = 'notes-toggle'; notesToggle.type = 'button'; notesToggle.textContent = 'Notes'; notesToggle.setAttribute('aria-expanded', 'false'); notesToggle.setAttribute('aria-controls', 'cockpit-annotation-notes');
+  const notesSidebar = document.createElement('aside');
+  notesSidebar.className = 'notes-sidebar'; notesSidebar.id = 'cockpit-annotation-notes'; notesSidebar.hidden = true; notesSidebar.setAttribute('aria-label', 'Annotation notes');
+  const notesHeading = document.createElement('div'); notesHeading.className = 'notes-heading';
+  const notesTitle = document.createElement('span'); notesTitle.textContent = 'Notes';
+  const notesClose = document.createElement('button'); notesClose.type = 'button'; notesClose.textContent = 'Close'; notesClose.setAttribute('aria-label', 'Close annotation notes');
+  notesHeading.append(notesTitle, notesClose);
+  const notesList = document.createElement('div'); notesList.className = 'notes-list';
+  const clearNotes = document.createElement('button'); clearNotes.className = 'notes-clear'; clearNotes.type = 'button'; clearNotes.textContent = 'Clear all annotations';
+  notesSidebar.append(notesHeading, notesList, clearNotes);
+  shadow.append(notesToggle, notesSidebar);
   controls.setAttribute('role', 'toolbar');
+  controls.addEventListener('pointerup', (event) => {
+    const button = event.composedPath().find((node) => node?.tagName === 'BUTTON');
+    button?.blur();
+  });
   hint.style.position = 'fixed'; hint.style.top = '40px'; hint.style.right = '8px';
   const editor = shadow.querySelector('.editor');
   const addText = shadow.querySelector('.add-text');
@@ -228,7 +268,20 @@
     syncObservedAnchors();
   }
   function setHint(text, visible = true) { hint.textContent = text; hint.hidden = !visible; }
-  function setMode(mode, visible = mode === 'annotate') { const nextMode = mode === 'annotate' ? 'annotate' : 'browse'; if (state.mode === 'annotate' && nextMode === 'browse') { releaseDrawingPointer(); state.drawing = null; hoveredElement = null; } state.mode = nextMode; surface.style.pointerEvents = state.mode === 'annotate' ? 'auto' : 'none'; controls.hidden = !visible; for (const button of shadow.querySelectorAll('[data-tool]')) { const active = button.dataset.tool === state.tool && state.mode === 'annotate'; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); } setHint(state.mode === 'annotate' ? 'Draw, pick an element, or drag a region. V Select, E Element, R Region, F Freehand.' : '', false); render(); }
+  function setMode(mode, visible = mode === 'annotate') {
+    const nextMode = mode === 'annotate' ? 'annotate' : 'browse';
+    if (state.mode === 'annotate' && nextMode === 'browse') { releaseDrawingPointer(); state.drawing = null; hoveredElement = null; state.notesOpen = false; }
+    state.mode = nextMode;
+    surface.style.pointerEvents = state.mode === 'annotate' ? 'auto' : 'none';
+    controls.hidden = !visible;
+    notesToggle.hidden = !visible;
+    for (const button of shadow.querySelectorAll('[data-tool]')) {
+      const active = button.dataset.tool === state.tool && state.mode === 'annotate';
+      button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
+    }
+    setHint(state.mode === 'annotate' ? 'Draw, pick an element, or drag a region. V Select, E Element, R Region, F Freehand.' : '', false);
+    render();
+  }
   function markBounds(annotation) {
     if (annotation.bounds) return annotation.bounds;
     const first = annotation.points[0] || { x: scrollX, y: scrollY };
@@ -239,6 +292,27 @@
   function positionBeside(element, bounds, vp) {
     element.style.left = `${Math.max(8, Math.min(bounds.x - vp.scroll_x, vp.width - element.offsetWidth - 12))}px`;
     element.style.top = `${Math.max(8, Math.min(bounds.y + bounds.height - vp.scroll_y + 8, vp.height - element.offsetHeight - 12))}px`;
+  }
+  function annotationSummary(annotation) { return annotation.comment || `${annotation.kind} mark`; }
+  function renderNotes() {
+    const visible = state.mode === 'annotate' && !controls.hidden && !state.capture;
+    notesToggle.hidden = !visible;
+    notesToggle.textContent = state.annotations.length ? `Notes (${state.annotations.length})` : 'Notes';
+    notesToggle.setAttribute('aria-expanded', String(state.notesOpen));
+    notesSidebar.hidden = !visible || !state.notesOpen;
+    notesTitle.textContent = `Notes (${state.annotations.length})`;
+    notesList.replaceChildren();
+    if (!state.annotations.length) {
+      const empty = document.createElement('p'); empty.className = 'notes-empty'; empty.textContent = 'No annotations yet.'; notesList.append(empty);
+    } else {
+      for (const annotation of state.annotations) {
+        const item = document.createElement('button'); item.type = 'button'; item.classList.toggle('selected', annotation.id === state.selected);
+        const kind = document.createElement('strong'); kind.textContent = annotation.kind;
+        const summary = document.createElement('span'); summary.textContent = annotationSummary(annotation);
+        item.append(kind, summary); item.addEventListener('click', () => revisitAnnotation(annotation.id)); notesList.append(item);
+      }
+    }
+    clearNotes.disabled = !state.annotations.length || Boolean(state.capture);
   }
   function render() {
     shadow.querySelectorAll('.comment').forEach((item) => item.remove());
@@ -286,8 +360,25 @@
         hoverOutline.style.width = `${rect.width}px`; hoverOutline.style.height = `${rect.height}px`;
       } else { hoverOutline.hidden = true; hoverOutline.style.display = 'none'; }
     } else { hoverOutline.hidden = true; hoverOutline.style.display = 'none'; }
+    renderNotes();
   }
   function select(id, edit = false) { state.selected = id; state.editing = edit; textarea.value = state.annotations.find(item => item.id === id)?.comment || ''; render(); if (edit) textarea.focus(); }
+  function revealAnnotation(annotation) {
+    const anchor = annotation.kind === 'element' ? restoreElementAnchor(annotation) : null;
+    if (anchor) anchor.scrollIntoView({ block: 'center', inline: 'center' });
+    else {
+      const bounds = markBounds(annotation);
+      scrollTo({ left: Math.max(0, bounds.x - innerWidth / 2), top: Math.max(0, bounds.y - innerHeight / 2) });
+    }
+    requestAnimationFrame(() => { render(); textarea.focus(); });
+  }
+  function revisitAnnotation(id) {
+    const annotation = state.annotations.find(item => item.id === id);
+    if (!annotation) return;
+    select(id, true); revealAnnotation(annotation);
+  }
+  notesToggle.addEventListener('click', () => { state.notesOpen = !state.notesOpen; render(); });
+  notesClose.addEventListener('click', () => { state.notesOpen = false; render(); notesToggle.focus(); });
   function persist() { send({ type: 'draft', draft: { tab_id: state.tabId, document_id: state.documentId, url: location.href, title: bounded(document.title, 300), annotations: state.annotations, viewport: viewport(), alignment_dirty: state.alignmentDirty, updated_at: new Date().toISOString() } }).catch(error => setHint(`Draft not saved: ${error.message}`)); }
   function add(annotation, anchor = null) {
     if (state.annotations.length >= MAX_ANNOTATIONS) { setHint('The 64 annotation limit has been reached.'); return; }
@@ -357,7 +448,15 @@
       geometryBaseline = null; state.alignmentDirty = false; state.reviewed = false; state.alignmentReason = null; state.captureAnyway = false;
     }
   }
+  function clearAnnotations() {
+    if (!state.annotations.length) return;
+    for (const annotation of state.annotations) forgetAnnotation(annotation.id);
+    state.annotations = []; anchorRefs.clear(); geometryBaseline = null;
+    state.selected = null; state.editing = false; state.alignmentDirty = false; state.reviewed = false; state.alignmentReason = null; state.captureAnyway = false;
+    textarea.value = ''; setHint('All annotations removed.'); render(); persist();
+  }
   shadow.querySelector('.remove').addEventListener('click', () => { if (!state.selected) return; removeAnnotation(state.selected); state.selected = null; textarea.value = ''; render(); persist(); });
+  clearNotes.addEventListener('click', clearAnnotations);
   textarea.addEventListener('input', () => { const selected = state.annotations.find(item => item.id === state.selected); if (selected) { selected.comment = bounded(textarea.value, 4000); render(); persist(); } });
   addText.addEventListener('click', () => select(state.selected, true));
   function finishEditing() { state.editing = false; hoveredElement = null; render(); persist(); }
@@ -507,6 +606,7 @@
       const capture = { annotations: structuredClone(state.annotations), viewport: vp, geometryBaseline: makeGeometryBaseline(false, vp), allowLayoutDrift, url: location.href, title: bounded(document.title, 300), document_id: state.documentId, captured_at: new Date().toISOString(), invalidated: false, monitorFrame: null };
       state.capture = capture;
       controls.hidden = true;
+      notesToggle.hidden = true; notesSidebar.hidden = true;
       editor.hidden = true; addText.hidden = true;
       watchCapture(capture);
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
