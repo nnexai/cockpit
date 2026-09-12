@@ -570,7 +570,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const directoryPathForFile = selectedPath?.includes("/") ? selectedPath.slice(0, selectedPath.lastIndexOf("/")) : "";
   const selectedDirectory = root ? directories[keyFor(root.root_id, directoryPathForFile)] : undefined;
   const selectedEntry = selectedDirectory?.data?.entries.find((entry) => (entry.path ?? (directoryPathForFile ? `${directoryPathForFile}/${entry.name}` : entry.name)) === selectedPath);
-  const selectedRevision = selectedEntry?.revision ?? null;
+  const selectedRevision = selectedEntry?.revision ?? selectedFileState?.revision ?? null;
   const documentState = selectedKey ? documents[selectedKey] : undefined;
   const protectedDirectoryKeys = new Set<string>();
   if (root) {
