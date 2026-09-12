@@ -1,50 +1,18 @@
 {
-  "increment": "packet12-workspace-context-review",
+  "increment": "packet12-real-checkout-correction",
   "status": "PASS",
+  "browser": {"session": "cockpit-focus-baseline-20260912", "gateway": "http://127.0.0.1:4190/", "herdr_session": "cockpit-real-20260912", "herdr_version": "0.9.0", "run_root": "/tmp/cockpit-real-20260912"},
+  "repository": {"root": "/tmp/cockpit-real-20260912/cockpit-repo", "common_dir": "/tmp/cockpit-real-20260912/cockpit-repo/.git", "origin": "https://github.com/nnexai/cockpit.git", "preserved_internal_origin": "https://192.168.50.166:9400/nnex/cockpit.git"},
+  "setup": {"operation_id": "6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1", "workspace_id": "w3", "checkout": "/tmp/cockpit-real-20260912/worktrees/cockpit-repo-6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1", "companion": "/tmp/cockpit-real-20260912/companions/6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1", "artifact": "nnexai/cockpit#4", "asset_bytes": 8993, "asset_sha256": "7611f2aac6ea7a3597df8780cbb15d8f7c2e95942c8263a9461c0b38c4e819cc", "tracked_edits": ["docs/discovery-limits.md", "src/app/styles.css"], "untracked_edit": "packet12-notes.txt"},
+  "retry": {"operation_id": "7d615383-5607-4526-8e8f-2dace14a766e", "failure_state": "partial/context_preparing", "failure_code": "source_import_busy", "failure_after_resources": true, "workspace_id": "w4", "checkout": "/tmp/cockpit-real-20260912/worktrees/cockpit-repo-7d615383-5607-4526-8e8f-2dace14a766e", "companion": "/tmp/cockpit-real-20260912/companions/7d615383-5607-4526-8e8f-2dace14a766e", "retry_result": "completed", "asset_bytes_after_retry": 8993, "same_resource_ids": true},
+  "recovery": {"mode": "Open existing checkout", "borrowed_checkout": "/tmp/cockpit-real-20260912/worktrees/cockpit-repo-6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1", "borrowed_companion": "/tmp/cockpit-real-20260912/companions/6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1", "saved_batch_selected": true, "explicit_reattach": true, "restored_anchors": ["docs/discovery-limits.md:22", "docs/discovery-limits.md (whole file)"], "restored_text": ["Real tracked edit line review", "Real tracked file review"], "preview_includes_actual_anchor": true, "source_changed_requires_stale_review": true},
   "viewports": [
-    {"width": 1440, "height": 900, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 63},
-    {"width": 1280, "height": 800, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 24},
-    {"width": 1024, "height": 768, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 0},
-    {"width": 480, "height": 900, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 0}
+    {"width": 1440, "height": 900, "review_diff_width": 290.734375, "review_diff_height": 778, "context_document_width": 375.734375, "context_document_height": 815, "source_role": true, "diff_role": true},
+    {"width": 800, "height": 1000, "review_diff_width": 136.65625, "review_diff_height": 878, "context_document_width": 286, "context_document_height": 71.1875, "source_role": true, "diff_role": true},
+    {"width": 600, "height": 900, "review_diff_width": 90.4375, "review_diff_height": 778, "context_document_width": 190, "context_document_height": 94.375, "source_role": true, "diff_role": true},
+    {"width": 480, "height": 900, "review_diff_width": 113.546875, "review_diff_height": 400, "context_document_width": 238, "context_document_height": 94.375, "source_role": true, "diff_role": true},
+    {"width": 360, "height": 900, "review_diff_width": 84.65625, "review_diff_height": 400, "context_document_width": 178, "context_document_height": 94.375, "source_role": true, "diff_role": true}
   ],
-  "browser": {
-    "session": "cockpit-focus-baseline-20260912",
-    "gateway": "http://127.0.0.1:4189/",
-    "herdr_session": "cockpit-focus-20260912",
-    "herdr_version": "0.9.0",
-    "protocol": 22,
-    "schema": 1,
-    "run_root": "/tmp/cockpit-focus-20260912"
-  },
-  "setup": {
-    "operation_id": "f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
-    "workspace_id": "w5",
-    "tab_id": "w5:t2",
-    "pane_id": "w5:p3",
-    "companion_id": "f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
-    "checkout": "/tmp/cockpit-focus-20260912/worktrees/fixture-repo-f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
-    "companion": "/tmp/cockpit-focus-20260912/companions/f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
-    "artifact": "nnexai/cockpit#4",
-    "asset_bytes": 8993,
-    "asset_comments": 3,
-    "asset_sha256": "817ad895f73e6f284d9185cbd98593794c381fc6d3d55b27862f67c617ab4b4a"
-  },
-  "browser_checks": {
-    "context": "PASS: Open Context from the created checkout terminal rendered the fetched issue asset under the companion root",
-    "review": "PASS: graphical Review showed two tracked edits and one untracked file; line and whole-file comments saved",
-    "refresh": "PASS: Review refresh retained selected file and both comments",
-    "target_changes": "PASS: tracked-b then tracked-a navigation returned to the selected file with comments intact",
-    "tab_return": "PASS: Tab 1 to Tab 2 retained selected file, review state, and both comments",
-    "preview": "PASS: comment overview preview refreshed to both anchors/text"
-  },
-  "gates": [
-    "cargo test -p cockpit-core projects::tests: 4 passed, 103 filtered",
-    "cargo build -p cockpit-host: PASS",
-    "bun run test -- src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx src/app/projects/SetupDialog.stale.test.ts src/client/projectProtocol.test.ts src/app/paneRenderers.test.tsx: 5 files, 25 passed",
-    "bun run build: PASS, tsc --noEmit and Vite 316 modules"
-  ],
-  "deferred": [
-    "Native constructor runtime coverage: INCONCLUSIVE/deferred",
-    "Full packet matrix and automatic zero-click draft rebind: INCONCLUSIVE/deferred"
-  ]
+  "gates": ["bunx vitest run src/app/context/ContextViewer.test.tsx src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx: 3 files, 20 passed", "bun run build: tsc --noEmit and Vite 316 modules passed", "cargo test -p cockpit-core companion_checkout_match_is_exact_and_unambiguous: 1 passed, 106 filtered; integration target 0 run, 20 filtered"],
+  "deferred": ["Native constructor runtime coverage: INCONCLUSIVE", "Full packet matrix: deferred", "Automatic zero-click draft rebinding: deferred; explicit Reattach passed"]
 }

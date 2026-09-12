@@ -1019,6 +1019,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       <header className="context-toolbar">
         <div className="context-breadcrumb" title={root.path}>{root.label}</div>
         {presentation.roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = presentation.roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{presentation.roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
+        <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file">Files</button>
         <span className="context-toolbar-spacer" />
 
         <button type="button" onClick={refresh} aria-label="Refresh Context files">Refresh</button>

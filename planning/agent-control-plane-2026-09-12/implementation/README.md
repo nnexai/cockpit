@@ -29,17 +29,24 @@ Validation:
 
 Direct task setup with an issue URL, ready-state transitions, and opening the prepared Context directly remain deferred to Packet 12. Native coverage is not applicable to this provider-only increment.
 
-## Packet 12 integrated increment
+## Packet 12 fixture increment
 
-Status: **PASS** for the scoped browser workflow. The real setup dialog created linked checkout `/tmp/cockpit-focus-20260912/worktrees/fixture-repo-f3136c9f-c08d-4c0a-83fb-e7ee8c363528`, companion `f3136c9f-c08d-4c0a-83fb-e7ee8c363528`, and context terminal from `https://github.com/nnexai/cockpit/issues/4`. The operation reached `completed`; the companion asset is 8,993 bytes with three GitHub comments. Opening Context from that terminal rendered the asset, and graphical Review showed two tracked edits plus one untracked file.
+Status: **PASS** for the earlier disposable fixture only. It proved the imported issue asset, direct Context opening, graphical Review, and draft preview behavior. It used an empty fixture checkout and therefore does not establish the real Cockpit checkout workflow.
 
-Review line and whole-file drafts saved, preview refresh retained both anchors, rapid file navigation returned to the selected file, and Tab 1 → Tab 2 retained the selected file and drafts. Computed source/diff font checks ran at 1440×900, 1280×800, 1024×768, and 480×900. Evidence is limited to [packet12-context-1440.png](packet12-context-1440.png), [packet12-review-1440-final.png](packet12-review-1440-final.png), and `packet12-style-receipt.json`.
+## Packet 12 real checkout correction
+
+Status: **PASS** for the focused real browser workflow. The run cloned the committed Cockpit checkout to `/tmp/cockpit-real-20260912/cockpit-repo` with canonical `origin=https://github.com/nnexai/cockpit.git` and preserved the prior internal URL as `internal-origin`. Setup through the app created linked checkout `/tmp/cockpit-real-20260912/worktrees/cockpit-repo-6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1`, companion `6da9059f-4cf1-44b4-a1c8-71f2a47cbbd1`, and direct Context from the focused terminal. The Context tree rendered the real `nnexai/cockpit#4` issue asset at 8,993 bytes with all three comments.
+
+The UI created two harmless tracked edits (`docs/discovery-limits.md`, `src/app/styles.css`) and one untracked file. Review saved a line draft and whole-file draft, refresh retained both, rapid file navigation returned to the selected file, and Tab 1 → Tab 2 retained the selected file and drafts. Reopening the same checkout through `Open existing checkout` borrowed the retained companion; the saved batch was selected, the overview reopened, and explicit `Reattach` restored both actual anchors/text. The restored preview records the line 22 anchor and both comment bodies, with source-changed status requiring stale excerpt review.
+
+A second real operation (`7d615383-5607-4526-8e8f-2dace14a766e`) held the run-owned source import lock after creating its workspace/companion. It stopped at `partial/context_preparing` with `source_import_busy`; after releasing the lock, `Retry source import` completed with the same workspace and resource paths and materialized the 8,993-byte issue asset. This is a source-lock recovery proof, not a provider outage claim.
+
+The corrected viewport receipt covers 1440×900, 800×1000, 600×900, 480×900, and 360×900. Each has a nonzero Review diff and Context document area, with source and diff roles present. Representative evidence is [packet12-real-review-1440.png](packet12-real-review-1440.png), [packet12-real-review-480.png](packet12-real-review-480.png), and `packet12-style-receipt.json`.
 
 Validation:
 
-- `cargo test -p cockpit-core projects::tests` — 4 passed, 103 filtered.
-- `cargo build -p cockpit-host` — passed after the direct Context and Review root repairs.
-- `bun run test -- src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx src/app/projects/SetupDialog.stale.test.ts src/client/projectProtocol.test.ts src/app/paneRenderers.test.tsx` — 5 files, 25 tests passed.
+- `bunx vitest run src/app/context/ContextViewer.test.tsx src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx` — 3 files, 20 tests passed.
 - `bun run build` — `tsc --noEmit` and Vite 316 modules passed; existing large-chunk warning emitted.
+- `cargo test -p cockpit-core companion_checkout_match_is_exact_and_unambiguous` — 1 passed, 106 filtered; integration target 0 run, 20 filtered.
 
-Native constructor coverage, the full packet matrix, and automatic zero-click draft rebinding remain **INCONCLUSIVE/deferred**. Run-owned Herdr, gateway, browser, fixture, and services remain under `/tmp/cockpit-focus-20260912` for the next increment.
+Native constructor coverage, the full packet matrix, and automatic zero-click draft rebinding remain **INCONCLUSIVE/deferred**. Run-owned Herdr, gateway, browser, clone, worktrees, companions, and proof receipts remain under `/tmp/cockpit-real-20260912`.

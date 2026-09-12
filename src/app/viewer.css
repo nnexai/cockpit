@@ -18,6 +18,46 @@
   font: var(--viewer-control-size)/var(--viewer-control-line-height) var(--viewer-control-font);
 }
 
+.context-viewer,
+.review-pane {
+  container-type: inline-size;
+}
+
+.viewer-file-picker-trigger {
+  display: none;
+}
+
+@container (max-width: 520px) {
+  .context-viewer .context-body,
+  .review-pane .review-body {
+    display: flex;
+    flex-direction: column;
+    --viewer-document-inset: 8px;
+  }
+
+  .context-viewer .context-tree,
+  .review-pane .review-files {
+    display: none;
+  }
+
+  .context-viewer .context-document,
+  .review-pane .review-diff {
+    width: 100%;
+  }
+
+  .context-viewer .context-toolbar,
+  .review-pane .review-toolbar,
+  .context-viewer .viewer-file-picker-trigger,
+  .review-pane .viewer-file-picker-trigger {
+    padding-inline: 8px;
+  }
+
+  .context-viewer .viewer-file-picker-trigger,
+  .review-pane .viewer-file-picker-trigger {
+    display: inline-flex;
+  }
+}
+
 .context-toolbar button,
 .context-mode-switch button,
 .context-notice button,
