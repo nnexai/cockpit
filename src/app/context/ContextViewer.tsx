@@ -1,9 +1,7 @@
 import { remarkBoundDiagrams } from "./markdownPolicy";
 import { SafeImage } from "./SafeImage";
 import { MermaidView } from "./MermaidView";
-import { SourceImport } from "./SourceImport";
 import type { CommentReviewRef } from "../../protocol/generated/v1";
-import { SnapshotImport } from "./SnapshotImport";
 import { HtmlPreview } from "./HtmlPreview";
 import { Component, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -24,6 +22,7 @@ import type {
 } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "./CommentDrafts";
 import { ContextSearch } from "./ContextSearch";
+import { ContextResources } from "./ContextResources";
 import { splitSourceLines } from "./sourceLines";
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
@@ -1116,22 +1115,18 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           {renderDocument()}
         </main>
       </div>
-      {resourcesOpen && root.kind === "companion" ? <div className="context-resources" role="dialog" aria-modal="true" aria-label="Context resources">
-        <header><strong>Context resources</strong><button type="button" onClick={() => setResourcesOpen(false)}>Close</button></header>
-        <SourceImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onChanged={files => {
+      {resourcesOpen ? <ContextResources client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} root={root} onClose={() => setResourcesOpen(false)} onChanged={files => {
           const paths = files.flatMap(file => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
           setExpanded(current => new Set([...current, ...paths]));
           void loadDirectory(root, "", true);
           for (const path of new Set(paths)) void loadDirectory(root, path, true);
-        }} />
-        <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={(result) => {
+        }} onImported={(result) => {
           const parts = result.snapshot_path.split("/");
           const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
           setExpanded(current => new Set([...current, ...paths]));
           void loadDirectory(root, "", true);
           for (const path of paths) void loadDirectory(root, path, true);
-        }} />
-      </div> : null}
+        }} /> : null}
       {pickerOpen ? <FilePicker candidates={[...pickerIndex.entries.values()].map((entry) => ({ id: entry.entry_id, path: entry.path!, detail: entry.bytes === null ? undefined : `${entry.bytes} B` } satisfies FileNavigationCandidate))} loading={pickerIndex.loading} incomplete={pickerIndex.incomplete} onChoose={(candidate) => { const entry = pickerIndex.entries.get(candidate.path); if (entry) chooseEntry(entry); closeFilePicker(); focusContent(); }} onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
     </section>
   );
