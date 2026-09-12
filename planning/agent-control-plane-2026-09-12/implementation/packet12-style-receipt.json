@@ -1,0 +1,50 @@
+{
+  "increment": "packet12-workspace-context-review",
+  "status": "PASS",
+  "viewports": [
+    {"width": 1440, "height": 900, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 63},
+    {"width": 1280, "height": 800, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 24},
+    {"width": 1024, "height": 768, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 0},
+    {"width": 480, "height": 900, "review_font": "\"IBM Plex Sans\", \"Noto Sans\", sans-serif", "diff_font": "\"IBM Plex Mono\", \"Noto Sans Mono\", monospace", "diff_width": 0}
+  ],
+  "browser": {
+    "session": "cockpit-focus-baseline-20260912",
+    "gateway": "http://127.0.0.1:4189/",
+    "herdr_session": "cockpit-focus-20260912",
+    "herdr_version": "0.9.0",
+    "protocol": 22,
+    "schema": 1,
+    "run_root": "/tmp/cockpit-focus-20260912"
+  },
+  "setup": {
+    "operation_id": "f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
+    "workspace_id": "w5",
+    "tab_id": "w5:t2",
+    "pane_id": "w5:p3",
+    "companion_id": "f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
+    "checkout": "/tmp/cockpit-focus-20260912/worktrees/fixture-repo-f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
+    "companion": "/tmp/cockpit-focus-20260912/companions/f3136c9f-c08d-4c0a-83fb-e7ee8c363528",
+    "artifact": "nnexai/cockpit#4",
+    "asset_bytes": 8993,
+    "asset_comments": 3,
+    "asset_sha256": "817ad895f73e6f284d9185cbd98593794c381fc6d3d55b27862f67c617ab4b4a"
+  },
+  "browser_checks": {
+    "context": "PASS: Open Context from the created checkout terminal rendered the fetched issue asset under the companion root",
+    "review": "PASS: graphical Review showed two tracked edits and one untracked file; line and whole-file comments saved",
+    "refresh": "PASS: Review refresh retained selected file and both comments",
+    "target_changes": "PASS: tracked-b then tracked-a navigation returned to the selected file with comments intact",
+    "tab_return": "PASS: Tab 1 to Tab 2 retained selected file, review state, and both comments",
+    "preview": "PASS: comment overview preview refreshed to both anchors/text"
+  },
+  "gates": [
+    "cargo test -p cockpit-core projects::tests: 4 passed, 103 filtered",
+    "cargo build -p cockpit-host: PASS",
+    "bun run test -- src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx src/app/projects/SetupDialog.stale.test.ts src/client/projectProtocol.test.ts src/app/paneRenderers.test.tsx: 5 files, 25 passed",
+    "bun run build: PASS, tsc --noEmit and Vite 316 modules"
+  ],
+  "deferred": [
+    "Native constructor runtime coverage: INCONCLUSIVE/deferred",
+    "Full packet matrix and automatic zero-click draft rebind: INCONCLUSIVE/deferred"
+  ]
+}

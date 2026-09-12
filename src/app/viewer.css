@@ -1,0 +1,161 @@
+:root {
+  --viewer-source-font: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  --viewer-control-font: "IBM Plex Sans", "Noto Sans", sans-serif;
+  --viewer-source-size: 13px;
+  --viewer-source-line-height: 19px;
+  --viewer-control-size: 13px;
+  --viewer-control-line-height: 20px;
+  --viewer-meta-size: 12px;
+  --viewer-meta-line-height: 16px;
+  --viewer-document-inset: 12px;
+  --viewer-source-gutter: 4ch;
+}
+
+.context-toolbar,
+.review-toolbar {
+  min-height: 36px;
+  padding-inline: var(--viewer-document-inset);
+  font: var(--viewer-control-size)/var(--viewer-control-line-height) var(--viewer-control-font);
+}
+
+.context-toolbar button,
+.context-mode-switch button,
+.context-notice button,
+.review-toolbar select,
+.review-toolbar input,
+.review-toolbar button,
+.review-source-controls button {
+  font-family: var(--viewer-control-font);
+  font-size: var(--viewer-control-size);
+  line-height: var(--viewer-control-line-height);
+}
+
+.context-breadcrumb,
+.context-tree-row,
+.context-tree-name,
+.review-file,
+.review-file-directory > summary {
+  font: var(--viewer-control-size)/var(--viewer-control-line-height) var(--viewer-control-font);
+}
+
+.context-tree-row,
+.review-file,
+.review-file-directory > summary {
+  min-height: 30px;
+}
+
+.context-tree-header,
+.context-tree-header span,
+.context-tree-meta,
+.context-tree-refusal,
+.context-tree-status,
+.context-tree-diagnostics,
+.context-document-header,
+.context-readonly-badge,
+.review-files > header,
+.review-file small,
+.review-file-stats,
+.review-file-stats em,
+.review-diff > header,
+.review-hunk > header,
+.review-source-controls span,
+.review-status,
+.context-comment-status {
+  font-family: var(--viewer-control-font);
+  font-size: var(--viewer-meta-size);
+  line-height: var(--viewer-meta-line-height);
+}
+
+.context-document-header code,
+.review-diff > header code {
+  font: var(--viewer-source-size)/var(--viewer-source-line-height) var(--viewer-source-font);
+}
+
+.context-document-header,
+.review-diff > header {
+  min-height: 36px;
+  padding-inline: var(--viewer-document-inset);
+}
+
+.context-mode-switch,
+.review-hunk > header,
+.context-viewer .comment-toolbar,
+.review-diff .comment-toolbar {
+  padding-inline: var(--viewer-document-inset);
+}
+
+.context-document-header,
+.review-diff > header {
+  padding-block: 6px;
+}
+
+.context-source-lines,
+.review-diff,
+.review-line,
+.context-markdown-body pre {
+  font-family: var(--viewer-source-font);
+  font-size: var(--viewer-source-size);
+  line-height: var(--viewer-source-line-height);
+}
+
+.context-source-line,
+.review-line {
+  padding-inline: var(--viewer-document-inset);
+  min-height: var(--viewer-source-line-height);
+}
+
+.context-source-line {
+  grid-template-columns: var(--viewer-source-gutter) minmax(0, 1fr);
+}
+
+.review-line {
+  grid-template-columns: var(--viewer-source-gutter) var(--viewer-source-gutter) minmax(0, 1fr);
+}
+
+.context-line-number,
+.review-line > span {
+  padding-right: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-markdown-body {
+  padding-inline: var(--viewer-document-inset);
+}
+
+.context-frontmatter {
+  margin-inline: var(--viewer-document-inset);
+}
+
+.context-markdown-body pre {
+  font: var(--viewer-source-size)/var(--viewer-source-line-height) var(--viewer-source-font);
+}
+
+.review-source-controls {
+  font-family: var(--viewer-control-font);
+  font-size: var(--viewer-control-size);
+  line-height: var(--viewer-control-line-height);
+  padding-inline: var(--viewer-document-inset);
+}
+
+.review-source-controls button,
+.review-diff .comment-toolbar button,
+.context-viewer .comment-toolbar {
+  font-family: var(--viewer-control-font);
+  font-size: var(--viewer-control-size);
+  line-height: var(--viewer-control-line-height);
+}
+
+.review-file-stats em {
+  font-size: inherit;
+}
+
+.comment-inline-editor {
+  margin-left: calc(var(--viewer-document-inset) + var(--viewer-source-gutter) + var(--viewer-source-gutter));
+}
+
+@media (max-width: 680px) {
+  .context-viewer,
+  .review-viewer {
+    --viewer-document-inset: 8px;
+  }
+}

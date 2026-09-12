@@ -10,10 +10,10 @@
 
 .review-toolbar {
   display: flex;
-  min-height: 34px;
+  min-height: 36px;
   align-items: center;
   gap: 6px;
-  padding: 3px 8px;
+  padding-block: 3px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -43,30 +43,30 @@
 .review-warning { color: var(--working); }
 .review-body { display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(160px, 228px) minmax(0, 1fr); }
 .review-files { min-width: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--sidebar-bg); }
-.review-files > header { position: sticky; top: 0; z-index: 1; display: flex; min-height: 26px; align-items: center; justify-content: space-between; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--sidebar-bg); color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.review-files > header { position: sticky; top: 0; z-index: 1; display: flex; min-height: 26px; align-items: center; justify-content: space-between; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--sidebar-bg); color: var(--text-secondary); }
 .review-file-directory { margin: 0; }
-.review-file-directory > summary { height: 24px; box-sizing: border-box; padding: 2px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); font: 12px/20px var(--font-mono, "IBM Plex Mono", monospace); cursor: pointer; }
+.review-file-directory > summary { height: auto; box-sizing: border-box; padding: 2px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); cursor: pointer; }
 .review-file-directory > summary::marker { color: var(--text-muted); }
-.review-file { display: grid; width: 100%; height: 24px; min-height: 24px; box-sizing: border-box; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; gap: 5px; padding: 2px 8px; font: 12px/20px var(--font-mono, "IBM Plex Mono", monospace); border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.review-file { display: grid; width: 100%; height: auto; box-sizing: border-box; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; gap: 5px; padding: 2px 8px; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .review-file:hover { background: var(--surface-hover); }
 .review-file.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
-.review-file b { color: var(--accent); font-size: var(--font-size-2xs); font-weight: 600; }
+.review-file b { color: var(--accent); font-weight: 600; }
 .review-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-file small { color: var(--text-muted); font-size: var(--font-size-2xs); }
+.review-file small { color: var(--text-muted); }
 .review-files p { padding: 8px; color: var(--text-secondary); }
 
-.review-diff { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: auto; outline: none; font-family: var(--font-mono, "IBM Plex Mono", monospace); }
+.review-diff { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: auto; outline: none; }
 .review-diff:focus-visible { box-shadow: inset 0 0 0 2px var(--focus-strong); }
-.review-diff > header { display: flex; min-height: 28px; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font: var(--font-size-2xs) var(--font-mono, "IBM Plex Mono", monospace); }
+.review-diff > header { display: flex; min-height: 36px; align-items: center; gap: 10px; padding-block: 6px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
 .review-diff > header code { min-width: 0; flex: 1; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
 .review-hunk { outline: none; }
 .review-hunk.is-current > header,
 .review-hunk:focus > header { background: var(--surface-selected); color: var(--text-primary); }
-.review-hunk > header { padding: 4px 12px; background: var(--surface); color: var(--text-secondary); font-size: var(--font-size-2xs); }
-.review-line { display: grid; width: 100%; min-height: 19px; grid-template-columns: 48px 48px minmax(0, 1fr); padding: 0 12px 0 0; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; font: 13px/19px var(--font-mono, "IBM Plex Mono", monospace); cursor: pointer; }
+.review-hunk > header { padding-block: 4px; background: var(--surface); color: var(--text-secondary); }
+.review-line { display: grid; width: 100%; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .review-line:hover { background: var(--surface-hover); }
 .review-line.is-selected { border-left-color: var(--accent); background: var(--surface-selected); }
-.review-line > span { padding-right: 8px; color: var(--text-muted); text-align: right; user-select: none; }
+.review-line > span { color: var(--text-muted); text-align: right; user-select: none; }
 .review-line code { overflow-wrap: anywhere; white-space: pre-wrap; font: inherit; }
 .review-diff-marker { color: var(--text-muted); }
 .review-token.is-comment { color: var(--text-muted); }
@@ -81,24 +81,22 @@
 
 .review-viewer { display: flex; width: 100%; min-width: 0; min-height: 0; height: 100%; flex: 1; flex-direction: column; }
 .review-viewer > .review-pane { flex: 1; }
-.review-source-controls { display: flex; min-height: 26px; align-items: center; gap: 4px; padding: 2px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font: var(--font-size-2xs) var(--font-sans); }
+.review-source-controls { display: flex; min-height: 26px; align-items: center; gap: 4px; padding-block: 2px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
 .review-source-controls span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-source-controls button:disabled { opacity: .45; cursor: default; }
-.review-diff .comment-toolbar { min-height: 26px; gap: 4px; padding: 2px 8px; border-bottom: 0; }
-.review-diff .comment-toolbar button { min-height: 24px; padding: 1px 6px; font-size: var(--font-size-2xs); }
+.review-diff .comment-toolbar { min-height: 26px; gap: 4px; padding-block: 2px; border-bottom: 0; }
+.review-diff .comment-toolbar button { min-height: 24px; padding: 1px 6px; }
 .review-diff .comment-toolbar button:not(.comment-count) { font-size: 0; }
-.review-diff .comment-toolbar button:not(.comment-count)::before { font-size: var(--font-size-2xs); }
+.review-diff .comment-toolbar button:not(.comment-count)::before { font-size: var(--viewer-meta-size); }
 .review-diff .comment-toolbar button:nth-of-type(2)::before { content: "File"; }
 .review-diff .comment-toolbar button:nth-of-type(3)::before { content: "Lines"; }
-.review-source-controls button { min-height: 24px; padding: 1px 6px; font-size: var(--font-size-2xs); }
-.comment-inline-editor { margin: 4px 16px 8px 96px; max-width: 760px; }
+.review-source-controls button { min-height: 24px; padding: 1px 6px; }
+.comment-inline-editor { margin-block: 4px 8px; margin-right: 16px; max-width: 760px; }
 .comment-inline-editor .comment-editor { padding: 8px 10px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
 
 @media (max-width: 680px) {
   .review-body { grid-template-columns: minmax(132px, 38%) minmax(0, 1fr); }
   .review-files button { min-height: 24px; }
-  .review-line { grid-template-columns: 38px 38px minmax(0, 1fr); }
-  .comment-inline-editor { margin-left: 76px; }
 }
 
 .review-status {
@@ -111,7 +109,6 @@
   border-top: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-secondary);
-  font-size: var(--font-size-2xs);
 }
 .review-status kbd { color: var(--text-primary); font: inherit; }
 .review-status-actions { display: flex; align-items: center; gap: 4px; }
@@ -122,6 +119,6 @@
 .review-file-name { direction: rtl; text-align: left; unicode-bidi: isolate; }
 
 .review-file-stats { display: flex; justify-content: flex-end; gap: 5px; grid-column: 4; }
-.review-file-stats em { font-style: normal; font-size: 11px; }
+.review-file-stats em { font-style: normal; }
 .review-file-stats .is-added { color: #98c88b; }
 .review-file-stats .is-deleted { color: #e68b97; }

@@ -4,6 +4,7 @@
 @import "@fontsource/ibm-plex-mono/latin-400.css";
 
 @import "@xterm/xterm/css/xterm.css";
+@import "./viewer.css";
 :root {
   color-scheme: dark;
   font-family: "IBM Plex Sans", "Noto Sans", sans-serif;

@@ -28,3 +28,18 @@ Validation:
 - One initial browser probe exposed and fixed the `url`/`html_url` serde collision; the final import completed with status `materialized`.
 
 Direct task setup with an issue URL, ready-state transitions, and opening the prepared Context directly remain deferred to Packet 12. Native coverage is not applicable to this provider-only increment.
+
+## Packet 12 integrated increment
+
+Status: **PASS** for the scoped browser workflow. The real setup dialog created linked checkout `/tmp/cockpit-focus-20260912/worktrees/fixture-repo-f3136c9f-c08d-4c0a-83fb-e7ee8c363528`, companion `f3136c9f-c08d-4c0a-83fb-e7ee8c363528`, and context terminal from `https://github.com/nnexai/cockpit/issues/4`. The operation reached `completed`; the companion asset is 8,993 bytes with three GitHub comments. Opening Context from that terminal rendered the asset, and graphical Review showed two tracked edits plus one untracked file.
+
+Review line and whole-file drafts saved, preview refresh retained both anchors, rapid file navigation returned to the selected file, and Tab 1 → Tab 2 retained the selected file and drafts. Computed source/diff font checks ran at 1440×900, 1280×800, 1024×768, and 480×900. Evidence is limited to [packet12-context-1440.png](packet12-context-1440.png), [packet12-review-1440-final.png](packet12-review-1440-final.png), and `packet12-style-receipt.json`.
+
+Validation:
+
+- `cargo test -p cockpit-core projects::tests` — 4 passed, 103 filtered.
+- `cargo build -p cockpit-host` — passed after the direct Context and Review root repairs.
+- `bun run test -- src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx src/app/projects/SetupDialog.stale.test.ts src/client/projectProtocol.test.ts src/app/paneRenderers.test.tsx` — 5 files, 25 tests passed.
+- `bun run build` — `tsc --noEmit` and Vite 316 modules passed; existing large-chunk warning emitted.
+
+Native constructor coverage, the full packet matrix, and automatic zero-click draft rebinding remain **INCONCLUSIVE/deferred**. Run-owned Herdr, gateway, browser, fixture, and services remain under `/tmp/cockpit-focus-20260912` for the next increment.
