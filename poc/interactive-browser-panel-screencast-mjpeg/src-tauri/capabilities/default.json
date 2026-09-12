@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the interactive browser panel MJPEG POC",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
