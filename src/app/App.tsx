@@ -662,6 +662,7 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { sta
   </aside>;
 }
 type FeedbackImageState = Record<string, BrowserFeedbackImage | null>;
+type FeedbackDraftState = Record<string, string>;
 
 const SIDEBAR_MIN_WIDTH = 224;
 const SIDEBAR_MAX_WIDTH = 360;
@@ -717,9 +718,11 @@ function SidebarHeader({ session, sync, collapsed, narrow, onSession, onCollapse
   </header>;
 }
 
-function FeedbackPanel({ lookup, images, busy, error, sendResult, riskPending, onRefresh, onAcknowledge, onSend, onRetryRisk, onDismiss }: {
+function FeedbackPanel({ lookup, images, drafts, targetLabel, busy, error, sendResult, riskPending, onRefresh, onAcknowledge, onSend, onRetryRisk, onDraftChange, onDismiss }: {
   lookup: BrowserFeedbackLookup | null;
   images: FeedbackImageState;
+  drafts: FeedbackDraftState;
+  targetLabel: string;
   busy: boolean;
   error: StatusError | null;
   sendResult: BrowserFeedbackSendResponse | null;
@@ -728,6 +731,7 @@ function FeedbackPanel({ lookup, images, busy, error, sendResult, riskPending, o
   onAcknowledge: () => void;
   onSend: () => void;
   onRetryRisk: () => void;
+  onDraftChange: (id: string, value: string) => void;
   onDismiss: () => void;
 }) {
   const captures = lookup?.feedback.captures.filter(capture => capture.pending_ids.length > 0) ?? [];
@@ -736,14 +740,14 @@ function FeedbackPanel({ lookup, images, busy, error, sendResult, riskPending, o
     <header>
       <div>
         <span className="heading-kicker">SPACE FEEDBACK</span>
-        <h2 id="feedback-panel-title">Browser annotations</h2>
+        <h2 id="feedback-panel-title">Feedback{lookup ? ` · ${lookup.feedback.captures[0]?.context.space_label ?? "Space"}` : ""}</h2>
       </div>
       <div className="feedback-panel-actions">
         <button type="button" onClick={onRefresh} disabled={busy} aria-label="Refresh browser feedback">Refresh</button>
         <button type="button" onClick={onDismiss} aria-label="Close browser feedback">Close</button>
       </div>
     </header>
-    {lookup ? <p className="feedback-browser-state">Browser: <strong>{lookup.browser.connection.replaceAll("_", " ")}</strong>{lookup.browser.message ? ` · ${lookup.browser.message}` : ""}</p> : null}
+    {lookup ? <p className="feedback-browser-state"><strong>{lookup.browser.connection.replaceAll("_", " ")}</strong>{lookup.browser.message ? ` · ${lookup.browser.message}` : ""}{targetLabel ? ` · To ${targetLabel}` : ""}</p> : null}
     {busy && !lookup ? <p className="feedback-state">Reading pending feedback…</p> : null}
     {error ? <div className="feedback-state feedback-state-error" role="alert"><span>{error.message}</span><button type="button" onClick={onRefresh} disabled={busy}>Retry</button></div> : null}
     {!error && lookup && captures.length === 0 ? <p className="feedback-state">No pending browser annotations.</p> : null}
@@ -756,7 +760,7 @@ function FeedbackPanel({ lookup, images, busy, error, sendResult, riskPending, o
         {images[capture.id] ? <img className="feedback-image" src={`data:${images[capture.id]!.mime_type};base64,${images[capture.id]!.data_base64}`} alt={`Combined capture of ${capture.page.title || capture.page.url}`} /> : <div className="feedback-image-placeholder">{images[capture.id] === null ? "Image unavailable" : "Loading capture image…"}</div>}
         <div className="feedback-annotations">
           {capture.annotations.filter(annotation => capture.pending_ids.includes(annotation.id)).map((annotation) => <div className="feedback-annotation" key={annotation.id}>
-            <span className="feedback-annotation-kind">{annotation.kind}</span>{annotation.comment ? <p>{annotation.comment}</p> : null}
+            <span className="feedback-annotation-kind">{annotation.kind}</span><textarea aria-label={`Draft for annotation ${annotation.id}`} value={drafts[annotation.id] ?? annotation.comment} onChange={(event) => onDraftChange(annotation.id, event.target.value)} />
             {annotation.element ? <details><summary>Element evidence</summary><span>{annotation.element.tag}{annotation.element.role ? ` · ${annotation.element.role}` : ""}{annotation.element.name ? ` · ${annotation.element.name}` : ""}</span><p>{annotation.element.excerpt || annotation.element.text}</p><code>{annotation.element.locators.join(" | ")}</code></details> : null}
           </div>)}
           {capture.pending_ids.filter((id) => !capture.annotations.some((annotation) => annotation.id === id)).map((id) => <div className="feedback-annotation" key={id}><code>{id}</code><span>pending annotation</span></div>)}
@@ -883,6 +887,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackLookup, setFeedbackLookup] = useState<BrowserFeedbackLookup | null>(null);
   const [feedbackImages, setFeedbackImages] = useState<FeedbackImageState>({});
+  const [feedbackDrafts, setFeedbackDrafts] = useState<FeedbackDraftState>({});
+  const [feedbackTargetPaneId, setFeedbackTargetPaneId] = useState<string | null>(null);
+  const feedbackTargetPaneRef = useRef<string | null>(null);
+  feedbackTargetPaneRef.current = feedbackTargetPaneId;
   const [feedbackSpaceId, setFeedbackSpaceId] = useState<string | null>(null);
   const feedbackImagesRef = useRef<FeedbackImageState>({});
   feedbackImagesRef.current = feedbackImages;
@@ -972,12 +980,13 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const token = ++feedbackRequest.current;
     feedbackBusyRef.current = true;
     if (!quiet) { setFeedbackBusy(true); setFeedbackError(null); }
-    const target = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
+    const target = { session_id: sessionId, space_id: spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
     const current = () => feedbackRequest.current === token && feedbackTargetRef.current?.sessionId === sessionId && feedbackTargetRef.current.spaceId === spaceId;
     try {
       const lookup = await client.browserFeedback({ target });
       if (!current()) return;
       if (lookup.browser.association && (lookup.browser.association.session_id !== sessionId || lookup.browser.association.space_id !== spaceId)) throw new Error("Feedback response belongs to another Space");
+      if (lookup.feedback.captures.some((capture) => capture.context.session_id !== sessionId || capture.context.space_id !== spaceId)) throw new Error("Feedback capture belongs to another Space");
       setFeedbackSpaceId(spaceId);
       setFeedbackLookup(lookup);
       setFeedbackError(null);
@@ -1001,10 +1010,14 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         setFeedbackBusy(false);
       }
     }
-  }, [client, state.sessionId, state.sync]);
+  }, [client, feedbackTargetPaneId, state.sessionId, state.sync]);
   const openFeedback = useCallback(() => {
     if (selection.spaceId && state.sync === "live") {
       setFeedbackOpen(true);
+      const selectedAgent = (snapshot?.agents ?? []).find((agent) => agent.pane_id === selection.paneId);
+      const targetPaneId = selectedAgent?.pane_id ?? snapshot?.agents[0]?.pane_id ?? null;
+      feedbackTargetPaneRef.current = targetPaneId;
+      setFeedbackTargetPaneId(targetPaneId);
       void loadFeedback(selection.spaceId);
     }
   }, [loadFeedback, selection.spaceId, state.sync]);
@@ -1022,22 +1035,24 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     feedbackBusyRef.current = true;
     setFeedbackBusy(true);
     setFeedbackError(null);
-    const target = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
+    const target = { session_id: sessionId, space_id: spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
+    let outcomeUnknown = false;
     try {
       const response = await client.sendBrowserFeedback({ target, ids, operation_id: operationId, acknowledge_duplicate_risk: acknowledgeDuplicateRisk });
       if (feedbackRequest.current !== token || feedbackTargetRef.current?.sessionId !== sessionId || feedbackTargetRef.current.spaceId !== spaceId) return;
       setFeedbackResult(response);
-      setFeedbackRisk(response.state === "outcome_unknown" ? { ids } : null);
+      outcomeUnknown = response.state === "outcome_unknown";
+      setFeedbackRisk(outcomeUnknown ? { ids } : null);
     } catch (error) {
       if (feedbackRequest.current === token) setFeedbackError(describeError(error, "Could not send browser feedback"));
     } finally {
       if (feedbackRequest.current === token) {
         feedbackBusyRef.current = false;
         setFeedbackBusy(false);
-        void loadFeedback(spaceId);
+        if (!outcomeUnknown) void loadFeedback(spaceId);
       }
     }
-  }, [client, loadFeedback, selection.spaceId, state.sessionId, state.sync]);
+  }, [client, feedbackTargetPaneId, loadFeedback, selection.spaceId, state.sessionId, state.sync]);
   const acknowledgeFeedback = useCallback(async () => {
     const sessionId = state.sessionId;
     const spaceId = selection.spaceId;
@@ -1048,7 +1063,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setFeedbackBusy(true);
     setFeedbackError(null);
     try {
-      await client.acknowledgeBrowserFeedback({ target: { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null }, ids });
+      await client.acknowledgeBrowserFeedback({ target: { session_id: sessionId, space_id: spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null }, ids });
     } catch (error) {
       if (feedbackRequest.current === token) setFeedbackError(describeError(error, "Could not acknowledge browser feedback"));
     } finally {
@@ -1058,7 +1073,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         void loadFeedback(spaceId);
       }
     }
-  }, [client, displayedFeedbackIds, loadFeedback, selection.spaceId, state.sessionId, state.sync]);
+  }, [client, displayedFeedbackIds, feedbackTargetPaneId, loadFeedback, selection.spaceId, state.sessionId, state.sync]);
   const sendDisplayedFeedback = useCallback(() => {
     if (displayedFeedbackIds.length === 0) return;
     const operationId = globalThis.crypto?.randomUUID?.() ?? `browser-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1069,12 +1084,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const operationId = globalThis.crypto?.randomUUID?.() ?? `browser-feedback-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     void sendFeedback(feedbackRisk.ids, operationId, true);
   }, [feedbackRisk, sendFeedback]);
+  const feedbackTarget = (snapshot?.agents ?? []).find((agent) => agent.pane_id === feedbackTargetPaneId);
+  const feedbackTargetLabel = feedbackTarget ? `${feedbackTarget.name} · ${tabs.find((tab) => tab.id === feedbackTarget.tab_id)?.label ?? "tab"}` : "No eligible agent";
   useEffect(() => {
     feedbackRequest.current += 1;
     feedbackBusyRef.current = false;
     setFeedbackOpen(false);
     setFeedbackLookup(null);
     setFeedbackImages({});
+    setFeedbackDrafts({});
+    feedbackTargetPaneRef.current = null;
+    setFeedbackTargetPaneId(null);
     setFeedbackSpaceId(null);
     setFeedbackError(null);
     setFeedbackResult(null);
@@ -1230,7 +1250,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
-    {feedbackOpen && (feedbackSpaceId === selection.spaceId || feedbackLookup === null) ? <FeedbackPanel lookup={feedbackLookup} images={feedbackImages} busy={feedbackBusy} error={feedbackError} sendResult={feedbackResult} riskPending={feedbackRisk !== null} onRefresh={refreshFeedback} onAcknowledge={() => { void acknowledgeFeedback(); }} onSend={sendDisplayedFeedback} onRetryRisk={retryUnknownFeedback} onDismiss={() => setFeedbackOpen(false)} /> : null}
+    {feedbackOpen && (feedbackSpaceId === selection.spaceId || feedbackLookup === null) ? <FeedbackPanel lookup={feedbackLookup} images={feedbackImages} drafts={feedbackDrafts} targetLabel={feedbackTargetLabel} busy={feedbackBusy} error={feedbackError} sendResult={feedbackResult} riskPending={feedbackRisk !== null} onRefresh={refreshFeedback} onAcknowledge={() => { void acknowledgeFeedback(); }} onSend={sendDisplayedFeedback} onRetryRisk={retryUnknownFeedback} onDraftChange={(id, value) => setFeedbackDrafts((previous) => ({ ...previous, [id]: value }))} onDismiss={() => setFeedbackOpen(false)} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
   </div>;
