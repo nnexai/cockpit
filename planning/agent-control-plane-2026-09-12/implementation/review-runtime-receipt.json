@@ -1,0 +1,28 @@
+{
+  "captured_at": "2026-09-12T19:03:25+02:00",
+  "source_head": "6ca0b2c9d105d7de5dfa7d68953d4d6cefaa4cf3",
+  "gateway": "http://127.0.0.1:4193",
+  "herdr": {
+    "version": "0.9.0",
+    "session": "csu12",
+    "socket": "/tmp/csu12-runtime/config/herdr/sessions/csu12/herdr.sock",
+    "task_pane": "w2:p2",
+    "review_pane": "w2:p3",
+    "fixture_checkout": "/tmp/csu12-runtime/worktrees/cockpit-37524fca-2fef-42c0-b6e6-c339ff7ee42c",
+    "authoritative_snapshot": "/tmp/csu12-evidence/herdr-csu12-snapshot.txt"
+  },
+  "review": {
+    "changed_file_count": 260,
+    "large_file": "large-review.txt",
+    "large_file_bytes_before_mutation": 6669000,
+    "page_bytes": 524288,
+    "page_one_loaded": true,
+    "continuation_exposed": true,
+    "mutation_stale_rejection": "working-tree source changed while the review page was being read",
+    "snapshots": [
+      "/tmp/csu12-evidence/review-large-page1.yml",
+      "/tmp/csu12-evidence/review-large-stale-page2.yml"
+    ]
+  },
+  "scope": "Run-owned Herdr and checkout only; unrelated user gateway and PID 2523753 untouched."
+}

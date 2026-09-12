@@ -1,0 +1,25 @@
+{
+  "captured_at": "2026-09-12T19:09:45+02:00",
+  "binary": "target/debug/cockpit-tauri",
+  "command": "XDG_CONFIG_HOME=/tmp/cn12-native/config XDG_STATE_HOME=/tmp/cn12-native/state COCKPIT_HERDR_EXECUTABLE=/home/linuxbrew/.linuxbrew/bin/herdr COCKPIT_HERDR_SESSION=native12 COCKPIT_HERDR_SOCKET=/tmp/cn12-native/config/herdr/sessions/native12/herdr.sock GDK_BACKEND=x11 DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 ./target/debug/cockpit-tauri",
+  "process": {
+    "pid": 3922518,
+    "herdr_pid": 3920415,
+    "stderr": "",
+    "exit_reason": "terminated by the integration owner after bounded observation; it did not exit on its own",
+    "webkit_children_observed": true,
+    "niri_window_observed": false
+  },
+  "native12": {
+    "session": "native12",
+    "socket": "/tmp/cn12-native/config/herdr/sessions/native12/herdr.sock",
+    "server_log": "/tmp/cn12-native/config/herdr/sessions/native12/herdr-server.log"
+  },
+  "capability": "INCONCLUSIVE_LAUNCH_NO_WINDOW",
+  "reason": "The isolated process initialized WebKit and remained alive, but niri exposed no corresponding second Cockpit window. No keyboard or clipboard input was sent.",
+  "protected": {
+    "user_pid": 2523753,
+    "user_gateway_pid": 191105,
+    "touched": false
+  }
+}
