@@ -155,3 +155,30 @@ it("confirms saved-batch discard inline and resets the active batch", async () =
     expect(host.querySelector<HTMLButtonElement>(".comment-count")?.disabled).toBe(false);
   } finally { await act(async () => mounted.unmount()); host.remove(); }
 });
+
+it.each([0, 1])("refreshes generation %i batches using their persistence state", async (generation) => {
+  const root: ContextRoot = { root_id: "root", kind: "repository", label: "Review", path: "/repo", repository_id: "repo", checkout_path: "/repo", companion_id: null };
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const batch: CommentBatch = { batch_id: "batch", generation, owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "review", source_id: "root" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, drafts: [], updated_at: "now" };
+  const commentBatch = vi.fn(async (_session: string, _pane: string, request: { batch_id: string | null }) => {
+    if (generation === 0 && request.batch_id !== null) throw new Error("comment batch does not exist");
+    return batch;
+  });
+  const client = { commentBatch } as unknown as CockpitClient;
+  const host = window.document.createElement("div");
+  window.document.body.append(host);
+  const mounted = createRoot(host);
+  const onEditorStateChange = vi.fn();
+  const render = (invalidationGeneration: number) => <CommentDrafts client={client} presentation={presentation} root={root} sourceIdentity="root" sourceKind="review" path="file.md" document={null} selection={null} mode="source" editorState={null} onEditorStateChange={onEditorStateChange} invalidationGeneration={invalidationGeneration} />;
+  try {
+    await act(async () => mounted.render(render(0)));
+    await act(async () => mounted.render(render(1)));
+    await act(async () => mounted.render(render(2)));
+    expect(commentBatch).toHaveBeenCalledTimes(3);
+    expect(commentBatch).toHaveBeenLastCalledWith("session", "pane", expect.objectContaining({ batch_id: generation === 0 ? null : "batch" }));
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});

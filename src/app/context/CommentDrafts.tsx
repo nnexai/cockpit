@@ -117,6 +117,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const [retainedStale, setRetainedStale] = useState(false);
   const generationRef = useRef(0);
   const refreshedInvalidation = useRef(invalidationGeneration);
+  const persistedBatchId = batch && batch.generation > 0 ? batch.batch_id : null;
   const identityRef = useRef(identity);
   identityRef.current = identity;
 
@@ -149,8 +150,8 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   useEffect(() => {
     if (pending || loading || refreshedInvalidation.current === invalidationGeneration) return;
     refreshedInvalidation.current = invalidationGeneration;
-    void loadBatch(batch?.batch_id ?? null);
-  }, [batch?.batch_id, invalidationGeneration, loadBatch, loading, pending]);
+    void loadBatch(persistedBatchId);
+  }, [persistedBatchId, invalidationGeneration, loadBatch, loading, pending]);
 
   const switchBatch = useCallback((batchId: string) => {
     if (batch?.batch_id !== batchId) clearEditor();
@@ -430,7 +431,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
       <button type="button" onClick={() => beginNew("lines")} disabled={!canCreateLines}>Comment selected lines</button>
       {detached ? <span className="comment-detached" role="status">Detached recovery</span> : null}
     </div> : null}
-    {error ? <div className="comment-notice comment-notice-error" role="alert"><strong>Comments not saved</strong><span>{error}</span><button type="button" onClick={() => void loadBatch(batch?.batch_id ?? null)}>Reload</button></div> : null}
+    {error ? <div className="comment-notice comment-notice-error" role="alert"><strong>Comments unavailable</strong><span>{error}</span><button type="button" onClick={() => void loadBatch(persistedBatchId)}>Reload</button></div> : null}
     {loading ? <div className="comment-notice" role="status">Loading comments…</div> : null}
     {content}
     {removedEditorDraft ? <div className="comment-notice" role="status"><span>This comment was deleted in another window. Your unsaved text is retained. Select a file{editor === "lines" ? " and source lines" : ""} to create a new comment.</span><button type="button" onClick={recreateFromCurrentSource} disabled={!document || document.text === null || !path || (editor === "lines" && !selectedRange)}>Use current source</button></div> : null}
@@ -442,7 +443,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
         {batch && detached ? <div className="comment-recovery"><strong>Detached batch</strong><span>Reattach after confirming this {sourceKind === "review" ? "Review" : "Context"} source.</span><button type="button" onClick={() => void attach()} disabled={pending || !sameSource}>Reattach</button></div> : null}
         <section className="comment-overview-list"><h3>Current comments</h3>{currentDrafts.length === 0 ? <p>No comments yet.</p> : currentDrafts.map((draft) => <article className={`comment-draft${stale(draft) ? " is-stale" : ""}`} key={draft.draft_id}><div className="comment-draft-meta"><strong>{sourceLabel(draft)}</strong><span>{draftAnchorLabel(draft.anchor)}{stale(draft) ? " · source changed" : ""}</span></div><p>{draft.comment_text}</p><div className="comment-draft-actions"><button type="button" onClick={() => actions.edit(draft)}>Edit</button><button type="button" onClick={() => actions.remove(draft)}>Delete</button></div></article>)}</section>
         <details className="comment-preview"><summary>Preview message</summary><div className="comment-preview-heading"><h3>Preview</h3><div><button type="button" onClick={() => void makePreview(false)} disabled={pending}>Refresh</button>{currentDrafts.some(stale) ? <button type="button" onClick={() => void makePreview(true)} disabled={pending}>Include stale excerpts</button> : null}</div></div>{preview ? <>{preview.reason ? <span className="comment-preview-reason">{preview.reason}</span> : null}<textarea readOnly value={preview.payload} rows={10} aria-label="Comment preview" />{preview.stale_draft_ids.length > 0 ? <span className="comment-preview-blocked">{preview.stale_draft_ids.length} stale comment{preview.stale_draft_ids.length === 1 ? "" : "s"} need review.</span> : null}{preview.exportable && retainedStale ? <span className="comment-preview-ok">Stale excerpts retained.</span> : null}</> : <span className="comment-preview-empty">Preview is optional.</span>}</details>
-        {batch ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onAccepted={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}
+        {batch && persistedBatchId && currentDrafts.length > 0 ? <CommentPasteControls client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} scope={scope} batch={batch} retainStale={retainedStale} preview={preview} onAccepted={() => { setPreview(null); void loadBatch(batch.batch_id); }} /> : null}
     </CommentOverview> : null}
   </>;
 }
