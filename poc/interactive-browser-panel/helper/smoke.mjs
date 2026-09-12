@@ -113,9 +113,22 @@ async function run() {
   }
   assert(greeting, 'pointer click did not activate the fixture button');
 
+  const beforeScroll = await request('inspect');
+  await request('input', { event: { kind: 'mouseMove', x: 500, y: 600, buttons: 0, modifiers: 0 } });
+  const wheelAck = await request('input', { event: { kind: 'wheel', x: 500, y: 600, deltaX: 0, deltaY: 500, modifiers: 0 } });
+  assert(!wheelAck.pngDataUrl && typeof wheelAck.cursor === 'string', 'wheel acknowledgement was not small');
+  const afterScroll = await request('inspect');
+  assert(afterScroll.scrollY > beforeScroll.scrollY, 'wheel input did not change scrollY');
+
+  await request('input', { event: { kind: 'mouseDown', x: 210, y: 120, button: 'left', buttons: 1 } });
+  await request('input', { event: { kind: 'mouseMove', x: 620, y: 120, button: 'left', buttons: 1 } });
+  await request('input', { event: { kind: 'mouseUp', x: 620, y: 120, button: 'left', buttons: 0 } });
+  const selected = await request('inspect');
+  assert(selected.selectedText?.length > 0, 'drag input did not select fixture text');
+
   const finalSnapshot = await request('snapshot');
-  assert(finalSnapshot.pngDataUrl !== beforeTyping.pngDataUrl, 'debounced frame did not change after typing/clicking');
-  console.log('interactive-browser-panel smoke passed: pointer focus, typing, button activation, reload, inspect, and snapshot');
+  assert(finalSnapshot.pngDataUrl !== beforeTyping.pngDataUrl, 'frame did not change after typing, scrolling, and selection');
+  console.log('interactive-browser-panel smoke passed: pointer, typing, button, wheel, selection, reload, inspect, snapshot');
 }
 
 try {

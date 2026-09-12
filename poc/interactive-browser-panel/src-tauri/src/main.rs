@@ -43,6 +43,8 @@ struct InspectResult {
     title: String,
     url: String,
     active_element: String,
+    selected_text: String,
+    scroll_y: u32,
     cursor: String,
 }
 

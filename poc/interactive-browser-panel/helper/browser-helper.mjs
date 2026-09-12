@@ -23,6 +23,7 @@ let cdp;
 let fixtureUrl;
 let shuttingDown = false;
 let lastPointer = { x: 0, y: 0 };
+let mouseButtons = 0;
 
 function protocolError(message) {
   const error = new Error(message);
@@ -151,13 +152,15 @@ async function evaluatePageState(x = lastPointer.x, y = lastPointer.y) {
           return (active.tagName || 'UNKNOWN').slice(0, 40) + id;
         })(),
         fixtureStatus: (document.querySelector('#result')?.textContent || '').slice(0, 240),
+        selectedText: (window.getSelection()?.toString() || '').slice(0, 240),
+        scrollY: Math.max(0, Math.round(window.scrollY)),
         cursor: safeCursors.has(cursor) ? cursor : 'default'
       };
     })()`,
     returnByValue: true,
     awaitPromise: false,
   });
-  return result.result?.value || { title: '', url: fixtureUrl, activeElement: 'BODY', fixtureStatus: '', cursor: 'default' };
+  return result.result?.value || { title: '', url: fixtureUrl, activeElement: 'BODY', fixtureStatus: '', selectedText: '', scrollY: 0, cursor: 'default' };
 }
 
 async function captureScreenshot() {
@@ -198,6 +201,8 @@ async function inspect() {
   return {
     status: 'ready',
     fixtureStatus: String(state.fixtureStatus || '').slice(0, 240),
+    selectedText: String(state.selectedText || '').slice(0, 240),
+    scrollY: Math.max(0, Math.min(100000, Number(state.scrollY) || 0)),
     title: String(state.title || '').slice(0, 200),
     url: String(state.url || fixtureUrl).slice(0, 2048),
     activeElement: String(state.activeElement || 'BODY').slice(0, 128),
@@ -211,6 +216,9 @@ function validateEvent(event) {
   const kind = assertString(event.kind, 'event.kind', 32);
   if (event.modifiers !== undefined && (!Number.isInteger(event.modifiers) || event.modifiers < 0 || event.modifiers > 15)) {
     throw protocolError('event.modifiers must be an integer bitmask from 0 to 15');
+  }
+  if (event.buttons !== undefined && (!Number.isInteger(event.buttons) || event.buttons < 0 || event.buttons > 31)) {
+    throw protocolError('event.buttons must be an integer bitmask from 0 to 31');
   }
   if (['mouseMove', 'mouseDown', 'mouseUp'].includes(kind)) {
     assertNumber(event.x, 'event.x', 0, WIDTH);
@@ -238,25 +246,45 @@ function validateEvent(event) {
   throw protocolError(`unsupported input event kind: ${kind}`);
 }
 
+function buttonMask(button) {
+  return button === 'left' ? 1 : button === 'right' ? 2 : button === 'middle' ? 4 : 0;
+}
 async function dispatchInput(event) {
   const kind = validateEvent(event);
   if (kind === 'mouseMove' || kind === 'mouseDown' || kind === 'mouseUp') {
     const type = { mouseMove: 'mouseMoved', mouseDown: 'mousePressed', mouseUp: 'mouseReleased' }[kind];
+    const button = kind === 'mouseMove' ? 0 : buttonMask(event.button || 'left');
+    if (kind === 'mouseDown') mouseButtons |= button;
+    const derivedButtons = kind === 'mouseUp' ? mouseButtons & ~button : mouseButtons;
+    const buttons = event.buttons ?? derivedButtons;
+    // This Chromium build ignores dragged mouseMoved events with button:"none";
+    // send the active button alongside buttons so text selection progresses.
+    const cdpButton = kind === 'mouseMove'
+      ? (buttons & 1 ? 'left' : buttons & 2 ? 'right' : buttons & 4 ? 'middle' : 'none')
+      : (event.button || 'left');
     lastPointer = { x: event.x, y: event.y };
     await cdp.send('Input.dispatchMouseEvent', {
       type,
       x: event.x,
       y: event.y,
-      button: kind === 'mouseMove' ? 'none' : (event.button || 'left'),
+      button: cdpButton,
       clickCount: kind === 'mouseMove' ? 0 : 1,
+      buttons,
       modifiers: event.modifiers || 0,
     });
+    if (kind === 'mouseUp') mouseButtons &= ~button;
   } else if (kind === 'wheel') {
     lastPointer = { x: event.x, y: event.y };
     await cdp.send('Input.dispatchMouseEvent', {
       type: 'mouseWheel', x: event.x, y: event.y,
       deltaX: event.deltaX || 0, deltaY: event.deltaY || 0,
       modifiers: event.modifiers || 0,
+    });
+    // Let Chromium commit the wheel scroll before reading the acknowledgement state.
+    await cdp.send('Runtime.evaluate', {
+      expression: 'new Promise((resolve) => requestAnimationFrame(() => resolve()))',
+      awaitPromise: true,
+      returnByValue: true,
     });
   } else {
     await cdp.send('Input.dispatchKeyEvent', {

@@ -10,16 +10,24 @@ const dimensions = document.querySelector('#dimensions');
 const pageUrl = document.querySelector('#page-url');
 const activeElement = document.querySelector('#active-element');
 const fixtureStatus = document.querySelector('#fixture-status');
+const scrollY = document.querySelector('#scroll-y');
+const selectedText = document.querySelector('#selected-text');
 const lastAction = document.querySelector('#last-action');
 
 let currentSnapshot;
 let inputQueue = Promise.resolve();
 let inputBusy = false;
-let moveTimer;
-let pendingMove;
+let dragFrame;
+let pendingDragMove;
+let wheelFrame;
+let pendingWheel;
 let pollTimer;
 let selfTestStarted = false;
 let selfTestRequested = false;
+let pendingLowPriority = { pointerMove: undefined, wheel: undefined };
+let lowPrioritySequence = 0;
+let lowPriorityRunning = false;
+
 const SAFE_CURSORS = new Set(['default', 'auto', 'pointer', 'text', 'crosshair', 'move', 'not-allowed', 'wait', 'grab', 'grabbing', 'cell', 'help', 'progress', 'zoom-in', 'zoom-out', 'col-resize', 'row-resize', 'e-resize', 'w-resize', 'n-resize', 's-resize']);
 
 function setStatus(message, kind = 'idle') {
@@ -114,12 +122,12 @@ function inputQueuePending() {
   return inputBusy;
 }
 
-function queueInput(event, description, quiet = false, strict = false) {
+function queueInput(event, description, quiet = false, strict = false, frameDelay = 90) {
   const operation = inputQueue.then(async () => {
     inputBusy = true;
     const ack = await command('browser_input', { event });
     applyInputAck(ack);
-    scheduleFrame(90);
+    scheduleFrame(frameDelay);
     if (!quiet) {
       setStatus('Ready', 'ok');
       reportAction(description);
@@ -133,41 +141,124 @@ function queueInput(event, description, quiet = false, strict = false) {
   });
   return strict ? operation : inputQueue;
 }
+function queueLatestInput(event, description) {
+  const slot = event.kind === 'wheel' ? 'wheel' : 'pointerMove';
+  pendingLowPriority[slot] = { event, description, sequence: ++lowPrioritySequence };
+  if (lowPriorityRunning) return;
+  lowPriorityRunning = true;
+  void (async () => {
+    while (pendingLowPriority.pointerMove || pendingLowPriority.wheel) {
+      const slotToRun = !pendingLowPriority.wheel ||
+        (pendingLowPriority.pointerMove && pendingLowPriority.pointerMove.sequence < pendingLowPriority.wheel.sequence)
+        ? 'pointerMove'
+        : 'wheel';
+      const next = pendingLowPriority[slotToRun];
+      pendingLowPriority[slotToRun] = undefined;
+      await queueInput(next.event, next.description, true, false, 40);
+    }
+    lowPriorityRunning = false;
+  })();
+}
 
 function modifierMask(event) {
   return (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) |
     (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
 }
+function panelPoint(x, y) {
+  const rect = image.getBoundingClientRect();
+  return {
+    clientX: rect.left + x * rect.width / currentSnapshot.width,
+    clientY: rect.top + y * rect.height / currentSnapshot.height,
+  };
+}
+
+function dispatchPanelPointer(type, x, y, options = {}) {
+  const point = panelPoint(x, y);
+  return panel.dispatchEvent(new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 1,
+    ...point,
+    button: options.button ?? -1,
+    buttons: options.buttons ?? 0,
+  }));
+}
+
+function dispatchPanelWheel(x, y, deltaY) {
+  const point = panelPoint(x, y);
+  return panel.dispatchEvent(new WheelEvent('wheel', {
+    bubbles: true,
+    cancelable: true,
+    ...point,
+    deltaMode: 0,
+    deltaY,
+  }));
+}
+
+async function waitForInputIdle() {
+  while (true) {
+    await inputQueue;
+    if (!inputBusy && !lowPriorityRunning && dragFrame === undefined && wheelFrame === undefined) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+async function clickPanel(x, y) {
+  dispatchPanelPointer('pointerdown', x, y, { button: 0, buttons: 1 });
+  dispatchPanelPointer('pointerup', x, y, { button: 0, buttons: 0 });
+  await waitForInputIdle();
+}
+
+async function typePanelKey(key, code) {
+  panel.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, code }));
+  panel.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key, code }));
+  await waitForInputIdle();
+}
+
 async function runSelfTest() {
   if (selfTestStarted || !selfTestRequested || !currentSnapshot) return;
   selfTestStarted = true;
   setStatus('Self-test running…');
   try {
-    const click = async (x, y) => {
-      await queueInput({ kind: 'mouseDown', x, y, button: 'left', modifiers: 0 }, 'Self-test pointer down', true, true);
-      await queueInput({ kind: 'mouseUp', x, y, button: 'left', modifiers: 0 }, 'Self-test pointer up', true, true);
-    };
     let focused;
     for (const [x, y] of [[300, 230], [300, 255], [300, 280], [300, 305]]) {
-      await click(x, y);
+      await clickPanel(x, y);
       focused = await command('browser_inspect');
       if (focused.activeElement === 'INPUT#name') break;
     }
     if (focused?.activeElement !== 'INPUT#name') throw new Error(`input focus was ${focused?.activeElement || 'unknown'}`);
     for (const [key, code] of [['A', 'KeyA'], ['d', 'KeyD'], ['a', 'KeyA']]) {
-      await queueInput({ kind: 'keyDown', key, code, text: key, modifiers: 0 }, `Self-test key down ${key}`, true, true);
-      await queueInput({ kind: 'keyUp', key, code, modifiers: 0 }, `Self-test key up ${key}`, true, true);
+      await typePanelKey(key, code);
     }
     let result;
     for (const [x, y] of [[820, 230], [820, 255], [820, 280], [820, 305], [800, 255], [840, 255]]) {
-      await click(x, y);
+      await clickPanel(x, y);
       result = await command('browser_inspect');
       if (result.fixtureStatus?.includes('Hello, Ada')) break;
     }
-    fixtureStatus.textContent = result?.fixtureStatus || '—';
-    activeElement.textContent = result?.activeElement || '—';
     if (!result?.fixtureStatus?.includes('Hello, Ada')) throw new Error(`fixture status was ${result?.fixtureStatus || 'empty'}`);
-    await command('browser_self_test_report', { success: true, detail: 'pointer focus, typing, and button activation' });
+
+    const beforeScroll = await command('browser_inspect');
+    dispatchPanelPointer('pointermove', 500, 600, { buttons: 0 });
+    dispatchPanelWheel(500, 600, 500);
+    await waitForInputIdle();
+    const afterScroll = await command('browser_inspect');
+    if (afterScroll.scrollY <= beforeScroll.scrollY) throw new Error(`scrollY stayed at ${beforeScroll.scrollY}`);
+
+    dispatchPanelPointer('pointermove', 210, 120, { buttons: 0 });
+    dispatchPanelPointer('pointerdown', 210, 120, { button: 0, buttons: 1 });
+    dispatchPanelPointer('pointermove', 620, 120, { button: 0, buttons: 1 });
+    dispatchPanelPointer('pointerup', 620, 120, { button: 0, buttons: 0 });
+    await waitForInputIdle();
+    await refreshFrame();
+    result = await command('browser_inspect');
+    if (!result.selectedText?.length) throw new Error('drag input did not select fixture text');
+
+    fixtureStatus.textContent = result.fixtureStatus || '—';
+    activeElement.textContent = result.activeElement || '—';
+    scrollY.textContent = String(result.scrollY ?? 0);
+    selectedText.textContent = result.selectedText || '—';
+    await command('browser_self_test_report', { success: true, detail: 'panel pointer, keyboard, wheel, and selection handlers' });
     setStatus('Self-test passed', 'ok');
     reportAction('Native self-test passed');
   } catch (error) {
@@ -177,37 +268,72 @@ async function runSelfTest() {
   }
 }
 
-function imageCoordinates(event) {
+
+function clampedImageCoordinates(event) {
   if (!currentSnapshot) return null;
   const rect = image.getBoundingClientRect();
-  if (!rect.width || !rect.height || event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return null;
+  if (!rect.width || !rect.height) return null;
   return {
     x: Math.max(0, Math.min(currentSnapshot.width, (event.clientX - rect.left) * currentSnapshot.width / rect.width)),
     y: Math.max(0, Math.min(currentSnapshot.height, (event.clientY - rect.top) * currentSnapshot.height / rect.height)),
   };
 }
 
+function imageCoordinates(event) {
+  const coordinates = clampedImageCoordinates(event);
+  if (!coordinates || event.clientX < image.getBoundingClientRect().left || event.clientX > image.getBoundingClientRect().right || event.clientY < image.getBoundingClientRect().top || event.clientY > image.getBoundingClientRect().bottom) return null;
+  return coordinates;
+}
+
 function buttonName(button) {
   return button === 1 ? 'middle' : button === 2 ? 'right' : 'left';
 }
-
+function buttonMask(button) {
+  return button === 'left' ? 1 : button === 'right' ? 2 : 4;
+}
 let activePointer = false;
 let lastPointer = null;
 let activeButton = 'left';
 
+function scheduleAnimation(callback) {
+  return typeof requestAnimationFrame === 'function' && typeof cancelAnimationFrame === 'function'
+    ? requestAnimationFrame(callback)
+    : setTimeout(callback, 16);
+}
+function cancelAnimation(id) {
+  if (typeof requestAnimationFrame === 'function' && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
+  else clearTimeout(id);
+}
+
+
+function flushDragMove() {
+  dragFrame = undefined;
+  const move = pendingDragMove;
+  pendingDragMove = undefined;
+  if (move) queueLatestInput(move, 'Pointer moved');
+}
+
+function flushWheel() {
+  wheelFrame = undefined;
+  // A wheel's target must follow the most recent pointer move in Chromium.
+  if (pendingDragMove) {
+    if (dragFrame !== undefined) {
+      cancelAnimation(dragFrame);
+      dragFrame = undefined;
+    }
+    flushDragMove();
+  }
+  const wheel = pendingWheel;
+  pendingWheel = undefined;
+  if (wheel) queueLatestInput(wheel, 'Wheel scrolled');
+}
+
 panel.addEventListener('pointermove', (event) => {
-  const coordinates = imageCoordinates(event);
+  const coordinates = activePointer ? clampedImageCoordinates(event) : imageCoordinates(event);
   if (!coordinates) return;
   lastPointer = coordinates;
-  pendingMove = { kind: 'mouseMove', ...coordinates, modifiers: modifierMask(event) };
-  if (!moveTimer) {
-    moveTimer = setTimeout(() => {
-      moveTimer = undefined;
-      const move = pendingMove;
-      pendingMove = undefined;
-      if (move) queueInput(move, 'Pointer moved', true);
-    }, 45);
-  }
+  pendingDragMove = { kind: 'mouseMove', ...coordinates, buttons: event.buttons, modifiers: modifierMask(event) };
+  if (dragFrame === undefined) dragFrame = scheduleAnimation(flushDragMove);
 });
 
 panel.addEventListener('pointerdown', (event) => {
@@ -217,16 +343,24 @@ panel.addEventListener('pointerdown', (event) => {
   lastPointer = coordinates;
   activePointer = true;
   activeButton = buttonName(event.button);
-  panel.setPointerCapture?.(event.pointerId);
-  queueInput({ kind: 'mouseDown', ...coordinates, button: activeButton, modifiers: modifierMask(event) }, 'Pointer pressed');
+  try { panel.setPointerCapture?.(event.pointerId); } catch {}
+  queueInput({ kind: 'mouseDown', ...coordinates, button: activeButton, buttons: event.buttons, modifiers: modifierMask(event) }, 'Pointer pressed');
 });
 
 function finishPointer(event, description) {
   if (!activePointer || !lastPointer) return;
-  const coordinates = imageCoordinates(event) || lastPointer;
+  if (dragFrame !== undefined) {
+    cancelAnimation(dragFrame);
+    dragFrame = undefined;
+  }
+  pendingDragMove = undefined;
+  pendingLowPriority.pointerMove = undefined;
+  const coordinates = clampedImageCoordinates(event) || lastPointer;
   activePointer = false;
-  panel.releasePointerCapture?.(event.pointerId);
-  queueInput({ kind: 'mouseUp', ...coordinates, button: activeButton, modifiers: modifierMask(event) }, description);
+  try { panel.releasePointerCapture?.(event.pointerId); } catch {}
+  // Always send the final endpoint before release, including an outside-image drag.
+  queueInput({ kind: 'mouseMove', ...coordinates, buttons: event.buttons || buttonMask(activeButton), modifiers: modifierMask(event) }, 'Pointer moved', true);
+  queueInput({ kind: 'mouseUp', ...coordinates, button: activeButton, buttons: 0, modifiers: modifierMask(event) }, description);
   lastPointer = null;
 }
 
@@ -238,7 +372,16 @@ panel.addEventListener('wheel', (event) => {
   const coordinates = imageCoordinates(event);
   if (!coordinates) return;
   event.preventDefault();
-  queueInput({ kind: 'wheel', ...coordinates, deltaX: event.deltaX, deltaY: event.deltaY, modifiers: modifierMask(event) }, 'Wheel scrolled');
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (currentSnapshot?.height || 720) : 1;
+  const deltaX = event.deltaX * unit;
+  const deltaY = event.deltaY * unit;
+  pendingWheel = {
+    kind: 'wheel', ...coordinates,
+    deltaX: Math.max(-10000, Math.min(10000, (pendingWheel?.deltaX || 0) + deltaX)),
+    deltaY: Math.max(-10000, Math.min(10000, (pendingWheel?.deltaY || 0) + deltaY)),
+    modifiers: modifierMask(event),
+  };
+  if (wheelFrame === undefined) wheelFrame = scheduleAnimation(flushWheel);
 }, { passive: false });
 
 panel.addEventListener('keydown', (event) => {
@@ -299,6 +442,8 @@ document.querySelector('#inspect').addEventListener('click', async () => {
     pageUrl.textContent = result.url;
     activeElement.textContent = result.activeElement;
     fixtureStatus.textContent = result.fixtureStatus || '—';
+    scrollY.textContent = String(result.scrollY ?? 0);
+    selectedText.textContent = result.selectedText || '—';
     setStatus('Ready', 'ok');
     reportAction('Inspected fixed page state');
   } catch (error) {

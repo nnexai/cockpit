@@ -19,6 +19,9 @@
     button:hover { background: #0e56b4; }
     #result { margin: 24px 0 0; padding: 15px 17px; border-radius: 9px; background: #eef4ff; color: #244d87; min-height: 24px; }
     .tag { display: inline-block; margin-top: 22px; color: #687792; font-size: 13px; }
+    .reading { min-height: 1000px; margin-top: 28px; padding: 28px 32px; border: 1px solid #d9e0ed; border-radius: 16px; background: #fff; color: #263550; }
+    .reading h2 { margin: 0 0 10px; color: #173a70; font-size: 22px; }
+    .reading p { margin: 12px 0; color: #52617a; }
   </style>
 </head>
 <body>
@@ -34,6 +37,14 @@
       <div id="result" role="status" aria-live="polite">Waiting for a greeting...</div>
       <span class="tag">Loopback-only local fixture</span>
     </section>
+    <article class="reading">
+      <h2>Selectable page content</h2>
+      <p id="selection-source">Drag across this sentence to exercise real Chromium text selection inside the screenshot pane.</p>
+      <p>Scrolling is also forwarded to the isolated browser. This deliberately long local fixture keeps enough content below the fold to make wheel movement observable.</p>
+      <p>Every interaction remains a normal page event: CSS cursor feedback, text selection, focus, keyboard input, and button activation are owned by Chromium.</p>
+      <p>Playwright provides the cross-platform browser process while the helper uses a CDP session for page inspection and input dispatch.</p>
+      <p>More fixture text keeps the viewport scrollable without changing the coordinates of the name field and greeting button above.</p>
+    </article>
   </main>
   <script>
     const name = document.querySelector('#name');
