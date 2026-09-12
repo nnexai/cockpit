@@ -63,3 +63,7 @@ The native and host builds passed; 16 focused comment/review tests passed. A dis
 ## Browser feedback lookup correction
 
 Feedback reads and acknowledgements now target the selected Space directly. Agent fallback is restricted to that Space, and opening feedback uses the current pane and agent inventory. Previously, the recipient pane could redirect the lookup to another Space. One focused mounted-App regression passed; the native build passed and was installed, and only the desktop was restarted. A read-only web-panel check displayed the existing capture and four annotations. The reported native-panel absence was not reproduced; native acceptance remains with the user.
+
+## Element capture save correction
+
+The next user report was traced to a retained extension capture, not the feedback panel. The live save endpoint returned 422 because element evidence included internal document_id/frame_id/DOM/rectangle metadata. The background save boundary now explicitly selects the six protocol fields, including when retrying already-pending captures. Running the corrected save against the retained capture succeeded and the Space feedback endpoint returned its three annotations. JavaScript syntax, host build, and native build passed. Installed the binaries and restarted Cockpit to update its embedded extension.

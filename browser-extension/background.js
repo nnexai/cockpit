@@ -305,7 +305,21 @@ async function savePendingOnce() {
   if (pending.request_bytes > MAX_REQUEST_BYTES) throw new Error('Capture request exceeds the 6 MiB limit; pending evidence was retained');
   const config = await loadPairing();
   if (pending.submission.association_key !== config.association_key) throw new Error('Pending capture belongs to the previous Space pairing; reconnect that pairing to retry');
-  const result = await apiRequest('/capture', { body: pending.submission });
+  const submission = {
+    ...pending.submission,
+    annotations: pending.submission.annotations.map(annotation => ({
+      ...annotation,
+      element: annotation.element ? {
+        tag: annotation.element.tag,
+        text: annotation.element.text,
+        role: annotation.element.role,
+        name: annotation.element.name,
+        locators: annotation.element.locators,
+        excerpt: annotation.element.excerpt,
+      } : null,
+    })),
+  };
+  const result = await apiRequest('/capture', { body: submission });
   const savedIds = new Set((Array.isArray(pending.submission.annotations) ? pending.submission.annotations : []).map(annotation => annotation.id));
   const captureId = pending.submission.capture_id;
   await mutateFeedbackStorage(async ({ drafts, pending: currentPending, consumed }) => {
