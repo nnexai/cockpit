@@ -1,0 +1,24 @@
+{
+  "captured_at": "2026-09-12T19:16:32+02:00",
+  "source_head": "24618ea",
+  "gateway": "http://127.0.0.1:4193",
+  "herdr_session": "csu12",
+  "checkout": "/tmp/csu12-runtime/worktrees/cockpit-37524fca-2fef-42c0-b6e6-c339ff7ee42c",
+  "proof": {
+    "ordinary_file": ".editorconfig",
+    "ordinary_file_result": "real source rendered with revision metadata and line grid; previous Invalid Context document next_offset failure no longer reproduced",
+    "large_file": "large-review.txt",
+    "large_file_bytes": 6669061,
+    "initial_preview": "real bounded source window rendered with Truncated by preview limit",
+    "continuation": "Load next source page completed",
+    "mutation": "appended CONTEXT_MUTATION_AFTER_PAGE_ONE after first page",
+    "stale_result": "Stale source: context file changed since it was listed",
+    "snapshots": [
+      "/tmp/csu12-evidence/contextfix-source.yml",
+      "/tmp/csu12-evidence/contextfix-large-source.yml",
+      "/tmp/csu12-evidence/contextfix-large-page2.yml",
+      "/tmp/csu12-evidence/contextfix-large-stale.yml"
+    ]
+  },
+  "scope": "Run-owned Herdr and checkout only; PID 2523753 and gateway 191105 untouched."
+}
