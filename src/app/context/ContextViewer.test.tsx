@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "../input/viewerTestLayout";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";

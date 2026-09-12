@@ -59,6 +59,7 @@
 .review-diff:focus-visible { box-shadow: inset 0 0 0 2px var(--focus-strong); }
 .review-diff > header { display: flex; min-height: 36px; align-items: center; gap: 10px; padding-block: 6px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
 .review-diff > header code { min-width: 0; flex: 1; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
+.review-diff > header strong { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .review-hunk { outline: none; }
 .review-hunk.is-current > header,
 .review-hunk:focus > header { background: var(--surface-selected); color: var(--text-primary); }

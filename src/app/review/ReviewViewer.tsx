@@ -33,10 +33,14 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
   const changeRef = useRef(onChange); changeRef.current = onChange;
   const valueRef = useRef(value); valueRef.current = value;
   const reviewViewRef = useRef(reviewView); reviewViewRef.current = reviewView;
+  const publishView = useCallback((next: ContextViewState) => {
+    valueRef.current = next;
+    changeRef.current(next);
+  }, []);
   const updateReviewView = useCallback((patch: Partial<ReviewViewState>) => {
     const current = valueRef.current.review ?? createReviewViewState();
-    changeRef.current({ ...valueRef.current, review: { ...current, ...patch } });
-  }, []);
+    publishView({ ...valueRef.current, review: { ...current, ...patch } });
+  }, [publishView]);
   const appendSourcePage = useCallback((sourceKey: string, side: "old" | "new", requestedOffset: number, expectedRevision: string | null, next: ReviewFileDiff) => {
     const chunk = side === "old" ? next.old_source : next.new_source;
     const offset = side === "old" ? next.old_source_offset : next.new_source_offset;
@@ -62,8 +66,8 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
         ? current : { count: null, canCreateLines: false, canCreateWholeFile: false });
       next = { ...next, commentCount: null };
     }
-    changeRef.current({ ...valueRef.current, review: next });
-  }, []);
+    publishView({ ...valueRef.current, review: next });
+  }, [publishView]);
   useEffect(() => {
     updateReviewView({ mode });
   }, [mode, updateReviewView]);
@@ -78,7 +82,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
       selectionEnd: selection?.end ?? reviewViewRef.current.selectionEnd,
     });
   }, [selection, updateReviewView]);
-  const editorChange = useCallback((commentEditor: ContextViewState["commentEditor"]) => changeRef.current({ ...valueRef.current, commentEditor }), []);
+  const editorChange = useCallback((commentEditor: ContextViewState["commentEditor"]) => publishView({ ...valueRef.current, commentEditor }), [publishView]);
   const updateCommentStatus = useCallback((identity: string, comparison: ReviewComparison, next: CommentStatus) => {
     if (comparison !== activeComparisonRef.current) return;
     if (identity !== activeCommentIdentityRef.current && activeCommentIdentityRef.current !== null) {
@@ -91,7 +95,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     const commentsLoading = viewerRef.current?.querySelector<HTMLElement>('.comment-notice[role="status"]')?.textContent === "Loading comments…";
     if (commentsLoading) return;
     setCommentStatus((current) => current.count === next.count && current.canCreateLines === next.canCreateLines && current.canCreateWholeFile === next.canCreateWholeFile ? current : next);
-    updateReviewView({ commentCount: next.count });
+    if (reviewViewRef.current.commentCount !== next.count) updateReviewView({ commentCount: next.count });
   }, [updateReviewView]);
   const restoreDiffFocus = useCallback(() => requestAnimationFrame(() => viewerRef.current?.querySelector<HTMLElement>(".review-diff")?.focus()), []);
   const { session_id: session, pane_id: pane, binding_id: binding } = presentation;

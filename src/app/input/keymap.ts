@@ -55,16 +55,17 @@ function modifierOnlyKey(key: string): boolean {
 export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
   if (event.isComposing) return;
   const target = typeof HTMLElement !== "undefined" && event.target instanceof HTMLElement ? event.target : null;
+  const modalOpen = routing.modalOpen || Boolean(target?.closest("dialog[open]"));
   const prefixSafe = !editableTarget(target) || Boolean(target?.closest(".terminal-host"));
   if (event.key === "Escape" && routing.prefixActive) {
     routing.setPrefixActive(false);
-    if (!routing.modalOpen && prefixSafe) {
+    if (!modalOpen && prefixSafe) {
       event.preventDefault();
       event.stopPropagation();
     }
     return;
   }
-  if (routing.modalOpen) return;
+  if (modalOpen) return;
   if (!routing.prefixActive) {
     if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b" && prefixSafe) {
       event.preventDefault();

@@ -1,3 +1,4 @@
+import { useFileOverview } from "../input/useFileOverview";
 import { Fragment, type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   ReviewChangedFile,
@@ -143,6 +144,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const filesRef = useRef<HTMLElement | null>(null);
   const paneRef = useRef<HTMLElement | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const overview = useFileOverview(paneRef);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -259,14 +261,17 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     }
     if (focus) button?.focus();
   };
-  const focusTree = useCallback(() => requestAnimationFrame(() => {
+  const focusTree = useCallback(() => {
+    overview.show();
+    requestAnimationFrame(() => {
     const rows = [...(filesRef.current?.querySelectorAll<HTMLButtonElement>(".review-file") ?? [])];
     const button = rows.find((row) => row.dataset.fileId === selected) ?? rows[0];
     for (let parent = button?.parentElement; parent && parent !== filesRef.current; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     }
     (button ?? filesRef.current)?.focus();
-  }), [selected]);
+    });
+  }, [selected]);
   const focusContent = useCallback(() => requestAnimationFrame(() => diffRef.current?.focus()), []);
   const moveFile = (delta: number) => {
     const files = fileNavigationOrder();
@@ -362,7 +367,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const diffContent = (comments = renderLineComments) => {
     const shownFile = diff?.file ?? selectedFile;
     return <>
-        {shownFile ? <header><code>{fileLabel(shownFile)}</code><span>{shownFile.summary}</span></header> : null}
+        {shownFile ? <header><strong title={fileLabel(shownFile)}>{fileName(shownFile)}</strong><span className="viewer-secondary-metadata">{shownFile.summary}</span>{review ? <details className="viewer-details"><summary>Details</summary><dl><dt>Old path</dt><dd><code>{shownFile.old_path ?? "None"}</code></dd><dt>New path</dt><dd><code>{shownFile.new_path ?? "None"}</code></dd><dt>Checkout</dt><dd><code>{review.checkout_path}</code></dd><dt>Review identity</dt><dd><code>{review.review_id}</code></dd><dt>Source identity</dt><dd><code>{review.source_id}</code></dd><dt>Comparison</dt><dd>{review.comparison.replaceAll("_", " ")}</dd><dt>Base revision</dt><dd><code>{review.base_revision ?? "Unavailable"}</code></dd><dt>Head revision</dt><dd><code>{review.head_revision ?? "Unavailable"}</code></dd><dt>Index revision</dt><dd><code>{review.index_revision}</code></dd><dt>Worktree revision</dt><dd><code>{review.worktree_revision}</code></dd><dt>File identity</dt><dd><code>{shownFile.file_id}</code></dd><dt>Old revision</dt><dd><code>{shownFile.old_revision ?? "Unavailable"}</code></dd><dt>New revision</dt><dd><code>{shownFile.new_revision ?? "Unavailable"}</code></dd>{[...review.diagnostics, ...(diff?.diagnostics ?? [])].map((diagnostic, index) => <Fragment key={`${diagnostic.code}-${index}`}><dt>Diagnostic</dt><dd key={`diagnostic-value-${diagnostic.code}-${index}`}><code>{diagnostic.code}</code>{diagnostic.path ? ` · ${diagnostic.path}` : ""} · {diagnostic.message}</dd></Fragment>)}</dl></details> : null}</header> : null}
         {shownFile?.binary ? <p className="review-empty">Binary content has no text anchors.</p> : null}
         {diff?.hunks.map((hunk, index) => <section className={`review-hunk${hunkIndex === index ? " is-current" : ""}`} tabIndex={-1} key={`${index}-${hunk.old_start}-${hunk.new_start}`}>
           <header>@@ -{hunk.old_start} +{hunk.new_start} @@</header>
@@ -394,6 +399,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         {modes.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
       </select>
       {comparison === "branch" ? <label className="review-base" htmlFor={`${baseId}-base`}>Base ref <input id={`${baseId}-base`} value={draftBaseRef} onChange={(event) => editBaseRef(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && draftBaseRef.trim()) { event.preventDefault(); submitComparison(); } }} placeholder="main" /></label> : null}
+      <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={`${baseId}-file-overview`}>Overview</button>
       <button type="button" className="viewer-file-picker-trigger" onClick={() => setPickerOpen(true)} disabled={!review?.files.length} aria-label="Choose review file" title="Choose review file">Files</button>
       <div className="review-nav" aria-label="Review navigation">
         <button type="button" aria-label="Previous file" title="Previous file (Alt+Left)" onClick={() => moveFile(-1)} disabled={!review?.files.length}>←</button>
@@ -407,10 +413,11 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     {error ? <p className="review-notice review-error" role="alert">{error}</p> : null}
     {diff?.truncated ? <p className="review-notice review-warning">This file's unified diff is partial. <button type="button" onClick={onOpenSource}>Open source</button> or narrow the comparison to inspect it safely.</p> : null}
     {review?.truncated ? <p className="review-notice review-warning">Review output reached a configured limit. Refresh with a narrower scope.</p> : null}
-    <div className="review-body">
-      <nav className="review-files" aria-label="Changed files" ref={filesRef} onKeyDown={onFilesKeyDown}>
+    <div className={`review-body${overview.open ? " has-file-overview" : ""}`}>
+      {overview.narrow && overview.open ? <button type="button" className="viewer-overview-backdrop" aria-label="Close file overview" onClick={overview.close} /> : null}
+      <nav id={`${baseId}-file-overview`} className={`review-files${overview.open ? " is-overview-open" : ""}`} aria-label="Changed files" ref={filesRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); diffRef.current?.focus(); } else onFilesKeyDown(event); }}>
         <header><span>Changed files</span><small>{review?.files.length ?? 0}</small></header>
-        {review ? <ReviewFileTree files={review.files} selected={selected} onSelect={setSelected} /> : null}
+        {review ? <ReviewFileTree files={review.files} selected={selected} onSelect={(id) => { setSelected(id); overview.select(); }} /> : null}
         {review && review.files.length === 0 ? <p>No changes in this scope.</p> : null}
       </nav>
       <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus(); }} onKeyDown={onDiffKeyDown}>

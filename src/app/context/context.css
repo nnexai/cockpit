@@ -137,6 +137,7 @@
   color: var(--text-secondary);
 }
 .context-document-header code { min-width: 0; flex: 1; color: var(--text-primary); }
+.context-document-header strong { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .context-state-warning { color: var(--warning, var(--working)); }
 .context-mode-switch { display: flex; gap: 4px; padding-block-start: 6px; background: var(--terminal-bg); }
 .context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: 4px 4px 0 0; color: var(--text-secondary); }

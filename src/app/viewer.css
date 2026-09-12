@@ -23,11 +23,28 @@
   container-type: inline-size;
 }
 
-.viewer-file-picker-trigger {
-  display: none;
-}
+.viewer-file-picker-trigger,
+.viewer-overview-trigger { display: inline-flex; }
+
+.viewer-details { position: relative; flex: 0 0 auto; font: var(--viewer-meta-size)/var(--viewer-meta-line-height) var(--viewer-control-font); }
+.viewer-details summary { color: var(--text-secondary); cursor: pointer; }
+.viewer-details { margin-left: auto; }
+.viewer-details dl { position: absolute; right: 0; top: 100%; z-index: 5; width: min(440px, 90cqw); max-height: 55dvh; overflow: auto; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; margin: 8px 0 0; padding: 8px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--text-secondary); }
+.viewer-details dt { color: var(--text-muted); }
+.viewer-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.viewer-details code { overflow-wrap: anywhere; white-space: normal; }
+.viewer-details pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.context-document-header strong, .review-diff > header strong { flex: 1; }
+.context-body:not(.has-file-overview), .review-body:not(.has-file-overview) { grid-template-columns: minmax(0, 1fr); }
+.context-tree:not(.is-overview-open), .review-files:not(.is-overview-open) { display: none; }
+.viewer-overview-backdrop { position: absolute; inset: 0; z-index: 2; border: 0; background: rgb(3 5 8 / 30%); }
+.context-markdown-body { font-size: var(--font-size-sm); line-height: 22px; }
+.context-markdown-body h1 { font-size: var(--font-size-xl); font-weight: 600; }
+.context-markdown-body h2 { font-size: var(--font-size-lg); font-weight: 500; }
+.context-markdown-body h3 { font-size: var(--font-size-md); font-weight: 500; }
 
 @container (max-width: 520px) {
+  .viewer-secondary-metadata { display: none; }
   .context-viewer .context-body,
   .review-pane .review-body {
     display: flex;
@@ -42,9 +59,23 @@
     overflow: hidden;
   }
 
+  .context-viewer .context-body,
+  .review-pane .review-body { position: relative; }
+
   .context-viewer .context-tree,
-  .review-pane .review-files {
-    display: none;
+  .review-pane .review-files { display: none; }
+
+  .context-viewer .context-tree.is-overview-open,
+  .review-pane .review-files.is-overview-open {
+    position: absolute;
+    z-index: 3;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    width: min(288px, 84%);
+    border-right: 1px solid var(--border-strong);
+    box-shadow: 8px 0 24px rgba(0, 0, 0, .24);
   }
 
   .context-viewer .context-document,
@@ -60,7 +91,9 @@
   }
 
   .context-viewer .viewer-file-picker-trigger,
-  .review-pane .viewer-file-picker-trigger {
+  .review-pane .viewer-file-picker-trigger,
+  .context-viewer .viewer-overview-trigger,
+  .review-pane .viewer-overview-trigger {
     display: inline-flex;
   }
 }
@@ -95,7 +128,7 @@
     width: 100%;
   }
 
-  .context-viewer .context-toolbar > button:not(.viewer-file-picker-trigger) {
+  .context-viewer .context-toolbar > button:not(.viewer-file-picker-trigger, .viewer-overview-trigger) {
     width: 28px;
     min-width: 28px;
     flex: 0 0 28px;
