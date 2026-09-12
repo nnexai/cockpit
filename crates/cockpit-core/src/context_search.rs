@@ -10,6 +10,7 @@ use cockpit_protocol::context_search::{
     ContextInvalidation, ContextInvalidationRequest, ContextInvalidationResponse,
     ContextInvalidationState, ContextSearchRequest, ContextSearchResponse, ContextSearchResult,
 };
+use sha2::{Digest, Sha256};
 
 use crate::context::{metadata_revision, AuthorizedRoot, ContextService};
 use crate::InspectionError;
@@ -154,17 +155,9 @@ fn search_blocking(
     request: ContextSearchRequest,
 ) -> Result<ContextSearchResponse, InspectionError> {
     root.revalidate()?;
-    let revision = root.directory_revision()?;
-    if request
-        .revision
-        .as_deref()
-        .is_some_and(|expected| expected != revision)
-    {
-        return Err(InspectionError::new(
-            "context_stale_revision",
-            "Context root changed since search continued",
-        ));
-    }
+    let root_revision = root.directory_revision()?;
+    let mut corpus_hasher = Sha256::new();
+    update_corpus_revision(&mut corpus_hasher, "", &root_revision);
     let deadline = Instant::now() + SEARCH_TIMEOUT;
     let mut pending = vec![(root.resolve_directory(Path::new(""))?, PathBuf::new())];
     let mut results = Vec::new();
@@ -252,6 +245,11 @@ fn search_blocking(
             if metadata.file_type().is_symlink() {
                 continue;
             }
+            update_corpus_revision(
+                &mut corpus_hasher,
+                &candidate.to_string_lossy(),
+                &metadata_revision(&metadata),
+            );
             if metadata.is_dir() {
                 match directory.open_dir_nofollow(Path::new(&name)) {
                     Ok(child) => pending.push((child, candidate)),
@@ -298,12 +296,23 @@ fn search_blocking(
         truncated = true;
     } else {
         root.revalidate()?;
-        if root.directory_revision()? != revision {
+        if root.directory_revision()? != root_revision {
             return Err(InspectionError::new(
                 "context_changed_during_read",
                 "Context root changed while searching",
             ));
         }
+    }
+    let revision = finish_corpus_revision(corpus_hasher);
+    if request
+        .revision
+        .as_deref()
+        .is_some_and(|expected| expected != revision)
+    {
+        return Err(InspectionError::new(
+            "context_stale_revision",
+            "Context files changed since search continued",
+        ));
     }
     let next_offset = (truncated && !results.is_empty()).then_some(
         request
@@ -323,6 +332,17 @@ fn search_blocking(
         next_offset,
         partial_reason,
     })
+}
+
+fn update_corpus_revision(hasher: &mut Sha256, path: &str, revision: &str) {
+    hasher.update(path.as_bytes());
+    hasher.update([0]);
+    hasher.update(revision.as_bytes());
+    hasher.update([0xff]);
+}
+
+fn finish_corpus_revision(hasher: Sha256) -> String {
+    format!("search-{:x}", hasher.finalize())
 }
 
 fn invalidate_blocking(
@@ -564,12 +584,13 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_matches, append_matches_page, truncate_utf8, validate_invalidation_request,
-        validate_search_request,
+        append_matches, append_matches_page, finish_corpus_revision, truncate_utf8,
+        update_corpus_revision, validate_invalidation_request, validate_search_request,
     };
     use cockpit_protocol::context_search::{
         ContextInvalidationRequest, ContextKnownRevision, ContextSearchRequest,
     };
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn search_preserves_lf_line_numbers_and_lone_carriage_returns() {
@@ -623,6 +644,19 @@ mod tests {
         );
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].line, 3);
+    }
+
+    #[test]
+    fn corpus_revision_changes_when_a_nested_file_revision_changes() {
+        let mut before = Sha256::new();
+        update_corpus_revision(&mut before, "", "root");
+        update_corpus_revision(&mut before, "nested/file.md", "file-r1");
+        let before = finish_corpus_revision(before);
+        let mut after = Sha256::new();
+        update_corpus_revision(&mut after, "", "root");
+        update_corpus_revision(&mut after, "nested/file.md", "file-r2");
+        let after = finish_corpus_revision(after);
+        assert_ne!(before, after);
     }
 
     #[test]

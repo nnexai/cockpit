@@ -513,7 +513,7 @@ function contextTreeRows(root: ContextRoot, directories: Record<string, Director
 export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView }: ContextViewerProps) {
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
-  const [documentPageLoading, setDocumentPageLoading] = useState(false);
+  const [documentPageLoading, setDocumentPageLoading] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const protectedDirectoryKeysRef = useRef<Set<string>>(new Set());
   const [refreshGeneration, setRefreshGeneration] = useState(0);
@@ -583,10 +583,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const loadDocumentPage = useCallback(async () => {
     if (!root || !selectedPath || !selectedKey || !document || document.next_offset === undefined) return;
     const expectedOffset = document.next_offset;
+    const requestKey = `${selectedKey}\u0000${document.revision}\u0000${expectedOffset}`;
     const controller = new AbortController();
     documentController.current?.abort();
     documentController.current = controller;
-    setDocumentPageLoading(true);
+    setDocumentPageLoading(requestKey);
     try {
       const data = await client.contextDocument(sessionId, paneId, {
         binding_id: bindingId,
@@ -613,7 +614,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (!controller.signal.aborted) setDocuments((current) => retainDocumentState(current, selectedKey, { status: "error", document: current[selectedKey]?.document ?? document, error: readableError(error) }));
     } finally {
       if (documentController.current === controller) documentController.current = null;
-      if (!controller.signal.aborted) setDocumentPageLoading(false);
+      setDocumentPageLoading((current) => current === requestKey ? null : current);
     }
   }, [bindingId, client, document, paneId, root, selectedKey, selectedPath, sessionId]);
   const knownRevisions = useMemo<ContextKnownRevision[]>(() => Object.values(documents)
@@ -742,6 +743,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const requestIdentity = identityKey;
     const requestBindingId = bindingId;
     const requestRootId = root.root_id;
+    setDocumentPageLoading(null);
     setDocuments((current) => retainDocumentState(current, selectedKey, { status: "loading", document: current[selectedKey]?.document }));
     const request: ContextDocumentRequest = { binding_id: requestBindingId, root_id: requestRootId, path: selectedPath, expected_revision: selectedRevision };
     void client.contextDocument(sessionId, paneId, request, controller.signal).then((data) => {
@@ -1032,6 +1034,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       const selectedLines = selectedRange
         ? `Lines ${Math.min(selectedRange.start, selectedRange.end)}–${Math.max(selectedRange.start, selectedRange.end)}`
         : null;
+      const pageRequestKey = selectedKey && document.next_offset !== undefined
+        ? `${selectedKey}\u0000${document.revision}\u0000${document.next_offset}`
+        : null;
       return (
         <>
           <div className="context-document-header"><code>{selectedPath}</code><span>{document.bytes} B · revision {document.revision}</span>{metadata ? <span>{metadata}</span> : null}{selectedLines ? <span>{selectedLines}</span> : null}{document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}</div>
@@ -1042,7 +1047,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               const mode = effectiveMode;
               return <>
                 {renderedMode ? <div className="context-mode-switch"><button type="button" aria-pressed={mode === "source"} onClick={() => updateFile({ mode: mode === "source" ? "auto" : "source" })}>{mode === "source" ? "Rendered preview" : "View source"}</button></div> : null}
-                {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing a bounded source window.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading}>{documentPageLoading ? "Loading…" : "Load next source page"}</button></div> : null}
+                {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing a bounded source window.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading === pageRequestKey}>{documentPageLoading === pageRequestKey ? "Loading…" : "Load next source page"}</button></div> : null}
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
                   {mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={{ ...fileState!, mode: "markdown" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
                 </RenderErrorBoundary>

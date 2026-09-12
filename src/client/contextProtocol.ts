@@ -94,7 +94,12 @@ export function parseContextDirectory(value: unknown): ContextDirectory {
   if (value.revision !== undefined && !nullableText(value.revision)) malformed("Context directory revision");
   if (value.next_offset !== undefined && value.next_offset !== null && !boundedOffset(value.next_offset)) malformed("Context directory continuation");
   if (value.total_entries !== undefined && value.total_entries !== null && !bytes(value.total_entries)) malformed("Context directory count");
-  return value as unknown as ContextDirectory;
+  return {
+    ...value,
+    revision: value.revision === undefined || value.revision === null ? undefined : value.revision,
+    next_offset: value.next_offset === undefined || value.next_offset === null ? undefined : value.next_offset,
+    total_entries: value.total_entries === undefined || value.total_entries === null ? undefined : value.total_entries,
+  } as unknown as ContextDirectory;
 }
 
 export function parseContextDocument(value: unknown): ContextDocument {
@@ -104,10 +109,16 @@ export function parseContextDocument(value: unknown): ContextDocument {
     || !diagnostics(value.diagnostics) || (value.truncated && value.content_hash !== null)
     || (text(value.text) && value.text.length > 8 * 1024 * 1024)) malformed("Context document");
   for (const [name, item] of [["offset", value.offset], ["next_offset", value.next_offset], ["line_offset", value.line_offset]] as const) {
-    if (item !== undefined && !bytes(item)) malformed(`Context document ${name}`);
+    if (item !== undefined && item !== null && !bytes(item)) malformed(`Context document ${name}`);
   }
   if (value.total_bytes !== undefined && value.total_bytes !== null && !bytes(value.total_bytes)) malformed("Context document total bytes");
-  return value as unknown as ContextDocument;
+  return {
+    ...value,
+    offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
+    next_offset: value.next_offset === undefined || value.next_offset === null ? undefined : value.next_offset,
+    line_offset: value.line_offset === undefined || value.line_offset === null ? undefined : value.line_offset,
+    total_bytes: value.total_bytes === null ? undefined : value.total_bytes,
+  } as unknown as ContextDocument;
 }
 
 export function matchContextResponse<T extends { binding_id: string; root_id: string; path: string }>(value: T, request: ContextDirectoryRequest): T {

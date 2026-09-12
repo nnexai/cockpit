@@ -1330,13 +1330,23 @@ impl ReviewService {
                 reader.read_exact(&mut bytes).await.map_err(|_| {
                     InspectionError::new("review_source_unreadable", "Git source could not be read")
                 })?;
-                let text = String::from_utf8(bytes).map_err(|_| {
+                let valid_bytes = match std::str::from_utf8(&bytes) {
+                    Ok(_) => bytes.len(),
+                    Err(error) if error.valid_up_to() > 0 => error.valid_up_to(),
+                    Err(_) => {
+                        return Err(InspectionError::new(
+                            "review_source_boundary",
+                            "Git source continuation offset is not a UTF-8 boundary",
+                        ));
+                    }
+                };
+                let text = String::from_utf8(bytes[..valid_bytes].to_vec()).map_err(|_| {
                     InspectionError::new(
                         "review_source_binary",
                         "Git review source is not UTF-8 text",
                     )
                 })?;
-                let end = offset.saturating_add(text.len() as u64);
+                let end = offset.saturating_add(valid_bytes as u64);
                 Ok(FrozenSource {
                     text: Some(text),
                     hash: None,
@@ -3285,6 +3295,36 @@ mod tests {
             .await
             .expect("second Git page");
         assert_eq!(second.text.as_deref(), Some("xxxxxxxxxxxxxxxxx"));
+        assert!(!second.truncated);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn git_source_pages_resume_at_utf8_boundary() {
+        let root = fixture("git-paged-unicode");
+        let mut bytes = vec![b'x'; MAX_FILE_BYTES - 1];
+        bytes.extend_from_slice("é-tail".as_bytes());
+        std::fs::write(root.join("unicode.txt"), bytes).expect("write source");
+        commit(&root, "unicode source");
+        let head = String::from_utf8(git_bytes(&root, &["rev-parse", "HEAD"]))
+            .expect("head text")
+            .trim()
+            .to_owned();
+        let service = service(&root);
+        let first = service
+            .git_source_page(&root, &head, "unicode.txt", 0)
+            .await
+            .expect("first Git page");
+        assert_eq!(
+            first.text.as_ref().map(String::len),
+            Some(MAX_FILE_BYTES - 1)
+        );
+        assert!(first.truncated);
+        let second = service
+            .git_source_page(&root, &head, "unicode.txt", (MAX_FILE_BYTES - 1) as u32)
+            .await
+            .expect("continuation Git page");
+        assert_eq!(second.text.as_deref(), Some("é-tail"));
         assert!(!second.truncated);
         std::fs::remove_dir_all(root).expect("cleanup");
     }
