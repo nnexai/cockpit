@@ -844,7 +844,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   // authorize renderer requests, but must not reset a live terminal renderer.
   const rendererKey = visiblePaneIds.map((paneId) => {
     const renderer = renderers.panes[paneId];
-    return `${paneId}:${renderer ? `${renderer.presentation.renderer ?? "terminal"}:${renderer.choice ?? ""}` : "pending"}`;
+    const graphical = renderer && (isGraphicalContext(renderer) || isGraphicalReview(renderer));
+    return `${paneId}:${graphical ? `${renderer.presentation.renderer}:${renderer.choice ?? ""}` : "terminal"}`;
   }).join("\0");
   const paneRenderKey = selectedTab && visiblePanes.length > 0 ? `${selectedTab.id}\0${visiblePaneIds.join("\0")}\0${rendererKey}` : null;
   const paneProjection: PaneCanvasProjection = { key: paneRenderKey, panes: visiblePanes, layout, visiblePaneIds, selectedPaneId: selection.paneId && visiblePaneIds.includes(selection.paneId) ? selection.paneId : null };
@@ -1368,7 +1369,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const bounds = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / projection.visiblePaneIds.length * 100}%`, top: "0%", width: `${100 / projection.visiblePaneIds.length}%`, height: "100%" };
     const style = { ...bounds, visibility: painted ? "visible" as const : "hidden" as const, pointerEvents: painted ? "auto" as const : "none" as const };
     const renderer = renderers.panes[pane.id];
-    const paneRendererKey = renderer ? `${renderer.presentation.renderer ?? "terminal"}:${renderer.choice ?? ""}` : "pending";
+    const paneRendererKey = renderer && (isGraphicalContext(renderer) || isGraphicalReview(renderer)) ? `${renderer.presentation.renderer}:${renderer.choice ?? ""}` : "terminal";
     const paintedSelected = painted && pane.id === projection.selectedPaneId;
     const controlPendingForPane = incoming && state.focusPending !== null
       && (state.focusPending.kind === "pane" || state.focusPending.kind === "agent"
@@ -1466,6 +1467,7 @@ export function App({ client }: { client: CockpitClient }) {
     onTimeout: requestResync,
   });
   const focusAndSelect = useCallback((request: FocusRequest, location: Selection) => {
+    setSelection(location);
     setControlPaneId(location.paneId);
     focus(request, location);
   }, [focus]);

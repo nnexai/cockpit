@@ -379,7 +379,7 @@ describe("mounted App mutation and session ordering", () => {
     expect(button("Pane").disabled).toBe(true);
   });
 
-  it("keeps the current tab until Herdr confirms a focus request", async () => {
+  it("paints the requested tab while Herdr confirms focus", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
@@ -387,7 +387,7 @@ describe("mounted App mutation and session ordering", () => {
     if (!tab) throw new Error("Missing second tab");
     click(tab);
     await settle();
-    expect(selectedTab()).toBe("Tab 1: Alpha tab");
+    expect(selectedTab()).toBe("Tab 2: Second tab");
     expect(container.querySelector('[aria-label="Waiting for Herdr focus confirmation"]')).not.toBeNull();
 
     fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
