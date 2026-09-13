@@ -643,6 +643,17 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
     return false;
   };
+  const discardPendingCapture = async (): Promise<void> => {
+    const pending = pendingCaptureRef.current;
+    const current = snapshotRef.current;
+    const documentContext = current ? context(current) : null;
+    if (!pending || !documentContext) { setMessage("The pending capture is still recovering."); return; }
+    const discarded = await command({ type: "draft", context: documentContext, draft_id: pending.draft_id, expected_revision: pending.draft_revision, command: { type: "discard_pending" } });
+    if (discarded?.type !== "capture" || discarded.capture.state !== "absent") return;
+    pendingDeliveryIdsRef.current = null;
+    setPendingCaptureState(null);
+    await openDraft();
+  };
   const capture = async (captureAsShown: boolean): Promise<void> => {
     const pending = pendingCaptureRef.current;
     const current = snapshotRef.current;
@@ -788,8 +799,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       <span className="browser-color-picker">{COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} title={`Use ${candidate} annotation color`} style={{ background: candidate, borderColor: candidate }} onClick={() => setColor(candidate)} />)}</span>
       <button type="button" disabled={!selectedId} aria-label="Remove" title="Remove selected annotation" onClick={() => { const current = snapshotRef.current; const documentContext = current ? context(current) : null; const currentDraft = draftRef.current; if (selectedId && documentContext && currentDraft) void command({ type: "draft", context: documentContext, draft_id: currentDraft.draft_id, expected_revision: currentDraft.revision, command: { type: "remove_annotation", annotation_id: selectedId } }); }}><AnnotationIcon name="remove" /></button>
       <button type="button" className="browser-annotation-notes" aria-expanded={notesOpen} aria-label={`Notes ${annotations.length}`} title={`Notes (${annotations.length})`} onClick={() => setNotesOpen((open) => !open)}><AnnotationIcon name="notes" /><span className="browser-annotation-count" aria-hidden="true">{annotations.length}</span></button>
-      {pendingCapture ? <span className="browser-capture-pending" role="status">Pending capture · Send annotations to retry</span> : null}
-      <button type="button" disabled={!draft || (!pendingCapture && (!frame || annotations.length === 0))} aria-label="Send annotations" title={pendingCapture ? "Retry pending capture" : "Capture and send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /><span>Send annotations</span></button>
+      {pendingCapture ? <><span className="browser-capture-pending" role="status">Pending capture · retry sending or discard it</span><button type="button" aria-label="Discard pending capture" title="Discard pending capture" onClick={() => void discardPendingCapture()}><AnnotationIcon name="remove" /></button></> : null}
+      <button type="button" disabled={pendingCapture ? false : !draft || !frame || annotations.length === 0} aria-label="Send annotations" title={pendingCapture ? "Retry pending capture" : "Capture and send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /><span>Send annotations</span></button>
     </div>
       <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={(event) => sendKey(event, "down")} onKeyUp={(event) => sendKey(event, "up")} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
