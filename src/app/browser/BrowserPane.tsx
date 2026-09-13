@@ -119,7 +119,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
 
   const applySnapshot = useCallback((next: BrowserViewSnapshot) => {
     snapshotRef.current = next;
-    inputSequence.current = next.control.next_input_sequence;
     setSnapshot(next);
     if (!urlEditing.current) setUrl(next.navigation?.url ?? "");
   }, []);
@@ -194,7 +193,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           && response.outcome.snapshot.identity.stream_epoch === current.identity.stream_epoch
           && response.outcome.snapshot.metadata_sequence >= current.metadata_sequence)) applySnapshot(response.outcome.snapshot);
       } else if (response.outcome.type === "control" && snapshotRef.current
-        && response.outcome.control.lease_generation >= snapshotRef.current.control.lease_generation) applySnapshot({ ...snapshotRef.current, control: response.outcome.control });
+        && response.outcome.control.lease_generation >= snapshotRef.current.control.lease_generation) { inputSequence.current = response.outcome.control.next_input_sequence; applySnapshot({ ...snapshotRef.current, control: response.outcome.control }); }
       else if (response.outcome.type === "draft") {
         const current = snapshotRef.current;
         if (current?.displayed_target_id === response.outcome.draft.target_id
@@ -276,7 +275,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (closed) return;
       if (incoming.type === "attached") {
         if (identityRef.current) return;
-        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
+        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
       }
       const identity = identityRef.current;
       if (!identity || incoming.metadata.view_id !== identity.id || incoming.metadata.stream_epoch !== identity.epoch) return;
@@ -297,7 +296,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "cursor_changed": next = { ...previous, cursor: incoming.cursor }; break;
         case "blocker_changed": next = { ...previous, blocker: incoming.blocker }; break;
         case "capabilities_changed": next = { ...previous, capabilities: incoming.capabilities }; break;
-        case "control_changed": next = { ...previous, control: incoming.control }; break;
+        case "control_changed": inputSequence.current = incoming.control.next_input_sequence; next = { ...previous, control: incoming.control }; break;
         case "frame_descriptor": return;
         case "frame_transport_revoked": setStatus("stale"); setMessage(incoming.message); return;
         case "failed": setStatus("error"); setMessage(incoming.message); return;
