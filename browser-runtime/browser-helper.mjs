@@ -930,6 +930,10 @@ async function attach(message) {
   browser = await chromium.connectOverCDP(message.cdp_endpoint);
   context = browser.contexts()[0];
   browserCdp = await browser.newBrowserCDPSession();
+  // Target events are opt-in on the browser-level CDP session. Without
+  // discovery, tabs opened by Playwright or another connected client remain
+  // absent until an unrelated manual tab command refreshes the snapshot.
+  await browserCdp.send('Target.setDiscoverTargets', { discover: true });
   const viewport = requestedViewport(message.viewport);
   state = {
     associationKey: message.association_key, browserIncarnation: message.browser_incarnation,
