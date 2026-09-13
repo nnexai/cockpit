@@ -9,7 +9,7 @@ export interface BrowserPaneProps {
   client: CockpitClient; target: BrowserTarget; viewport: BrowserViewViewportRequest;
   visible?: boolean; presentation?: BrowserViewPresentation; clientId?: string;
   inputActive?: boolean; liveInputEnabled?: boolean; onInteractionFocus?: () => void; onFeedback?: (captureIds: string[]) => void;
-  onHide?: () => void; onBackToTerminals?: () => void; onExpand?: () => void; className?: string;
+  onReconnect?: () => void; onHide?: () => void; onBackToTerminals?: () => void; onExpand?: () => void; className?: string;
 }
 
 type PaneStatus = "hidden" | "loading" | "ready" | "stale" | "error" | "unsupported" | "empty";
@@ -75,8 +75,7 @@ function context(snapshot: BrowserViewSnapshot) {
 function location(snapshot: BrowserViewSnapshot, frame: BrowserViewFramePacket["descriptor"]): BrowserViewLocation | null {
   return snapshot.document && snapshot.viewport && snapshot.displayed_target_id ? { target_id: snapshot.displayed_target_id, document_generation: snapshot.document.document_generation, viewport_revision: snapshot.viewport.viewport_revision, presented_frame_sequence: frame.frame_sequence, lease_generation: snapshot.control.lease_generation } : null;
 }
-
-export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onHide, onBackToTerminals, onExpand, className }: BrowserPaneProps) {
+export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onHide, onBackToTerminals, onExpand, className }: BrowserPaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<BrowserViewStream | null>(null);
@@ -737,7 +736,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     void enqueueInput("boundary", async () => { await command(commandValue); });
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
-    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{presentation === "browser_only" && onBackToTerminals ? <button type="button" onClick={onBackToTerminals}>Restore split</button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" onClick={onExpand}>Expand browser</button> : null}{(status === "stale" || status === "error") ? <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button> : null}{onHide ? <button type="button" onClick={onHide}>Close browser pane</button> : null}</div></header>
+    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{presentation === "browser_only" && onBackToTerminals ? <button type="button" onClick={onBackToTerminals}>Restore split</button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" onClick={onExpand}>Expand browser</button> : null}{(status === "stale" || status === "error") ? <button type="button" onClick={() => onReconnect ? onReconnect() : setRetry((value) => value + 1)}>Retry</button> : null}{onHide ? <button type="button" onClick={onHide}>Close browser pane</button> : null}</div></header>
     <div className="browser-tabs" role="tablist" aria-label="Browser tabs">{targetTabs.map((browserTarget) => <div key={browserTarget.target_id} className="browser-tab-wrap"><button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{browserTarget.title || browserTarget.url || "New tab"}</button>{browserTarget.can_close ? <button type="button" className="browser-tab-close" aria-label="Close browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } })}>×</button> : null}</div>)}<button type="button" className="browser-new-tab" aria-label="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}>+</button></div>
     <div className="browser-navigation"><button type="button" disabled={!snapshot?.navigation?.can_go_back} onClick={() => navigation("back")}>←</button><button type="button" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}>→</button><button type="button" disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}>{snapshot?.navigation?.loading ? "■" : "↻"}</button><form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}><input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" /></form></div>
     <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
