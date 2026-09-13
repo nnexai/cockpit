@@ -12,6 +12,12 @@ The default build invokes the local Tauri CLI as `bunx tauri build --no-bundle`,
 
 `$XDG_BIN_HOME/cockpit` and `$XDG_BIN_HOME/cockpit-cli`, or `~/.local/bin/cockpit` and `~/.local/bin/cockpit-cli` by default, are stable symlinks to the installed binaries. Existing Cockpit processes retain their old executable image. The installer writes new temporary binaries beside the installed binaries, syncs them, then atomically replaces the old files. New launches use the update without killing or restarting anything.
 
+After changing browser paths or installing an update, fully restart any
+existing `cockpit` or `cockpit serve` process before testing. Browser
+configuration is loaded at startup; if another process already owns the
+browser state root, the new process observes it and forwards browser
+operations to that owner.
+
 The desktop entry is written under the selected data directory at `applications/dev.cockpit.app.desktop`, and the icon at `icons/hicolor/256x256/apps/dev.cockpit.app.png`. Linux desktop environments consume these files. On macOS, the user-local binaries work from a shell; add the selected `bin` directory to `PATH` if it is not already present.
 
 ## Native window settings

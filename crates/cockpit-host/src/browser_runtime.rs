@@ -36,11 +36,30 @@ use tokio::{
 const MAX_REQUEST_FRAME: usize = 6 * 1024 * 1024;
 const MAX_RESPONSE_FRAME: usize = 129 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+// Owner browser actions can perform up to four sequential 15-second CLI
+// probes/operations, with a small allowance for the bounded socket checks
+// around them. This remains a finite observer deadline.
+const BROWSER_ACTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(75);
+// Attachment performs one 15-second live probe before the helper's bounded
+// 10-second ready and 10-second first-frame waits.
+const INLINE_VIEW_OPEN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(45);
+// A helper command waits up to 10 seconds for its response; leave bounded
+// room for the owner's follow-up work before returning the wire response.
+const INLINE_VIEW_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const OWNER_READY_TIMEOUT: Duration = Duration::from_secs(2);
 const OWNER_READY_POLL: Duration = Duration::from_millis(25);
 const OWNER_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PEERS: usize = 32;
 const VIEW_EVENT_QUEUE: usize = 64;
+
+fn response_read_timeout(request: &WireRequest) -> Duration {
+    match request {
+        WireRequest::Action(_) => BROWSER_ACTION_RESPONSE_TIMEOUT,
+        WireRequest::BrowserViewOpen(_) => INLINE_VIEW_OPEN_RESPONSE_TIMEOUT,
+        WireRequest::BrowserViewCommand(_) => INLINE_VIEW_COMMAND_RESPONSE_TIMEOUT,
+        _ => IO_TIMEOUT,
+    }
+}
 
 /// Validate a browser-view command and preserve the protocol's structured
 /// navigation rejection code at every host boundary.
@@ -716,7 +735,8 @@ async fn forward(socket: &Path, request: WireRequest) -> Result<WireResponse, In
         )
     })?
     .map_err(|error| io_error("browser_outcome_unknown", error))?;
-    let frame = timeout(IO_TIMEOUT, read_frame(&mut reader, MAX_RESPONSE_FRAME))
+    let response_timeout = response_read_timeout(&request);
+    let frame = timeout(response_timeout, read_frame(&mut reader, MAX_RESPONSE_FRAME))
         .await
         .map_err(|_| {
             InspectionError::new(
@@ -796,6 +816,9 @@ async fn forward_view_events(
     let (events, receiver) = tokio::sync::broadcast::channel(VIEW_EVENT_QUEUE);
     let relay = events.clone();
     tokio::spawn(async move {
+        // Keep the client-to-owner half open while the returned receiver is
+        // live; the owner uses EOF on this half as the event-stream signal.
+        let _writer = writer;
         loop {
             let frame = tokio::select! {
                 _ = relay.closed() => break,
@@ -1050,4 +1073,42 @@ fn io_error(code: &'static str, error: impl std::fmt::Display) -> InspectionErro
         error.to_string()
     };
     InspectionError::new(code, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_read_deadline_matches_browser_operation() {
+        let action: WireRequest = serde_json::from_str(
+            r#"{"kind":"action","value":{"target":{"session_id":"session","space_id":null,"pane_id":null,"endpoint_path":null},"action":{"kind":"status"}}}"#,
+        )
+        .expect("valid action request");
+        let open: WireRequest = serde_json::from_str(
+            r#"{"kind":"browser_view_open","value":{"target":{"session_id":"session","space_id":null,"pane_id":null,"endpoint_path":null},"client_id":"client","presentation":"split","viewport":{"css_width":800,"css_height":600,"device_pixel_ratio":1.0},"takeover":false}}"#,
+        )
+        .expect("valid browser view open request");
+        let command: WireRequest = serde_json::from_str(
+            r#"{"kind":"browser_view_command","value":{"view_id":"view","stream_epoch":1,"request_id":"request","command":{"type":"take_control","viewport":{"css_width":800,"css_height":600,"device_pixel_ratio":1.0}}}}"#,
+        )
+        .expect("valid browser view command request");
+
+        assert_eq!(
+            response_read_timeout(&action),
+            BROWSER_ACTION_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            response_read_timeout(&open),
+            INLINE_VIEW_OPEN_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            response_read_timeout(&command),
+            INLINE_VIEW_COMMAND_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            response_read_timeout(&WireRequest::BrowserViewEvents("view".to_owned())),
+            IO_TIMEOUT
+        );
+    }
 }

@@ -123,20 +123,77 @@
 
 .browser-annotation-toolbar {
   flex-wrap: wrap;
+  align-content: center;
+  row-gap: 4px;
 }
 
-.browser-annotation-toolbar .is-active,
+.browser-annotation-toolbar > button {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 var(--compact-control-size);
+  align-items: center;
+  justify-content: center;
+  width: var(--compact-control-size);
+  min-width: var(--compact-control-size);
+  padding: 0;
+}
+
+.browser-annotation-toolbar > button.browser-annotation-notes {
+  flex-basis: auto;
+  width: auto;
+  min-width: var(--compact-control-size);
+  gap: 3px;
+  padding-inline: 5px;
+}
+
+.browser-annotation-toolbar > button:hover:not(:disabled),
+.browser-annotation-toolbar > button:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.browser-annotation-toolbar > button.is-active,
 .browser-tabs button[aria-selected="true"] {
   border-color: var(--focus-strong);
   background: var(--surface-hover);
 }
 
+.browser-annotation-toolbar > button:focus-visible,
+.browser-color-picker button:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: 1px;
+}
+
+.browser-annotation-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.browser-annotation-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.browser-annotation-icon-region {
+  stroke-dasharray: 2 1.5;
+}
+
+.browser-annotation-count {
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .browser-color-picker {
   display: inline-flex;
+  flex: 0 0 auto;
   gap: 3px;
 }
 
 .browser-color-picker button {
+  box-sizing: border-box;
   width: var(--compact-control-size);
   padding: 0;
   background: var(--annotation-color);
