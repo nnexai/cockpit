@@ -411,33 +411,6 @@
   border-color: var(--focus-strong);
 }
 
-.browser-state {
-  display: flex;
-  max-width: 32rem;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 24px;
-  color: var(--text-secondary);
-  text-align: center;
-  font-size: var(--font-size-sm);
-}
-
-.browser-state strong {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.browser-state span {
-  color: var(--text-muted);
-  font-size: var(--font-size-2xs);
-}
-
-.browser-pane-loading .browser-state strong::before {
-  margin-right: 6px;
-  color: var(--working);
-  content: "◌";
-}
 
 .browser-pane-stale .browser-toolbar-status,
 .browser-pane-error .browser-toolbar-status,
