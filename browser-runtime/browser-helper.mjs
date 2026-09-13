@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import readline from 'node:readline';
+import { createServer } from 'node:http';
 
 const MAX_WIDTH = 2560;
 const MAX_HEIGHT = 1600;
@@ -14,6 +15,10 @@ const MAX_HANDSHAKE = 8192;
 const MAX_WS_PAYLOAD = 64 * 1024;
 const MAX_WS_BUFFER = MAX_WS_PAYLOAD + 14;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+const START_PAGE_PATH = '/__cockpit_browser_start__';
+const START_PAGE_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Cockpit browser ready</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f4f6f8;color:#1d2733;font:16px system-ui,sans-serif}main{max-width:34rem;padding:2rem;text-align:center}p{color:#526170}</style></head><body><main><strong>Inline browser ready</strong><p>Enter a URL above to navigate.</p></main></body></html>';
+
 let frameBarrier = Promise.resolve();
 let context;
 let browser;
@@ -22,6 +27,65 @@ let pageCdp;
 let browserCdp;
 let state;
 let server;
+let dummyServer;
+let dummyUrl;
+
+function startDummyPageServer() {
+  if (dummyUrl) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const current = createServer((request, response) => {
+      const pathname = new URL(request.url || '/', 'http://127.0.0.1').pathname;
+      if (request.method !== 'GET' || pathname !== START_PAGE_PATH) {
+        response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end('Not found');
+        return;
+      }
+      const body = Buffer.from(START_PAGE_HTML);
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': body.byteLength,
+      });
+      response.end(body);
+    });
+    dummyServer = current;
+    current.once('error', (error) => {
+      dummyServer = undefined;
+      dummyUrl = undefined;
+      reject(error);
+    });
+    current.listen(0, '127.0.0.1', () => {
+      const address = current.address();
+      if (!address || typeof address === 'string') {
+        dummyServer = undefined;
+        dummyUrl = undefined;
+        current.close();
+        reject(new Error('Unable to determine the local browser start page port'));
+        return;
+      }
+      dummyUrl = `http://127.0.0.1:${address.port}${START_PAGE_PATH}`;
+      resolve();
+    });
+  });
+}
+async function stopDummyPageServer() {
+  const current = dummyServer;
+  dummyServer = undefined;
+  dummyUrl = undefined;
+  if (!current) return;
+  await new Promise((resolve) => current.close(() => resolve()));
+}
+async function ensureInitialPage() {
+  if (page.url() !== 'about:blank') return;
+  const empty = await page.evaluate(() => {
+    const body = document.body;
+    return !body || (!body.textContent?.trim() && body.children.length === 0);
+  }).catch(() => false);
+  if (!empty) return;
+  await startDummyPageServer();
+  await page.goto(dummyUrl, { waitUntil: 'domcontentloaded' });
+}
+
 let port;
 let sockets = new Set();
 let grants = new Map();
@@ -322,6 +386,8 @@ async function bindPage(targetId, restartScreencast = true) {
     state.cursor = null;
     latestFrame = null;
   }
+  if (!restartScreencast) await ensureInitialPage();
+
   await installPageObservers();
   await applyRequestedViewport({ css_width: state.cssWidth, css_height: state.cssHeight, device_pixel_ratio: state.devicePixelRatio });
   await updatePageState();
@@ -832,6 +898,7 @@ async function detach() {
   for (const socket of sockets) socket.terminate();
   sockets.clear();
   server?.close();
+  await stopDummyPageServer();
   try { await browser?.disconnect(); } catch {}
   process.exit(0);
 }

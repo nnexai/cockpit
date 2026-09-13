@@ -34,6 +34,7 @@ The follow-up repair pass verified the reported slow-owner path and the observer
 - A delayed-owner smoke used a disposable Playwright wrapper that delayed `cookie-get` by 12 seconds. Through the observer, browser action returned HTTP 200 in 14.49 seconds and inline view open returned HTTP 200 in 29.68 seconds instead of the former 10-second observer deadline.
 - The repaired observer UI opened a live `800×600` canvas, remained **Live browser view** after metadata and frame WebSockets connected, and returned to the same state after Hide/Show.
 - The toolbar showed nine icon-only action controls plus five color swatches. Tool selection and color selection changed state without visible text labels; the only visible toolbar text was the Notes count.
+- A blank-page first-frame smoke confirmed that initial `about:blank` attachment navigates to a loopback-only start page before screencast, returning an 800×600 JPEG frame; existing non-empty page content is not replaced.
 
 ## Limits and follow-up
 

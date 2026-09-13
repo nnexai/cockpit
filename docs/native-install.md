@@ -91,6 +91,10 @@ Open the selected Space's browser from Commands or its context menu. The browser
 
 Cockpit attaches to the same named Playwright CLI browser that agents use. The packaged Node helper streams binary JPEG frames from Chromium. Install Node and Playwright CLI before opening a browser. The helper is embedded in the host binary. Configuration can override `[browser]` keys `playwright_cli`, `chromium_executable`, `node_executable`, `browser_helper`, and `playwright_core`. The last value identifies the Playwright-core package paired with the CLI. No second browser is launched for the inline view.
 
+On initial attachment, an empty `about:blank` is replaced with a loopback-only
+start page before screencast capture begins, guaranteeing a paintable first
+frame. Non-empty pages and later user navigation are left unchanged.
+
 Click **Take control** to control an observed browser. Clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own keyboard input. Other clients observe until they explicitly take control. Agents can still change the page through Playwright.
 
 Use Browse, Select, Freehand, Region, or Element in the browser toolbar. Marks have a color and optional inline text. **Capture** saves the displayed page, marks, and comments as a PNG. Draft recovery preserves older documents separately. Failed saves retain the composed image for retry. Saved feedback remains available after closing the browser, and sending feedback pastes into the active tab's eligible agent without pressing Enter.
