@@ -233,14 +233,13 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
     const metrics = await expectedCdp.send('Page.getLayoutMetrics');
     if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
     const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
-    const width = boundedInteger(viewport.clientWidth, state.cssWidth, MAX_WIDTH);
-    const height = boundedInteger(viewport.clientHeight, state.cssHeight, MAX_HEIGHT);
+    // CSS dimensions are the requested Cockpit surface size. Chromium's
+    // measured client box can briefly report scrollbar/transition geometry
+    // during a reload or resize; adopting it would create alternating
+    // viewport revisions and reject otherwise current frames.
     const scrollX = boundedNumber(viewport.pageX, 0);
     const scrollY = boundedNumber(viewport.pageY, 0);
-    const changed = width !== state.cssWidth || height !== state.cssHeight
-      || scrollX !== state.scrollX || scrollY !== state.scrollY;
-    state.cssWidth = width;
-    state.cssHeight = height;
+    const changed = scrollX !== state.scrollX || scrollY !== state.scrollY;
     state.scrollX = scrollX;
     state.scrollY = scrollY;
     if (changed) {
