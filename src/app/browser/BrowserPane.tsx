@@ -426,7 +426,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     remotePointRef.current = point;
     void enqueueInput(kind === "move" ? "move" : "boundary", async () => {
       const controlled = await ensureControl(); const where = controlled ? localLocation() : null;
-      if (!where || !frameMatchesCurrent()) return;
+      if (!where || !frameSupportsViewportInput()) return;
       const input_sequence = nextInput();
       await command({ type: "pointer", location: where, input: { kind, button: button(event.button), x: point.x, y: point.y, buttons: event.buttons, modifiers: modifiers(event), click_count: event.detail, input_sequence } });
     });
@@ -437,12 +437,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   const releaseRemotePointer = useCallback((): Promise<void> => {
     const current = snapshotRef.current;
-    const where = current && frameMatchesCurrent() && frameRef.current ? location(current, frameRef.current.descriptor) : null;
+    const where = current && frameSupportsViewportInput() && frameRef.current ? location(current, frameRef.current.descriptor) : null;
     const point = remotePointRef.current;
     remotePointerRef.current = null; remotePointRef.current = null;
     if (!current || !where || !point || current.control.status !== "controlled") return flushInput();
     return enqueueInput("boundary", async () => {
-      if (!frameMatchesCurrent()) return;
+      if (!frameSupportsViewportInput()) return;
       const input_sequence = inputSequence.current++;
       await command({ type: "pointer", location: where, input: { kind: "cancel", button: null, x: point.x, y: point.y, buttons: 0, modifiers: 0, click_count: 0, input_sequence } });
     });
@@ -533,7 +533,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     event.preventDefault(); onInteractionFocus?.();
     void enqueueInput("wheel", async () => {
       const controlled = await ensureControl(); const where = controlled ? localLocation() : null;
-      if (!where || !frameMatchesCurrent()) return;
+      if (!where || !frameSupportsViewportInput()) return;
       const input_sequence = nextInput();
       await command({ type: "wheel", location: where, input: { x: point.x, y: point.y, delta_x_css: event.deltaX * scale, delta_y_css: event.deltaY * scale, modifiers: modifiers(event), input_sequence } });
     });
@@ -553,7 +553,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (!liveInputEnabledRef.current || tool !== "browse") return;
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
-      if (!documentContext || !frameMatchesCurrent()) return;
+      if (!documentContext || !frameSupportsViewportInput()) return;
       const input_sequence = nextInput();
       await command({ type: "composition", context: documentContext, input: { kind, text: event.data, input_sequence } });
     });
@@ -564,7 +564,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const commandValue = copy ? { type: "copy" as const } : { type: "paste" as const, text: event.clipboardData.getData("text/plain") };
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
-      if (documentContext && frameMatchesCurrent()) await command({ type: "clipboard", context: documentContext, command: commandValue });
+      if (documentContext && frameSupportsViewportInput()) await command({ type: "clipboard", context: documentContext, command: commandValue });
     });
   };
   const navigation = (action: "back" | "forward" | "reload" | "stop" | "navigate", address?: string): void => {
@@ -732,7 +732,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const tabCommand = (commandValue: Extract<BrowserViewCommand, { type: "tab" }>) => {
     if (!liveInputEnabledRef.current) return;
     void releaseRemotePointer();
-    void enqueueInput("boundary", async () => { if (frameMatchesCurrent()) await command(commandValue); });
+    void enqueueInput("boundary", async () => { await command(commandValue); });
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
     <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{presentation === "browser_only" && onBackToTerminals ? <button type="button" onClick={onBackToTerminals}>Restore split</button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" onClick={onExpand}>Expand browser</button> : null}{(status === "stale" || status === "error") ? <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button> : null}{onHide ? <button type="button" onClick={onHide}>Close browser pane</button> : null}</div></header>

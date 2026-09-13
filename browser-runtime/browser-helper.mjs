@@ -1011,13 +1011,14 @@ async function command(request) {
         clickCount: i.click_count, modifiers: i.modifiers,
       });
       advanceInput(sequence);
+      emitControl();
       state.pointer = { x: i.x, y: i.y };
       state.pressedButtons = i.buttons;
       state.pointerSampleSequence++;
       await updateCursor();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
-    if (request.command.type === 'wheel') { const sequence = requireControl(request.command); const i = request.command.input; await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: i.x, y: i.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers }); advanceInput(sequence); await updatePageState(); emitEvent('viewport_changed', { viewport: viewportState() }); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
+    if (request.command.type === 'wheel') { const sequence = requireControl(request.command); const i = request.command.input; await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: i.x, y: i.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers }); advanceInput(sequence); emitControl(); await updatePageState(); emitEvent('viewport_changed', { viewport: viewportState() }); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
     if (request.command.type === 'keyboard') {
       const sequence = requireControl(request.command);
       const i = request.command.input;
@@ -1034,12 +1035,13 @@ async function command(request) {
       if (i.kind === 'down') state.heldKeys.set(i.code, i);
       else state.heldKeys.delete(i.code);
       advanceInput(sequence);
+      emitControl();
       await updateFocus();
       emitFocus();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
-    if (request.command.type === 'composition') { const sequence = requireControl(request.command); const i = request.command.input; if (i.kind === 'commit') await pageCdp.send('Input.insertText', { text: i.text }); else await pageCdp.send('Input.imeSetComposition', { text: i.kind === 'cancel' ? '' : i.text, selectionStart: i.text.length, selectionEnd: i.text.length, replacementStart: 0, replacementEnd: 0 }); state.focus.composition_active = i.kind === 'start' || i.kind === 'update'; advanceInput(sequence); emitFocus(); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
-    if (request.command.type === 'clipboard') { const sequence = requireControl(request.command); if (request.command.command.type === 'paste') { await pageCdp.send('Input.insertText', { text: request.command.command.text }); advanceInput(sequence); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text: null } }; } const text = await page.evaluate(() => window.getSelection()?.toString().slice(0, 16384) || ''); advanceInput(sequence); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text } }; }
+    if (request.command.type === 'composition') { const sequence = requireControl(request.command); const i = request.command.input; if (i.kind === 'commit') await pageCdp.send('Input.insertText', { text: i.text }); else await pageCdp.send('Input.imeSetComposition', { text: i.kind === 'cancel' ? '' : i.text, selectionStart: i.text.length, selectionEnd: i.text.length, replacementStart: 0, replacementEnd: 0 }); state.focus.composition_active = i.kind === 'start' || i.kind === 'update'; advanceInput(sequence); emitControl(); emitFocus(); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
+    if (request.command.type === 'clipboard') { const sequence = requireControl(request.command); if (request.command.command.type === 'paste') { await pageCdp.send('Input.insertText', { text: request.command.command.text }); advanceInput(sequence); emitControl(); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text: null } }; } const text = await page.evaluate(() => window.getSelection()?.toString().slice(0, 16384) || ''); advanceInput(sequence); emitControl(); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text } }; }
     if (request.command.type === 'tab') {
       const action = request.command.command;
       if (action.type === 'select') {
@@ -1145,6 +1147,7 @@ async function command(request) {
       emitNavigation();
     }
     const code = error?.code;
+    if (code === 'stale_input_sequence') emitControl();
     if (['browser_control_required', 'stale_input_sequence', 'stale_control', 'stale_dialog', 'stale_pointer', 'stale_capture', 'browser_last_page'].includes(code)) {
       return { status: 'rejected', ...base, code, message: String(error.message || error) };
     }
