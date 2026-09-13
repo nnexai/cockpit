@@ -303,7 +303,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "failed": setStatus("error"); setMessage(incoming.message); return;
         case "closed": setStatus("error"); setMessage(incoming.reason); return;
       }
-      applySnapshot(next); setStatus(frameRef.current && statusFor(next) === "loading" ? "stale" : statusFor(next));
+      applySnapshot(next); const nextStatus = statusFor(next); if (nextStatus !== "loading" || !frameRef.current) setStatus(nextStatus);
     };
     presenter = new FramePresenter({
       isExpectedStale: (descriptor) => {
