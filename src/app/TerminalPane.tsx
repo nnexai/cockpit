@@ -536,8 +536,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     const schedulePaneVisibilityRetry = (cause: unknown): boolean => {
       const typed = cause instanceof Error ? cause as Error & { code?: string; operationCode?: string } : null;
       const code = typed?.operationCode ?? typed?.code;
-      if (code !== "pane_not_visible" || retryScheduled || attachRetryCountRef.current >= 4) return false;
-      retryScheduled = true;
+      const message = typed?.message ?? "";
+      const visibilityRace = code === "pane_not_visible"
+        || /not visible in the focused tab|terminal websocket closed/i.test(message);
+      if (!visibilityRace || retryScheduled || attachRetryCountRef.current >= 4) return false;
       const delay = 40 * 2 ** attachRetryCountRef.current;
       attachRetryCountRef.current += 1;
       attachRetryTimerRef.current = window.setTimeout(() => {
