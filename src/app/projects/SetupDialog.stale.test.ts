@@ -167,13 +167,26 @@ describe("SetupDialog", () => {
     await renderDialog({ ...client, planWorkspace, startWorkspace });
 
     const repositoryInput = container!.querySelector<HTMLInputElement>("#setup-repository")!;
-    await act(async () => { writeInput(repositoryInput, "rps"); });
+    await act(async () => { repositoryInput.focus(); writeInput(repositoryInput, "rps"); });
     expect([...container!.querySelectorAll(".setup-repository mark")].map((mark) => mark.textContent).join("")).toBe("Rps");
     await act(async () => { repositoryInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
     const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
     await act(async () => { submit.click(); await Promise.resolve(); });
     expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "repository" }));
     expect(startWorkspace).toHaveBeenCalledTimes(1);
+  });
+  it("opens repository matches as a focused overlay without adding form height", async () => {
+    await renderDialog();
+    const input = container!.querySelector<HTMLInputElement>("#setup-repository")!;
+    expect(container!.querySelector("#setup-repository-results")).toBeNull();
+    expect(container!.querySelector("#setup-branch")).not.toBeNull();
+
+    act(() => input.focus());
+    expect(container!.querySelector("#setup-repository-results")).not.toBeNull();
+    expect(container!.querySelector("#setup-branch")).not.toBeNull();
+
+    act(() => input.blur());
+    expect(container!.querySelector("#setup-repository-results")).toBeNull();
   });
   it("keeps a source-selected nested repository active in the picker", async () => {
     vi.useFakeTimers();
@@ -197,6 +210,7 @@ describe("SetupDialog", () => {
       });
       await settle();
       const input = container!.querySelector<HTMLInputElement>("#setup-repository")!;
+      act(() => input.focus());
       expect(container!.querySelector<HTMLElement>("[data-setup-repository-result-index='1']")?.classList).toContain("is-active");
       expect(input.getAttribute("aria-activedescendant")).toBe("setup-repository-result-1");
       await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));

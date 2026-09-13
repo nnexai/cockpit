@@ -101,17 +101,28 @@
 }
 .setup-field input::placeholder { color: var(--text-muted); }
 
-.setup-repository-picker { min-width: 0; }
+.setup-repository-picker { position: relative; z-index: 1; min-width: 0; }
+.setup-repository-picker:focus-within { z-index: 3; }
 .setup-picker-status,
 .setup-picker-help { margin: 5px 0 0; color: var(--text-muted); font-size: 11px; line-height: 15px; }
 .setup-picker-help { margin-top: 6px; }
+.setup-repository-control { position: relative; }
 .setup-repository-list {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
   display: grid;
   gap: 4px;
   max-height: 210px;
   overflow: auto;
-  margin-top: 8px;
-  padding: 1px;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-control);
+  background: var(--surface-raised, #1b222d);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .32);
 }
 .setup-repository {
   display: grid;

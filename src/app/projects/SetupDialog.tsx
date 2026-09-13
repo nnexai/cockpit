@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -176,6 +177,7 @@ function RepositoryPicker({ repositories, selectedId, loading, disabled, onChoos
   const pickerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [selection, setSelection] = useState<{ query: string; id: string | null }>({ query: "", id: selectedId || null });
   const previousSelectedId = useRef(selectedId);
   const matches = useMemo(() => rankFuzzyMatches(query, repositories, (repository) => repository.name), [query, repositories]);
@@ -197,7 +199,7 @@ function RepositoryPicker({ repositories, selectedId, loading, disabled, onChoos
   }, [query, selectedId]);
   useEffect(() => {
     pickerRef.current?.querySelector<HTMLElement>(`[data-setup-repository-result-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
-  }, [active, activeId]);
+  }, [active, activeId, pickerOpen]);
 
   const choose = (repository = matches[active]) => {
     if (disabled) return;
@@ -205,6 +207,9 @@ function RepositoryPicker({ repositories, selectedId, loading, disabled, onChoos
       setSelection({ query, id: repository.repository_id });
       onChoose(repository);
     }
+  };
+  const onBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPickerOpen(false);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
@@ -232,16 +237,18 @@ function RepositoryPicker({ repositories, selectedId, loading, disabled, onChoos
     }
   };
 
-  return <div ref={pickerRef} className="setup-repository-picker" onKeyDown={onKeyDown}>
-    <input ref={inputRef} id="setup-repository" type="search" aria-label="Find a repository" role="combobox" aria-expanded="true" aria-controls="setup-repository-results" aria-autocomplete="list" aria-activedescendant={activeId ? `setup-repository-result-${active}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a repository" autoComplete="off" disabled={disabled} />
-    <p className="setup-picker-status" aria-live="polite">{loading ? "Loading local repositories…" : `${repositories.length} repositories`}</p>
-    <div id="setup-repository-results" className="setup-repository-list" role="listbox" aria-label="Matching repositories">
-      {matches.map((repository, index) => <button key={repository.repository_id} id={`setup-repository-result-${index}`} data-setup-repository-result-index={index} type="button" role="option" aria-selected={index === active} className={`setup-repository${repository.repository_id === selectedId ? " is-selected" : ""}${index === active ? " is-active" : ""}`} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => choose(repository)} disabled={disabled}>
-        <span className="setup-repository-title"><strong>{Array.from(repository.name, (character, characterIndex) => matches[index].matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</strong></span>
-        <code>{repository.root}</code>
-        {repository.branch ? <span className="setup-repository-meta">{repository.branch}{repository.is_detached ? " · detached" : ""}</span> : null}
-      </button>)}
-      {!loading && matches.length === 0 ? <p>No matching repositories.</p> : null}
+  return <div ref={pickerRef} className="setup-repository-picker" onFocus={() => setPickerOpen(true)} onBlur={onBlur} onKeyDown={onKeyDown}>
+    <div className="setup-repository-control">
+      <input ref={inputRef} id="setup-repository" type="search" aria-label="Find a repository" role="combobox" aria-expanded={pickerOpen} aria-controls={pickerOpen ? "setup-repository-results" : undefined} aria-autocomplete="list" aria-activedescendant={pickerOpen && activeId ? `setup-repository-result-${active}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a repository" autoComplete="off" disabled={disabled} />
+      <p className="setup-picker-status" aria-live="polite">{loading ? "Loading local repositories…" : `${repositories.length} repositories`}</p>
+      {pickerOpen ? <div id="setup-repository-results" className="setup-repository-list" role="listbox" aria-label="Matching repositories">
+        {matches.map((repository, index) => <button key={repository.repository_id} id={`setup-repository-result-${index}`} data-setup-repository-result-index={index} type="button" role="option" aria-selected={index === active} className={`setup-repository${repository.repository_id === selectedId ? " is-selected" : ""}${index === active ? " is-active" : ""}`} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => choose(repository)} disabled={disabled}>
+          <span className="setup-repository-title"><strong>{Array.from(repository.name, (character, characterIndex) => matches[index].matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</strong></span>
+          <code>{repository.root}</code>
+          {repository.branch ? <span className="setup-repository-meta">{repository.branch}{repository.is_detached ? " · detached" : ""}</span> : null}
+        </button>)}
+        {!loading && matches.length === 0 ? <p>No matching repositories.</p> : null}
+      </div> : null}
     </div>
     <p className="setup-picker-help">↑↓ or Ctrl+N/P to choose · Enter select · Esc clear</p>
   </div>;
