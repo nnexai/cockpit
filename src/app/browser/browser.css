@@ -30,9 +30,12 @@
 
 .browser-toolbar-status {
   min-width: 0;
+  flex: 1 1 0;
+  height: 14px;
   overflow: hidden;
   color: var(--text-secondary);
   font-size: var(--font-size-2xs);
+  line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -57,7 +60,11 @@
 }
 
 .browser-tabs {
+  flex: 0 0 33px;
+  box-sizing: border-box;
+  height: 33px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 0;
 }
 
