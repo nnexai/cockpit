@@ -313,7 +313,10 @@ async function updateHistory(expectedCdp = pageCdp, expectedBinding = pageBindin
 async function updateFrameId(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
   try {
     const frameTree = await expectedCdp.send('Page.getFrameTree');
-    if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) state.frameId = frameTree.frameTree.frame.id;
+    if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) {
+      state.frameId = frameTree.frameTree.frame.id;
+      state.loaderId = frameTree.frameTree.frame.loaderId || null;
+    }
   } catch {
     if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) state.frameId = 'main';
   }
@@ -833,26 +836,37 @@ async function installPageObservers() {
   const current = () => bindingCurrent();
   const onFrameNavigated = (frame) => {
     if (!bindingCurrent() || frame !== observed.mainFrame()) return;
-    state.documentGeneration = nextGeneration(state.documentGeneration);
-    state.frameGeneration = nextGeneration(state.frameGeneration);
-    resetFrameTransport();
-    void dismissPendingBlocker();
-    // Keep the CDP screencast subscription alive. Stopping and recreating it
-    // after navigation can miss the next compositor update and strand the
-    // viewer on the discarded document's final frame.
-    frameBarrier = frameBarrier.then(async () => {
+    void (async () => {
+      // Playwright emits `framenavigated` for History API route changes too.
+      // The CDP loader ID changes only when Chromium replaces the document.
+      let loaderId = null;
+      try { loaderId = (await cdp.send('Page.getFrameTree')).frameTree.frame.loaderId || null; } catch {}
       if (!bindingCurrent()) return;
-      const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
-      if (!bindingCurrent()) return;
-      await updateFrameId(cdp, bindingGeneration);
-      if (!bindingCurrent()) return;
-      await updateHistory(cdp, bindingGeneration);
-      if (!bindingCurrent()) return;
-      if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
-      emitEvent('document_changed', { document: documentState() });
-      emitNavigation();
-      await captureCurrentFrame(cdp, bindingGeneration);
-    }).catch(() => {});
+      if (loaderId === state.loaderId) {
+        await updatePageState(observed, cdp, bindingGeneration);
+        await updateHistory(cdp, bindingGeneration);
+        if (bindingCurrent()) emitNavigation();
+        return;
+      }
+      state.loaderId = loaderId;
+      state.documentGeneration = nextGeneration(state.documentGeneration);
+      state.frameGeneration = nextGeneration(state.frameGeneration);
+      resetFrameTransport();
+      void dismissPendingBlocker();
+      frameBarrier = frameBarrier.then(async () => {
+        if (!bindingCurrent()) return;
+        const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
+        if (!bindingCurrent()) return;
+        await updateFrameId(cdp, bindingGeneration);
+        if (!bindingCurrent()) return;
+        await updateHistory(cdp, bindingGeneration);
+        if (!bindingCurrent()) return;
+        if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
+        emitEvent('document_changed', { document: documentState() });
+        emitNavigation();
+        await captureCurrentFrame(cdp, bindingGeneration);
+      }).catch(() => {});
+    })();
   };
   const onLoad = () => {
     if (!current()) return;
@@ -923,7 +937,7 @@ async function attach(message) {
     documentGeneration: nextGeneration(), frameGeneration: nextGeneration(), viewportRevision: 1, frameSequence: 0,
     leaseGeneration: 1, nextInputSequence: 1, cssWidth: viewport.width, cssHeight: viewport.height,
     devicePixelRatio: viewport.dpr, scrollX: 0, scrollY: 0, targets: [], targetId: message.target_id,
-    frameId: 'main', url: '', title: '', frameGrant: message.frame_grant, loading: false,
+    frameId: 'main', loaderId: null, url: '', title: '', frameGrant: message.frame_grant, loading: false,
     canGoBack: false, canGoForward: false, requestedUrl: null, controlled: false,
     focus: { page_focused: false, editable: false, selection_available: false, composition_active: false },
     cursor: null, pointer: null, pointerSampleSequence: 0, viewIds: new Set([message.view_id]), controllerViewId: null,
