@@ -18,7 +18,6 @@ export type TerminalPaneProps = {
   selected: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
-  focusTransitionPending: boolean;
   focusEpoch: number;
   focusToken: number;
   terminalMouseInput: boolean;
@@ -156,7 +155,7 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
 type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
 
 
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusTransitionPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -491,7 +490,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
 
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal || !terminalReady || focusTransitionPending) return;
+    if (!terminal || !terminalReady) return;
     const restoreFocus = selectedRef.current && Boolean(terminal.element?.contains(document.activeElement));
     const geometry = terminalCellGeometry(terminal);
     // The authoritative snapshot can clear a focus transition one render
@@ -640,7 +639,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, request.session_id, request.pane_id, controlRequested, focusTransitionPending, terminalReady, attempt, registerStream]);
+  }, [client, request.session_id, request.pane_id, controlAllowed, controlRequested, terminalReady, attempt, registerStream]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;

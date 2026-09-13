@@ -170,7 +170,7 @@ afterEach(() => {
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {
-  it("waits for authoritative focus before opening a terminal stream", async () => {
+  it("opens the required terminal stream without waiting for focus confirmation", async () => {
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];
     const { client, openTerminal } = makeClient(sent, messages);
@@ -179,15 +179,11 @@ describe("TerminalPane fitting and pointer ownership", () => {
     const root = createRoot(host);
     try {
       await act(async () => {
-        root.render(<TerminalPane {...paneProps(client, false, { focusTransitionPending: true })} />);
-        await settle();
-      });
-      expect(openTerminal).not.toHaveBeenCalled();
-      await act(async () => {
-        root.render(<TerminalPane {...paneProps(client, false, { focusTransitionPending: false })} />);
+        root.render(<TerminalPane {...paneProps(client, false)} />);
         await settle();
       });
       expect(openTerminal).toHaveBeenCalledOnce();
+      expect(openTerminal.mock.calls[0]?.[0].mode).toBe("control");
     } finally {
       await act(async () => root.unmount());
       host.remove();
