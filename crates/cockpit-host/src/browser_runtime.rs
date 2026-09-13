@@ -10,7 +10,7 @@ use std::{
 mod browser_helper;
 
 use browser_helper::BrowserHelperSupervisor;
-pub use browser_helper::{BrowserViewEvents, BrowserViewOpen};
+pub use browser_helper::{BrowserViewEvents, BrowserViewNativeSubscription, BrowserViewOpen};
 use cockpit_core::{InspectionError, browser::BrowserService};
 use cockpit_protocol::browser::{
     BrowserFeedbackAckRequest, BrowserFeedbackImage, BrowserFeedbackImageRequest,
@@ -358,6 +358,43 @@ impl BrowserRuntime {
         }
         let socket = self.owner_socket().await?;
         forward_view_events(&socket, view_id).await
+    }
+    pub async fn browser_view_native_subscribe(
+        &self,
+        view_id: &str,
+        stream_epoch: u64,
+    ) -> Result<BrowserViewNativeSubscription, InspectionError> {
+        if let Some(helper) = self.helper.as_ref() {
+            return helper.native_subscribe(view_id, stream_epoch).await;
+        }
+        let events = self.browser_view_events(view_id).await?;
+        if events.snapshot.identity.stream_epoch != stream_epoch {
+            return Err(InspectionError::new(
+                "stale_browser_view",
+                "Browser view stream epoch is stale",
+            ));
+        }
+        let grant = events.snapshot.frame_grant.clone().ok_or_else(|| {
+            InspectionError::new(
+                "browser_frame_unavailable",
+                "Browser view has no frame grant",
+            )
+        })?;
+        let endpoint = self.browser_view_frame_endpoint(&grant).await?;
+        Ok(BrowserViewNativeSubscription {
+            snapshot: events.snapshot,
+            events: events.events,
+            endpoint,
+            grant,
+        })
+    }
+
+    pub async fn browser_view_native_release(&self, view_id: &str) {
+        if let Some(helper) = self.helper.as_ref() {
+            helper.native_release(view_id).await;
+        } else {
+            let _ = self.browser_view_detach(view_id).await;
+        }
     }
 
     pub async fn browser_view_command(

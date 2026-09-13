@@ -46,12 +46,19 @@ pub struct BrowserViewEvents {
     pub snapshot: BrowserViewSnapshot,
     pub events: broadcast::Receiver<BrowserViewEvent>,
 }
+pub struct BrowserViewNativeSubscription {
+    pub snapshot: BrowserViewSnapshot,
+    pub events: broadcast::Receiver<BrowserViewEvent>,
+    pub endpoint: String,
+    pub grant: BrowserViewFrameGrant,
+}
 pub(crate) struct BrowserHelperSupervisor {
     state_root: PathBuf,
     /// Incarnation is part of the registry key so a restarted Chromium can
     /// never inherit a helper or frame grant from its predecessor.
     associations: Mutex<HashMap<(String, String), Vec<String>>>,
     views: Mutex<HashMap<String, ManagedView>>,
+    native_connections: Mutex<HashMap<String, usize>>,
 }
 
 struct ManagedView {
@@ -135,6 +142,7 @@ impl BrowserHelperSupervisor {
             state_root,
             associations: Mutex::new(HashMap::new()),
             views: Mutex::new(HashMap::new()),
+            native_connections: Mutex::new(HashMap::new()),
         }
     }
 
@@ -348,6 +356,62 @@ impl BrowserHelperSupervisor {
         let snapshot = view.snapshot.lock().await.clone();
         let events = view.events.subscribe();
         Ok(BrowserViewEvents { snapshot, events })
+    }
+    pub(crate) async fn native_subscribe(
+        &self,
+        view_id: &str,
+        stream_epoch: u64,
+    ) -> Result<BrowserViewNativeSubscription, InspectionError> {
+        let views = self.views.lock().await;
+        let view = views.get(view_id).ok_or_else(|| {
+            InspectionError::new(
+                "browser_view_not_found",
+                "Browser view is not attached to this owner",
+            )
+        })?;
+        let _barrier = view.barrier.lock().await;
+        let snapshot = view.snapshot.lock().await.clone();
+        if snapshot.identity.stream_epoch != stream_epoch {
+            return Err(InspectionError::new(
+                "stale_browser_view",
+                "Browser view stream epoch is stale",
+            ));
+        }
+        let grant = snapshot.frame_grant.clone().ok_or_else(|| {
+            InspectionError::new(
+                "browser_frame_unavailable",
+                "Browser view has no frame grant",
+            )
+        })?;
+        let events = view.events.subscribe();
+        let endpoint = view.endpoint.clone();
+        let mut connections = self.native_connections.lock().await;
+        *connections.entry(view_id.to_owned()).or_insert(0) += 1;
+        Ok(BrowserViewNativeSubscription {
+            snapshot,
+            events,
+            endpoint,
+            grant,
+        })
+    }
+
+    pub(crate) async fn native_release(&self, view_id: &str) {
+        let release = {
+            let mut connections = self.native_connections.lock().await;
+            let Some(count) = connections.get_mut(view_id) else {
+                return;
+            };
+            if *count > 1 {
+                *count -= 1;
+                false
+            } else {
+                connections.remove(view_id);
+                true
+            }
+        };
+        if release {
+            self.detach(view_id).await;
+        }
     }
 
     async fn open_shared(
@@ -603,6 +667,9 @@ impl BrowserHelperSupervisor {
         }
     }
     pub(crate) async fn detach(&self, view_id: &str) {
+        if self.native_connections.lock().await.contains_key(view_id) {
+            return;
+        }
         let idle = {
             let associations = self.associations.lock().await;
             associations.values().any(|ids| ids.len() == 1 && ids.first().is_some_and(|id| id == view_id))
@@ -658,9 +725,9 @@ impl BrowserHelperSupervisor {
             if let Some(task) = managed.task.lock().await.take() { let _ = timeout(HELPER_STOP_TIMEOUT, task).await; }
         } else { let _ = managed.input.send(HelperInput::DetachView { view_id: view_id.to_owned() }).await; }
     }
-
     pub(crate) async fn shutdown(&self) {
         self.associations.lock().await.clear();
+        self.native_connections.lock().await.clear();
         let views = std::mem::take(&mut *self.views.lock().await);
         let mut stopped = std::collections::HashSet::new();
         for (_, view) in views {

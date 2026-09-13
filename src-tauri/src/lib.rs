@@ -545,32 +545,24 @@ async fn cockpit_browser_view_subscribe(
     registry: State<'_, StreamRegistry>,
 ) -> Result<String, ErrorResponse> {
     let subscription = runtime
-        .browser_view_events(&view_id)
+        .browser_view_native_subscribe(&view_id, stream_epoch)
         .await
         .map_err(inspection_error_response)?;
-    if subscription.snapshot.identity.stream_epoch != stream_epoch {
-        return Err(stream_error(
-            "stale_browser_view",
-            "Browser view stream epoch is stale",
-        ));
-    }
     let initial_snapshot = subscription.snapshot.clone();
-    let grant = initial_snapshot.frame_grant.clone().ok_or_else(|| {
-        stream_error(
-            "browser_frame_unavailable",
-            "Browser view has no frame grant",
-        )
-    })?;
-    let endpoint = runtime
-        .browser_view_frame_endpoint(&grant)
-        .await
-        .map_err(inspection_error_response)?;
+    let grant = subscription.grant.clone();
+    let endpoint = subscription.endpoint.clone();
     let (ack_tx, mut ack_rx) = mpsc::channel(8);
     let control = StreamControl::new_browser();
-    let stream_id = registry.allocate(StreamEntry::BrowserView {
+    let stream_id = match registry.allocate(StreamEntry::BrowserView {
         control: Arc::clone(&control),
         acknowledgements: ack_tx,
-    })?;
+    }) {
+        Ok(stream_id) => stream_id,
+        Err(error) => {
+            runtime.browser_view_native_release(&view_id).await;
+            return Err(error);
+        }
+    };
     let task_registry = registry.inner().clone();
     let task_stream_id = stream_id.clone();
     let task_control = Arc::clone(&control);
@@ -587,7 +579,7 @@ async fn cockpit_browser_view_subscribe(
                 drop(events);
                 drop(ack_rx);
                 task_registry.complete(&task_stream_id);
-                let _ = task_runtime.browser_view_detach(&task_view_id).await;
+                let _ = task_runtime.browser_view_native_release(&task_view_id).await;
                 return;
             }
             result = FrameConnection::connect(&endpoint, &grant.grant) => match result {
@@ -603,7 +595,7 @@ async fn cockpit_browser_view_subscribe(
                     drop(events);
                     drop(ack_rx);
                     task_registry.complete(&task_stream_id);
-                    let _ = task_runtime.browser_view_detach(&task_view_id).await;
+                    let _ = task_runtime.browser_view_native_release(&task_view_id).await;
                     return;
                 }
             },
@@ -630,7 +622,7 @@ async fn cockpit_browser_view_subscribe(
             drop(events);
             drop(ack_rx);
             task_registry.complete(&task_stream_id);
-            let _ = task_runtime.browser_view_detach(&task_view_id).await;
+            let _ = task_runtime.browser_view_native_release(&task_view_id).await;
             return;
         }
         let mut outstanding = None;
@@ -709,7 +701,7 @@ async fn cockpit_browser_view_subscribe(
         drop(events);
         drop(ack_rx);
         task_registry.complete(&task_stream_id);
-        let _ = task_runtime.browser_view_detach(&task_view_id).await;
+        let _ = task_runtime.browser_view_native_release(&task_view_id).await;
     });
     control.set_abort(task.abort_handle());
     Ok(stream_id)
