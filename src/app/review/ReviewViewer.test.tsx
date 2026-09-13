@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { CommentBatch, PanePresentation, ReviewFileDiff, ReviewSnapshot } from "../../protocol/generated/v1";
 import { createReviewViewState, type ContextViewState } from "../context/ContextViewer";
-import { ReviewViewer, reviewCommentBatchIdentity } from "./ReviewViewer";
+import { ReviewViewer, reviewCommentBatchIdentity, reviewRepositoryId } from "./ReviewViewer";
 
 const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as const;
 
@@ -17,6 +17,13 @@ it("uses the CommentDrafts source identity and comparison for review count statu
   expect(reviewCommentBatchIdentity(presentation, "checkout", "all_local")).toBe(allLocal);
   expect(reviewCommentBatchIdentity(presentation, "checkout", "staged")).not.toBe(allLocal);
   expect(reviewCommentBatchIdentity(presentation, "other-checkout", "all_local")).not.toBe(allLocal);
+});
+it("uses the default repository root when nested repositories share a presentation", () => {
+  const roots = [
+    { root_id: "outer", kind: "repository", repository_id: "outer-repo" },
+    { root_id: "nested", kind: "repository", repository_id: "nested-repo" },
+  ] as PanePresentation["roots"];
+  expect(reviewRepositoryId({ roots, default_root_id: "nested" })).toBe("nested-repo");
 });
 
 it("keeps a saved review editor cleared when its comment status updates", async () => {

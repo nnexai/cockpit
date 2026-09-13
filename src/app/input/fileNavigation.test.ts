@@ -3,7 +3,7 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { FilePicker } from "./FilePicker";
-import { FILE_NAVIGATION_EVENT, rankFileMatches } from "./fileNavigation";
+import { FILE_NAVIGATION_EVENT, rankFileMatches, rankFuzzyMatches } from "./fileNavigation";
 
 describe("file navigation", () => {
   it("uses case-insensitive subsequence matches and favors contiguous basename matches", () => {
@@ -13,6 +13,15 @@ describe("file navigation", () => {
       { id: "later", path: "src/components/contextual.ts" },
     ]).map((match) => match.id)).toEqual(["basename", "spread", "later"]);
   });
+  it("ranks generic command candidates with the same subsequence positions", () => {
+    const matches = rankFuzzyMatches("nsp", [
+      { id: "new-space", label: "New Space" },
+      { id: "next-pane", label: "Next pane" },
+    ], (candidate) => candidate.label);
+    expect(matches[0]?.matchedIndices.map((index) => "New Space"[index]).join("")).toBe("NSp");
+    expect(matches[1]?.id).toBeUndefined();
+  });
+
 
   it("keeps the selected result and DOM focus when polling replaces the candidate array", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

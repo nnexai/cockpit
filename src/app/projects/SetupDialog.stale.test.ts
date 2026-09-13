@@ -161,6 +161,53 @@ describe("SetupDialog", () => {
     expect(document.activeElement).toBe(branch);
     expect(branch.value).toBe("retain-focus");
   });
+  it("selects a repository through subsequence search and submits its ID", async () => {
+    const planWorkspace = vi.fn(async () => createPlan());
+    const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace });
+
+    const repositoryInput = container!.querySelector<HTMLInputElement>("#setup-repository")!;
+    await act(async () => { writeInput(repositoryInput, "rps"); });
+    expect([...container!.querySelectorAll(".setup-repository mark")].map((mark) => mark.textContent).join("")).toBe("Rps");
+    await act(async () => { repositoryInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
+    await act(async () => { submit.click(); await Promise.resolve(); });
+    expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "repository" }));
+    expect(startWorkspace).toHaveBeenCalledTimes(1);
+  });
+  it("keeps a source-selected nested repository active in the picker", async () => {
+    vi.useFakeTimers();
+    const nestedRepository = { ...repository, repository_id: "nested", name: "Nested Repository", root: "/repositories/nested", checkout_path: "/repositories/nested", common_dir: "/repositories/nested/.git" };
+    const repositoryResponse: RepositoryListResponse = { repositories: [repository, nestedRepository], diagnostics: [] };
+    const planWorkspace = vi.fn(async () => ({ ...createPlan(), repository: nestedRepository }));
+    const startWorkspace = vi.fn(async () => workspaceOperation({ ...createPlan(), repository: nestedRepository }, "completed"));
+    const dialogClient: SetupClient = {
+      ...client,
+      repositories: async () => repositoryResponse,
+      resolveWorkspaceDefaults: async () => ({ ...sourceDefaults("main", "cockpit#5"), repositories: repositoryResponse.repositories, repository_id: nestedRepository.repository_id }),
+      planWorkspace,
+      startWorkspace,
+    };
+    try {
+      await renderDialog(dialogClient);
+      const source = container!.querySelector<HTMLInputElement>("#setup-artifact-url")!;
+      await act(async () => {
+        writeInput(source, "https://github.com/nnexai/cockpit/issues/5");
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await settle();
+      const input = container!.querySelector<HTMLInputElement>("#setup-repository")!;
+      expect(container!.querySelector<HTMLElement>("[data-setup-repository-result-index='1']")?.classList).toContain("is-active");
+      expect(input.getAttribute("aria-activedescendant")).toBe("setup-repository-result-1");
+      await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+      const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
+      await act(async () => { submit.click(); await Promise.resolve(); });
+      expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "nested" }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 
   it("ignores a late source lookup and preserves manual branch edits", async () => {
     vi.useFakeTimers();

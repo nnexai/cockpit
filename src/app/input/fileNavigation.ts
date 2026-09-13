@@ -47,10 +47,18 @@ function subsequenceMatch(query: string, path: string): { score: number; matched
   return { score: score + Math.max(0, candidate.length - Array.from(query).length) / 1000, matchedIndices: [...matchedIndices] };
 }
 
-export function rankFileMatches(query: string, candidates: readonly FileNavigationCandidate[]): FileNavigationMatch[] {
+export function rankFuzzyMatches<T>(
+  query: string,
+  candidates: readonly T[],
+  text: (candidate: T) => string,
+): Array<T & { score: number; matchedIndices: number[] }> {
   const normalized = query.trim();
   return candidates.flatMap((candidate, index) => {
-    const match = normalized ? subsequenceMatch(normalized, candidate.path) : { score: index, matchedIndices: [] };
+    const match = normalized ? subsequenceMatch(normalized, text(candidate)) : { score: index, matchedIndices: [] };
     return match === null ? [] : [{ ...candidate, ...match }];
-  }).sort((left, right) => left.score - right.score || left.path.localeCompare(right.path));
+  }).sort((left, right) => left.score - right.score || text(left).localeCompare(text(right)));
+}
+
+export function rankFileMatches(query: string, candidates: readonly FileNavigationCandidate[]): FileNavigationMatch[] {
+  return rankFuzzyMatches(query, candidates, (candidate) => candidate.path);
 }

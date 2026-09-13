@@ -13,6 +13,10 @@ export function reviewCommentBatchIdentity(presentation: Pick<PanePresentation, 
   const draftsIdentity = `${presentation.session_id}\u0000${presentation.pane_id}\u0000${presentation.binding_id}\u0000${sourceId}\u0000${sourceId}`;
   return `${draftsIdentity}\u0000${comparison}`;
 }
+export function reviewRepositoryId(presentation: Pick<PanePresentation, "roots" | "default_root_id">): string | undefined {
+  return (presentation.roots.find(root => root.root_id === presentation.default_root_id && root.kind === "repository")
+    ?? presentation.roots.find(root => root.kind === "repository"))?.repository_id;
+}
 
 export function ReviewViewer({ client, presentation, value, onChange, onTerminalView: _onTerminalView, onRequestControl }: {
   client: CockpitClient; presentation: PanePresentation; value: ContextViewState;
@@ -105,8 +109,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     return result;
   }, [client, session, pane]);
   const file = useCallback((request: ReviewFileRequest, signal: AbortSignal) => client.reviewFile(session, pane, request, signal), [client, session, pane]);
-  const repositoryId = (presentation.roots.find(root => root.kind === "repository")
-    ?? presentation.roots.find(root => root.root_id === presentation.default_root_id))?.repository_id;
+  const repositoryId = reviewRepositoryId(presentation);
   if (!repositoryId) return <div className="review-empty">No Git checkout could be resolved for this Review pane.</div>;
   return <div className="review-viewer" ref={viewerRef} onPointerDown={onRequestControl}>
     <ReviewPane identity={`${session}\0${pane}\0${binding}`} sessionId={session} paneId={pane} bindingId={binding} repositoryId={repositoryId} snapshot={snapshot} file={file} selectedLines={selection}

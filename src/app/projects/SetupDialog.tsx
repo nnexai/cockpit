@@ -3,11 +3,14 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { rankFuzzyMatches } from "../input/fileNavigation";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
   ProjectConfiguration,
@@ -161,6 +164,87 @@ function recoveryActionFor(operation: WorkspaceOperation): WorkspaceRecoveryActi
 
 function initialForm(): FormState {
   return { repositoryId: "", mode: "create", branch: "", base: "", checkoutPath: "", openPath: "", label: "", artifactUrl: "", focus: true };
+}
+
+function RepositoryPicker({ repositories, selectedId, loading, disabled, onChoose }: {
+  repositories: readonly RepositoryCandidate[];
+  selectedId: string;
+  loading: boolean;
+  disabled: boolean;
+  onChoose: (repository: RepositoryCandidate) => void;
+}) {
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [selection, setSelection] = useState<{ query: string; id: string | null }>({ query: "", id: selectedId || null });
+  const previousSelectedId = useRef(selectedId);
+  const matches = useMemo(() => rankFuzzyMatches(query, repositories, (repository) => repository.name), [query, repositories]);
+  const selectionId = query === "" && previousSelectedId.current !== selectedId ? selectedId : selection.id;
+  const active = selection.query === query ? Math.max(0, matches.findIndex((repository) => repository.repository_id === selectionId)) : 0;
+  const activeId = matches[active]?.repository_id ?? null;
+  const selectIndex = (index: number) => setSelection({ query, id: matches[index]?.repository_id ?? null });
+
+  useEffect(() => {
+    setSelection((current) => current.query === query && current.id === activeId ? current : { query, id: activeId });
+  }, [activeId, query]);
+  useEffect(() => {
+    if (query === "" && previousSelectedId.current !== selectedId) {
+      previousSelectedId.current = selectedId;
+      setSelection({ query, id: selectedId || null });
+      return;
+    }
+    previousSelectedId.current = selectedId;
+  }, [query, selectedId]);
+  useEffect(() => {
+    pickerRef.current?.querySelector<HTMLElement>(`[data-setup-repository-result-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }, [active, activeId]);
+
+  const choose = (repository = matches[active]) => {
+    if (disabled) return;
+    if (repository) {
+      setSelection({ query, id: repository.repository_id });
+      onChoose(repository);
+    }
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setQuery("");
+      inputRef.current?.focus();
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      choose();
+      return;
+    }
+    if (event.key === "ArrowDown" || (event.ctrlKey && event.key.toLowerCase() === "n")) {
+      event.preventDefault();
+      selectIndex(Math.min(Math.max(0, matches.length - 1), active + 1));
+      return;
+    }
+    if (event.key === "ArrowUp" || (event.ctrlKey && event.key.toLowerCase() === "p")) {
+      event.preventDefault();
+      selectIndex(Math.max(0, active - 1));
+    }
+  };
+
+  return <div ref={pickerRef} className="setup-repository-picker" onKeyDown={onKeyDown}>
+    <input ref={inputRef} id="setup-repository" type="search" aria-label="Find a repository" role="combobox" aria-expanded="true" aria-controls="setup-repository-results" aria-autocomplete="list" aria-activedescendant={activeId ? `setup-repository-result-${active}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a repository" autoComplete="off" disabled={disabled} />
+    <p className="setup-picker-status" aria-live="polite">{loading ? "Loading local repositories…" : `${repositories.length} repositories`}</p>
+    <div id="setup-repository-results" className="setup-repository-list" role="listbox" aria-label="Matching repositories">
+      {matches.map((repository, index) => <button key={repository.repository_id} id={`setup-repository-result-${index}`} data-setup-repository-result-index={index} type="button" role="option" aria-selected={index === active} className={`setup-repository${repository.repository_id === selectedId ? " is-selected" : ""}${index === active ? " is-active" : ""}`} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => choose(repository)} disabled={disabled}>
+        <span className="setup-repository-title"><strong>{Array.from(repository.name, (character, characterIndex) => matches[index].matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</strong></span>
+        <code>{repository.root}</code>
+        {repository.branch ? <span className="setup-repository-meta">{repository.branch}{repository.is_detached ? " · detached" : ""}</span> : null}
+      </button>)}
+      {!loading && matches.length === 0 ? <p>No matching repositories.</p> : null}
+    </div>
+    <p className="setup-picker-help">↑↓ or Ctrl+N/P to choose · Enter select · Esc clear</p>
+  </div>;
 }
 
 function Field({ label, hint, children, htmlFor }: { label: string; hint?: string; children: ReactNode; htmlFor?: string }) {
@@ -582,7 +666,8 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
           <Field label="Issue / MR URL" htmlFor="setup-artifact-url"><input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onTextField("artifactUrl")} placeholder="Optional URL" disabled={editingLocked} /></Field>
           {sourceState.pending ? <p className="setup-inline-status">Resolving source defaults…</p> : null}
           {sourceState.error ? <p className="setup-error" role="alert">{sourceState.error}</p> : null}
-          {loadState === "ready" ? <Field label="Repository" htmlFor="setup-repository"><select id="setup-repository" value={form.repositoryId} onChange={onTextField("repositoryId", true)} disabled={editingLocked}><option value="">Select repository</option>{sourceRepositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.name}</option>)}</select></Field> : null}
+          {sourceState.defaults?.artifact ? <p className="setup-inline-status is-valid">Resolved {sourceState.defaults.artifact.kind} · {sourceState.defaults.artifact.canonical_id}</p> : null}
+          {loadState !== "error" && loadState !== "empty" ? <div className="setup-field"><label className="setup-label" htmlFor="setup-repository">Repository</label><RepositoryPicker repositories={sourceRepositories} selectedId={form.repositoryId} loading={loadState === "loading"} disabled={editingLocked} onChoose={(repository) => updateText("repositoryId", repository.repository_id, true)} /></div> : null}
         </> : null}
         <div className="setup-field"><span className="setup-label" id="setup-operation-label">Operation</span><div className="viewer-segmented setup-operation-choice" role="group" aria-labelledby="setup-operation-label">
           <button type="button" aria-pressed={form.mode === "create"} onClick={() => setMode("create")} disabled={editingLocked}>New worktree</button>
@@ -594,7 +679,6 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
           <Field label="Space name" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onTextField("label", true)} placeholder="Defaults to directory name" disabled={editingLocked} /></Field>
 
         </> : <>
-          {loadState === "loading" ? <p className="setup-empty">Loading local repositories…</p> : null}
           {loadState === "error" ? <div className="setup-empty setup-empty-error"><strong>Could not load project setup</strong><p>{loadError}</p><button type="button" onClick={() => setRequestRefresh((value) => value + 1)} disabled={editingLocked}>Reload</button></div> : null}
           {loadState === "empty" ? <p className="setup-empty">No configured local repositories are available.</p> : null}
           <Field label="Branch" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onTextField("branch", true)} placeholder="Configured default" disabled={editingLocked} /></Field>

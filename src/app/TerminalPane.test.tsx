@@ -207,6 +207,35 @@ describe("TerminalPane fitting and pointer ownership", () => {
     expect(readText).toHaveBeenCalledTimes(1);
   });
 
+  it("anchors the clipboard menu at the right-click coordinates", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false)} />);
+        await settle();
+      });
+      const terminalHost = host.querySelector<HTMLElement>(".terminal-host")!;
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 123, clientY: 87 });
+      await act(async () => {
+        terminalHost.dispatchEvent(event);
+        await settle();
+      });
+      const menu = host.querySelector<HTMLElement>(".terminal-context-menu");
+      expect(event.defaultPrevented).toBe(true);
+      expect(menu?.style.left).toBe("123px");
+      expect(menu?.style.top).toBe("87px");
+      expect(menu?.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.disabled).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("holds paste until the requested pane owns control", async () => {
     const readText = vi.fn(async () => "line one\nline two\n✓");
     vi.stubGlobal("navigator", { clipboard: { readText, writeText: vi.fn() } });

@@ -25,7 +25,7 @@ import { useFocusCoordinator } from "./session/focusCoordinator";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
 import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
-import { dispatchFileNavigation } from "./input/fileNavigation";
+import { dispatchFileNavigation, rankFuzzyMatches } from "./input/fileNavigation";
 import { TerminalPane } from "./TerminalPane";
 import { SetupDialog } from "./projects/SetupDialog";
 import { TeardownDialog } from "./projects/TeardownDialog";
@@ -608,9 +608,10 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const [showAll, setShowAll] = useState(false);
   const normalized = query.trim().toLocaleLowerCase();
   const primaryIds = ["prefix:zoom-pane", "renderer:review-right", "space:setup", "browser:feedback", "session:switch"];
-  const filtered = normalized || showAll
-    ? actions.filter((action) => !normalized || `${action.label} ${action.shortcut ?? ""} ${action.group}`.toLocaleLowerCase().includes(normalized))
-    : primaryIds.flatMap(id => actions.filter(action => action.id === id));
+  const ranked = normalized
+    ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
+    : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
+  const filtered = normalized || showAll ? ranked : primaryIds.flatMap((id) => ranked.filter((action) => action.id === id));
   useEffect(() => setActive((current) => Math.min(current, Math.max(0, filtered.length - 1))), [filtered.length]);
   useEffect(() => { searchRef.current?.focus(); }, []);
   useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [active, normalized]);
@@ -626,8 +627,11 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
     const groupActions = !normalized && !showAll ? (group === "Navigate" ? filtered : []) : filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
-    return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => { const index = filtered.indexOf(action); return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{action.label}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>; })}</section>;
-  })}</div><footer className="command-footer"><span>↑↓ navigate · Enter choose · Esc close</span><button type="button" onClick={() => { setShowAll(value => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
+    return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => {
+      const index = filtered.indexOf(action);
+      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>;
+    })}</section>;
+  })}</div><footer className="command-footer"><span>↑↓ navigate · Enter choose · Esc close</span><button type="button" onClick={() => { setShowAll((value) => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
 }
 
 export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
@@ -833,6 +837,26 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const panes = panesForTab(snapshot?.panes ?? [], selectedTab?.id ?? null);
   const visiblePaneIds = projectedPaneIds(panes.map((pane) => pane.id), layout, snapshot?.focused_pane_id ?? selection.paneId);
   const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
+  // Keep an incoming pane mounted for xterm's initial fit, but out of the
+  // painted frame. The key only tracks the visible projection; Herdr still
+  // owns selection and layout, and hidden tabs still detach through the hook.
+  const paneRenderKey = selectedTab && visiblePanes.length > 0 ? `${selectedTab.id}\0${visiblePaneIds.join("\0")}` : null;
+  const [revealedPaneKey, setRevealedPaneKey] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    setRevealedPaneKey(null);
+  }, [paneRenderKey]);
+  useEffect(() => {
+    if (paneRenderKey === null) return;
+    let cancelled = false;
+    const frame = window.requestAnimationFrame(() => {
+      if (!cancelled) setRevealedPaneKey(paneRenderKey);
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [paneRenderKey]);
+  const paneCanvasVisible = paneRenderKey === null || revealedPaneKey === paneRenderKey;
   const renderers = usePaneRenderers(client, state.sessionId, visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editing, setEditing] = useState<ContextTarget | null>(null);
@@ -1274,7 +1298,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
-      <div className="pane-canvas">{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
+      <div className="pane-canvas" style={{ visibility: paneCanvasVisible ? "visible" : "hidden" }}>{panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : visiblePanes.map((pane, index) => {
         const rectangle = projectedPaneRect(layout, pane.id);
         const area = layout?.area;
         const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / visiblePanes.length * 100}%`, top: "0%", width: `${100 / visiblePanes.length}%`, height: "100%" };

@@ -245,6 +245,12 @@ async function settle(): Promise<void> {
   });
 }
 
+async function settleFrame(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+}
+
 async function mount(fixture: AppFixture): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
@@ -381,6 +387,39 @@ describe("mounted App mutation and session ordering", () => {
     fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
+  });
+  it("stages a newly selected tab until its pane view has had an initial frame", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+
+    await settleFrame();
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
+
+    const tab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 2: Second tab"]');
+    if (!tab) throw new Error("Missing second tab");
+    click(tab);
+    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
+    await settle();
+    expect(selectedTab()).toBe("Tab 2: Second tab");
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("hidden");
+
+    await settleFrame();
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
+    const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
+    if (!firstTab) throw new Error("Missing first tab");
+    click(firstTab);
+    fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
+    await settle();
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("hidden");
+
+    const secondTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 2: Second tab"]');
+    if (!secondTab) throw new Error("Missing second tab after return");
+    click(secondTab);
+    fixture.emitSnapshot("session-1", 1, 4, snapshot("session-1", "tab-2", "pane-2"));
+    await settle();
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("hidden");
+    await settleFrame();
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
   });
 
   it("retries the retained focus intent after a recovery snapshot", async () => {

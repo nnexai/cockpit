@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
@@ -171,6 +171,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const [clipboardError, setClipboardError] = useState<{ operation: "copy" | "paste"; message: string } | null>(null);
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [terminalContextOpen, setTerminalContextOpen] = useState(false);
+  const [terminalContextPosition, setTerminalContextPosition] = useState<{ x: number; y: number } | null>(null);
   const lastSequence = useRef<bigint | null>(null);
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
@@ -320,6 +321,17 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       window.removeEventListener("keydown", escape);
     };
   }, [terminalContextOpen]);
+
+  useLayoutEffect(() => {
+    if (!terminalContextOpen || !terminalContextPosition) return;
+    const bounds = contextMenuRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const gutter = 8;
+    const x = Math.max(gutter, Math.min(terminalContextPosition.x, window.innerWidth - bounds.width - gutter));
+    const y = Math.max(gutter, Math.min(terminalContextPosition.y, window.innerHeight - bounds.height - gutter));
+    if (x === terminalContextPosition.x && y === terminalContextPosition.y) return;
+    setTerminalContextPosition({ x, y });
+  }, [terminalContextOpen, terminalContextPosition]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -637,7 +649,12 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       ref={hostRef}
       aria-label={`Terminal ${request.pane_id}`}
       // Keep terminal clipboard actions local to this pane.
-      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTerminalContextOpen(true); }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setTerminalContextPosition({ x: event.clientX, y: event.clientY });
+        setTerminalContextOpen(true);
+      }}
       onPointerDownCapture={(event) => {
         const button = terminalMouseButton(event.button);
         if (!button) return;
@@ -685,7 +702,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         releaseCapturedPointer();
       }}
     >
-      {terminalContextOpen ? <div ref={contextMenuRef} className="terminal-context-menu" role="menu" aria-label="Terminal clipboard actions" onContextMenu={(event) => event.preventDefault()}>
+      {terminalContextOpen && terminalContextPosition ? <div ref={contextMenuRef} className="terminal-context-menu" role="menu" aria-label="Terminal clipboard actions" style={{ left: terminalContextPosition.x, top: terminalContextPosition.y }} onContextMenu={(event) => event.preventDefault()}>
         <button type="button" role="menuitem" disabled={clipboardBusy || !terminalRef.current?.hasSelection()} onClick={() => { setTerminalContextOpen(false); void copySelection(); }}>Copy</button>
         <button type="button" role="menuitem" disabled={clipboardBusy} onClick={() => { setTerminalContextOpen(false); void pasteClipboard(); }}>Paste</button>
       </div> : null}

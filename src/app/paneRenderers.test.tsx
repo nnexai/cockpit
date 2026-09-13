@@ -146,6 +146,36 @@ const reviewWithRoot = {
     companion_id: null,
   }],
 } as PanePresentation;
+const nestedReviewWithRoot = {
+  ...reviewWithRoot,
+  default_root_id: "nested",
+  roots: [
+    { ...reviewWithRoot.roots[0], root_id: "outer", repository_id: "outer-repo" },
+    { ...reviewWithRoot.roots[0], root_id: "nested", repository_id: "nested-repo", path: "/repo/nested", checkout_path: "/repo/nested" },
+  ],
+} as PanePresentation;
+
+it("opens Review against the default repository when nested roots are present", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const inspectPane = vi.fn().mockResolvedValue(structuredClone(nestedReviewWithRoot));
+  const openReview = vi.fn().mockResolvedValue(undefined);
+  const client = { inspectPane, openReview } as unknown as CockpitClient;
+  function Probe() {
+    const { open } = usePaneRenderers(client, "session", ["pane"], ["pane"], true, 0, vi.fn());
+    return <button type="button" onClick={() => { void open("pane", "right", "review"); }}>open</button>;
+  }
+  try {
+    await act(async () => { mounted.render(<Probe />); await settle(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("button")!.click(); await settle(); });
+    expect(openReview).toHaveBeenCalledWith("session", { pane_id: "pane", binding_id: "binding", repository_id: "nested-repo", direction: "right" });
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
 
 it.each(["request_outcome_unknown", "mutation_applied_snapshot_failed"] as const)(
   "refreshes authoritative renderer state after %s without relaunching",
