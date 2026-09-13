@@ -631,15 +631,15 @@ function enqueueFrame(frame) {
       || width * height > MAX_PIXELS) {
       throw new Error('screencast frame exceeds frozen bounds');
     }
-    const scrollX = boundedNumber(rawMetadata.scrollOffsetX, state.scrollX);
-    const scrollY = boundedNumber(rawMetadata.scrollOffsetY, state.scrollY);
-    if (scrollX !== state.scrollX || scrollY !== state.scrollY) {
-      state.scrollX = scrollX;
-      state.scrollY = scrollY;
-      state.viewportRevision++;
-      resetFrameTransport();
-      emitEvent('viewport_changed', { viewport: viewportState() });
-    }
+    // Screencast metadata describes the instant at which Chromium captured the
+    // image. It can arrive after a newer frame (and its scroll offset can
+    // therefore move backwards). The viewport state is the single authoritative
+    // contract; validate metadata geometry, but never let a late packet advance
+    // or rewind the viewport revision.
+    boundedNumber(rawMetadata.scrollOffsetX, state.scrollX);
+    boundedNumber(rawMetadata.scrollOffsetY, state.scrollY);
+    const scrollX = state.scrollX;
+    const scrollY = state.scrollY;
     const timestamp = boundedNumber(rawMetadata.timestamp, Date.now() / 1000, Number.MAX_SAFE_INTEGER / 1_000_000);
     const descriptor = {
       target_id: state.targetId,
@@ -773,25 +773,32 @@ async function installPageObservers() {
   const cdp = pageCdp;
   const targetId = state?.targetId;
   const bindingGeneration = pageBindingGeneration;
-  const current = () => pageBindingIsCurrent(observed, cdp, bindingGeneration) && state.targetId === targetId;
+  const frameGeneration = state?.frameGeneration;
+  const bindingCurrent = () => pageBindingIsCurrent(observed, cdp, bindingGeneration) && state.targetId === targetId;
+  const current = () => bindingCurrent() && state.frameGeneration === frameGeneration;
   const onFrameNavigated = (frame) => {
-    if (!current() || frame !== observed.mainFrame()) return;
+    if (!bindingCurrent() || frame !== observed.mainFrame()) return;
     state.documentGeneration = nextGeneration(state.documentGeneration);
     state.frameGeneration = nextGeneration(state.frameGeneration);
     resetFrameTransport();
     void dismissPendingBlocker();
-    void cdp.send('Page.stopScreencast').catch(() => {});
+    if (screencastListener && cdp) cdp.off?.('Page.screencastFrame', screencastListener);
+    screencastListener = null;
+    const stopped = cdp.send('Page.stopScreencast').catch(() => {});
     frameBarrier = frameBarrier.then(async () => {
-      if (!current()) return;
+      await stopped;
+      if (!bindingCurrent()) return;
       const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
-      if (!current()) return;
+      if (!bindingCurrent()) return;
       await updateFrameId(cdp, bindingGeneration);
-      if (!current()) return;
+      if (!bindingCurrent()) return;
       await updateHistory(cdp, bindingGeneration);
-      if (!current()) return;
+      if (!bindingCurrent()) return;
       if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
       emitEvent('document_changed', { document: documentState() });
       emitNavigation();
+      await installPageObservers();
+      if (!pageBindingIsCurrent(observed, cdp, bindingGeneration)) return;
       await startScreencast(cdp, bindingGeneration);
     }).catch(() => {});
   };
