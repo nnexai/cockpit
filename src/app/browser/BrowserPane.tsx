@@ -455,6 +455,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (previousToolRef.current === "browse" && tool !== "browse") void releaseRemotePointer();
     previousToolRef.current = tool;
   }, [releaseRemotePointer, tool]);
+  useEffect(() => {
+    if (inputActive && tool === "browse") surfaceRef.current?.focus({ preventScroll: true });
+  }, [inputActive, tool]);
   const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
     if ((tool === "browse" || tool === "element") && !liveInputEnabledRef.current) return;
     onInteractionFocus?.();
