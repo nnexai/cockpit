@@ -534,7 +534,11 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     }
     let retryScheduled = false;
     const schedulePaneVisibilityRetry = (cause: unknown): boolean => {
-      const typed = cause instanceof Error ? cause as Error & { code?: string; operationCode?: string } : null;
+      const typed = cause instanceof Error
+        ? cause as Error & { code?: string; operationCode?: string }
+        : cause !== null && typeof cause === "object"
+          ? cause as { code?: string; operationCode?: string; message?: string }
+          : null;
       const code = typed?.operationCode ?? typed?.code;
       const message = typed?.message ?? "";
       const visibilityRace = code === "pane_not_visible"
@@ -634,6 +638,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         return;
       }
       if (message.type === "error" || message.type === "disconnected") {
+        if (schedulePaneVisibilityRetry(message)) return;
         fail(message.code, message.message);
       } else if (message.type === "closed") {
         cancelled = true;
