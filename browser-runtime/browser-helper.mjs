@@ -1017,6 +1017,7 @@ async function command(request) {
     if (request.command.type === 'keyboard') {
       const sequence = requireControl(request.command);
       const i = request.command.input;
+      const text = i.kind === 'down' && i.key.length === 1 && (i.modifiers & 7) === 0 ? i.key : undefined;
       await pageCdp.send('Input.dispatchKeyEvent', {
         type: i.kind === 'down' ? 'keyDown' : 'keyUp',
         key: i.key,
@@ -1024,6 +1025,7 @@ async function command(request) {
         location: i.location,
         modifiers: i.modifiers,
         autoRepeat: i.repeat,
+        ...(text ? { text, unmodifiedText: text } : {}),
       });
       if (i.kind === 'down') state.heldKeys.set(i.code, i);
       else state.heldKeys.delete(i.code);

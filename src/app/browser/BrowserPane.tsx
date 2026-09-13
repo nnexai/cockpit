@@ -212,19 +212,23 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       return response.outcome;
     } catch (error) { setStatus("error"); setMessage(errorMessage(error)); return null; }
   }, [applyDraft, applySnapshot, setPendingCaptureState]);
-  const frameMatchesCurrent = useCallback((candidate = frameRef.current): boolean => {
+  const frameSupportsViewportInput = useCallback((candidate = frameRef.current): boolean => {
     const current = snapshotRef.current; const identity = identityRef.current;
     const descriptor = candidate?.descriptor;
     return Boolean(current?.document && current.viewport && current.displayed_target_id && identity && descriptor
       && descriptor.stream_epoch === identity.epoch
       && descriptor.target_id === current.displayed_target_id
       && descriptor.document_generation === current.document.document_generation
-      && descriptor.viewport_revision === current.viewport.viewport_revision
       && Math.abs(descriptor.viewport_css_width - current.viewport.css_width) <= 0.01
-      && Math.abs(descriptor.viewport_css_height - current.viewport.css_height) <= 0.01
+      && Math.abs(descriptor.viewport_css_height - current.viewport.css_height) <= 0.01);
+  }, []);
+  const frameMatchesCurrent = useCallback((candidate = frameRef.current): boolean => {
+    const current = snapshotRef.current; const descriptor = candidate?.descriptor;
+    return frameSupportsViewportInput(candidate) && Boolean(descriptor && current?.viewport
+      && descriptor.viewport_revision === current.viewport.viewport_revision
       && Math.abs(descriptor.scroll_x - current.viewport.scroll_x) <= 0.01
       && Math.abs(descriptor.scroll_y - current.viewport.scroll_y) <= 0.01);
-  }, []);
+  }, [frameSupportsViewportInput]);
   const paneViewport = useCallback((): BrowserViewViewportRequest => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
     return {
@@ -236,21 +240,17 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const ensureControl = useCallback(async (): Promise<boolean> => {
     if (!liveInputEnabled) return false;
     const current = snapshotRef.current;
-    if (!current || !frameMatchesCurrent()) return false;
+    if (!current || !frameSupportsViewportInput()) return false;
     if (current.control.status === "controlled") return true;
     if (controlPromiseRef.current) return controlPromiseRef.current;
     if (!current.control.can_take_control) { setMessage("Another Cockpit view controls this browser."); return false; }
     const pending = command({
-      type: "take_control",
-      viewport: paneViewport(),
+      type: "take_control", viewport: paneViewport(),
     }).then(() => snapshotRef.current?.control.status === "controlled").catch(() => false);
     controlPromiseRef.current = pending;
-    try {
-      return await pending;
-    } finally {
-      if (controlPromiseRef.current === pending) controlPromiseRef.current = null;
-    }
-  }, [command, frameMatchesCurrent, liveInputEnabled, paneViewport]);
+    void pending.finally(() => { if (controlPromiseRef.current === pending) controlPromiseRef.current = null; });
+    return pending;
+  }, [command, frameSupportsViewportInput, liveInputEnabled, paneViewport]);
   const openDraft = useCallback(async (): Promise<void> => {
     const current = snapshotRef.current; const documentContext = current ? context(current) : null;
     if (!documentContext || !current?.document || current.document.target_id !== current.displayed_target_id) return;
@@ -293,7 +293,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           break;
         }
         case "document_changed": next = { ...previous, document: incoming.document }; clearPresentedFrame(); inputJobsRef.current = []; draftRequestRef.current += 1; draftRef.current = null; setDraft(null); setPendingCaptureState(null); setSelectedId(null); setNoteId(null); setNoteValue(""); setInspection(null); queueMicrotask(() => { void openDraft(); }); break;
-        case "viewport_changed": next = { ...previous, viewport: incoming.viewport }; clearPresentedFrame(false); inputJobsRef.current = []; setInspection(null); break;
+        case "viewport_changed": next = { ...previous, viewport: incoming.viewport }; setInspection(null); break;
         case "cursor_changed": next = { ...previous, cursor: incoming.cursor }; break;
         case "blocker_changed": next = { ...previous, blocker: incoming.blocker }; break;
         case "capabilities_changed": next = { ...previous, capabilities: incoming.capabilities }; break;
@@ -372,11 +372,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
 
   const paintedRectFor = useCallback(() => {
     const current = frameRef.current; const surface = surfaceRef.current;
-    if (!current || !surface || !frameMatchesCurrent()) return null;
+    if (!current || !surface || !frameSupportsViewportInput(current)) return null;
     const bounds = surface.getBoundingClientRect(); const aspect = current.descriptor.image_width / current.descriptor.image_height;
     const width = Math.min(bounds.width, bounds.height * aspect); const height = width / aspect;
     return { left: bounds.left + (bounds.width - width) / 2, top: bounds.top + (bounds.height - height) / 2, width, height };
-  }, [frameMatchesCurrent]);
+  }, [frameSupportsViewportInput]);
   const pointFor = useCallback((event: { clientX: number; clientY: number }, allowOutside = false): BrowserPoint | null => {
     const painted = paintedRectFor(); if (!painted || !frameRef.current) return null;
     let clientX = event.clientX; let clientY = event.clientY;
@@ -395,7 +395,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
     return createBrowserTransform(frameRef.current.descriptor, painted)?.clientToViewport(clientX, clientY) ?? null;
   }, [paintedRectFor]);
-  const localLocation = (): BrowserViewLocation | null => snapshotRef.current && frameMatchesCurrent() && frameRef.current ? location(snapshotRef.current, frameRef.current.descriptor) : null;
+  const localLocation = (): BrowserViewLocation | null => snapshotRef.current && frameSupportsViewportInput() && frameRef.current ? location(snapshotRef.current, frameRef.current.descriptor) : null;
   const nextInput = (): number => inputSequence.current++;
   const persist = async (annotation: BrowserViewDraftAnnotation): Promise<boolean> => {
     const current = snapshotRef.current; const documentContext = current ? context(current) : null; const currentDraft = draftRef.current;
@@ -541,15 +541,13 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   const sendKey = (event: KeyboardEvent<HTMLElement>, kind: "down" | "up"): void => {
     if (!liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse" || event.target !== event.currentTarget) return;
-    const text = kind === "down" ? textFromKey(event) : null;
     if (!event.nativeEvent.isComposing && event.key !== "Dead") event.preventDefault();
     onInteractionFocus?.();
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
-      if (!documentContext || !frameMatchesCurrent()) return;
+      if (!documentContext || !frameSupportsViewportInput()) return;
       const input_sequence = nextInput();
       await command({ type: "keyboard", context: documentContext, input: { kind, key: event.key, code: event.code, location: event.location, modifiers: modifiers(event), repeat: event.repeat, input_sequence } });
-      if (text) await command({ type: "text", context: documentContext, input: { text, input_sequence: nextInput() } });
     });
   };
   const sendText = (event: FormEvent<HTMLTextAreaElement>): void => {
