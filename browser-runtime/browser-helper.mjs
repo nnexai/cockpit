@@ -641,7 +641,9 @@ function resetFrameTransport() {
   latestFrame = null;
   frameHistory.clear();
   for (const socket of sockets) {
-    forgetSocketFrame(socket, 'awaitingFrame');
+    // The client may still be decoding the prior frame. Preserve that credit so
+    // its eventual acknowledgement advances the replacement instead of closing
+    // the frame socket as an invalid late acknowledgement.
     forgetSocketFrame(socket, 'pendingFrame');
   }
 }

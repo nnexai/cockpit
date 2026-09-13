@@ -48,7 +48,7 @@ const statusText = (status: PaneStatus, message: string | null): string => {
 };
 const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
-const preservesTextInput = (event: KeyboardEvent<HTMLElement>): boolean => event.nativeEvent.isComposing || event.key === "Dead" || (!event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1);
+const textFromKey = (event: KeyboardEvent<HTMLElement>): string | null => !event.nativeEvent.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1 ? event.key : null;
 const rectFrom = (first: BrowserPoint, last: BrowserPoint): BrowserRect => ({ x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(last.x - first.x), height: Math.abs(last.y - first.y) });
 const kindFor = (annotation: BrowserViewDraftAnnotation): "freehand" | "region" | "element" => annotation.kind;
 function simplify(points: BrowserPoint[]): BrowserPoint[] {
@@ -541,13 +541,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   const sendKey = (event: KeyboardEvent<HTMLElement>, kind: "down" | "up"): void => {
     if (!liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse" || event.target !== event.currentTarget) return;
-    if (!preservesTextInput(event)) event.preventDefault();
+    const text = kind === "down" ? textFromKey(event) : null;
+    if (!event.nativeEvent.isComposing && event.key !== "Dead") event.preventDefault();
     onInteractionFocus?.();
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
       if (!documentContext || !frameMatchesCurrent()) return;
       const input_sequence = nextInput();
       await command({ type: "keyboard", context: documentContext, input: { kind, key: event.key, code: event.code, location: event.location, modifiers: modifiers(event), repeat: event.repeat, input_sequence } });
+      if (text) await command({ type: "text", context: documentContext, input: { text, input_sequence: nextInput() } });
     });
   };
   const sendText = (event: FormEvent<HTMLTextAreaElement>): void => {
