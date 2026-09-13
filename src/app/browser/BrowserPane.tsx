@@ -48,6 +48,7 @@ const statusText = (status: PaneStatus, message: string | null): string => {
 };
 const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
+const preservesTextInput = (event: KeyboardEvent<HTMLElement>): boolean => event.nativeEvent.isComposing || event.key === "Dead" || (!event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1);
 const rectFrom = (first: BrowserPoint, last: BrowserPoint): BrowserRect => ({ x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(last.x - first.x), height: Math.abs(last.y - first.y) });
 const kindFor = (annotation: BrowserViewDraftAnnotation): "freehand" | "region" | "element" => annotation.kind;
 function simplify(points: BrowserPoint[]): BrowserPoint[] {
@@ -130,9 +131,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     pendingCaptureRef.current = next;
     setPendingCapture(next);
   }, []);
-  const clearPresentedFrame = useCallback(() => {
+  const clearPresentedFrame = useCallback((clearCanvas = true) => {
     frameRef.current = null;
     setFrame(null);
+    if (!clearCanvas) return;
     const canvas = canvasRef.current;
     const drawing = canvas?.getContext("2d");
     if (canvas && drawing) drawing.clearRect(0, 0, canvas.width, canvas.height);
@@ -291,8 +293,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           break;
         }
         case "document_changed": next = { ...previous, document: incoming.document }; clearPresentedFrame(); inputJobsRef.current = []; draftRequestRef.current += 1; draftRef.current = null; setDraft(null); setPendingCaptureState(null); setSelectedId(null); setNoteId(null); setNoteValue(""); setInspection(null); queueMicrotask(() => { void openDraft(); }); break;
-        case "viewport_changed": next = { ...previous, viewport: incoming.viewport }; clearPresentedFrame(); inputJobsRef.current = []; setInspection(null); break;
-        case "navigation_changed": next = { ...previous, navigation: incoming.navigation }; break;
+        case "viewport_changed": next = { ...previous, viewport: incoming.viewport }; clearPresentedFrame(false); inputJobsRef.current = []; setInspection(null); break;
         case "cursor_changed": next = { ...previous, cursor: incoming.cursor }; break;
         case "blocker_changed": next = { ...previous, blocker: incoming.blocker }; break;
         case "capabilities_changed": next = { ...previous, capabilities: incoming.capabilities }; break;
@@ -540,7 +541,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   const sendKey = (event: KeyboardEvent<HTMLElement>, kind: "down" | "up"): void => {
     if (!liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse" || event.target !== event.currentTarget) return;
-    event.preventDefault(); onInteractionFocus?.();
+    if (!preservesTextInput(event)) event.preventDefault();
+    onInteractionFocus?.();
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
       if (!documentContext || !frameMatchesCurrent()) return;
