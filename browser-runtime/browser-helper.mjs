@@ -18,7 +18,11 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const FRAME_INTERVAL_MS = 1000 / 30;
 
 const START_PAGE_PATH = '/__cockpit_browser_start__';
-const START_PAGE_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Cockpit browser ready</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f4f6f8;color:#1d2733;font:16px system-ui,sans-serif}main{max-width:34rem;padding:2rem;text-align:center}p{color:#526170}</style></head><body><main><strong>Inline browser ready</strong><p>Enter a URL above to navigate.</p></main></body></html>';
+const START_PAGE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Cockpit browser ready</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{height:100%;margin:0}body{display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 20% 15%,#24324b 0,transparent 34%),radial-gradient(circle at 80% 88%,#142e35 0,transparent 35%),#0b1018;color:#e7edf7;font:15px/1.5 ui-sans-serif,system-ui,sans-serif}main{width:min(31rem,calc(100% - 3rem));padding:2rem 2.25rem;border:1px solid #34445e;border-radius:16px;background:linear-gradient(145deg,#182233eF,#111925eF);box-shadow:0 24px 72px #02050acc;text-align:center}main::before{display:grid;width:42px;height:42px;margin:0 auto 1.15rem;place-items:center;border:1px solid #6387b9;border-radius:12px;background:#1c314b;color:#a9cdfb;content:'↗';font-size:22px}strong{display:block;font-size:18px;font-weight:650;letter-spacing:-.01em}p{margin:8px 0 0;color:#aab9cc}kbd{display:inline-block;margin-top:1.35rem;padding:4px 8px;border:1px solid #3a4d68;border-radius:6px;background:#0b111b;color:#c6ddfb;font:12px ui-monospace,SFMono-Regular,monospace}</style></head>
+<body><main><strong>Browser ready</strong><p>Enter a URL in the address bar to begin browsing.</p><kbd>https://example.com</kbd></main></body></html>`;
 
 let frameBarrier = Promise.resolve();
 let context;
