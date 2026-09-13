@@ -8,7 +8,6 @@ import {
   type TerminalStream,
 } from "../client/CockpitClient";
 import type {
-  BrowserFeedbackSendResponse,
   BrowserTarget,
   BrowserViewPresentation,
   BrowserViewViewportRequest,
@@ -1180,43 +1179,29 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     browserBusyRef.current = false;
     return () => { browserRequest.current += 1; };
   }, [browserAction, selection.spaceId, state.sessionId, state.sync]);
-  const [feedbackBusy, setFeedbackBusy] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<StatusError | null>(null);
-  const [feedbackResult, setFeedbackResult] = useState<BrowserFeedbackSendResponse | null>(null);
-  const [feedbackRisk, setFeedbackRisk] = useState<{ ids: string[] } | null>(null);
   const feedbackBusyRef = useRef(false);
   const feedbackRequest = useRef(0);
   const sendFeedback = useCallback(async (ids: string[], acknowledgeDuplicateRisk: boolean) => {
     const sessionId = state.sessionId; const spaceId = selection.spaceId;
-    if (!sessionId || !spaceId || ids.length === 0 || state.sync !== "live" || feedbackBusyRef.current) return;
+    if (!sessionId || !spaceId || ids.length === 0 || state.sync !== "live") throw new Error("Annotation delivery is unavailable for this Space.");
+    if (feedbackBusyRef.current) throw new Error("Annotation delivery is already in progress.");
     const token = ++feedbackRequest.current;
-    feedbackBusyRef.current = true; setFeedbackBusy(true); setFeedbackError(null);
+    feedbackBusyRef.current = true;
     try {
       const response = await client.sendBrowserFeedback({
         target: { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null },
         ids, operation_id: globalThis.crypto?.randomUUID?.() ?? `browser-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         acknowledge_duplicate_risk: acknowledgeDuplicateRisk,
       });
-      if (feedbackRequest.current !== token) return;
-      setFeedbackResult(response);
-      setFeedbackRisk(response.state === "outcome_unknown" ? { ids } : null);
-    } catch (error) {
-      if (feedbackRequest.current === token) {
-        const described = describeError(error, "Could not send browser feedback");
-        setFeedbackError(described);
-        if (described.code === "browser_feedback_duplicate_risk") setFeedbackRisk({ ids });
-      }
+      if (feedbackRequest.current !== token) throw new Error("Annotation delivery was superseded.");
+      return response;
     } finally {
-      if (feedbackRequest.current === token) { feedbackBusyRef.current = false; setFeedbackBusy(false); }
+      if (feedbackRequest.current === token) feedbackBusyRef.current = false;
     }
   }, [client, selection.spaceId, state.sessionId, state.sync]);
-  const sendCapturedFeedback = useCallback((ids: string[]) => { void sendFeedback(ids, false); }, [sendFeedback]);
-  const retryUnknownFeedback = useCallback(() => {
-    if (feedbackRisk) void sendFeedback(feedbackRisk.ids, true);
-  }, [feedbackRisk, sendFeedback]);
+  const sendCapturedFeedback = useCallback((ids: string[]) => sendFeedback(ids, false), [sendFeedback]);
   useEffect(() => {
     feedbackRequest.current += 1; feedbackBusyRef.current = false;
-    setFeedbackBusy(false); setFeedbackError(null); setFeedbackResult(null); setFeedbackRisk(null);
   }, [selection.spaceId, state.sessionId, state.sync]);
   const runCommand = useCallback((command: PrefixCommand) => {
     setBrowserInputActive(false);
