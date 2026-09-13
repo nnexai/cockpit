@@ -868,19 +868,6 @@ async fn run_helper(
                         if let Some(sender) = first_frame.take() {
                             let _ = sender.send(descriptor.clone());
                         }
-                        let next = {
-                            let mut value = snapshot.lock().await;
-                            value.metadata_sequence = value.metadata_sequence.saturating_add(1);
-                            BrowserViewEventMetadata {
-                                view_id: value.identity.view_id.clone(),
-                                stream_epoch: value.identity.stream_epoch,
-                                metadata_sequence: value.metadata_sequence,
-                            }
-                        };
-                        let _ = events.send(BrowserViewEvent::FrameDescriptor {
-                            metadata: next,
-                            descriptor,
-                        });
                     }
                     Ok(HelperOutput::CommandResponse { response }) => {
                         let request_id = match &response {
