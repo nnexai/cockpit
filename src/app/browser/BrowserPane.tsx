@@ -344,7 +344,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const request: BrowserViewOpenRequest = { target, client_id: clientId ?? clientRef.current, presentation, viewport: paneViewport(), takeover: false };
     void client.openBrowserView(request, event, (packet) => presenter?.push(packet), (error) => { if (!closed) { setStatus("error"); setMessage(errorMessage(error)); } }, controller.signal).then((stream) => { if (closed) stream.close(); else { streamRef.current = stream; openDraft(); } }).catch((error: unknown) => { if (!closed && !controller.signal.aborted) { setStatus("error"); setMessage(errorMessage(error)); } });
     return close;
-  }, [applySnapshot, clearPresentedFrame, client, clientId, frameMatchesCurrent, openDraft, paneViewport, presentation, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
+  // Browser-only is local layout state; it must not revoke the live frame stream.
+  }, [applySnapshot, clearPresentedFrame, client, clientId, frameMatchesCurrent, openDraft, paneViewport, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
       inputJobsRef.current = [];
