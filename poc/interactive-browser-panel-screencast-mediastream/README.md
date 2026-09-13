@@ -20,6 +20,8 @@ After every top-level reload or HTTP(S) navigation, the helper waits for `DOMCon
 
 VP8 is selected by `VideoEncoder.isConfigSupported()` from realtime candidates. The current probe rejected `prefer-hardware`, so the verified route falls back to `no-preference`; that is not a device-acceleration claim. VP8 has no decoder description in this flow, avoiding an H264 AVCC/decoder-config transport requirement.
 
+A fresh codec matrix covered VP8, VP9, AV1, H.264 profiles, and HEVC across 640×360 through 1920×1080, 30/60 fps, realtime/default latency modes, bundled Chromium, branded Chrome, headed/headless modes, and explicit VA-API flags. No Chromium `VideoEncoder.isConfigSupported()` candidate returned `supported: true` with `hardwareAcceleration: 'prefer-hardware'`; supported no-preference H.264 profiles are not evidence of hardware encoding.
+
 Packets have a fixed 48-byte `IPWC` header and bounded VP8 payload. The helper accepts producer data only on token-authenticated `/ingress`, fans out to token-authenticated `/frames`, keeps one in-flight packet per native peer, and drops unsafe delta replacement until it requests a source keyframe. There is no JPEG, CDP screencast, WebRTC, or synthetic-frame fallback. If the native WebKit runtime lacks `VideoDecoder`, the frontend self-test reports that explicit failure; its navigation check requires a newly rendered frame rather than relying on packet sequence monotonicity.
 
 The Tauri setup starts one background helper prewarm, so Chromium launch and first capture overlap WebView startup. The first frame still waits for a trusted capture gesture, encoder configuration, and a keyframe; this is startup overlap, not zero-latency capture.
