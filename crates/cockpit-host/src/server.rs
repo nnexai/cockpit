@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+#[path = "browser_view.rs"]
+pub mod browser_view;
 use crate::browser_runtime::BrowserRuntime;
 use axum::{
     Extension, Json, Router,
@@ -209,6 +211,7 @@ fn build_router_with_validated_root(
         .merge(context_media::routes())
         .merge(projects::routes())
         .merge(context::routes())
+        .merge(browser_view::routes())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(static_service)

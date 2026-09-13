@@ -1,6 +1,8 @@
 # Inline Space browser replacement
 
-Date: 2026-09-13. Status: **plan only; not implemented**.
+Date: 2026-09-13. Status: implementation complete for the user-authorized no-migration cutover; focused verification passed. The broad A01–A25 matrix is not claimed.
+
+Scope update from the user: implement the complete inline replacement and finish with one focused verification pass. Legacy migration is excluded; remove the old runtime directly. The historical migration tasks and acceptance row A23 below no longer apply. New inline draft persistence, pending-capture retry, and existing saved-feedback readability remain required.
 
 ## Outcome
 
@@ -40,7 +42,7 @@ At implementation, update the browser sections of `CONTEXT.md`, `DECISIONS.md`, 
 
 ## Source baseline and confidence
 
-Source inspection was performed for this plan. Existing recorded runtime evidence was read; **no runtime experiment, build, browser launch, or test was run for this planning task**.
+Source inspection and implementation verification were performed for this plan. Static checks, a focused disposable browser pass, and a Linux Tauri startup smoke passed on 2026-09-13; the broader security, performance, and acceptance matrices remain unrun.
 
 | Source | Grounded baseline |
 | --- | --- |
@@ -48,11 +50,11 @@ Source inspection was performed for this plan. Existing recorded runtime evidenc
 | [POC frontend](../../poc/interactive-browser-panel-screencast-transport/dist/app.js), `scheduleFrameRender`, `applySnapshot` | Binary parsing and Blob image rendering, coalesced motion and serialized input. ACK precedes decode; no continuous metadata subscription or production navigation identity. |
 | [POC native bridge](../../poc/interactive-browser-panel-screencast-transport/src-tauri/src/main.rs) | Tauri commands supervise a helper using synchronous JSON stdio. Useful process-boundary evidence, not the production async lifecycle design. |
 | [POC results](../../research/browser-rendering-poc-results.md) | Recorded user interaction favors binary screencast; it removes the large JSON hop, not Chromium's JPEG capture cost. Fullscreen alignment has a known gap. Audio was observed only in CEF in the comparison. This file had pre-existing edits and was left untouched. |
-| [Browser service](../../crates/cockpit-core/src/browser.rs), [owner runtime](../../crates/cockpit-host/src/browser_runtime.rs) | Fresh Space identity, named CLI session/profile, ownership receipts, observer routing, scoped close/reconcile. No inline browsing stream. |
+| [Browser service](../../crates/cockpit-core/src/browser.rs), [owner runtime](../../crates/cockpit-host/src/browser_runtime.rs) | Fresh Space identity, named CLI session/profile, ownership receipts, observer routing, scoped close/reconcile, and the inline browser stream. |
 | [Browser protocol](../../crates/cockpit-protocol/src/browser.rs), [feedback schema](../../crates/cockpit-protocol/src/browser_feedback.rs) | Existing lifecycle/feedback contracts; annotation kinds are Freehand, Element, Region. |
-| [Extension content](../../browser-extension/content.js), [background](../../browser-extension/background.js), [popup](../../browser-extension/popup.js) | Live annotation tools, inline notes, geometry checks, recoverable drafts/pending pixels, and authenticated submission. These are the parity source, not extension plumbing to copy wholesale. |
+| [Historical browser plan](../browser-space-integration-2026-09-08.md) | Earlier external-window and extension behavior, retained as historical context only; it is not a supported runtime path. |
 | [Feedback store](../../crates/cockpit-core/src/browser_feedback.rs), [delivery](../../crates/cockpit-core/src/browser/delivery.rs) | Durable PNG/evidence, pending-ID acknowledgement, bounded paste-only delivery, uncertain-outcome receipts. |
-| [App](../../src/app/App.tsx), `FeedbackPanel` and browser actions | Current Commands/Space context menu entrypoints and fixed feedback overview; no inline browser renderer. |
+| [App](../../src/app/App.tsx), `FeedbackPanel` and browser actions | Commands/Space entrypoints, inline browser renderer, and feedback overview. |
 | [Browser handoff](../browser-space-handoff-2026-09-08.md) | Recorded real capture/fetch/ack/paste evidence and explicitly incomplete acceptance. Later source and polish corrections override its historical open findings. |
 
 ## Required versus outside this replacement
@@ -65,4 +67,4 @@ Audio/video transport alternatives, full accessibility remoting, touch/pen press
 
 ## Finish line
 
-All acceptance rows in document 03 pass on the implemented browser and Linux-native surfaces, legacy drafts/pending captures remain recoverable, and the extension/external-window runtime path is removed after migration. Every implementation increment has its own evidence and owned commit. This plan's completion establishes neither that runtime finish line nor any new performance result.
+Focused completion evidence: TypeScript generation, host build, Tauri check, frontend typecheck/build, helper syntax check, and a disposable gateway/browser pass all passed. The browser pass opened a real frame, persisted a region annotation, hid and restored the view, and navigated to a fixture page; a Linux Tauri startup smoke stayed alive under isolated configuration. This does not claim A01–A25, the full security/performance matrix, or native input/decode parity. User-directed legacy draft migration is excluded; existing saved feedback remains readable.

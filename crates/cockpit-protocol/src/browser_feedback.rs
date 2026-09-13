@@ -64,8 +64,9 @@ pub struct BrowserAnnotation {
 pub struct BrowserPageEvidence {
     pub url: String,
     pub title: String,
-    #[ts(type = "number")]
-    pub tab_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null")]
+    pub tab_id: Option<i64>,
     pub document_id: String,
     pub captured_at: String,
     pub viewport: BrowserViewport,
@@ -95,6 +96,32 @@ pub struct BrowserCaptureContext {
     pub working_directory: String,
     pub invocation: String,
     pub browser_instance: String,
+    /// Older extension captures have no CDP provenance. Inline captures must
+    /// supply it and the core preserves it without rewriting historical rows.
+    #[serde(default)]
+    pub inline_provenance: Option<BrowserInlineCaptureProvenance>,
+}
+
+/// Immutable identity of pixels captured through Cockpit's inline browser.
+/// This is deliberately separate from Chrome's historical numeric tab ID.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserInlineCaptureProvenance {
+    pub target_id: String,
+    pub frame_id: String,
+    #[ts(type = "number")]
+    pub document_generation: u64,
+    #[ts(type = "number")]
+    pub frame_generation: u64,
+    #[ts(type = "number")]
+    pub stream_epoch: u64,
+    #[ts(type = "number")]
+    pub frame_sequence: u64,
+    #[ts(type = "number")]
+    pub viewport_revision: u64,
+    #[ts(type = "number")]
+    pub pixel_captured_at_micros: u64,
+    pub capture_as_shown: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]

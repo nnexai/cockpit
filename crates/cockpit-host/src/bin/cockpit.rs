@@ -87,7 +87,6 @@ struct BrowserArgs {
 enum BrowserActionName {
     Open,
     Status,
-    Show,
     Close,
     Feedback,
 }
@@ -425,7 +424,6 @@ async fn run_browser(args: BrowserArgs) -> Result<(), String> {
             let action = match action {
                 BrowserActionName::Open => BrowserAction::Open { url: args.url },
                 BrowserActionName::Status => BrowserAction::Status,
-                BrowserActionName::Show => BrowserAction::Show,
                 BrowserActionName::Close => BrowserAction::Close,
                 BrowserActionName::Feedback => unreachable!(),
             };

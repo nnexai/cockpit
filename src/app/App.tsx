@@ -1,6 +1,6 @@
 import { UiIcon } from "./UiIcon";
 import { ReviewViewer } from "./review/ReviewViewer";
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import {
   parseResourceMutationResponse,
   type CockpitClient,
@@ -8,9 +8,13 @@ import {
   type TerminalStream,
 } from "../client/CockpitClient";
 import type {
+  BrowserDraftRecoveryAction,
   BrowserFeedbackImage,
   BrowserFeedbackLookup,
   BrowserFeedbackSendResponse,
+  BrowserTarget,
+  BrowserViewPresentation,
+  BrowserViewViewportRequest,
   FocusRequest,
   ResourceMutationRequest,
   ResourceMutationResponse,
@@ -32,6 +36,7 @@ import { TeardownDialog } from "./projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
 import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
+import { BrowserPane } from "./browser/BrowserPane";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
@@ -730,6 +735,34 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { sta
 }
 type FeedbackImageState = Record<string, BrowserFeedbackImage | null>;
 type FeedbackDraftState = Record<string, string>;
+type BrowserPresentationState = { associationOpen: boolean; visible: boolean; presentation: BrowserViewPresentation };
+const BROWSER_FALLBACK_VIEWPORT: BrowserViewViewportRequest = { css_width: 800, css_height: 600, device_pixel_ratio: 1 };
+const BROWSER_SPLIT_MIN_RATIO = 0.25;
+const BROWSER_SPLIT_MAX_RATIO = 0.65;
+const BROWSER_SPLIT_DEFAULT_RATIO = 0.42;
+const BROWSER_SPLIT_KEY = "cockpit.browser.split-ratio";
+
+function boundedBrowserViewport(width: number, height: number, devicePixelRatio: number): BrowserViewViewportRequest {
+  return {
+    css_width: Math.max(1, Math.min(2560, Math.round(Number.isFinite(width) && width > 0 ? width : BROWSER_FALLBACK_VIEWPORT.css_width))),
+    css_height: Math.max(1, Math.min(1600, Math.round(Number.isFinite(height) && height > 0 ? height : BROWSER_FALLBACK_VIEWPORT.css_height))),
+    device_pixel_ratio: Math.max(1, Math.min(4, Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1)),
+  };
+}
+
+function boundedBrowserSplitRatio(value: number): number {
+  return Math.max(BROWSER_SPLIT_MIN_RATIO, Math.min(BROWSER_SPLIT_MAX_RATIO, Number.isFinite(value) ? value : BROWSER_SPLIT_DEFAULT_RATIO));
+}
+
+function readBrowserSplitRatio(key: string): number {
+  if (typeof window === "undefined") return BROWSER_SPLIT_DEFAULT_RATIO;
+  try {
+    const stored = window.sessionStorage.getItem(`${BROWSER_SPLIT_KEY}:${key}`);
+    return stored === null ? BROWSER_SPLIT_DEFAULT_RATIO : boundedBrowserSplitRatio(Number(stored));
+  } catch {
+    return BROWSER_SPLIT_DEFAULT_RATIO;
+  }
+}
 
 const SIDEBAR_MIN_WIDTH = 224;
 const SIDEBAR_MAX_WIDTH = 360;
@@ -782,7 +815,7 @@ function SidebarHeader({ session, sync, narrow, onSession, onClose, closeRef }: 
   </header>;
 }
 
-function FeedbackPanel({ lookup, images, drafts, targetLabel, busy, error, sendResult, riskPending, onRefresh, onAcknowledge, onSend, onRetryRisk, onDraftChange, onDismiss }: {
+function FeedbackPanel({ lookup, images, drafts, targetLabel, busy, error, sendResult, riskPending, onRefresh, onAcknowledge, onSend, onRetryRisk, onDraftChange, onRecovery, onDismiss }: {
   lookup: BrowserFeedbackLookup | null;
   images: FeedbackImageState;
   drafts: FeedbackDraftState;
@@ -796,6 +829,7 @@ function FeedbackPanel({ lookup, images, drafts, targetLabel, busy, error, sendR
   onSend: () => void;
   onRetryRisk: () => void;
   onDraftChange: (id: string, value: string) => void;
+  onRecovery: (action: BrowserDraftRecoveryAction) => void;
   onDismiss: () => void;
 }) {
   const captures = lookup?.feedback.captures.filter(capture => capture.pending_ids.length > 0) ?? [];
@@ -814,6 +848,14 @@ function FeedbackPanel({ lookup, images, drafts, targetLabel, busy, error, sendR
     {lookup ? <p className="feedback-browser-state"><strong>{lookup.browser.connection.replaceAll("_", " ")}</strong>{lookup.browser.message ? ` · ${lookup.browser.message}` : ""}{targetLabel ? ` · To ${targetLabel}` : ""}</p> : null}
     {busy && !lookup ? <p className="feedback-state">Reading pending feedback…</p> : null}
     {error ? <div className="feedback-state feedback-state-error" role="alert"><span>{error.message}</span><button type="button" onClick={onRefresh} disabled={busy}>Retry</button></div> : null}
+    {lookup?.drafts && (lookup.drafts.drafts.length > 0 || lookup.drafts.pending_capture) ? <details className="feedback-state"><summary>Unfinished annotations · {lookup.drafts.drafts.length}</summary>
+      {lookup.drafts.pending_capture ? <div><span>A composed capture is waiting to be saved.</span><button type="button" disabled={busy} onClick={() => onRecovery({ type: "retry_pending" })}>Retry save</button><button type="button" disabled={busy} onClick={() => onRecovery({ type: "discard_pending" })}>Discard captured image</button></div> : null}
+      {lookup.drafts.drafts.map(draft => <details key={draft.draft_id}><summary>{draft.annotations.length} marks · {draft.stale ? "Earlier document" : "Unfinished draft"}</summary>
+        {draft.annotations.map(mark => <p key={mark.id}>{mark.comment || mark.evidence?.text || "Drawing without text"}</p>)}
+        <a download={`browser-draft-${draft.draft_id}.json`} href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(draft, null, 2))}`}>Export draft</a>
+        <button type="button" disabled={busy} onClick={() => onRecovery({ type: "discard_draft", draft_id: draft.draft_id, expected_revision: draft.revision })}>Discard draft</button>
+      </details>)}
+    </details> : null}
     {!error && lookup && captures.length === 0 ? <p className="feedback-state">No pending browser annotations.</p> : null}
     {lookup && captures.length > 0 ? <div className="feedback-captures">
       {captures.map((capture) => <article className="feedback-capture" key={capture.id}>
@@ -902,6 +944,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [prefixActive, setPrefixActive] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const browserSizeKey = `${state.sessionId}:${selection.spaceId}`;
+  const [browserSplitRatio, setBrowserSplitRatio] = useState(() => readBrowserSplitRatio(browserSizeKey));
+  useEffect(() => setBrowserSplitRatio(readBrowserSplitRatio(browserSizeKey)), [browserSizeKey]);
   const [narrowViewport, setNarrowViewport] = useState(isNarrowViewport);
   const [drawerOpen, setDrawerOpen] = useState(() => !isNarrowViewport());
   const sidebarReturnFocus = useRef<HTMLElement | null>(null);
@@ -933,6 +978,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setSidebarWidth(width);
     try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* local preferences are optional */ }
   }, []);
+  const updateBrowserSplitRatio = useCallback((next: number) => {
+    const ratio = boundedBrowserSplitRatio(next);
+    setBrowserSplitRatio(ratio);
+    try { window.sessionStorage.setItem(`${BROWSER_SPLIT_KEY}:${browserSizeKey}`, String(ratio)); } catch { /* local preferences are optional */ }
+  }, [browserSizeKey]);
   const toggleSidebarCollapsed = useCallback(() => {
     setSidebarCollapsed((collapsed) => {
       const next = !collapsed;
@@ -979,6 +1029,150 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   }, [closeDrawer, drawerOpen, narrowViewport, selection.paneId, selection.spaceId, state.focusError, state.focusPending]);
   const [browserError, setBrowserError] = useState<(StatusError & { action: string }) | null>(null);
   const [browserBusy, setBrowserBusy] = useState(false);
+  const [browserInputActive, setBrowserInputActive] = useState(false);
+  const [browserPresentation, setBrowserPresentation] = useState<Record<string, BrowserPresentationState>>({});
+  const [browserViewport, setBrowserViewport] = useState<BrowserViewViewportRequest>(BROWSER_FALLBACK_VIEWPORT);
+  const browserRegionRef = useRef<HTMLDivElement | null>(null);
+  const browserTarget: BrowserTarget | null = state.sessionId && selection.spaceId ? {
+    session_id: state.sessionId,
+    space_id: selection.spaceId,
+    pane_id: null,
+    endpoint_path: null,
+  } : null;
+  const browserKey = state.sessionId && selection.spaceId ? `${state.sessionId}:${selection.spaceId}` : null;
+  const selectedBrowserPresentation = browserKey ? browserPresentation[browserKey] : undefined;
+  const previousBrowserKeyRef = useRef<string | null>(browserKey);
+  const browserKeyChanged = previousBrowserKeyRef.current !== browserKey;
+  const browserPresentationRef = useRef(browserPresentation);
+  browserPresentationRef.current = browserPresentation;
+  const browserClientIdRef = useRef<string | null>(null);
+  if (browserClientIdRef.current === null) {
+    browserClientIdRef.current = `cockpit-browser-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+  }
+  const browserClientId = browserClientIdRef.current;
+  // Presentation state is intentionally independent from Herdr sync. A stale
+  // session can still safely display the last browser frame for this exact
+  // session/Space, while browser actions remain live-state guarded below.
+  const browserOnly = narrowViewport && !browserKeyChanged && selectedBrowserPresentation?.presentation === "browser_only";
+  const browserVisible = Boolean(browserTarget && selectedBrowserPresentation?.associationOpen && selectedBrowserPresentation.visible);
+  const browserSyncUnavailable = state.sync !== "live";
+  const browserSyncMessage = state.sync === "disconnected"
+    ? "Herdr session disconnected; showing the last confirmed browser frame."
+    : state.sync === "stale"
+      ? "Herdr session is stale; showing the last confirmed browser frame."
+      : "Herdr session is resyncing; showing the last confirmed browser frame.";
+  useEffect(() => {
+    const previousKey = previousBrowserKeyRef.current;
+    previousBrowserKeyRef.current = browserKey;
+    if (previousKey === browserKey) return;
+    setBrowserInputActive(false);
+    setBrowserPresentation((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const key of [previousKey, browserKey]) {
+        if (key && next[key]?.presentation === "browser_only") {
+          next[key] = { ...next[key], presentation: "split" };
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [browserKey]);
+  useEffect(() => {
+    if (narrowViewport) return;
+    setBrowserPresentation((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [key, value] of Object.entries(next)) {
+        if (value.presentation === "browser_only") {
+          next[key] = { ...value, presentation: "split" };
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [narrowViewport]);
+  const setBrowserOnlyPresentation = useCallback((presentation: BrowserViewPresentation) => {
+    if (!browserKey) return;
+    setBrowserPresentation((current) => {
+      const existing = current[browserKey];
+      if (!existing || existing.presentation === presentation) return current;
+      return { ...current, [browserKey]: { ...existing, presentation } };
+    });
+  }, [browserKey]);
+  const enterBrowserOnly = useCallback(() => {
+    if (!narrowViewport || !browserVisible) return;
+    setBrowserOnlyPresentation("browser_only");
+  }, [browserVisible, narrowViewport, setBrowserOnlyPresentation]);
+  const backToTerminals = useCallback(() => {
+    setBrowserInputActive(false);
+    setBrowserOnlyPresentation("split");
+  }, [setBrowserOnlyPresentation]);
+  const hideBrowser = useCallback(() => {
+    setBrowserInputActive(false);
+    if (!browserKey) return;
+    setBrowserPresentation((current) => {
+      const existing = current[browserKey];
+      return existing && !existing.visible && existing.presentation === "split" ? current : {
+        ...current,
+        [browserKey]: { associationOpen: existing?.associationOpen ?? false, visible: false, presentation: "split" },
+      };
+    });
+  }, [browserKey]);
+  useEffect(() => {
+    if (!browserVisible) return;
+    const region = browserRegionRef.current;
+    if (!region) return;
+    const updateViewport = () => {
+      const surface = region.querySelector<HTMLElement>(".browser-surface");
+      const bounds = (surface ?? region).getBoundingClientRect();
+      setBrowserViewport(boundedBrowserViewport(bounds.width, bounds.height, window.devicePixelRatio));
+    };
+    updateViewport();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(region);
+    const surface = region.querySelector<HTMLElement>(".browser-surface");
+    if (surface) observer.observe(surface);
+    return () => observer.disconnect();
+  }, [browserVisible, browserKey, browserSplitRatio, narrowViewport, browserSyncUnavailable]);
+  const browserSplitterKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Home") {
+      event.preventDefault();
+      updateBrowserSplitRatio(BROWSER_SPLIT_MIN_RATIO);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      updateBrowserSplitRatio(BROWSER_SPLIT_MAX_RATIO);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      updateBrowserSplitRatio(browserSplitRatio + 0.02);
+    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      updateBrowserSplitRatio(browserSplitRatio - 0.02);
+    }
+  }, [browserSplitRatio, updateBrowserSplitRatio]);
+  const browserSplitterPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const content = event.currentTarget.parentElement;
+    if (!content) return;
+    event.preventDefault();
+    const bounds = content.getBoundingClientRect();
+    const size = narrowViewport ? bounds.height : bounds.width;
+    if (!(size > 0)) return;
+    const move = (next: PointerEvent) => {
+      const coordinate = narrowViewport ? next.clientY : next.clientX;
+      const ratio = narrowViewport ? (bounds.bottom - coordinate) / size : (bounds.right - coordinate) / size;
+      updateBrowserSplitRatio(ratio);
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }, [narrowViewport, updateBrowserSplitRatio]);
   const browserBusyRef = useRef(false);
   const browserRequest = useRef(0);
   const browserTargetRef = useRef<{ sessionId: string; spaceId: string } | null>(null);
@@ -1006,6 +1200,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   useEffect(() => () => { streamRegistry.current.forEach((stream) => stream.close()); streamRegistry.current.clear(); }, []);
   const focusSpace = (space: Space) => {
     if (modalOpen) return;
+    setBrowserInputActive(false);
     const tabId = allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null;
     const paneId = snapshot?.panes.find((pane) => pane.space_id === space.id && pane.focused)?.id ?? null;
     if (narrowViewport) drawerFocusTarget.current = { spaceId: space.id, paneId };
@@ -1013,12 +1208,14 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   };
   const focusTab = (tab: Tab) => {
     if (modalOpen) return;
+    setBrowserInputActive(false);
     const paneId = snapshot?.panes.find((pane) => pane.tab_id === tab.id && pane.focused)?.id ?? null;
     onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId });
   };
-  const focusPane = (pane: Pane) => { if (!modalOpen) onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); };
+  const focusPane = (pane: Pane) => { if (!modalOpen) { setBrowserInputActive(false); onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); } };
   const focusAgent = (agent: Agent) => {
     if (modalOpen) return;
+    setBrowserInputActive(false);
     if (narrowViewport) drawerFocusTarget.current = { spaceId: agent.space_id, paneId: agent.pane_id };
     onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id });
   };
@@ -1037,20 +1234,30 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   };
   const browserAction = useCallback(async (spaceId: string, action: "open" | "show" | "close", url?: string) => {
     const sessionId = state.sessionId;
-    if (!sessionId || state.sync !== "live" || browserBusyRef.current || browserTargetRef.current?.sessionId !== sessionId || browserTargetRef.current.spaceId !== spaceId) return;
+    const key = sessionId ? `${sessionId}:${spaceId}` : null;
+    if (!sessionId || !key || state.sync !== "live" || browserBusyRef.current || browserTargetRef.current?.sessionId !== sessionId || browserTargetRef.current.spaceId !== spaceId) return;
+    const existing = browserPresentationRef.current[key];
+    if ((action === "open" || action === "show") && existing?.associationOpen && !url) {
+      setBrowserPresentation((current) => ({ ...current, [key]: { associationOpen: true, visible: true, presentation: "split" } }));
+      setBrowserError(null);
+      setCommandsOpen(false);
+      return;
+    }
     const token = ++browserRequest.current;
     browserBusyRef.current = true;
     setBrowserBusy(true);
     setBrowserError(null);
-    const target = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
+    const target: BrowserTarget = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
     const current = () => browserRequest.current === token && browserTargetRef.current?.sessionId === sessionId && browserTargetRef.current.spaceId === spaceId;
     try {
-      let response = await client.browserAction({ target, action: action === "open" ? { kind: "open", url: url ?? null } : { kind: action } });
+      const response = await client.browserAction({ target, action: action === "close" ? { kind: "close" } : { kind: "open", url: url ?? null } });
       if (!current()) return;
       if (response.association && (response.association.session_id !== sessionId || response.association.space_id !== spaceId)) throw new Error("Browser response belongs to another Space");
-      if (action === "open" && response.connection === "open") {
-        response = await client.browserAction({ target, action: { kind: "show" } });
-        if (!current()) return;
+      if (action === "open" || action === "show") {
+        if (response.connection !== "open" && response.association?.connection !== "open") throw new Error(response.message || "Browser association did not open");
+        setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: true, visible: true, presentation: "split" } }));
+      } else {
+        setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: false, visible: false, presentation: "split" } }));
       }
       setBrowserError(null);
       setCommandsOpen(false);
@@ -1124,6 +1331,27 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const refreshFeedback = useCallback(() => {
     if (selection.spaceId) void loadFeedback(selection.spaceId);
   }, [loadFeedback, selection.spaceId]);
+  const recoverBrowserDraft = useCallback(async (action: BrowserDraftRecoveryAction) => {
+    const sessionId = state.sessionId;
+    const spaceId = selection.spaceId;
+    if (!sessionId || !spaceId || state.sync !== "live" || feedbackBusyRef.current) return;
+    if (action.type.startsWith("discard") && !window.confirm("Discard this unfinished browser work?")) return;
+    const token = ++feedbackRequest.current;
+    feedbackBusyRef.current = true;
+    setFeedbackBusy(true);
+    setFeedbackError(null);
+    try {
+      await client.browserDraftRecovery({ target: { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null }, action });
+    } catch (error) {
+      if (feedbackRequest.current === token) setFeedbackError(describeError(error, "Could not recover browser annotations"));
+    } finally {
+      if (feedbackRequest.current === token) {
+        feedbackBusyRef.current = false;
+        setFeedbackBusy(false);
+        void loadFeedback(spaceId, true);
+      }
+    }
+  }, [client, loadFeedback, selection.spaceId, state.sessionId, state.sync]);
   const displayedFeedbackIds = feedbackLookup && feedbackSpaceId === selection.spaceId
     ? Array.from(new Set(feedbackLookup.feedback.captures.flatMap((capture) => capture.pending_ids))) : [];
   const sendFeedback = useCallback(async (ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => {
@@ -1135,7 +1363,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     feedbackBusyRef.current = true;
     setFeedbackBusy(true);
     setFeedbackError(null);
-    const target = { session_id: sessionId, space_id: feedbackTargetPaneRef.current ? null : spaceId, pane_id: feedbackTargetPaneRef.current, endpoint_path: null };
+    const target = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
     let outcomeUnknown = false;
     try {
       const response = await client.sendBrowserFeedback({ target, ids, operation_id: operationId, acknowledge_duplicate_risk: acknowledgeDuplicateRisk });
@@ -1184,7 +1412,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const operationId = globalThis.crypto?.randomUUID?.() ?? `browser-feedback-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     void sendFeedback(feedbackRisk.ids, operationId, true);
   }, [feedbackRisk, sendFeedback]);
-  const feedbackTarget = (snapshot?.agents ?? []).find((agent) => agent.pane_id === feedbackTargetPaneId);
+  const feedbackTarget = (snapshot?.agents ?? []).find((agent) => agent.space_id === selection.spaceId && agent.tab_id === snapshot?.focused_tab_id);
   const feedbackTargetLabel = feedbackTarget ? `${feedbackTarget.name} · ${tabs.find((tab) => tab.id === feedbackTarget.tab_id)?.label ?? "tab"}` : "No eligible agent";
   useEffect(() => {
     feedbackRequest.current += 1;
@@ -1205,6 +1433,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     return () => window.clearInterval(timer);
   }, [feedbackOpen, loadFeedback, selection.spaceId, state.sync]);
   const runCommand = useCallback((command: PrefixCommand) => {
+    setBrowserInputActive(false);
     const space = byId(spaces, selection.spaceId);
     const tab = byId(tabs, selection.tabId);
     const pane = byId(panes, selection.paneId);
@@ -1260,7 +1489,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       const space = spaces.find((candidate) => candidate.id === menu.target.id);
       if (!space) return null;
       const browserReason = space.id === selection.spaceId ? undefined : "Select this Space first";
-      return <ContextMenu menu={menu} onDismiss={dismissMenu}><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button><button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}><UiIcon name="grid" />Open browser</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}><UiIcon name="grid" />Show browser</button><button role="menuitem" type="button" disabled={disabled || feedbackBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(openFeedback)}><UiIcon name="comment" />Browser feedback</button><button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} className="destructive" title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}><UiIcon name="close" />Close browser</button><button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Review task cleanup…</button></ContextMenu>;
+      const spaceBrowser = state.sessionId ? browserPresentation[`${state.sessionId}:${space.id}`] : undefined;
+      return <ContextMenu menu={menu} onDismiss={dismissMenu}>
+        <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
+        <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button>
+        <button role="menuitem" type="button" disabled={disabled || browserBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "open"); })}><UiIcon name="grid" />Open browser</button>
+        <button role="menuitem" type="button" disabled={disabled || browserBusy || !spaceBrowser?.associationOpen || spaceBrowser.visible || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "show"); })}><UiIcon name="grid" />Show browser</button>
+        <button role="menuitem" type="button" disabled={disabled || !spaceBrowser?.visible || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(hideBrowser)}><UiIcon name="grid" />Hide browser</button>
+        <button role="menuitem" type="button" disabled={disabled || feedbackBusy || Boolean(browserReason)} title={browserReason} onClick={() => menuAction(openFeedback)}><UiIcon name="comment" />Browser feedback</button>
+        <button role="menuitem" type="button" disabled={disabled || browserBusy || !spaceBrowser?.associationOpen || Boolean(browserReason)} className="destructive" title={browserReason} onClick={() => menuAction(() => { void browserAction(space.id, "close"); })}><UiIcon name="close" />Close browser</button>
+        <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Review task cleanup…</button>
+      </ContextMenu>;
     }
     if (menu.target.kind === "tab") {
       const tab = allTabs.find((candidate) => candidate.id === menu.target.id);
@@ -1305,8 +1544,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     { id: "session:switch", label: "switch session...", group: "Navigate", run: () => { void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); } },
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: () => setRecoveryOpen(true) },
     { id: "browser:open", label: "Open browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "open"); } },
-    { id: "browser:show", label: "Show browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "show"); } },
-    { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
+    { id: "browser:show", label: "Show browser view", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || Boolean(selectedBrowserPresentation.visible) || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "show"); } },
+    { id: "browser:hide", label: "Hide browser view", group: "Browser", disabled: !browserVisible, reason: !browserVisible ? "Open the browser view first" : undefined, run: hideBrowser },
+    { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
     { id: "browser:feedback", label: "Browser feedback", group: "Browser", disabled: !selection.spaceId || feedbackBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: openFeedback },
     { id: "browser:context", label: "Send browser context", group: "Browser", disabled: !selection.spaceId || feedbackBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { setFeedbackOpen(true); void sendFeedback([], globalThis.crypto?.randomUUID?.() ?? `browser-context-${Date.now()}-${Math.random().toString(36).slice(2)}`, false); } },
     ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
@@ -1333,9 +1573,12 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
           : state.focusPending.kind === "space" && state.focusPending.target_id === pane.space_id);
     const currentPaneStatus = incoming && pane.id === selection.paneId && state.focusPending !== null && !controlPendingForPane;
     const paneFocusError = incoming && state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} busy={mutationBusy} controlAllowed={incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusTransitionPending={!incoming || state.focusPending !== null} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} onMenu={(event) => openPaneMenu(event, pane)} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
+    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusTransitionPending={!incoming || state.focusPending !== null} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} onMenu={(event) => openPaneMenu(event, pane)} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
-  const workbenchStyle: CSSProperties & { "--sidebar-width": string } = { "--sidebar-width": `${sidebarWidth}px` };
+  const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
+    "--sidebar-width": `${sidebarWidth}px`,
+    "--browser-ratio": `${browserSplitRatio * 100}%`,
+  };
   const sidebarClass = "sidebar";
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
@@ -1350,10 +1593,18 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
-      <div className="pane-canvas" style={{ visibility: paneCanvasVisible ? "visible" : "hidden" }}>
-        {retainedProjection ? <div aria-hidden="true" inert style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>{renderPaneLayer(retainedProjection, false)}</div> : null}
-        <div aria-hidden={retainedProjection ? "true" : undefined} inert={retainedProjection !== null} style={{ position: "absolute", inset: 0, visibility: retainedProjection ? "hidden" : "visible", pointerEvents: retainedProjection ? "none" : "auto" }}>{renderPaneLayer(paneProjection, true)}</div>
-        {retainedProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
+      <div className="workarea-content">
+        <div className="pane-canvas" style={{ visibility: paneCanvasVisible ? "visible" : "hidden", display: browserOnly ? "none" : undefined }}>
+          {retainedProjection ? <div aria-hidden="true" inert style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>{renderPaneLayer(retainedProjection, false)}</div> : null}
+          <div aria-hidden={retainedProjection ? "true" : undefined} inert={retainedProjection !== null} style={{ position: "absolute", inset: 0, visibility: retainedProjection ? "hidden" : "visible", pointerEvents: retainedProjection ? "none" : "auto" }}>{renderPaneLayer(paneProjection, true)}</div>
+          {retainedProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
+        </div>
+        {browserVisible && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}
+        {browserVisible && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
+          {narrowViewport && !browserOnly ? <div className="browser-toolbar" aria-label="Browser presentation controls"><div className="browser-toolbar-actions"><button type="button" onClick={enterBrowserOnly}>Browser only</button></div></div> : null}
+          {browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
+          <BrowserPane client={client} target={browserTarget} viewport={browserViewport} visible presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onFeedback={openFeedback} onHide={hideBrowser} onBackToTerminals={browserOnly ? backToTerminals : undefined} />
+        </div> : null}
       </div>
     </main>
     {renderMenu()}
@@ -1363,12 +1614,11 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
-    {feedbackOpen && (feedbackSpaceId === selection.spaceId || feedbackLookup === null) ? <FeedbackPanel lookup={feedbackLookup} images={feedbackImages} drafts={feedbackDrafts} targetLabel={feedbackTargetLabel} busy={feedbackBusy} error={feedbackError} sendResult={feedbackResult} riskPending={feedbackRisk !== null} onRefresh={refreshFeedback} onAcknowledge={() => { void acknowledgeFeedback(); }} onSend={sendDisplayedFeedback} onRetryRisk={retryUnknownFeedback} onDraftChange={(id, value) => setFeedbackDrafts((previous) => ({ ...previous, [id]: value }))} onDismiss={() => setFeedbackOpen(false)} /> : null}
+    {feedbackOpen && (feedbackSpaceId === selection.spaceId || feedbackLookup === null) ? <FeedbackPanel lookup={feedbackLookup} images={feedbackImages} drafts={feedbackDrafts} targetLabel={feedbackTargetLabel} busy={feedbackBusy} error={feedbackError} sendResult={feedbackResult} riskPending={feedbackRisk !== null} onRefresh={refreshFeedback} onAcknowledge={() => { void acknowledgeFeedback(); }} onSend={sendDisplayedFeedback} onRetryRisk={retryUnknownFeedback} onRecovery={(action) => { void recoverBrowserDraft(action); }} onDraftChange={(id, value) => setFeedbackDrafts((previous) => ({ ...previous, [id]: value }))} onDismiss={() => setFeedbackOpen(false)} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
   </div>;
 }
-
 export function App({ client }: { client: CockpitClient }) {
   const [status, setStatus] = useState<CockpitStatus | null>(null);
   const [statusError, setStatusError] = useState<StatusError | null>(null);

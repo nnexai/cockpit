@@ -71,3 +71,9 @@ Source import verifies the companion's primary repository origin against this co
 ## Changed-scope quality gate
 
 Run `bun run quality:probe` to inspect the pinned metric tools, then `bun run quality:report --base <review-base>` for the current staged, unstaged and untracked scope. `bun run quality:gate --base <review-base> --strict` applies the strict gate. Reports are ignored local artifacts under `quality/reports/`. Missing metric providers produce an inconclusive result (exit 2); they never count as passing coverage or complexity. See `quality/README.md` for provider inputs, baseline review and exception rules.
+
+## Inline browser implementation
+
+`browser-runtime/browser-helper.mjs` attaches to the Space's CLI-managed Chromium and owns CDP input, metadata, inspection, and binary frames. `crates/cockpit-host/src/browser_helper.rs` supervises it. `browser_runtime.rs` forwards observer requests to the one owner. `browser_view.rs` provides the web routes and bounded binary relay; native commands use the same runtime.
+
+`src/app/browser/` owns presentation, input mapping, annotations, and PNG composition through `CockpitClient`. Rust protocol DTOs in `crates/cockpit-protocol/src/browser_view.rs` generate the shared frontend contract. Core browser draft and feedback modules own durable data. The no-migration inline cutover is implemented; focused browser and Linux-native startup verification passed on 2026-09-13. See `planning/inline-space-browser-2026-09-13/` for the exact evidence and unclaimed A01–A25/security/performance matrix.

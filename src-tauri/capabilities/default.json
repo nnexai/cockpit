@@ -55,6 +55,11 @@
     "allow-cockpit-browser-feedback",
     "allow-cockpit-browser-feedback-ack",
     "allow-cockpit-browser-feedback-image",
-    "allow-cockpit-browser-feedback-send"
+    "allow-cockpit-browser-feedback-send",
+    "allow-cockpit-browser-view-open",
+    "allow-cockpit-browser-view-command",
+    "allow-cockpit-browser-view-subscribe",
+    "allow-cockpit-browser-view-frame-ack",
+    "allow-cockpit-browser-draft-recovery"
   ]
 }

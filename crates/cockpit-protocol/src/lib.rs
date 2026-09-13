@@ -1,5 +1,6 @@
 pub mod browser;
 pub mod browser_feedback;
+pub mod browser_view;
 
 pub mod comment_paste;
 pub mod comments;

@@ -21,12 +21,20 @@ use cockpit_core::{
     TerminalSession,
 };
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
-use cockpit_host::BrowserRuntime;
+use cockpit_host::{
+    BrowserRuntime,
+    browser_runtime::validate_browser_view_command,
+    server::browser_view::{FrameConnection, decode_frame},
+};
 use cockpit_protocol::{
     browser::{
         BrowserFeedbackAckRequest, BrowserFeedbackImage, BrowserFeedbackImageRequest,
         BrowserFeedbackLookup, BrowserFeedbackRequest, BrowserFeedbackSendRequest,
         BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse,
+    },
+    browser_view::{
+        BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewEvent,
+        BrowserViewOpenRequest, BrowserViewSnapshot,
     },
     v1::{
         CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
@@ -35,9 +43,16 @@ use cockpit_protocol::{
         TerminalOwnershipState, TerminalStreamMessage,
     },
 };
-use tauri::{Manager, State, ipc::Channel};
-use tokio::{io::AsyncWriteExt, process::Command as TokioCommand};
-use tokio::sync::mpsc;
+use serde::Serialize;
+use tauri::{
+    Manager, State,
+    ipc::{Channel, InvokeResponseBody},
+};
+use tokio::{
+    io::AsyncWriteExt,
+    process::Command as TokioCommand,
+    sync::{Notify, mpsc},
+};
 use uuid::Uuid;
 
 const MAX_STREAMS: usize = 256;
@@ -49,17 +64,32 @@ const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2)
 #[tauri::command]
 async fn cockpit_clipboard_write(text: String) -> Result<(), ErrorResponse> {
     #[cfg(target_os = "linux")]
-    { write_linux_clipboard(&text).await }
+    {
+        write_linux_clipboard(&text).await
+    }
     #[cfg(not(target_os = "linux"))]
-    { let _ = text; Err(stream_error("clipboard_unavailable", "The native clipboard adapter is unavailable on this platform")) }
+    {
+        let _ = text;
+        Err(stream_error(
+            "clipboard_unavailable",
+            "The native clipboard adapter is unavailable on this platform",
+        ))
+    }
 }
 
 #[tauri::command]
 async fn cockpit_clipboard_read() -> Result<String, ErrorResponse> {
     #[cfg(target_os = "linux")]
-    { read_linux_clipboard().await }
+    {
+        read_linux_clipboard().await
+    }
     #[cfg(not(target_os = "linux"))]
-    { Err(stream_error("clipboard_unavailable", "The native clipboard adapter is unavailable on this platform")) }
+    {
+        Err(stream_error(
+            "clipboard_unavailable",
+            "The native clipboard adapter is unavailable on this platform",
+        ))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -67,34 +97,85 @@ async fn write_linux_clipboard(text: &str) -> Result<(), ErrorResponse> {
     let mut process = TokioCommand::new("wl-copy")
         .stdin(std::process::Stdio::piped())
         .spawn()
-        .map_err(|error| stream_error("clipboard_unavailable", format!("Could not start wl-copy: {error}")))?;
+        .map_err(|error| {
+            stream_error(
+                "clipboard_unavailable",
+                format!("Could not start wl-copy: {error}"),
+            )
+        })?;
     let result = tokio::time::timeout(CLIPBOARD_TIMEOUT, async {
-        let mut stdin = process.stdin.take().ok_or_else(|| stream_error("clipboard_unavailable", "wl-copy stdin was unavailable"))?;
-        stdin.write_all(text.as_bytes()).await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not write the clipboard: {error}")))?;
+        let mut stdin = process.stdin.take().ok_or_else(|| {
+            stream_error("clipboard_unavailable", "wl-copy stdin was unavailable")
+        })?;
+        stdin.write_all(text.as_bytes()).await.map_err(|error| {
+            stream_error(
+                "clipboard_write_failed",
+                format!("Could not write the clipboard: {error}"),
+            )
+        })?;
         drop(stdin);
-        let status = process.wait().await.map_err(|error| stream_error("clipboard_write_failed", format!("Could not finish the clipboard write: {error}")))?;
-        if status.success() { Ok(()) } else { Err(stream_error("clipboard_write_failed", format!("wl-copy exited with {status}"))) }
-    }).await;
+        let status = process.wait().await.map_err(|error| {
+            stream_error(
+                "clipboard_write_failed",
+                format!("Could not finish the clipboard write: {error}"),
+            )
+        })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(stream_error(
+                "clipboard_write_failed",
+                format!("wl-copy exited with {status}"),
+            ))
+        }
+    })
+    .await;
     match result {
         Ok(result) => result,
         Err(_) => {
             let _ = process.kill().await;
-            Err(stream_error("clipboard_write_timeout", "The native clipboard write exceeded 2 seconds"))
+            Err(stream_error(
+                "clipboard_write_timeout",
+                "The native clipboard write exceeded 2 seconds",
+            ))
         }
     }
 }
 
 #[cfg(target_os = "linux")]
 async fn read_linux_clipboard() -> Result<String, ErrorResponse> {
-    let output = tokio::time::timeout(CLIPBOARD_TIMEOUT, TokioCommand::new("wl-paste")
-        .args(["--no-newline", "--type", "text/plain"])
-        .output())
-        .await
-        .map_err(|_| stream_error("clipboard_read_timeout", "The native clipboard read exceeded 2 seconds"))?
-        .map_err(|error| stream_error("clipboard_unavailable", format!("Could not start wl-paste: {error}")))?;
+    let output = tokio::time::timeout(
+        CLIPBOARD_TIMEOUT,
+        TokioCommand::new("wl-paste")
+            .args(["--no-newline", "--type", "text/plain"])
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        stream_error(
+            "clipboard_read_timeout",
+            "The native clipboard read exceeded 2 seconds",
+        )
+    })?
+    .map_err(|error| {
+        stream_error(
+            "clipboard_unavailable",
+            format!("Could not start wl-paste: {error}"),
+        )
+    })?;
     if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|error| stream_error("clipboard_read_failed", format!("The clipboard was not valid UTF-8: {error}")))
-    } else { Err(stream_error("clipboard_read_failed", format!("wl-paste exited with {}", output.status))) }
+        String::from_utf8(output.stdout).map_err(|error| {
+            stream_error(
+                "clipboard_read_failed",
+                format!("The clipboard was not valid UTF-8: {error}"),
+            )
+        })
+    } else {
+        Err(stream_error(
+            "clipboard_read_failed",
+            format!("wl-paste exited with {}", output.status),
+        ))
+    }
 }
 
 /// A cancellation/cleanup handle shared with a stream relay task.
@@ -102,24 +183,43 @@ struct StreamControl {
     cancelled: AtomicBool,
     abort: Mutex<Option<tokio::task::AbortHandle>>,
     release: Mutex<Option<mpsc::Sender<TerminalCommand>>>,
+    cancel_notify: Option<Arc<Notify>>,
+    abort_on_cancel: bool,
 }
 
 impl StreamControl {
     fn new(release: Option<mpsc::Sender<TerminalCommand>>) -> Arc<Self> {
+        Self::with_cancel_notify(release, None, true)
+    }
+
+    fn new_browser() -> Arc<Self> {
+        Self::with_cancel_notify(None, Some(Arc::new(Notify::new())), false)
+    }
+
+    fn with_cancel_notify(
+        release: Option<mpsc::Sender<TerminalCommand>>,
+        cancel_notify: Option<Arc<Notify>>,
+        abort_on_cancel: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
             cancelled: AtomicBool::new(false),
             abort: Mutex::new(None),
             release: Mutex::new(release),
+            cancel_notify,
+            abort_on_cancel,
         })
     }
 
     fn set_abort(&self, abort: tokio::task::AbortHandle) {
         if self.cancelled.load(Ordering::Acquire) {
-            abort.abort();
+            if self.abort_on_cancel {
+                abort.abort();
+            }
             return;
         }
         *self.abort.lock().expect("stream control lock poisoned") = Some(abort);
         if self.cancelled.load(Ordering::Acquire)
+            && self.abort_on_cancel
             && let Some(abort) = self
                 .abort
                 .lock()
@@ -132,6 +232,9 @@ impl StreamControl {
 
     async fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+        if let Some(notify) = &self.cancel_notify {
+            notify.notify_one();
+        }
         let release = self
             .release
             .lock()
@@ -141,11 +244,12 @@ impl StreamControl {
             let _ =
                 tokio::time::timeout(RELEASE_TIMEOUT, release.send(TerminalCommand::Release)).await;
         }
-        if let Some(abort) = self
-            .abort
-            .lock()
-            .expect("stream control lock poisoned")
-            .take()
+        if self.abort_on_cancel
+            && let Some(abort) = self
+                .abort
+                .lock()
+                .expect("stream control lock poisoned")
+                .take()
         {
             abort.abort();
         }
@@ -159,6 +263,10 @@ enum StreamEntry {
     Terminal {
         control: Arc<StreamControl>,
         commands: mpsc::Sender<TerminalCommand>,
+    },
+    BrowserView {
+        control: Arc<StreamControl>,
+        acknowledgements: mpsc::Sender<u64>,
     },
 }
 
@@ -201,6 +309,16 @@ impl StreamRegistry {
         }
     }
 
+    fn browser_view_acknowledgements(&self, stream_id: &str) -> Option<mpsc::Sender<u64>> {
+        let entries = self.entries.lock().expect("stream registry lock poisoned");
+        match entries.get(stream_id) {
+            Some(StreamEntry::BrowserView {
+                acknowledgements, ..
+            }) => Some(acknowledgements.clone()),
+            _ => None,
+        }
+    }
+
     fn complete(&self, stream_id: &str) {
         let entry = self
             .entries
@@ -209,7 +327,9 @@ impl StreamRegistry {
             .remove(stream_id);
         if let Some(entry) = entry {
             match entry {
-                StreamEntry::Session { control } | StreamEntry::Terminal { control, .. } => {
+                StreamEntry::Session { control }
+                | StreamEntry::Terminal { control, .. }
+                | StreamEntry::BrowserView { control, .. } => {
                     control.cancelled.store(true, Ordering::Release);
                 }
             }
@@ -224,7 +344,9 @@ impl StreamRegistry {
             .remove(stream_id);
         if let Some(entry) = entry {
             match entry {
-                StreamEntry::Session { control } | StreamEntry::Terminal { control, .. } => {
+                StreamEntry::Session { control }
+                | StreamEntry::Terminal { control, .. }
+                | StreamEntry::BrowserView { control, .. } => {
                     control.cancel().await;
                 }
             }
@@ -261,8 +383,12 @@ mod clipboard_tests {
     #[ignore = "requires a run-owned Wayland display; run explicitly for native integration proof"]
     async fn native_clipboard_roundtrip_preserves_unicode_and_newlines() {
         let expected = "Cockpit αβγ\nline two\n✓ 终端";
-        write_linux_clipboard(expected).await.expect("wl-copy should accept text");
-        let actual = read_linux_clipboard().await.expect("wl-paste should return text");
+        write_linux_clipboard(expected)
+            .await
+            .expect("wl-copy should accept text");
+        let actual = read_linux_clipboard()
+            .await
+            .expect("wl-paste should return text");
         assert_eq!(actual, expected);
     }
 }
@@ -340,6 +466,275 @@ async fn cockpit_browser_feedback_send(
         .await
         .map_err(inspection_error_response)
 }
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum BrowserViewChannelMessage {
+    Event {
+        event: BrowserViewEvent,
+    },
+    Frame {
+        descriptor: cockpit_protocol::browser_view::BrowserViewFrameDescriptor,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
+}
+
+fn send_browser_view_message(
+    channel: &Channel<InvokeResponseBody>,
+    message: BrowserViewChannelMessage,
+) -> bool {
+    let Ok(json) = serde_json::to_string(&message) else {
+        return false;
+    };
+    channel.send(InvokeResponseBody::Json(json)).is_ok()
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BrowserViewOpenNativeResponse {
+    snapshot: BrowserViewSnapshot,
+    first_frame: cockpit_protocol::browser_view::BrowserViewFrameDescriptor,
+}
+
+#[tauri::command]
+async fn cockpit_browser_draft_recovery(
+    request: cockpit_protocol::browser_view::BrowserDraftRecoveryRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<cockpit_protocol::browser_view::BrowserViewCommandOutcome, ErrorResponse> {
+    runtime.browser_draft_recovery(request).await.map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_view_open(
+    request: BrowserViewOpenRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserViewOpenNativeResponse, ErrorResponse> {
+    request
+        .validate()
+        .map_err(|message| stream_error("invalid_browser_view_open", message))?;
+    let opened = runtime
+        .open_browser_view(request)
+        .await
+        .map_err(inspection_error_response)?;
+    Ok(BrowserViewOpenNativeResponse {
+        snapshot: opened.snapshot,
+        first_frame: opened.first_frame,
+    })
+}
+
+#[tauri::command]
+async fn cockpit_browser_view_command(
+    request: BrowserViewCommandRequest,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<BrowserViewCommandResponse, ErrorResponse> {
+    validate_browser_view_command(&request)
+        .map_err(|error| stream_error(&error.code, error.message))?;
+    runtime
+        .browser_view_command(request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+async fn cockpit_browser_view_subscribe(
+    view_id: String,
+    stream_epoch: u64,
+    channel: Channel<InvokeResponseBody>,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+    registry: State<'_, StreamRegistry>,
+) -> Result<String, ErrorResponse> {
+    let subscription = runtime
+        .browser_view_events(&view_id)
+        .await
+        .map_err(inspection_error_response)?;
+    if subscription.snapshot.identity.stream_epoch != stream_epoch {
+        return Err(stream_error(
+            "stale_browser_view",
+            "Browser view stream epoch is stale",
+        ));
+    }
+    let initial_snapshot = subscription.snapshot.clone();
+    let grant = initial_snapshot.frame_grant.clone().ok_or_else(|| {
+        stream_error(
+            "browser_frame_unavailable",
+            "Browser view has no frame grant",
+        )
+    })?;
+    let endpoint = runtime
+        .browser_view_frame_endpoint(&grant)
+        .await
+        .map_err(inspection_error_response)?;
+    let (ack_tx, mut ack_rx) = mpsc::channel(8);
+    let control = StreamControl::new_browser();
+    let stream_id = registry.allocate(StreamEntry::BrowserView {
+        control: Arc::clone(&control),
+        acknowledgements: ack_tx,
+    })?;
+    let task_registry = registry.inner().clone();
+    let task_stream_id = stream_id.clone();
+    let task_control = Arc::clone(&control);
+    let task_runtime = runtime.inner().clone();
+    let task_view_id = initial_snapshot.identity.view_id.clone();
+    let cancel_notify = task_control
+        .cancel_notify
+        .clone()
+        .expect("browser stream cancellation notification");
+    let task = tokio::spawn(async move {
+        let mut events = subscription.events;
+        let mut frame = tokio::select! {
+            _ = cancel_notify.notified() => {
+                drop(events);
+                drop(ack_rx);
+                task_registry.complete(&task_stream_id);
+                let _ = task_runtime.browser_view_detach(&task_view_id).await;
+                return;
+            }
+            result = FrameConnection::connect(&endpoint, &grant.grant) => match result {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let _ = send_browser_view_message(
+                        &channel,
+                        BrowserViewChannelMessage::Error {
+                            code: error.code.to_owned(),
+                            message: error.message.to_owned(),
+                        },
+                    );
+                    drop(events);
+                    drop(ack_rx);
+                    task_registry.complete(&task_stream_id);
+                    let _ = task_runtime.browser_view_detach(&task_view_id).await;
+                    return;
+                }
+            },
+        };
+        let mut target_id = initial_snapshot
+            .displayed_target_id
+            .clone()
+            .unwrap_or_default();
+        let metadata = cockpit_protocol::browser_view::BrowserViewEventMetadata {
+            view_id: initial_snapshot.identity.view_id.clone(),
+            stream_epoch,
+            metadata_sequence: initial_snapshot.metadata_sequence,
+        };
+        if !send_browser_view_message(
+            &channel,
+            BrowserViewChannelMessage::Event {
+                event: BrowserViewEvent::Attached {
+                    metadata,
+                    snapshot: initial_snapshot.clone(),
+                },
+            },
+        ) {
+            drop(frame);
+            drop(events);
+            drop(ack_rx);
+            task_registry.complete(&task_stream_id);
+            let _ = task_runtime.browser_view_detach(&task_view_id).await;
+            return;
+        }
+        let mut outstanding = None;
+        while !task_control.cancelled.load(Ordering::Acquire) {
+            tokio::select! {
+                _ = cancel_notify.notified() => break,
+                event = events.recv() => match event {
+                    Ok(event) => {
+                        if let BrowserViewEvent::Attached { snapshot, .. } = &event { target_id = snapshot.displayed_target_id.clone().unwrap_or(target_id); }
+                        if let BrowserViewEvent::TargetsChanged { displayed_target_id, .. } = &event { target_id = displayed_target_id.clone().unwrap_or(target_id); }
+                        if !send_browser_view_message(&channel, BrowserViewChannelMessage::Event { event }) { break; }
+                    }
+                    Err(_) => {
+                        let _ = send_browser_view_message(
+                            &channel,
+                            BrowserViewChannelMessage::Error {
+                                code: "browser_metadata_closed".into(),
+                                message: "Browser metadata stream closed".into(),
+                            },
+                        );
+                        break;
+                    }
+                },
+                ack = ack_rx.recv() => {
+                    let Some(sequence) = ack else { break; };
+                    if outstanding == Some(sequence) {
+                        if frame.send_credit("ack", sequence).await.is_err() { break; }
+                        outstanding = None;
+                    }
+                }
+                incoming = frame.recv() => match incoming {
+                    Ok(Some(payload)) => {
+                        let packet = match decode_frame(&payload, &target_id, stream_epoch) {
+                            Ok(packet) => packet,
+                            Err(error) => {
+                                let _ = send_browser_view_message(
+                                    &channel,
+                                    BrowserViewChannelMessage::Error {
+                                        code: error.code.to_owned(),
+                                        message: error.message.to_owned(),
+                                    },
+                                );
+                                break;
+                            }
+                        };
+                        if outstanding.is_some() {
+                            if frame.send_credit("discard", packet.descriptor.frame_sequence).await.is_err() { break; }
+                            continue;
+                        }
+                        let sequence = packet.descriptor.frame_sequence;
+                        let descriptor = packet.descriptor;
+                        let jpeg = packet.jpeg;
+                        outstanding = Some(sequence);
+                        if !send_browser_view_message(
+                            &channel,
+                            BrowserViewChannelMessage::Frame { descriptor },
+                        ) {
+                            outstanding = None;
+                            let _ = frame.send_credit("discard", sequence).await;
+                            break;
+                        }
+                        if channel.send(InvokeResponseBody::Raw(jpeg)).is_err() {
+                            outstanding = None;
+                            let _ = frame.send_credit("discard", sequence).await;
+                            break;
+                        }
+                    }
+                    Ok(None) | Err(_) => break,
+                }
+            }
+        }
+        if let Some(sequence) = outstanding {
+            let _ = frame.send_credit("discard", sequence).await;
+        }
+        drop(frame);
+        drop(events);
+        drop(ack_rx);
+        task_registry.complete(&task_stream_id);
+        let _ = task_runtime.browser_view_detach(&task_view_id).await;
+    });
+    control.set_abort(task.abort_handle());
+    Ok(stream_id)
+}
+
+#[tauri::command]
+async fn cockpit_browser_view_frame_ack(
+    stream_id: String,
+    frame_sequence: u64,
+    registry: State<'_, StreamRegistry>,
+) -> Result<(), ErrorResponse> {
+    let Some(acknowledgements) = registry.browser_view_acknowledgements(&stream_id) else {
+        return Err(stream_error(
+            "stream_not_found",
+            "The browser view stream is not active",
+        ));
+    };
+    acknowledgements.try_send(frame_sequence).map_err(|_| {
+        stream_error(
+            "stream_closed",
+            "The browser view stream is not accepting frame credit",
+        )
+    })
+}
+
 #[tauri::command]
 async fn cockpit_sessions(
     service: State<'_, CockpitService>,
@@ -1068,6 +1463,11 @@ pub fn run() {
             comments::cockpit_comments_discard,
             cockpit_status,
             cockpit_browser_action,
+            cockpit_browser_view_open,
+            cockpit_browser_draft_recovery,
+            cockpit_browser_view_command,
+            cockpit_browser_view_subscribe,
+            cockpit_browser_view_frame_ack,
             comments::cockpit_comments_preview,
             comments::cockpit_comments_paste_prepare,
             comments::cockpit_comments_paste_send,

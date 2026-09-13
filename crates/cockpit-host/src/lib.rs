@@ -4,7 +4,6 @@
 //! behavior remains in `cockpit-core`, allowing native and browser transports to
 //! consume the same status operation.
 
-mod browser_annotations;
 pub mod browser_runtime;
 pub mod server;
 

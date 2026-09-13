@@ -35,6 +35,7 @@ export function prefixCommandForKey(key: string, shiftKey: boolean): PrefixComma
   return null;
 }
 
+
 function editableTarget(target: EventTarget | null): boolean {
   return target !== null && target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 }
@@ -56,7 +57,9 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
   if (event.isComposing) return;
   const target = typeof HTMLElement !== "undefined" && event.target instanceof HTMLElement ? event.target : null;
   const modalOpen = routing.modalOpen || Boolean(target?.closest("dialog[open]"));
-  const prefixSafe = !editableTarget(target) || Boolean(target?.closest(".terminal-host"));
+  const browserFocused = Boolean(target?.closest(".browser-pane"));
+  const remoteBrowserInput = Boolean(target?.closest("[data-browser-input]"));
+  const prefixSafe = remoteBrowserInput || (!browserFocused && (!editableTarget(target) || Boolean(target?.closest(".terminal-host"))));
   if (event.key === "Escape" && routing.prefixActive) {
     routing.setPrefixActive(false);
     if (!modalOpen && prefixSafe) {
@@ -73,7 +76,7 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
       routing.setPrefixActive(true);
       return;
     }
-    if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey && !editableTarget(target)) {
+    if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey && !editableTarget(target) && !browserFocused) {
       event.preventDefault();
       routing.setCommandsOpen(true);
     }

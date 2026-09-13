@@ -1335,6 +1335,7 @@ mod tests {
                         working_directory: "/tmp".into(),
                         invocation: "playwright-cli".into(),
                         browser_instance: browser_instance.clone(),
+                        inline_provenance: None,
                     },
                     BrowserCaptureSubmission {
                         association_key: association_key.into(),
@@ -1343,7 +1344,7 @@ mod tests {
                         page: BrowserPageEvidence {
                             url: "http://localhost/".into(),
                             title: "Test".into(),
-                            tab_id: 1,
+                            tab_id: Some(1),
                             document_id: "document".into(),
                             captured_at: "2026-09-09T00:00:00Z".into(),
                             viewport: BrowserViewport {
@@ -1385,6 +1386,7 @@ mod tests {
                     working_directory: "/tmp".into(),
                     invocation: "playwright-cli".into(),
                     browser_instance: browser_instance.clone(),
+                    inline_provenance: None,
                 },
                 BrowserCaptureSubmission {
                     association_key: association_key.into(),
@@ -1393,7 +1395,7 @@ mod tests {
                     page: BrowserPageEvidence {
                         url: "http://localhost/".into(),
                         title: "Test".into(),
-                        tab_id: 1,
+                        tab_id: Some(1),
                         document_id: "document".into(),
                         captured_at: "2026-09-09T00:00:00Z".into(),
                         viewport: BrowserViewport {

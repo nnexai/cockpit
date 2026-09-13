@@ -132,6 +132,7 @@ class AppFixture {
     status: vi.fn(async () => status),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this Space" })),
     browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in fixture"); }),
+    browserDraftRecovery: vi.fn(async () => ({ type: "none" as const })),
     acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in fixture"); }),
     browserFeedbackImage: vi.fn(async () => { throw new Error("Unexpected browser feedback image in fixture"); }),
     sendBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback send in fixture"); }),
@@ -176,6 +177,7 @@ class AppFixture {
       return { close: () => { subscription.closed = true; } };
     }),
     openTerminal: vi.fn(),
+    openBrowserView: vi.fn(),
   };
 
   constructor() {
@@ -814,10 +816,11 @@ it("loads browser feedback for the selected Space independently of agent panes",
   const readFeedback = vi.fn<CockpitClient["browserFeedback"]>(async () => ({
     browser: { association: null, connection: "closed", message: "browser is closed" },
     feedback: { captures: [], pending_count: 0, retention_seconds: 86400 },
+    drafts: null,
   }));
   fixture.client.browserFeedback = readFeedback;
   await mount(fixture);
-  const next = snapshot("session-1");
+  const next = snapshot("session-1", "tab-2", "pane-2");
   next.agents = [
     { pane_id: "foreign-pane", space_id: "other-space", tab_id: "foreign-tab", name: "Other agent", status: "idle", title: null, focused: false, state_change_seq: 1 },
     { pane_id: "pane-2", space_id: "space-1", tab_id: "tab-2", name: "Local agent", status: "idle", title: null, focused: false, state_change_seq: 1 },

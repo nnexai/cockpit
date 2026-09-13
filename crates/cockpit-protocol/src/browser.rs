@@ -18,7 +18,6 @@ pub enum BrowserAction {
     Open { url: Option<String> },
     Status,
     Close,
-    Show,
 }
 
 /// A browser operation and the Herdr identity it must revalidate.
@@ -85,6 +84,8 @@ pub struct BrowserFeedbackAckRequest {
 pub struct BrowserFeedbackLookup {
     pub browser: BrowserResponse,
     pub feedback: crate::browser_feedback::BrowserFeedbackResponse,
+    #[serde(default)]
+    pub drafts: Option<crate::browser_view::BrowserViewDraftInventory>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

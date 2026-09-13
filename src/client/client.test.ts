@@ -76,10 +76,11 @@ function streamStale(sequence: number, generation = 1) {
 }
 
 function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
-  return {
+  const base: CockpitClient = {
     status: vi.fn(async () => status),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this Space" })),
     browserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback in terminal fixture"); }),
+    browserDraftRecovery: vi.fn(async () => ({ type: "none" as const })),
     acknowledgeBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback acknowledgement in terminal fixture"); }),
     browserFeedbackImage: vi.fn(async () => { throw new Error("Unexpected browser feedback image in terminal fixture"); }),
     sendBrowserFeedback: vi.fn(async () => { throw new Error("Unexpected browser feedback send in terminal fixture"); }),
@@ -120,8 +121,9 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot })),
     subscribeSession: vi.fn(async () => ({ close: vi.fn() })),
     openTerminal: vi.fn(async () => ({ send: vi.fn(), close: vi.fn() })),
-    ...overrides,
+    openBrowserView: vi.fn(async () => ({ command: vi.fn(), close: vi.fn() })),
   };
+  return Object.assign(base, overrides);
 }
 
 describe("client DTO parsers", () => {

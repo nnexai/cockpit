@@ -2665,3 +2665,142 @@ kbd {
   .workbench { display: flex; }
   .workbench > .sidebar { width: min(300px, calc(100vw - 48px)); }
 }
+
+/* Browser is a Cockpit-only sibling surface; Herdr pane geometry remains in .pane-canvas. */
+.workarea-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: 8px;
+}
+
+.workarea-content > .pane-canvas {
+  min-width: 0;
+}
+
+.browser-region {
+  display: flex;
+  min-width: 280px;
+  min-height: 0;
+  flex: 0 1 42%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--terminal-bg);
+}
+
+.browser-region:focus-within {
+  border-color: var(--border-strong);
+}
+
+@media (max-width: 800px) {
+  .workarea-content {
+    flex-direction: column;
+  }
+
+  .browser-region {
+    min-width: 0;
+    min-height: 220px;
+    flex: 0 1 42%;
+  }
+}
+
+/* The browser is a local presentation split; its ratio never mutates Herdr layout. */
+.workarea-content {
+  gap: 0;
+}
+
+.workarea-content > .pane-canvas {
+  flex: 1 1 0;
+}
+
+.browser-splitter {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 9px;
+  min-width: 9px;
+  min-height: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.browser-splitter::after {
+  position: absolute;
+  inset: 0 4px;
+  background: var(--border);
+  content: "";
+}
+
+.browser-splitter:hover::after,
+.browser-splitter:active::after,
+.browser-splitter:focus-visible::after {
+  background: var(--accent);
+}
+
+.browser-splitter:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: -1px;
+}
+
+.browser-region {
+  flex: 0 1 var(--browser-ratio, 42%);
+  min-width: min(280px, 100%);
+  flex-direction: column;
+}
+
+.browser-region.is-session-stale {
+  border-color: var(--working);
+}
+
+.browser-recovery-strip {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--working) 60%, var(--border));
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+}
+
+.browser-recovery-strip span {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.browser-recovery-strip button {
+  flex: 0 0 auto;
+  min-height: var(--compact-control-size);
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-2xs);
+}
+
+.browser-recovery-strip button:hover,
+.browser-recovery-strip button:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+@media (max-width: 800px) {
+  .browser-splitter {
+    min-width: 0;
+    min-height: 9px;
+    cursor: row-resize;
+  }
+
+  .browser-splitter::after {
+    inset: 4px 0;
+  }
+
+  .browser-region {
+    min-width: 0;
+    min-height: 220px;
+    flex-basis: var(--browser-ratio, 42%);
+  }
+}

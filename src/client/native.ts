@@ -49,6 +49,16 @@ import type {
 import { transitionSessionStream, type StreamOrderCursor } from "./streamOrder";
 import {
   CockpitClientError,
+  matchBrowserViewCommandResponse,
+  matchBrowserViewEvent,
+  parseBrowserViewCommandRequest,
+  parseBrowserDraftRecoveryRequest,
+  parseBrowserViewCommandOutcome,
+  parseBrowserViewCommandResponse,
+  parseBrowserViewEvent,
+  parseBrowserViewFrameDescriptor,
+  parseBrowserViewOpenRequest,
+  parseBrowserViewSnapshot,
   parseBrowserFeedbackAck,
   parseBrowserFeedbackAckRequest,
   parseBrowserFeedbackImage,
@@ -73,6 +83,15 @@ import {
   parseTerminalStreamMessage,
   validateSessionId,
   validateResourceId,
+  type BrowserViewCommandRequest,
+  type BrowserViewEvent,
+  type BrowserViewFrameDescriptor,
+  type BrowserViewFramePacket,
+  type BrowserViewOpenRequest,
+  type BrowserViewSnapshot,
+  type BrowserViewStream,
+  type BrowserDraftRecoveryRequest,
+  type BrowserViewCommandOutcome,
   type ClosableStream,
   type CockpitClient,
   type TerminalStream,
@@ -101,6 +120,165 @@ async function invokeAndParse<T>(invoke: NativeInvoke, command: string, args: Re
     if (error instanceof CockpitClientError) throw error;
     throw new CockpitClientError("malformed_response", `The native Cockpit ${operation} command returned an invalid response`, { cause: error });
   }
+}
+interface NativeBrowserViewOpenResponse { snapshot: BrowserViewSnapshot; first_frame: BrowserViewFrameDescriptor; }
+function parseNativeBrowserViewOpen(value: unknown): NativeBrowserViewOpenResponse {
+  if (typeof value !== "object" || value === null) throw new CockpitClientError("malformed_response", "Native browser view open response is malformed");
+  const body = value as Record<string, unknown>;
+  if (!("snapshot" in body) || !("first_frame" in body)) throw new CockpitClientError("malformed_response", "Native browser view open response is incomplete");
+  return { snapshot: parseBrowserViewSnapshot(body.snapshot), first_frame: parseBrowserViewFrameDescriptor(body.first_frame) };
+}
+function nativeBinaryFrame(value: unknown, expectedLength: number): ArrayBuffer {
+  let bytes: Uint8Array;
+  if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+  else if (value instanceof Uint8Array) bytes = value;
+  else throw new CockpitClientError("malformed_response", "Native browser frame payload is not binary");
+  if (bytes.byteLength === 0 || bytes.byteLength > 6 * 1024 * 1024 || bytes.byteLength !== expectedLength
+    || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    throw new CockpitClientError("malformed_response", "Native browser frame payload is invalid");
+  }
+  if (value instanceof ArrayBuffer) return value;
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer) return bytes.buffer;
+  return bytes.slice().buffer;
+}
+
+function nativeBrowserViewSubscription(
+  invoke: NativeInvoke,
+  channelFactory: NativeChannelFactory,
+  value: BrowserViewOpenRequest,
+  onEvent: (event: BrowserViewEvent) => void,
+  onFrame: (packet: BrowserViewFramePacket) => void,
+  onError: (error: CockpitClientError) => void,
+  signal?: AbortSignal,
+): Promise<BrowserViewStream> {
+  let request: BrowserViewOpenRequest;
+  try { request = parseBrowserViewOpenRequest(value); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+  return invokeAndParse(invoke, "cockpit_browser_view_open", { request }, "browser view open", parseNativeBrowserViewOpen).then((opened) => new Promise((resolve, reject) => {
+    const identity = opened.snapshot.identity;
+    let closed = false; let settled = false; let streamId: string | undefined;
+    let pendingFrame: { descriptor: BrowserViewFrameDescriptor; sequence: number } | undefined;
+    let lastFrameSequence = 0;
+    // Tauri can deliver a frame before the subscribe invoke resolves. Keep its
+    // release until the stream id exists; otherwise host `outstanding` remains
+    // occupied forever. The queue preserves frame/channel order.
+    let deferredAcknowledgements: number[] = [];
+    let acknowledgementQueue: Promise<unknown> = Promise.resolve();
+    const sendAcknowledgement = (id: string, sequence: number) => {
+      acknowledgementQueue = acknowledgementQueue.then(() => invoke("cockpit_browser_view_frame_ack", { streamId: id, frameSequence: sequence })).catch((cause) => {
+        try { onError(streamFailure("Native browser frame acknowledgement failed", cause)); } catch { /* Preserve cancellation after a consumer callback failure. */ }
+      });
+    };
+    const releaseFrame = (sequence: number) => {
+      if (streamId === undefined) { deferredAcknowledgements.push(sequence); return; }
+      sendAcknowledgement(streamId, sequence);
+    };
+    const releasePendingFrame = () => {
+      const pending = pendingFrame;
+      if (pending === undefined) return;
+      pendingFrame = undefined;
+      releaseFrame(pending.sequence);
+    };
+    const cancel = (id: string) => {
+      void acknowledgementQueue.then(() => invoke("cockpit_stream_cancel", { streamId: id })).catch(() => undefined);
+    };
+    const fail = (error: CockpitClientError) => {
+      if (closed) return;
+      releasePendingFrame();
+      closed = true;
+      if (streamId) cancel(streamId);
+      if (!settled) { settled = true; reject(error); } else onError(error);
+    };
+    const channel = channelFactory<unknown>((raw) => {
+      if (closed) return;
+      try {
+        if (raw instanceof ArrayBuffer || raw instanceof Uint8Array) {
+          const pending = pendingFrame;
+          if (pending === undefined) throw new CockpitClientError("malformed_response", "Native browser frame payload has no descriptor");
+          pendingFrame = undefined;
+          let jpeg: ArrayBuffer;
+          try { jpeg = nativeBinaryFrame(raw, pending.descriptor.jpeg_length); }
+          catch (error) { releaseFrame(pending.sequence); throw error; }
+          lastFrameSequence = pending.sequence;
+          let delivered = false;
+          try {
+            onFrame({
+              descriptor: pending.descriptor,
+              jpeg,
+              ack() {
+                if (delivered || closed) return;
+                delivered = true;
+                releaseFrame(pending.sequence);
+              },
+              discard() {
+                if (delivered || closed) return;
+                delivered = true;
+                releaseFrame(pending.sequence);
+              },
+            });
+          } catch (error) {
+            if (!delivered) releaseFrame(pending.sequence);
+            throw error;
+          }
+          return;
+        }
+        if (typeof raw !== "object" || raw === null) throw new CockpitClientError("malformed_response", "Native browser view message is malformed");
+        const message = raw as Record<string, unknown>;
+        if (pendingFrame !== undefined) {
+          releasePendingFrame();
+          throw new CockpitClientError("malformed_response", "Native browser frame payload is missing");
+        }
+        if (message.kind === "error") {
+          throw new CockpitClientError("stream_error", typeof message.message === "string" ? message.message : "Native browser view stream failed", { operationCode: typeof message.code === "string" ? message.code : undefined });
+        }
+        if (message.kind === "event") {
+          const event = matchBrowserViewEvent(parseBrowserViewEvent(message.event), identity);
+          onEvent(event);
+          return;
+        }
+        if (message.kind === "frame") {
+          const descriptor = parseBrowserViewFrameDescriptor(message.descriptor);
+          if (descriptor.stream_epoch !== identity.stream_epoch) throw new CockpitClientError("malformed_response", "Native browser frame identity does not match");
+          if (descriptor.frame_sequence <= lastFrameSequence) {
+            releaseFrame(descriptor.frame_sequence);
+            throw new CockpitClientError("malformed_response", "Native browser frame sequence is out of order");
+          }
+          pendingFrame = { descriptor, sequence: descriptor.frame_sequence };
+          return;
+        }
+        throw new CockpitClientError("malformed_response", "Native browser view message kind is unknown");
+      } catch (error) { fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Native browser view message is malformed", { cause: error })); }
+    });
+    const abort = () => fail(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
+    if (signal?.aborted) { abort(); return; } signal?.addEventListener("abort", abort, { once: true });
+    void invokeAndParse(invoke, "cockpit_browser_view_subscribe", { viewId: identity.view_id, streamEpoch: identity.stream_epoch, channel }, "browser view subscription", streamIdValue).then((id) => {
+      streamId = id;
+      const deferred = deferredAcknowledgements;
+      deferredAcknowledgements = [];
+      for (const sequence of deferred) sendAcknowledgement(id, sequence);
+      if (closed) {
+        // Cancellation must follow any release queued during the id-less
+        // window, so the host cannot observe a cancelled outstanding frame.
+        void acknowledgementQueue.then(() => invoke("cockpit_stream_cancel", { streamId: id })).catch(() => undefined);
+        return;
+      }
+      settled = true;
+      resolve({
+        close() { if (closed) return; releasePendingFrame(); closed = true; signal?.removeEventListener("abort", abort); cancel(id); },
+        command(commandValue) {
+          if (closed || !settled) return Promise.reject(new CockpitClientError("stream_error", "Browser view stream is not ready"));
+          let command: BrowserViewCommandRequest;
+          try { command = parseBrowserViewCommandRequest(commandValue); } catch (error) { return Promise.reject(error); }
+          if (command.view_id !== identity.view_id || command.stream_epoch !== identity.stream_epoch) return Promise.reject(new CockpitClientError("malformed_response", "Browser view command identity does not match"));
+          return invokeAndParse(invoke, "cockpit_browser_view_command", { request: command }, "browser view command", (response) => matchBrowserViewCommandResponse(response, command));
+        },
+      });
+    }, (error) => { if (!closed) fail(error); });
+  }));
+}
+function streamIdValue(value: unknown): string {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "object" && value !== null && "stream_id" in value && typeof value.stream_id === "string" && value.stream_id.length > 0) return value.stream_id;
+  throw new CockpitClientError("malformed_response", "Native browser view subscription returned no stream id");
 }
 function streamFailure(message: string, cause?: unknown, operationCode?: string): CockpitClientError {
   return new CockpitClientError("stream_error", message, { cause, operationCode });
@@ -498,6 +676,10 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const request = parseBrowserFeedbackRequest(value);
       return invokeAndParse(invoke, "cockpit_browser_feedback", { request }, "browser feedback", parseBrowserFeedbackLookup);
     },
+    async browserDraftRecovery(value: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> {
+      const request = parseBrowserDraftRecoveryRequest(value);
+      return invokeAndParse(invoke, "cockpit_browser_draft_recovery", { request }, "browser draft recovery", parseBrowserViewCommandOutcome);
+    },
     async acknowledgeBrowserFeedback(value) {
       const request = parseBrowserFeedbackAckRequest(value);
       return invokeAndParse(invoke, "cockpit_browser_feedback_ack", { request }, "browser feedback acknowledgement", parseBrowserFeedbackAck);
@@ -547,5 +729,8 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     },
     subscribeSession(sessionId, onMessage, onError) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError); },
     openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },
+    openBrowserView(request, onEvent, onFrame, onError, signal) {
+      return nativeBrowserViewSubscription(invoke, channelFactory, request, onEvent, onFrame, onError, signal);
+    },
   };
 }

@@ -1,8 +1,10 @@
 # Space-associated browsers and visual feedback
 
+Current direction: superseded by [the inline browser replacement](inline-space-browser-2026-09-13/README.md). The external extension design below is historical. The no-migration inline implementation has focused verification evidence; the broad A01–A25 matrix is not claimed.
+
 Date: 2026-09-08
 
-Status: agreed product direction and proposed implementation starting point. Full integration is not implemented. Command names, protocol fields, and UI placements below remain proposals until checked against the existing code and installed Playwright CLI.
+Status: historical product direction and implementation starting point. The inline replacement supersedes these external-window/extension proposals; the exact focused verification record is in the inline handoff.
 
 ## Decision
 

@@ -3,6 +3,7 @@ use cockpit_protocol::browser::{
     BrowserAction, BrowserAssociation, BrowserConnectionState, BrowserRequest, BrowserResponse,
     BrowserTarget,
 };
+use cockpit_protocol::browser_view::BrowserViewOpenRequest;
 use cockpit_protocol::v1::SessionSnapshotResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,12 +14,15 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, OnceLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
-use tokio::net::UnixStream;
-use tokio::sync::Mutex;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpStream, UnixStream},
+    sync::Mutex,
+};
 use uuid::Uuid;
 
 use crate::InspectionError;
@@ -26,8 +30,7 @@ use crate::config::BrowserConfiguration;
 use crate::process::run_bounded_command;
 
 mod delivery;
-mod extension;
-pub use extension::{ANNOTATION_EXTENSION_ID, ExtensionStatus};
+pub mod drafts;
 
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 const MAX_ASSOCIATIONS: usize = 1024;
@@ -35,6 +38,7 @@ const CLI_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUIRED_PLAYWRIGHT_CLI_VERSION: &str = "0.1.5";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_OPENED_TAB_BYTES: usize = 20;
 
 /// A snapshot pinned to the exact Herdr endpoint that served it.
 #[derive(Clone, Debug)]
@@ -62,8 +66,25 @@ pub struct BrowserService {
     operation_lock: Arc<Mutex<()>>,
     shutting_down: Arc<AtomicBool>,
     feedback: Arc<crate::browser_feedback::BrowserFeedbackStore>,
-    feedback_endpoint: Arc<OnceLock<String>>,
     paste_adapter: Option<Arc<dyn crate::paste_adapter::CommentPasteAdapter>>,
+}
+
+/// A host-only capability for attaching the private inline helper. This type is
+/// intentionally assembled only after fresh endpoint and target ownership
+/// checks.
+#[derive(Clone)]
+pub struct BrowserRuntimeAttachment {
+    pub association_key: String,
+    pub browser_incarnation: String,
+    pub session_id: String,
+    pub space_id: String,
+    pub profile_path: PathBuf,
+    pub cdp_endpoint: String,
+    /// Stable CDP target identity selected for this association.
+    pub target_id: String,
+    pub playwright_core: Option<PathBuf>,
+    pub node_executable: Option<PathBuf>,
+    pub helper_module: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -80,9 +101,18 @@ struct BrowserReceipt {
     working_directory: String,
     profile_path: String,
     config_path: String,
+    /// The loopback endpoint and browser identity captured after a verified
+    /// inline launch. Both must still match before a helper can attach.
+    #[serde(default)]
+    cdp_endpoint: Option<String>,
+    #[serde(default)]
+    cdp_browser_identity: Option<String>,
     intent: ReceiptIntent,
-
     state: ReceiptState,
+    /// Stable CDP target identity; absent in legacy receipts and unresolved opens.
+    #[serde(default)]
+    target_id: Option<String>,
+    /// Historical Playwright CLI tab index, never used as attachment authority.
     opened_tab: Option<String>,
     incarnation: Option<String>,
 }
@@ -97,7 +127,6 @@ enum ReceiptState {
     OutcomeUnknown,
     Disconnected,
 }
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ReceiptIntent {
@@ -127,8 +156,6 @@ impl BrowserService {
             "profiles",
             "workspaces",
             "configs",
-            "extensions",
-            "pairings",
         ] {
             prepare_root(&root.join(name))?;
         }
@@ -147,7 +174,6 @@ impl BrowserService {
             operation_lock: Arc::new(Mutex::new(())),
             shutting_down: Arc::new(AtomicBool::new(false)),
             feedback: Arc::new(feedback),
-            feedback_endpoint: Arc::new(OnceLock::new()),
             paste_adapter: None,
         })
     }
@@ -209,8 +235,96 @@ impl BrowserService {
             BrowserAction::Open { url } => self.open(&mut receipt, url.as_deref()).await,
             BrowserAction::Status => self.status(&mut receipt).await,
             BrowserAction::Close => self.close(&mut receipt).await,
-            BrowserAction::Show => self.show(&mut receipt).await,
         }
+    }
+
+    /// Produces an in-memory, profile- and incarnation-bound attachment only
+    /// after freshly resolving Herdr authority. It deliberately does not start
+    /// or communicate with the helper while the operation lock is held.
+    #[doc(hidden)]
+    pub async fn browser_runtime_attachment(
+        &self,
+        request: &BrowserViewOpenRequest,
+    ) -> Result<BrowserRuntimeAttachment, InspectionError> {
+        request
+            .validate()
+            .map_err(|message| InspectionError::new("invalid_browser_view_request", message))?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(InspectionError::new(
+                "browser_runtime_stopping",
+                "browser runtime is shutting down",
+            ));
+        }
+        let _operation = self.operation_lock.lock().await;
+        let target = self.resolve_target(&request.target).await?;
+        let key = association_key(
+            &target.endpoint_identity,
+            &target.session_id,
+            &target.space_id,
+        );
+        let mut receipt = self.load(&key)?.ok_or_else(|| {
+            InspectionError::new(
+                "browser_view_association_absent",
+                "Open the browser association before attaching an inline browser view",
+            )
+        })?;
+        if receipt.state != ReceiptState::Open {
+            return Err(InspectionError::new(
+                "browser_view_association_unavailable",
+                "Inline browser views require a verified open inline association",
+            ));
+        }
+        let incarnation = self.inspect_live(&receipt).await?;
+        if receipt.incarnation.as_deref() != Some(&incarnation) {
+            return Err(InspectionError::new(
+                "browser_receipt_replaced",
+                "Browser incarnation changed before inline attachment",
+            ));
+        }
+        let cdp_endpoint = receipt.cdp_endpoint.clone().ok_or_else(|| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Inline browser CDP endpoint is absent",
+            )
+        })?;
+        let target_id = receipt.target_id.clone().ok_or_else(|| {
+            InspectionError::new(
+                "browser_target_unresolved",
+                "Inline browser target identity is absent; reopen the browser association before attaching",
+            )
+        })?;
+        self.store(&receipt)?;
+        let cli = resolve_executable(&self.configuration.playwright_cli, "Playwright CLI")?;
+        let configured_core = self
+            .configuration
+            .playwright_core
+            .as_ref()
+            .map(|path| resolve_playwright_core(path))
+            .transpose()?;
+        let helper_module = self
+            .configuration
+            .browser_helper
+            .as_ref()
+            .map(|path| resolve_regular_file(path, "Browser helper"))
+            .transpose()?;
+        let node_executable = self
+            .configuration
+            .node_executable
+            .as_ref()
+            .map(|path| resolve_executable(path, "Node runtime"))
+            .transpose()?;
+        Ok(BrowserRuntimeAttachment {
+            association_key: receipt.association_key,
+            browser_incarnation: incarnation,
+            session_id: receipt.session_id,
+            space_id: receipt.space_id,
+            profile_path: PathBuf::from(receipt.profile_path),
+            cdp_endpoint,
+            target_id,
+            playwright_core: configured_core.or_else(|| locate_playwright_core(&cli)),
+            node_executable,
+            helper_module,
+        })
     }
 
     /// Reconcile durable associations without treating a transient Herdr failure
@@ -356,7 +470,10 @@ impl BrowserService {
         let profile_path = self.root.join("profiles").join(&key);
         prepare_root(&profile_path)?;
         let config_path = self.root.join("configs").join(format!("{key}.json"));
-        atomic_write_json(&config_path, &launch_configuration(&self.configuration)?)?;
+        atomic_write_json(
+            &config_path,
+            &launch_configuration(&self.configuration)?,
+        )?;
         let receipt = BrowserReceipt {
             association_key: key.clone(),
             owner_id: self.owner_id.clone(),
@@ -369,10 +486,13 @@ impl BrowserService {
             working_directory: path_string(&working_directory)?,
             profile_path: path_string(&profile_path)?,
             config_path: path_string(&config_path)?,
+            cdp_endpoint: None,
+            cdp_browser_identity: None,
+            intent: ReceiptIntent::None,
             state: ReceiptState::Closed,
+            target_id: None,
             opened_tab: None,
             incarnation: None,
-            intent: ReceiptIntent::None,
         };
         self.store(&receipt)?;
         Ok(receipt)
@@ -407,9 +527,12 @@ impl BrowserService {
                 receipt.state = ReceiptState::Open;
                 receipt.owner_id = self.owner_id.clone();
                 receipt.incarnation = Some(incarnation);
-                self.store(receipt)?;
-                self.ensure_annotation_extension(receipt).await?;
+                self.bind_inline_cdp(receipt, false).await?;
+                if receipt.target_id.is_none() {
+                    self.resolve_inline_target(receipt, None).await?;
+                }
                 if let Some(url) = url {
+                    let previous_target = receipt.target_id.clone();
                     receipt.intent = ReceiptIntent::TabNew;
                     self.store(receipt)?;
                     let args = [
@@ -420,6 +543,7 @@ impl BrowserService {
                     match self.run_cli(receipt, &args).await {
                         Ok(output) => {
                             receipt.opened_tab = tab_index(&output);
+                            self.resolve_inline_target(receipt, previous_target.as_deref()).await?;
                             receipt.intent = ReceiptIntent::None;
                         }
                         Err(error) => {
@@ -428,14 +552,13 @@ impl BrowserService {
                             return Err(error);
                         }
                     }
-                    self.store(receipt)?;
                 }
+                self.store(receipt)?;
                 Ok(self.response(receipt, BrowserConnectionState::Open, "browser is open"))
             }
             Err(error) if !may_launch_after_inspection_failure(&error) => Err(error),
             Err(_) => {
                 self.ensure_cli_version().await?;
-                self.prepare_annotation_extension(receipt)?;
                 receipt.state = ReceiptState::PendingOpen;
                 receipt.intent = if url.is_some() {
                     ReceiptIntent::LaunchNavigation
@@ -445,13 +568,14 @@ impl BrowserService {
                 receipt.owner_id = self.owner_id.clone();
                 receipt.incarnation = None;
                 receipt.opened_tab = None;
+                receipt.cdp_endpoint = None;
+                receipt.cdp_browser_identity = None;
                 self.store(receipt)?;
                 let mut args = vec![format!("-s={}", receipt.playwright_session), "open".into()];
                 if let Some(url) = url {
                     args.push(url.into());
                 }
                 args.extend([
-                    "--headed".into(),
                     format!("--profile={}", receipt.profile_path),
                     format!("--config={}", receipt.config_path),
                 ]);
@@ -466,8 +590,9 @@ impl BrowserService {
                             receipt.state = ReceiptState::Open;
                             receipt.intent = ReceiptIntent::None;
                             receipt.incarnation = Some(incarnation);
+                            self.bind_inline_cdp(receipt, true).await?;
+                            self.resolve_inline_target(receipt, None).await?;
                             self.store(receipt)?;
-                            self.ensure_annotation_extension(receipt).await?;
                             Ok(self.response(
                                 receipt,
                                 BrowserConnectionState::Open,
@@ -511,6 +636,7 @@ impl BrowserService {
                 receipt.owner_id = self.owner_id.clone();
                 receipt.intent = ReceiptIntent::None;
                 receipt.incarnation = Some(incarnation.clone());
+                self.bind_inline_cdp(receipt, true).await?;
                 self.store(receipt)?;
                 return Ok(self.response(
                     receipt,
@@ -526,6 +652,7 @@ impl BrowserService {
             if let Ok(incarnation) = &live {
                 receipt.incarnation = Some(incarnation.clone());
                 receipt.owner_id = self.owner_id.clone();
+                self.bind_inline_cdp(receipt, true).await?;
             }
             receipt.state = ReceiptState::OutcomeUnknown;
             self.store(receipt)?;
@@ -543,6 +670,8 @@ impl BrowserService {
             receipt.state = ReceiptState::Closed;
             receipt.intent = ReceiptIntent::None;
             receipt.incarnation = None;
+            receipt.cdp_endpoint = None;
+            receipt.cdp_browser_identity = None;
             self.store(receipt)?;
             return Ok(self.response(
                 receipt,
@@ -550,7 +679,6 @@ impl BrowserService {
                 "browser close was reconciled; profile retained",
             ));
         }
-
         if matches!(
             receipt.state,
             ReceiptState::OutcomeUnknown | ReceiptState::PendingOpen | ReceiptState::Closing
@@ -570,6 +698,7 @@ impl BrowserService {
                 receipt.state = ReceiptState::Open;
                 receipt.owner_id = self.owner_id.clone();
                 receipt.incarnation = Some(incarnation);
+                self.bind_inline_cdp(receipt, false).await?;
                 self.store(receipt)?;
                 Ok(self.response(receipt, BrowserConnectionState::Open, "browser is open"))
             }
@@ -577,6 +706,8 @@ impl BrowserService {
                 receipt.state = ReceiptState::Closed;
                 receipt.intent = ReceiptIntent::None;
                 receipt.incarnation = None;
+                receipt.cdp_endpoint = None;
+                receipt.cdp_browser_identity = None;
                 self.store(receipt)?;
                 Ok(self.response(
                     receipt,
@@ -615,6 +746,8 @@ impl BrowserService {
                 receipt.state = ReceiptState::Closed;
                 receipt.intent = ReceiptIntent::None;
                 receipt.incarnation = None;
+                receipt.cdp_endpoint = None;
+                receipt.cdp_browser_identity = None;
                 self.store(receipt)?;
                 return Ok(self.response(
                     receipt,
@@ -640,6 +773,8 @@ impl BrowserService {
                 receipt.state = ReceiptState::Closed;
                 receipt.intent = ReceiptIntent::None;
                 receipt.incarnation = None;
+                receipt.cdp_endpoint = None;
+                receipt.cdp_browser_identity = None;
                 self.store(receipt)?;
                 Ok(self.response(
                     receipt,
@@ -664,35 +799,6 @@ impl BrowserService {
         }
     }
 
-    async fn show(&self, receipt: &mut BrowserReceipt) -> Result<BrowserResponse, InspectionError> {
-        let status = self.status(receipt).await?;
-        let incarnation = match self.inspect_live(receipt).await {
-            Ok(value) => value,
-            Err(_) => return Ok(status),
-        };
-        // `show` opens the CLI dashboard. Bring the active page forward instead.
-        self.run_cli(
-            receipt,
-            &[
-                format!("-s={}", receipt.playwright_session),
-                "run-code".into(),
-                "async page => { await page.bringToFront(); }".into(),
-            ],
-        )
-        .await?;
-        receipt.owner_id = self.owner_id.clone();
-        receipt.incarnation = Some(incarnation);
-        self.store(receipt)?;
-        Ok(self.response(
-            receipt,
-            status.connection,
-            if status.connection == BrowserConnectionState::OutcomeUnknown {
-                "browser window requested; the previous URL action outcome remains unknown"
-            } else {
-                "browser window requested"
-            },
-        ))
-    }
 
     async fn run_cli_output(
         &self,
@@ -741,11 +847,7 @@ impl BrowserService {
         })?;
         // CLI 0.1.5 reports tool failures in stdout while exiting successfully.
         if text.lines().any(|line| line == "### Error") {
-            let detail = cli_error_detail(&text).filter(|line| {
-                line.starts_with("Annotation extension ")
-                    || line.starts_with("Unexpected annotation extension")
-                    || line.starts_with("annotation extension ")
-            });
+            let detail = cli_error_detail(&text);
             let message = detail.map_or_else(
                 || {
                     "Playwright reported a browser operation failure; inspect the browser before another URL action"
@@ -778,6 +880,51 @@ impl BrowserService {
                 ),
             ));
         }
+        Ok(())
+    }
+    async fn bind_inline_cdp(
+        &self,
+        receipt: &mut BrowserReceipt,
+        allow_unrecorded: bool,
+    ) -> Result<(), InspectionError> {
+        let binding = wait_for_cdp_binding(Path::new(&receipt.profile_path)).await?;
+        if (receipt.cdp_endpoint.is_none() || receipt.cdp_browser_identity.is_none())
+            && !allow_unrecorded
+        {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Inline CDP ownership was not recorded for this browser incarnation",
+            ));
+        }
+        if receipt
+            .cdp_endpoint
+            .as_deref()
+            .is_some_and(|endpoint| endpoint != binding.endpoint)
+            || receipt
+                .cdp_browser_identity
+                .as_deref()
+                .is_some_and(|identity| identity != binding.browser_identity)
+        {
+            return Err(InspectionError::new(
+                "browser_receipt_replaced",
+                "Chromium CDP endpoint or browser identity changed",
+            ));
+        }
+        receipt.cdp_endpoint = Some(binding.endpoint);
+        receipt.cdp_browser_identity = Some(binding.browser_identity);
+        Ok(())
+    }
+
+    async fn resolve_inline_target(
+        &self,
+        receipt: &mut BrowserReceipt,
+        previous: Option<&str>,
+    ) -> Result<(), InspectionError> {
+        let endpoint = receipt.cdp_endpoint.as_deref().ok_or_else(|| {
+            InspectionError::new("browser_cdp_unavailable", "Inline CDP endpoint is absent")
+        })?;
+        let target_id = cdp_page_target(endpoint, previous).await?;
+        receipt.target_id = Some(target_id);
         Ok(())
     }
 
@@ -966,6 +1113,12 @@ impl BrowserService {
                 )
             })?;
         }
+        if !receipt_config_has_inline_debugging(&receipt)? {
+            return Err(InspectionError::new(
+                "browser_receipt_mismatch",
+                "Inline browser launch configuration lacks the private loopback CDP binding",
+            ));
+        }
         Ok(Some(receipt))
     }
     fn load_all(&self) -> Result<Vec<BrowserReceipt>, InspectionError> {
@@ -1151,15 +1304,423 @@ fn receipt_config_executable(receipt: &BrowserReceipt) -> Result<Option<String>,
     }
 }
 
-fn launch_configuration(configuration: &BrowserConfiguration) -> Result<Value, InspectionError> {
+fn launch_configuration(
+    configuration: &BrowserConfiguration,
+) -> Result<Value, InspectionError> {
     let mut config = serde_json::json!({"browser": {"launchOptions": {}}});
     if let Some(path) = &configuration.chromium_executable {
         config["browser"]["launchOptions"]["executablePath"] = Value::String(path_string(
             &resolve_executable(path, "Chromium executable")?,
         )?);
     }
+    // Chromium allocates the port and writes it to the association profile.
+    // This avoids a global fixed-port collision and never exposes CDP beyond
+    // the local owner helper.
+    config["browser"]["launchOptions"]["args"] = serde_json::json!([
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=0"
+    ]);
     Ok(config)
 }
+
+fn receipt_config_has_inline_debugging(receipt: &BrowserReceipt) -> Result<bool, InspectionError> {
+    let config: Value = serde_json::from_slice(&read_regular(
+        Path::new(&receipt.config_path),
+        MAX_RECEIPT_BYTES,
+    )?)
+    .map_err(|_| {
+        InspectionError::new(
+            "browser_config_corrupt",
+            "browser launch configuration is invalid",
+        )
+    })?;
+    let Some(args) = config
+        .pointer("/browser/launchOptions/args")
+        .and_then(Value::as_array)
+    else {
+        return Ok(false);
+    };
+    Ok(args.len() == 2
+        && args[0].as_str() == Some("--remote-debugging-address=127.0.0.1")
+        && args[1].as_str() == Some("--remote-debugging-port=0"))
+}
+#[derive(Debug)]
+struct CdpBinding {
+    endpoint: String,
+    browser_identity: String,
+}
+
+async fn wait_for_cdp_binding(profile: &Path) -> Result<CdpBinding, InspectionError> {
+    let deadline = tokio::time::Instant::now() + SOCKET_TIMEOUT;
+    loop {
+        match cdp_binding(profile).await {
+            Ok(binding) => return Ok(binding),
+            Err(error) if error.code == "browser_cdp_unavailable" => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(error);
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn cdp_binding(profile: &Path) -> Result<CdpBinding, InspectionError> {
+    let port_file = profile.join("DevToolsActivePort");
+    let bytes = read_regular(&port_file, 512).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium did not publish a bounded DevToolsActivePort record",
+        )
+    })?;
+    let record = std::str::from_utf8(&bytes).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium DevToolsActivePort record is not UTF-8",
+        )
+    })?;
+    let mut lines = record.lines();
+    let port = lines
+        .next()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium DevToolsActivePort does not contain a valid port",
+            )
+        })?;
+    let browser_path = lines
+        .next()
+        .filter(|path| path.starts_with("/devtools/browser/") && path.len() <= 512)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium DevToolsActivePort does not contain a browser identity",
+            )
+        })?
+        .to_owned();
+    if lines.next().is_some() {
+        return Err(InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium DevToolsActivePort record has unexpected fields",
+        ));
+    }
+    let endpoint = format!("http://127.0.0.1:{port}");
+    let mut stream = tokio::time::timeout(SOCKET_TIMEOUT, TcpStream::connect(("127.0.0.1", port)))
+        .await
+        .map_err(|_| InspectionError::new("browser_cdp_unavailable", "Chromium CDP timed out"))?
+        .map_err(|_| {
+            InspectionError::new("browser_cdp_unavailable", "Chromium CDP is not reachable")
+        })?;
+    let request = format!(
+        "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    tokio::time::timeout(SOCKET_TIMEOUT, stream.write_all(request.as_bytes()))
+        .await
+        .map_err(|_| {
+            InspectionError::new("browser_cdp_unavailable", "Chromium CDP write timed out")
+        })?
+        .map_err(|_| {
+            InspectionError::new("browser_cdp_unavailable", "Chromium CDP write failed")
+        })?;
+    let mut response = Vec::with_capacity(2048);
+    let mut buffer = [0_u8; 4096];
+    let header_end = loop {
+        let count = tokio::time::timeout(SOCKET_TIMEOUT, stream.read(&mut buffer))
+            .await
+            .map_err(|_| {
+                InspectionError::new("browser_cdp_unavailable", "Chromium CDP read timed out")
+            })?
+            .map_err(|_| {
+                InspectionError::new("browser_cdp_unavailable", "Chromium CDP read failed")
+            })?;
+        if count == 0 {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP returned truncated HTTP",
+            ));
+        }
+        if response.len() + count > 64 * 1024 {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP version response exceeds bounds",
+            ));
+        }
+        response.extend_from_slice(&buffer[..count]);
+        if let Some(position) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position;
+        }
+    };
+    let headers = std::str::from_utf8(&response[..header_end]).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium CDP returned invalid HTTP headers",
+        )
+    })?;
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Content-Length:")
+                .or_else(|| line.strip_prefix("content-length:"))
+        })
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|length| *length <= 64 * 1024)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP response lacks a bounded Content-Length",
+            )
+        })?;
+    let body_start = header_end + 4;
+    while response.len() < body_start + content_length {
+        let count = tokio::time::timeout(SOCKET_TIMEOUT, stream.read(&mut buffer))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP body read timed out",
+                )
+            })?
+            .map_err(|_| {
+                InspectionError::new("browser_cdp_unavailable", "Chromium CDP body read failed")
+            })?;
+        if count == 0 {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP returned truncated body",
+            ));
+        }
+        if response.len() + count > body_start + content_length {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP body exceeds Content-Length",
+            ));
+        }
+        response.extend_from_slice(&buffer[..count]);
+    }
+    let body = &response[body_start..body_start + content_length];
+    let value: Value = serde_json::from_slice(body).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium CDP returned invalid JSON",
+        )
+    })?;
+    let websocket = value
+        .get("webSocketDebuggerUrl")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP version response lacks browser websocket identity",
+            )
+        })?;
+    let websocket = url::Url::parse(websocket).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium CDP websocket URL is invalid",
+        )
+    })?;
+    if websocket.scheme() != "ws"
+        || websocket.host_str() != Some("127.0.0.1")
+        || websocket.port() != Some(port)
+        || websocket.path() != browser_path
+    {
+        return Err(InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium CDP websocket identity is not the loopback profile binding",
+        ));
+    }
+    Ok(CdpBinding {
+        endpoint,
+        browser_identity: browser_path,
+    })
+}
+
+async fn cdp_page_target(
+    endpoint: &str,
+    previous: Option<&str>,
+) -> Result<String, InspectionError> {
+    let url = url::Url::parse(endpoint).map_err(|_| {
+        InspectionError::new("browser_cdp_unavailable", "Inline CDP endpoint is invalid")
+    })?;
+    if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") {
+        return Err(InspectionError::new(
+            "browser_cdp_unavailable",
+            "Inline CDP endpoint is not loopback",
+        ));
+    }
+    let port = url.port().ok_or_else(|| {
+        InspectionError::new("browser_cdp_unavailable", "Inline CDP endpoint has no port")
+    })?;
+    let mut stream =
+        tokio::time::timeout(SOCKET_TIMEOUT, TcpStream::connect(("127.0.0.1", port)))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP target listing timed out",
+                )
+            })?
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP target listing is unreachable",
+                )
+            })?;
+    let request =
+        format!("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    tokio::time::timeout(SOCKET_TIMEOUT, stream.write_all(request.as_bytes()))
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP target-list write timed out",
+            )
+        })?
+        .map_err(|_| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP target-list write failed",
+            )
+        })?;
+
+    let mut response = Vec::with_capacity(4096);
+    let mut buffer = [0_u8; 4096];
+    let header_end = loop {
+        let count = tokio::time::timeout(SOCKET_TIMEOUT, stream.read(&mut buffer))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP target-list read timed out",
+                )
+            })?
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP target-list read failed",
+                )
+            })?;
+        if count == 0 {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP returned truncated target-list HTTP",
+            ));
+        }
+        if response.len() + count > 64 * 1024 {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP target-list response exceeds bounds",
+            ));
+        }
+        response.extend_from_slice(&buffer[..count]);
+        if let Some(position) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position;
+        }
+    };
+    let headers = std::str::from_utf8(&response[..header_end]).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium CDP target-list returned invalid HTTP headers",
+        )
+    })?;
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then_some(value.trim())
+        })
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|length| *length <= 256 * 1024)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP target-list response lacks a bounded Content-Length",
+            )
+        })?;
+    let body_start = header_end + 4;
+    while response.len() < body_start + content_length {
+        let count = tokio::time::timeout(SOCKET_TIMEOUT, stream.read(&mut buffer))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP target-list body read timed out",
+                )
+            })?
+            .map_err(|_| {
+                InspectionError::new(
+                    "browser_cdp_unavailable",
+                    "Chromium CDP target-list body read failed",
+                )
+            })?;
+        if count == 0 {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP returned truncated target-list body",
+            ));
+        }
+        if response.len() + count > body_start + content_length {
+            return Err(InspectionError::new(
+                "browser_cdp_unavailable",
+                "Chromium CDP target-list body exceeds Content-Length",
+            ));
+        }
+        response.extend_from_slice(&buffer[..count]);
+    }
+    let body = &response[body_start..body_start + content_length];
+    let targets: Vec<Value> = serde_json::from_slice(body).map_err(|_| {
+        InspectionError::new(
+            "browser_cdp_unavailable",
+            "Chromium CDP target list is invalid",
+        )
+    })?;
+    let pages: Vec<String> = targets
+        .into_iter()
+        .filter(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+        .filter_map(|target| {
+            target
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    let selected: Vec<String> = match previous {
+        Some(previous) => pages.into_iter().filter(|target| target != previous).collect(),
+        None => pages,
+    };
+    if selected.len() != 1 {
+        return Err(InspectionError::new(
+            "browser_target_unresolved",
+            "CDP could not identify one stable page target for this browser operation",
+        ));
+    }
+    Ok(selected.into_iter().next().expect("one target"))
+}
+
+fn locate_playwright_core(cli: &Path) -> Option<PathBuf> {
+    let mut directory = cli.parent()?;
+    for _ in 0..8 {
+        let candidate = if directory
+            .file_name()
+            .is_some_and(|name| name == "node_modules")
+        {
+            directory.join("playwright-core")
+        } else {
+            directory.join("node_modules/playwright-core")
+        };
+        if candidate.join("package.json").is_file() {
+            return candidate.canonicalize().ok();
+        }
+        directory = directory.parent()?;
+    }
+    None
+}
+
 fn compatible_playwright_cli_version(version: &str) -> bool {
     let mut parts = version.split('.');
     let Some(major) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
@@ -1174,6 +1735,37 @@ fn compatible_playwright_cli_version(version: &str) -> bool {
     major == 0 && minor == 1 && patch >= 5 && parts.next().is_none()
 }
 
+fn resolve_regular_file(path: &Path, label: &str) -> Result<PathBuf, InspectionError> {
+    let resolved = path.canonicalize().map_err(|_| {
+        InspectionError::new(
+            "browser_tool_missing",
+            format!("cannot resolve {label}: {}", path.display()),
+        )
+    })?;
+    if !fs::metadata(&resolved).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(InspectionError::new(
+            "browser_tool_missing",
+            format!("{label} is not a regular file: {}", resolved.display()),
+        ));
+    }
+    Ok(resolved)
+}
+
+fn resolve_playwright_core(path: &Path) -> Result<PathBuf, InspectionError> {
+    let resolved = path.canonicalize().map_err(|_| {
+        InspectionError::new(
+            "browser_tool_missing",
+            format!("cannot resolve Playwright-core: {}", path.display()),
+        )
+    })?;
+    if !resolved.join("package.json").is_file() {
+        return Err(InspectionError::new(
+            "browser_tool_missing",
+            "Configured Playwright-core path does not contain package.json",
+        ));
+    }
+    Ok(resolved)
+}
 fn resolve_executable(path: &Path, label: &str) -> Result<PathBuf, InspectionError> {
     let candidate = if path.components().count() == 1 {
         env::var_os("PATH")
@@ -1266,14 +1858,19 @@ fn validate_id(value: &str, label: &str) -> Result<(), InspectionError> {
 fn validate_url(value: &str) -> Result<(), InspectionError> {
     let parsed = url::Url::parse(value)
         .map_err(|_| InspectionError::new("invalid_browser_url", "browser URL must be absolute"))?;
-    if matches!(parsed.scheme(), "http" | "https" | "file" | "about") {
-        Ok(())
-    } else {
-        Err(InspectionError::new(
+    if !matches!(parsed.scheme(), "http" | "https" | "about") {
+        return Err(InspectionError::new(
             "invalid_browser_url",
-            "browser URL has an unsupported scheme",
-        ))
+            "browser URL has an unsupported or unsafe scheme",
+        ));
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(InspectionError::new(
+            "invalid_browser_url",
+            "browser URL must not contain userinfo",
+        ));
+    }
+    Ok(())
 }
 fn tab_index(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
@@ -1281,6 +1878,23 @@ fn tab_index(output: &str) -> Option<String> {
         (!index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
             .then(|| index.to_owned())
     })
+}
+
+fn validated_opened_tab(value: Option<&str>) -> Result<Option<String>, InspectionError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty()
+        || value.len() > MAX_OPENED_TAB_BYTES
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || value.parse::<u64>().is_err()
+    {
+        return Err(InspectionError::new(
+            "browser_receipt_corrupt",
+            "Browser receipt opened tab index is invalid or exceeds its bound",
+        ));
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn shell_quote(value: &str) -> String {

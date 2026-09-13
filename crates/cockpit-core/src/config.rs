@@ -29,6 +29,12 @@ pub struct WindowConfiguration {
 pub struct BrowserConfiguration {
     pub playwright_cli: PathBuf,
     pub chromium_executable: Option<PathBuf>,
+    /// Optional Node executable used only by the private inline-browser helper.
+    pub node_executable: Option<PathBuf>,
+    /// Optional installed helper module. When absent, the host packages its own.
+    pub browser_helper: Option<PathBuf>,
+    /// Optional pinned `playwright-core` module directory used by the helper.
+    pub playwright_core: Option<PathBuf>,
     pub feedback_retention_seconds: u64,
     pub feedback_max_store_bytes: u64,
 }
@@ -63,6 +69,9 @@ struct TomlWindow {
 struct TomlBrowser {
     playwright_cli: Option<String>,
     chromium_executable: Option<String>,
+    node_executable: Option<String>,
+    browser_helper: Option<String>,
+    playwright_core: Option<String>,
     feedback_retention_seconds: Option<u64>,
     feedback_max_store_bytes: Option<u64>,
 }
@@ -374,6 +383,12 @@ pub fn load_browser_configuration(
         browser.chromium_executable,
         "",
     )?;
+    let (node_executable, node_source) =
+        choose_path("COCKPIT_NODE_EXECUTABLE", browser.node_executable, "")?;
+    let (browser_helper, helper_source) =
+        choose_path("COCKPIT_BROWSER_HELPER", browser.browser_helper, "")?;
+    let (playwright_core, playwright_core_source) =
+        choose_path("COCKPIT_PLAYWRIGHT_CORE", browser.playwright_core, "")?;
     let feedback_retention_seconds = browser.feedback_retention_seconds.unwrap_or(3600);
     let feedback_max_store_bytes = browser
         .feedback_max_store_bytes
@@ -390,6 +405,10 @@ pub fn load_browser_configuration(
         playwright_cli: PathBuf::from(playwright_cli),
         chromium_executable: (chromium_source != "default")
             .then(|| PathBuf::from(chromium_executable)),
+        node_executable: (node_source != "default").then(|| PathBuf::from(node_executable)),
+        browser_helper: (helper_source != "default").then(|| PathBuf::from(browser_helper)),
+        playwright_core: (playwright_core_source != "default")
+            .then(|| PathBuf::from(playwright_core)),
         feedback_retention_seconds,
         feedback_max_store_bytes,
     })

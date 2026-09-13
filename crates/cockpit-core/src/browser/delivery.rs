@@ -628,11 +628,12 @@ mod tests {
                 working_directory: "/tmp".to_owned(),
                 invocation: "open".to_owned(),
                 browser_instance: "browser".to_owned(),
+                inline_provenance: None,
             },
             page: BrowserPageEvidence {
                 url: "https://example.test".to_owned(),
                 title: "Example".to_owned(),
-                tab_id: 1,
+                tab_id: Some(1),
                 document_id: "document".to_owned(),
                 captured_at: "2026-09-09T00:00:00Z".to_owned(),
                 viewport: BrowserViewport {

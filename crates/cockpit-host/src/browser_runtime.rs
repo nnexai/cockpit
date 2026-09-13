@@ -6,7 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::browser_annotations::AnnotationServer;
+#[path = "browser_helper.rs"]
+mod browser_helper;
+
+use browser_helper::BrowserHelperSupervisor;
+pub use browser_helper::{BrowserViewEvents, BrowserViewOpen};
 use cockpit_core::{InspectionError, browser::BrowserService};
 use cockpit_protocol::browser::{
     BrowserFeedbackAckRequest, BrowserFeedbackImage, BrowserFeedbackImageRequest,
@@ -14,23 +18,47 @@ use cockpit_protocol::browser::{
     BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse,
 };
 use cockpit_protocol::browser_feedback::BrowserFeedbackAck;
+use cockpit_protocol::browser_view::{
+    BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftCommand, BrowserViewFrameGrant,
+    BrowserViewOpenRequest, BrowserDraftRecoveryRequest,
+};
+
 use fs2::FileExt;
 use nix::unistd::Uid;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     sync::{Mutex, Semaphore, oneshot},
     time::timeout,
 };
 
-const MAX_REQUEST_FRAME: usize = 256 * 1024;
+const MAX_REQUEST_FRAME: usize = 6 * 1024 * 1024;
 const MAX_RESPONSE_FRAME: usize = 129 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const OWNER_READY_TIMEOUT: Duration = Duration::from_secs(2);
 const OWNER_READY_POLL: Duration = Duration::from_millis(25);
 const OWNER_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PEERS: usize = 32;
+const VIEW_EVENT_QUEUE: usize = 64;
+
+/// Validate a browser-view command and preserve the protocol's structured
+/// navigation rejection code at every host boundary.
+pub fn validate_browser_view_command(
+    request: &BrowserViewCommandRequest,
+) -> Result<(), InspectionError> {
+    request.validate().map_err(|message| {
+        if let Some(message) = message
+            .strip_prefix("invalid_browser_url:")
+            .map(str::trim_start)
+        {
+            InspectionError::new("invalid_browser_url", message)
+        } else {
+            InspectionError::new("invalid_browser_view_command", message)
+        }
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 enum WireRequest {
@@ -39,6 +67,12 @@ enum WireRequest {
     Acknowledge(BrowserFeedbackAckRequest),
     FeedbackImage(BrowserFeedbackImageRequest),
     SendFeedback(BrowserFeedbackSendRequest),
+    BrowserViewOpen(BrowserViewOpenRequest),
+    BrowserViewCommand(BrowserViewCommandRequest),
+    BrowserViewEvents(String),
+    BrowserViewFrameEndpoint(BrowserViewFrameGrant),
+    BrowserViewDetach(String),
+    BrowserDraftRecovery(BrowserDraftRecoveryRequest),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,7 +83,20 @@ enum WireResponse {
     Acknowledged(BrowserFeedbackAck),
     FeedbackImage(BrowserFeedbackImage),
     FeedbackSent(BrowserFeedbackSendResponse),
+    BrowserViewOpen(WireBrowserViewOpen),
+    BrowserViewCommand(BrowserViewCommandResponse),
+    BrowserViewEvent(cockpit_protocol::browser_view::BrowserViewEvent),
+    BrowserViewFrameEndpoint(String),
+    BrowserViewDetached,
+    BrowserDraftRecovery(BrowserViewCommandOutcome),
     Err(WireError),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WireBrowserViewOpen {
+    snapshot: cockpit_protocol::browser_view::BrowserViewSnapshot,
+    first_frame: cockpit_protocol::browser_view::BrowserViewFrameDescriptor,
+    frame_endpoint: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,7 +109,6 @@ struct Owner {
     lock: File,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
-    annotations: Option<AnnotationServer>,
 }
 
 enum RuntimeRole {
@@ -75,6 +121,9 @@ enum RuntimeRole {
 pub struct BrowserRuntime {
     role: Mutex<RuntimeRole>,
     service: Arc<BrowserService>,
+    /// Present only in the local owner. Observers intentionally cannot attach
+    /// to, command, or subscribe to the owner's private browser helper.
+    helper: Option<Arc<BrowserHelperSupervisor>>,
 }
 
 impl BrowserRuntime {
@@ -96,6 +145,7 @@ impl BrowserRuntime {
         Ok(Self {
             role: Mutex::new(RuntimeRole::Observer { socket }),
             service,
+            helper: None,
         })
     }
 
@@ -146,12 +196,13 @@ impl BrowserRuntime {
                     .metadata()
                     .map_err(|error| io_error("browser_owner_unavailable", error))?
                     .uid();
-                let annotations = AnnotationServer::start(Arc::clone(&service)).await?;
                 let peers = Arc::new(Semaphore::new(MAX_PEERS));
                 let (stop_tx, mut stop_rx) = oneshot::channel();
                 let owner_service = Arc::clone(&service);
                 let cleanup_socket = socket.clone();
                 let mut reconcile = tokio::time::interval(Duration::from_secs(15));
+                let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
+                let task_helper = Arc::clone(&helper);
                 let task = tokio::spawn(async move {
                     loop {
                         tokio::select! {
@@ -166,7 +217,8 @@ impl BrowserRuntime {
                                 if peer_uid != expected_uid { continue; }
                                 let Ok(permit) = Arc::clone(&peers).try_acquire_owned() else { continue; };
                                 let service = Arc::clone(&owner_service);
-                                tokio::spawn(async move { let _permit = permit; serve_peer(stream, service).await; });
+                                let helper = Arc::clone(&task_helper);
+                                tokio::spawn(async move { let _permit = permit; serve_peer(stream, service, helper).await; });
                             }
                         }
                     }
@@ -177,9 +229,9 @@ impl BrowserRuntime {
                         lock,
                         stop: Some(stop_tx),
                         task: Some(task),
-                        annotations: Some(annotations),
                     })),
                     service,
+                    helper: Some(helper),
                 })
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -192,6 +244,7 @@ impl BrowserRuntime {
                 Ok(Self {
                     role: Mutex::new(RuntimeRole::Observer { socket }),
                     service,
+                    helper: None,
                 })
             }
             Err(error) => Err(io_error("browser_owner_unavailable", error)),
@@ -247,6 +300,105 @@ impl BrowserRuntime {
         }
     }
 
+    /// Attach a persistent inline view to a freshly verified local association.
+    /// The returned endpoint is loopback-only; authenticate its WebSocket with
+    /// the snapshot's first-message frame grant, not a query parameter.
+    pub async fn open_browser_view(
+        &self,
+        request: BrowserViewOpenRequest,
+    ) -> Result<BrowserViewOpen, InspectionError> {
+        if let Some(helper) = self.helper.as_ref() {
+            let attachment = self.service.browser_runtime_attachment(&request).await?;
+            return helper.open(attachment, request).await;
+        }
+        match self.request(WireRequest::BrowserViewOpen(request)).await? {
+            WireResponse::BrowserViewOpen(open) => Ok(BrowserViewOpen {
+                snapshot: open.snapshot,
+                first_frame: open.first_frame,
+                frame_endpoint: open.frame_endpoint,
+            }),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn browser_draft_recovery(
+        &self, request: BrowserDraftRecoveryRequest,
+    ) -> Result<BrowserViewCommandOutcome, InspectionError> {
+        match self.request(WireRequest::BrowserDraftRecovery(request)).await? {
+            WireResponse::BrowserDraftRecovery(outcome) => Ok(outcome),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn browser_view_events(
+        &self,
+        view_id: &str,
+    ) -> Result<BrowserViewEvents, InspectionError> {
+        if let Some(helper) = self.helper.as_ref() {
+            return helper.events(view_id).await;
+        }
+        let socket = self.owner_socket().await?;
+        forward_view_events(&socket, view_id).await
+    }
+
+    pub async fn browser_view_command(
+        &self,
+        request: BrowserViewCommandRequest,
+    ) -> Result<BrowserViewCommandResponse, InspectionError> {
+        validate_browser_view_command(&request)?;
+        if let Some(helper) = self.helper.as_ref() {
+            return owner_view_command(&self.service, helper, request).await;
+        }
+        match self
+            .request(WireRequest::BrowserViewCommand(request))
+            .await?
+        {
+            WireResponse::BrowserViewCommand(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn browser_view_frame_endpoint(
+        &self,
+        grant: &BrowserViewFrameGrant,
+    ) -> Result<String, InspectionError> {
+        if let Some(helper) = self.helper.as_ref() {
+            return helper.frame_endpoint(grant).await;
+        }
+        match self
+            .request(WireRequest::BrowserViewFrameEndpoint(grant.clone()))
+            .await?
+        {
+            WireResponse::BrowserViewFrameEndpoint(endpoint) => Ok(endpoint),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn browser_view_detach(&self, view_id: &str) -> Result<(), InspectionError> {
+        if let Some(helper) = self.helper.as_ref() {
+            helper.detach(view_id).await;
+            return Ok(());
+        }
+        match self
+            .request(WireRequest::BrowserViewDetach(view_id.to_owned()))
+            .await?
+        {
+            WireResponse::BrowserViewDetached => Ok(()),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    async fn owner_socket(&self) -> Result<PathBuf, InspectionError> {
+        let role = self.role.lock().await;
+        match &*role {
+            RuntimeRole::Observer { socket } => Ok(socket.clone()),
+            RuntimeRole::Owner(_) => Err(InspectionError::new(
+                "browser_owner_unavailable",
+                "Browser owner socket is unavailable",
+            )),
+        }
+    }
+
     async fn request(&self, request: WireRequest) -> Result<WireResponse, InspectionError> {
         let socket = {
             let role = self.role.lock().await;
@@ -256,7 +408,7 @@ impl BrowserRuntime {
             }
         };
         match socket {
-            None => dispatch(&self.service, request).await,
+            None => dispatch(&self.service, self.helper.as_ref(), request).await,
             Some(socket) => forward(&socket, request).await,
         }
     }
@@ -269,16 +421,15 @@ impl BrowserRuntime {
                 RuntimeRole::Owner(owner) => (
                     owner.stop.take(),
                     owner.task.take(),
-                    owner.annotations.take(),
                 ),
-                RuntimeRole::Observer { .. } => (None, None, None),
+                RuntimeRole::Observer { .. } => (None, None),
             }
         };
         if owner.0.is_some() {
-            let service_result = self.service.shutdown().await;
-            if let Some(mut annotations) = owner.2 {
-                annotations.shutdown().await;
+            if let Some(helper) = &self.helper {
+                helper.shutdown().await;
             }
+            let service_result = self.service.shutdown().await;
             if let Some(stop) = owner.0 {
                 let _ = stop.send(());
             }
@@ -298,12 +449,20 @@ impl BrowserRuntime {
         matches!(*self.role.lock().await, RuntimeRole::Owner(_))
     }
 }
+fn invalid_response() -> InspectionError {
+    InspectionError::new(
+        "invalid_browser_response",
+        "Browser owner returned an unexpected response kind",
+    )
+}
 
 async fn dispatch(
     service: &BrowserService,
+    helper: Option<&Arc<BrowserHelperSupervisor>>,
     request: WireRequest,
 ) -> Result<WireResponse, InspectionError> {
     match request {
+        WireRequest::BrowserDraftRecovery(request) => service.browser_draft_recovery(request).await.map(WireResponse::BrowserDraftRecovery),
         WireRequest::Action(request) => service.execute(request).await.map(WireResponse::Action),
         WireRequest::Feedback(request) => service
             .feedback(&request.target)
@@ -321,48 +480,198 @@ async fn dispatch(
             .send_feedback(request)
             .await
             .map(WireResponse::FeedbackSent),
+        WireRequest::BrowserViewOpen(request) => {
+            let helper = helper.ok_or_else(|| {
+                InspectionError::new(
+                    "browser_view_owner_required",
+                    "Inline browser owner helper is unavailable",
+                )
+            })?;
+            let attachment = service.browser_runtime_attachment(&request).await?;
+            let opened = helper.open(attachment, request).await?;
+            Ok(WireResponse::BrowserViewOpen(WireBrowserViewOpen {
+                snapshot: opened.snapshot,
+                first_frame: opened.first_frame,
+                frame_endpoint: opened.frame_endpoint,
+            }))
+        }
+        WireRequest::BrowserViewCommand(request) => {
+            validate_browser_view_command(&request)?;
+            let helper = helper.ok_or_else(|| {
+                InspectionError::new(
+                    "browser_view_owner_required",
+                    "Inline browser owner helper is unavailable",
+                )
+            })?;
+            owner_view_command(service, helper, request)
+                .await
+                .map(WireResponse::BrowserViewCommand)
+        }
+        WireRequest::BrowserViewFrameEndpoint(grant) => {
+            let helper = helper.ok_or_else(|| {
+                InspectionError::new(
+                    "browser_view_owner_required",
+                    "Inline browser owner helper is unavailable",
+                )
+            })?;
+            helper
+                .frame_endpoint(&grant)
+                .await
+                .map(WireResponse::BrowserViewFrameEndpoint)
+        }
+        WireRequest::BrowserViewDetach(view_id) => {
+            if let Some(helper) = helper {
+                helper.detach(&view_id).await;
+            }
+            Ok(WireResponse::BrowserViewDetached)
+        }
+        WireRequest::BrowserViewEvents(_) => Err(InspectionError::new(
+            "invalid_browser_request",
+            "Browser view events require a streaming connection",
+        )),
     }
 }
 
-fn invalid_response() -> InspectionError {
-    InspectionError::new(
-        "invalid_browser_response",
-        "Browser owner returned an unexpected response kind",
-    )
+async fn owner_view_command(
+    service: &BrowserService,
+    helper: &BrowserHelperSupervisor,
+    request: BrowserViewCommandRequest,
+) -> Result<BrowserViewCommandResponse, InspectionError> {
+    if let BrowserViewCommand::Draft { context, draft_id, expected_revision, command } = &request.command {
+        let view = helper.events(&request.view_id).await?;
+        let snapshot = view.snapshot;
+        let historical = matches!(command, BrowserViewDraftCommand::List | BrowserViewDraftCommand::SaveCapture { .. }
+            | BrowserViewDraftCommand::RetryPending | BrowserViewDraftCommand::DiscardPending);
+        if snapshot.identity.stream_epoch != request.stream_epoch
+            || (!historical && snapshot.document.as_ref().is_none_or(|document|
+                document.target_id != context.target_id || document.document_generation != context.document_generation))
+        {
+            return Ok(BrowserViewCommandResponse::Stale {
+                view_id: request.view_id,
+                stream_epoch: request.stream_epoch,
+                request_id: request.request_id,
+                current_stream_epoch: snapshot.identity.stream_epoch,
+                current_metadata_sequence: snapshot.metadata_sequence,
+                code: "browser_document_stale".into(),
+                message: "Browser document changed; reopen the draft from the current view".into(),
+            });
+        }
+        let (target, attachment) = helper.attachment_context(&request.view_id).await?;
+        let result = service.browser_annotation_command(
+            &target, &attachment, context.clone(), draft_id.as_deref(), *expected_revision, command.clone(),
+        ).await;
+        return Ok(match result {
+            Ok(outcome) => BrowserViewCommandResponse::Accepted {
+                view_id: request.view_id, stream_epoch: request.stream_epoch,
+                request_id: request.request_id, outcome,
+            },
+            Err(error) => BrowserViewCommandResponse::Rejected {
+                view_id: request.view_id, stream_epoch: request.stream_epoch,
+                request_id: request.request_id, code: error.code, message: error.message,
+            },
+        });
+    }
+    let response = helper.command(request.clone()).await?;
+    if let (BrowserViewCommand::Capture { command }, BrowserViewCommandResponse::Accepted {
+        outcome: BrowserViewCommandOutcome::CapturePrepared { capture_id, descriptor }, ..
+    }) = (&request.command, &response) {
+        let (target, attachment) = helper.attachment_context(&request.view_id).await?;
+        let snapshot = helper.events(&request.view_id).await?.snapshot;
+        let document = snapshot.document.filter(|document|
+            document.target_id == descriptor.target_id && document.document_generation == descriptor.document_generation
+        ).ok_or_else(|| InspectionError::new("browser_capture_stale", "The document changed during capture preparation"))?;
+        service.browser_prepare_capture(&target, &attachment, command, capture_id, descriptor,
+            document.frame_id, document.frame_generation).await?;
+    }
+    Ok(response)
 }
 
-async fn serve_peer(stream: UnixStream, service: Arc<BrowserService>) {
+async fn serve_peer(
+    stream: UnixStream,
+    service: Arc<BrowserService>,
+    helper: Arc<BrowserHelperSupervisor>,
+) {
     let (mut reader, mut writer) = stream.into_split();
     let Ok(Ok(Some(frame))) = timeout(IO_TIMEOUT, read_frame(&mut reader, MAX_REQUEST_FRAME)).await
     else {
         return;
     };
-    let response = match serde_json::from_slice::<WireRequest>(&frame) {
-        Ok(request) => match dispatch(&service, request).await {
-            Ok(value) => value,
-            Err(error) => WireResponse::Err(WireError {
-                code: error.code,
-                message: error.message,
-            }),
-        },
-        Err(error) => WireResponse::Err(WireError {
-            code: "invalid_browser_request".to_owned(),
-            message: error.to_string(),
-        }),
+    let request = match serde_json::from_slice::<WireRequest>(&frame) {
+        Ok(request) => request,
+        Err(error) => {
+            let _ = write_wire(
+                &mut writer,
+                &WireResponse::Err(WireError {
+                    code: "invalid_browser_request".into(),
+                    message: error.to_string(),
+                }),
+            )
+            .await;
+            return;
+        }
     };
-    let Ok(encoded) = serde_json::to_vec(&response) else {
-        return;
-    };
-    if encoded.len() > MAX_RESPONSE_FRAME {
+    if let WireRequest::BrowserViewEvents(view_id) = request {
+        let Ok(view) = helper.events(&view_id).await else {
+            return;
+        };
+        let metadata = cockpit_protocol::browser_view::BrowserViewEventMetadata {
+            view_id: view.snapshot.identity.view_id.clone(),
+            stream_epoch: view.snapshot.identity.stream_epoch,
+            metadata_sequence: view.snapshot.metadata_sequence,
+        };
+        let attached = cockpit_protocol::browser_view::BrowserViewEvent::Attached {
+            metadata,
+            snapshot: view.snapshot,
+        };
+        if write_wire(&mut writer, &WireResponse::BrowserViewEvent(attached))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let mut events = view.events;
+        let mut peer_byte = [0u8; 1];
+        loop {
+            tokio::select! {
+                _ = reader.read(&mut peer_byte) => break,
+                event = events.recv() => {
+                    let Ok(event) = event else { break; };
+                    if write_wire(&mut writer, &WireResponse::BrowserViewEvent(event)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
         return;
     }
-    let _ = timeout(IO_TIMEOUT, async {
+    let response = match dispatch(&service, Some(&helper), request).await {
+        Ok(value) => value,
+        Err(error) => WireResponse::Err(WireError {
+            code: error.code,
+            message: error.message,
+        }),
+    };
+    let _ = write_wire(&mut writer, &response).await;
+}
+
+async fn write_wire<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    response: &WireResponse,
+) -> Result<(), std::io::Error> {
+    let encoded = serde_json::to_vec(response).map_err(std::io::Error::other)?;
+    if encoded.len() > MAX_RESPONSE_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "response exceeds bound",
+        ));
+    }
+    timeout(IO_TIMEOUT, async {
         writer.write_all(&encoded).await?;
         writer.write_all(b"\n").await
     })
-    .await;
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "response timed out"))?
 }
-
 async fn forward(socket: &Path, request: WireRequest) -> Result<WireResponse, InspectionError> {
     let stream = timeout(IO_TIMEOUT, UnixStream::connect(socket))
         .await
@@ -428,6 +737,85 @@ async fn forward(socket: &Path, request: WireRequest) -> Result<WireResponse, In
         WireResponse::Err(error) => Err(InspectionError::new(error.code, error.message)),
         response => Ok(response),
     }
+}
+
+async fn forward_view_events(
+    socket: &Path,
+    view_id: &str,
+) -> Result<BrowserViewEvents, InspectionError> {
+    let stream = UnixStream::connect(socket)
+        .await
+        .map_err(|error| io_error("browser_owner_unavailable", error))?;
+    let peer_uid = stream
+        .peer_cred()
+        .map_err(|error| io_error("browser_owner_unavailable", error))?
+        .uid();
+    let expected_uid = fs::metadata(socket)
+        .map_err(|error| io_error("browser_owner_unavailable", error))?
+        .uid();
+    if peer_uid != expected_uid {
+        return Err(InspectionError::new(
+            "browser_owner_unavailable",
+            "Browser owner belongs to another user",
+        ));
+    }
+    let (mut reader, mut writer) = stream.into_split();
+    let request = serde_json::to_vec(&WireRequest::BrowserViewEvents(view_id.to_owned()))
+        .map_err(|error| InspectionError::new("invalid_browser_request", error.to_string()))?;
+    writer
+        .write_all(&request)
+        .await
+        .map_err(|error| io_error("browser_owner_unavailable", error))?;
+    writer
+        .write_all(b"\n")
+        .await
+        .map_err(|error| io_error("browser_owner_unavailable", error))?;
+    let first = timeout(IO_TIMEOUT, read_frame(&mut reader, MAX_RESPONSE_FRAME))
+        .await
+        .map_err(|_| {
+            InspectionError::new("browser_owner_timeout", "Browser event snapshot timed out")
+        })?
+        .map_err(|error| io_error("browser_owner_unavailable", error))?
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_view_not_found",
+                "Browser owner closed the event stream",
+            )
+        })?;
+    let response = serde_json::from_slice::<WireResponse>(&first)
+        .map_err(|error| InspectionError::new("invalid_browser_response", error.to_string()))?;
+    let WireResponse::BrowserViewEvent(
+        cockpit_protocol::browser_view::BrowserViewEvent::Attached { snapshot, .. },
+    ) = response
+    else {
+        return Err(InspectionError::new(
+            "invalid_browser_response",
+            "Browser owner did not return a browser view snapshot",
+        ));
+    };
+    let (events, receiver) = tokio::sync::broadcast::channel(VIEW_EVENT_QUEUE);
+    let relay = events.clone();
+    tokio::spawn(async move {
+        loop {
+            let frame = tokio::select! {
+                _ = relay.closed() => break,
+                frame = read_frame(&mut reader, MAX_RESPONSE_FRAME) => frame,
+            };
+            let Ok(Some(frame)) = frame else {
+                break;
+            };
+            let Ok(WireResponse::BrowserViewEvent(event)) = serde_json::from_slice(&frame) else {
+                break;
+            };
+            if relay.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    Ok(BrowserViewEvents {
+        snapshot,
+        events: receiver,
+    })
 }
 
 async fn read_frame<R: AsyncRead + Unpin>(

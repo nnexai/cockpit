@@ -383,3 +383,11 @@ Every submission gets a fresh plan. Once dispatched, its receipt survives a clos
 ### 2026-09-13: optional comment message preview
 
 The user's targeted polish review removes the manual preview prerequisite for pasting comments to an agent. Preparation supplies the current payload hash and eligible target; sending still revalidates the source and payload, preserves stale-source and uncertain-delivery handling, and pastes without submitting. Preview remains an optional disclosure. Draft saves commit the captured comment without rereading the entire batch; freshness is checked on batch inspection and delivery preparation.
+
+## 2026-09-13: Inline Space browser replacement
+
+The user authorized the complete inline browser plan and the no-migration cutover. This supersedes the September 8 external-window and annotation-extension choices. The existing single browser owner, named Playwright CLI session, persistent profile, and agent discovery remain authoritative. The view uses the selected raw JPEG screencast transport. Focused implementation and runtime verification passed on 2026-09-13; the broad acceptance matrix is not claimed.
+
+The browser is a Space-scoped Cockpit split beside the unchanged Herdr layout. It does not add a Herdr pane, tab, or PTY. Clicking it suspends local terminal writable intent without fabricating Herdr focus. Returning to a terminal uses the existing confirmed focus path. Hide affects presentation; Close remains an explicit browser lifecycle action.
+
+Cockpit owns annotation overlays and durable revisioned drafts. PNG capture retains exact retry bytes and existing feedback/paste receipt semantics. The user explicitly excluded legacy migration. The inline runtime directly replaces the extension and external-window integration without an import layer. Existing saved feedback remains readable. The focused pass covered browser open/frame, region draft persistence, hide/show, URL navigation, static gates, and Linux Tauri startup; full security, performance, native input/decode, and A01–A25 evidence remains unrun.

@@ -3,6 +3,11 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
             "cockpit_browser_action",
+            "cockpit_browser_view_open",
+            "cockpit_browser_draft_recovery",
+            "cockpit_browser_view_command",
+            "cockpit_browser_view_subscribe",
+            "cockpit_browser_view_frame_ack",
             "cockpit_browser_feedback",
             "cockpit_browser_feedback_ack",
             "cockpit_browser_feedback_image",

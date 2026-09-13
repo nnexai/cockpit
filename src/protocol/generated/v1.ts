@@ -14,7 +14,7 @@ export type ErrorResponse = { code: string, message: string, };
 
 export type BrowserTarget = { session_id: string, space_id: string | null, pane_id: string | null, endpoint_path: string | null, };
 
-export type BrowserAction = { "kind": "open", url: string | null, } | { "kind": "status" } | { "kind": "close" } | { "kind": "show" };
+export type BrowserAction = { "kind": "open", url: string | null, } | { "kind": "status" } | { "kind": "close" };
 
 export type BrowserRequest = { target: BrowserTarget, action: BrowserAction, };
 
@@ -28,7 +28,7 @@ export type BrowserFeedbackRequest = { target: BrowserTarget, };
 
 export type BrowserFeedbackAckRequest = { target: BrowserTarget, ids: Array<string>, };
 
-export type BrowserFeedbackLookup = { browser: BrowserResponse, feedback: BrowserFeedbackResponse, };
+export type BrowserFeedbackLookup = { browser: BrowserResponse, feedback: BrowserFeedbackResponse, drafts: BrowserViewDraftInventory | null, };
 
 export type BrowserFeedbackImageRequest = { target: BrowserTarget, capture_id: string, };
 
@@ -50,11 +50,18 @@ export type BrowserAnnotationKind = "freehand" | "element" | "region";
 
 export type BrowserAnnotation = { id: string, kind: BrowserAnnotationKind, comment: string, color: string, points: Array<BrowserPoint>, bounds: BrowserRect | null, element: BrowserElementEvidence | null, };
 
-export type BrowserPageEvidence = { url: string, title: string, tab_id: number, document_id: string, captured_at: string, viewport: BrowserViewport, image_width: number, image_height: number, };
+export type BrowserPageEvidence = { url: string, title: string, tab_id?: number | null, document_id: string, captured_at: string, viewport: BrowserViewport, image_width: number, image_height: number, };
 
 export type BrowserCaptureSubmission = { association_key: string, browser_instance: string, capture_id: string, page: BrowserPageEvidence, annotations: Array<BrowserAnnotation>, png_base64: string, };
 
-export type BrowserCaptureContext = { association_key: string, session_id: string, space_id: string, space_label: string, playwright_session: string, working_directory: string, invocation: string, browser_instance: string, };
+export type BrowserCaptureContext = { association_key: string, session_id: string, space_id: string, space_label: string, playwright_session: string, working_directory: string, invocation: string, browser_instance: string,
+/**
+ * Older extension captures have no CDP provenance. Inline captures must
+ * supply it and the core preserves it without rewriting historical rows.
+ */
+inline_provenance: BrowserInlineCaptureProvenance | null, };
+
+export type BrowserInlineCaptureProvenance = { target_id: string, frame_id: string, document_generation: number, frame_generation: number, stream_epoch: number, frame_sequence: number, viewport_revision: number, pixel_captured_at_micros: number, capture_as_shown: boolean, };
 
 export type BrowserFeedbackCapture = { id: string, context: BrowserCaptureContext, page: BrowserPageEvidence, annotations: Array<BrowserAnnotation>, pending_ids: Array<string>, image_path: string, };
 
@@ -63,6 +70,130 @@ export type BrowserCaptureSaved = { capture_id: string, annotation_ids: Array<st
 export type BrowserFeedbackResponse = { captures: Array<BrowserFeedbackCapture>, pending_count: number, retention_seconds: number, };
 
 export type BrowserFeedbackAck = { acknowledged_ids: Array<string>, remaining: number, };
+
+export type BrowserViewPresentation = "split" | "browser_only";
+
+export type BrowserViewViewportRequest = { css_width: number, css_height: number, device_pixel_ratio: number, };
+
+export type BrowserViewOpenRequest = { target: BrowserTarget, client_id: string, presentation: BrowserViewPresentation, viewport: BrowserViewViewportRequest, takeover: boolean, };
+
+export type BrowserViewIdentity = { association_key: string, browser_incarnation: string, view_id: string, stream_epoch: number, };
+
+export type BrowserViewTargetKind = "page" | "popup" | "background" | "internal";
+
+export type BrowserViewTargetSummary = { target_id: string, kind: BrowserViewTargetKind, title: string, url: string, order: number, opener_target_id: string | null, can_close: boolean, };
+
+export type BrowserViewDocumentState = { target_id: string, frame_id: string, document_generation: number, frame_generation: number, };
+
+export type BrowserViewViewportState = { viewport_revision: number, css_width: number, css_height: number, visual_offset_x: number, visual_offset_y: number, scroll_x: number, scroll_y: number, visual_scale: number, page_scale: number, device_pixel_ratio: number, geometry_fresh: boolean, };
+
+export type BrowserViewNavigationState = { url: string, title: string, loading: boolean, can_go_back: boolean, can_go_forward: boolean, requested_url: string | null, };
+
+export type BrowserViewCursor = "default" | "pointer" | "text" | "crosshair" | "move" | "not_allowed" | "wait" | "grab" | "grabbing" | "cell" | "help" | "progress" | "zoom_in" | "zoom_out" | "column_resize" | "row_resize" | "east_resize" | "west_resize" | "north_resize" | "south_resize" | "northeast_resize" | "northwest_resize" | "southeast_resize" | "southwest_resize";
+
+export type BrowserViewCursorState = { cursor: BrowserViewCursor, pointer_sample_sequence: number, target_id: string, document_generation: number, viewport_revision: number, };
+
+export type BrowserViewFocusState = { page_focused: boolean, editable: boolean, selection_available: boolean, composition_active: boolean, };
+
+export type BrowserViewBlockerKind = "dialog" | "file_chooser" | "download" | "permission" | "unsupported";
+
+export type BrowserViewBlocker = { blocker_id: string, kind: BrowserViewBlockerKind, message: string, default_prompt: string | null, target_id: string, document_generation: number, cancellable: boolean, };
+
+export type BrowserViewCapability = "supported" | "unsupported" | "unavailable";
+
+export type BrowserViewCapabilities = { pointer_input: BrowserViewCapability, keyboard_input: BrowserViewCapability, text_input: BrowserViewCapability, composition_input: BrowserViewCapability, clipboard_read: BrowserViewCapability, clipboard_write: BrowserViewCapability, dialogs: BrowserViewCapability, file_chooser: BrowserViewCapability, downloads: BrowserViewCapability, permissions: BrowserViewCapability, inspection: BrowserViewCapability, capture: BrowserViewCapability, drafts: BrowserViewCapability, audio: BrowserViewCapability, };
+
+export type BrowserViewControlStatus = "observing" | "pending" | "controlled" | "revoked" | "lost";
+
+export type BrowserViewControlState = { status: BrowserViewControlStatus, controller_view_id: string | null, lease_generation: number, next_input_sequence: number, can_take_control: boolean, };
+
+export type BrowserViewFrameEnvelopeV2 = { magic: number, version: number, header_bytes: number, max_width: number, max_height: number, max_pixels: number, max_jpeg_bytes: number, };
+
+export type BrowserViewFrameGrant = { view_id: string, stream_epoch: number, grant: string, expires_at: string, envelope: BrowserViewFrameEnvelopeV2, };
+
+export type BrowserViewFrameDescriptor = { target_id: string, stream_epoch: number, frame_sequence: number, document_generation: number, viewport_revision: number, image_width: number, image_height: number, viewport_css_width: number, viewport_css_height: number, viewport_offset_x: number, viewport_offset_y: number, scroll_x: number, scroll_y: number, capture_timestamp_micros: number, jpeg_length: number, };
+
+export type BrowserViewSnapshot = { identity: BrowserViewIdentity, metadata_sequence: number, targets: Array<BrowserViewTargetSummary>, displayed_target_id: string | null, document: BrowserViewDocumentState | null, viewport: BrowserViewViewportState | null, navigation: BrowserViewNavigationState | null, cursor: BrowserViewCursorState | null, focus: BrowserViewFocusState, blocker: BrowserViewBlocker | null, capabilities: BrowserViewCapabilities, control: BrowserViewControlState, frame_grant: BrowserViewFrameGrant | null, };
+
+export type BrowserViewEventMetadata = { view_id: string, stream_epoch: number,
+/**
+ * Sequence is contiguous within one subscription; a gap requires a new snapshot.
+ */
+metadata_sequence: number, };
+
+export type BrowserViewEvent = { "type": "attached", metadata: BrowserViewEventMetadata, snapshot: BrowserViewSnapshot, } | { "type": "targets_changed", metadata: BrowserViewEventMetadata, targets: Array<BrowserViewTargetSummary>, displayed_target_id: string | null, } | { "type": "document_changed", metadata: BrowserViewEventMetadata, document: BrowserViewDocumentState | null, } | { "type": "viewport_changed", metadata: BrowserViewEventMetadata, viewport: BrowserViewViewportState | null, } | { "type": "navigation_changed", metadata: BrowserViewEventMetadata, navigation: BrowserViewNavigationState | null, } | { "type": "cursor_changed", metadata: BrowserViewEventMetadata, cursor: BrowserViewCursorState | null, } | { "type": "focus_changed", metadata: BrowserViewEventMetadata, focus: BrowserViewFocusState, } | { "type": "blocker_changed", metadata: BrowserViewEventMetadata, blocker: BrowserViewBlocker | null, } | { "type": "capabilities_changed", metadata: BrowserViewEventMetadata, capabilities: BrowserViewCapabilities, } | { "type": "control_changed", metadata: BrowserViewEventMetadata, control: BrowserViewControlState, } | { "type": "frame_descriptor", metadata: BrowserViewEventMetadata, descriptor: BrowserViewFrameDescriptor, } | { "type": "frame_transport_revoked", metadata: BrowserViewEventMetadata, code: string, message: string, } | { "type": "failed", metadata: BrowserViewEventMetadata, code: string, message: string, } | { "type": "closed", metadata: BrowserViewEventMetadata, reason: string, };
+
+export type BrowserViewLocation = { target_id: string, document_generation: number, viewport_revision: number, presented_frame_sequence: number, lease_generation: number, };
+
+export type BrowserViewDocumentCommandContext = { target_id: string, document_generation: number, lease_generation: number, };
+
+export type BrowserViewPointerKind = "move" | "down" | "up" | "cancel";
+
+export type BrowserViewPointerButton = "left" | "middle" | "right";
+
+export type BrowserViewPointerInput = { kind: BrowserViewPointerKind, button: BrowserViewPointerButton | null, x: number, y: number, buttons: number, modifiers: number, click_count: number, input_sequence: number, };
+
+export type BrowserViewWheelInput = { x: number, y: number, delta_x_css: number, delta_y_css: number, modifiers: number, input_sequence: number, };
+
+export type BrowserViewKeyKind = "down" | "up";
+
+export type BrowserViewKeyboardInput = { kind: BrowserViewKeyKind, key: string, code: string, location: number, modifiers: number, repeat: boolean, input_sequence: number, };
+
+export type BrowserViewTextInput = { text: string, input_sequence: number, };
+
+export type BrowserViewCompositionKind = "start" | "update" | "commit" | "cancel";
+
+export type BrowserViewCompositionInput = { kind: BrowserViewCompositionKind, text: string, input_sequence: number, };
+
+export type BrowserViewClipboardCommand = { "type": "paste", text: string, } | { "type": "copy" };
+
+export type BrowserViewNavigationCommand = { "type": "navigate", url: string, } | { "type": "back" } | { "type": "forward" } | { "type": "reload" } | { "type": "stop" };
+
+export type BrowserViewTabCommand = { "type": "select", target_id: string, } | { "type": "create", url: string | null, } | { "type": "close", target_id: string, };
+
+export type BrowserViewDialogCommand = { "type": "accept", text: string | null, } | { "type": "dismiss" };
+
+export type BrowserViewFileCommand = { "type": "choose", selection_ids: Array<string>, } | { "type": "cancel" };
+
+export type BrowserViewDownloadCommand = { "type": "accept" } | { "type": "cancel" };
+
+export type BrowserViewPermissionDecision = "allow" | "deny" | "cancel";
+
+export type BrowserViewPermissionCommand = { decision: BrowserViewPermissionDecision, };
+
+export type BrowserViewInspectionFreshness = "fresh" | "review_required" | "stale" | "unavailable";
+
+export type BrowserViewInspectResult = { location: BrowserViewLocation, frame_id: string, frame_generation: number, pointer_sample_sequence: number, bounds: BrowserRect | null, evidence: BrowserElementEvidence | null, inspectable: boolean, freshness: BrowserViewInspectionFreshness, limitation: string | null, };
+
+export type BrowserViewInspectCommand = { location: BrowserViewLocation, pointer_sample_sequence: number, x: number, y: number, };
+
+export type BrowserViewCaptureCommand = { location: BrowserViewLocation, draft_id: string, draft_revision: number, annotation_ids: Array<string>, capture_as_shown: boolean, };
+
+export type BrowserViewDraftAnnotation = { id: string, kind: BrowserAnnotationKind, color: string, points: Array<BrowserPoint>, bounds: BrowserRect | null, evidence: BrowserElementEvidence | null, comment: string | null, };
+
+export type BrowserViewDraftEditorState = { selected_annotation_id: string | null, notes_open: boolean, };
+
+export type BrowserViewDraftState = { draft_id: string, target_id: string, document_generation: number, revision: number, annotations: Array<BrowserViewDraftAnnotation>, freshness: BrowserViewInspectionFreshness, stale: boolean, editor: BrowserViewDraftEditorState, };
+
+export type BrowserViewDraftInventory = { drafts: Array<BrowserViewDraftState>, active_draft_limit: number, pending_capture: BrowserViewPendingCapture | null, };
+
+export type BrowserViewPendingCapture = { capture_id: string, draft_id: string, draft_revision: number, annotation_ids: Array<string>, last_error: string | null, };
+
+export type BrowserViewCaptureOutcome = { "state": "absent" } | { "state": "pending", pending: BrowserViewPendingCapture, } | { "state": "saved", saved: BrowserCaptureSaved, };
+
+export type BrowserViewDraftCommand = { "type": "list" } | { "type": "open", draft_id: string | null, } | { "type": "upsert_annotation", annotation: BrowserViewDraftAnnotation, } | { "type": "remove_annotation", annotation_id: string, } | { "type": "clear" } | { "type": "discard" } | { "type": "set_editor", editor: BrowserViewDraftEditorState, } | { "type": "save_capture", submission: BrowserCaptureSubmission, annotation_ids: Array<string>, provenance: BrowserInlineCaptureProvenance, } | { "type": "retry_pending" } | { "type": "discard_pending" };
+
+export type BrowserDraftRecoveryAction = { "type": "list" } | { "type": "retry_pending" } | { "type": "discard_pending" } | { "type": "discard_draft", draft_id: string, expected_revision: number, };
+
+export type BrowserDraftRecoveryRequest = { target: BrowserTarget, action: BrowserDraftRecoveryAction, };
+
+export type BrowserViewCommand = { "type": "take_control", viewport: BrowserViewViewportRequest, } | { "type": "release_control", lease_generation: number, } | { "type": "detach" } | { "type": "resize", context: BrowserViewDocumentCommandContext, viewport: BrowserViewViewportRequest, } | { "type": "pointer", location: BrowserViewLocation, input: BrowserViewPointerInput, } | { "type": "wheel", location: BrowserViewLocation, input: BrowserViewWheelInput, } | { "type": "keyboard", context: BrowserViewDocumentCommandContext, input: BrowserViewKeyboardInput, } | { "type": "text", context: BrowserViewDocumentCommandContext, input: BrowserViewTextInput, } | { "type": "composition", context: BrowserViewDocumentCommandContext, input: BrowserViewCompositionInput, } | { "type": "clipboard", context: BrowserViewDocumentCommandContext, command: BrowserViewClipboardCommand, } | { "type": "navigation", context: BrowserViewDocumentCommandContext, command: BrowserViewNavigationCommand, } | { "type": "tab", command: BrowserViewTabCommand, } | { "type": "dialog", blocker_id: string, command: BrowserViewDialogCommand, } | { "type": "file", blocker_id: string, command: BrowserViewFileCommand, } | { "type": "download", blocker_id: string, command: BrowserViewDownloadCommand, } | { "type": "permission", blocker_id: string, command: BrowserViewPermissionCommand, } | { "type": "inspect", command: BrowserViewInspectCommand, } | { "type": "capture", command: BrowserViewCaptureCommand, } | { "type": "draft", context: BrowserViewDocumentCommandContext, draft_id: string | null, expected_revision: number | null, command: BrowserViewDraftCommand, };
+
+export type BrowserViewCommandRequest = { view_id: string, stream_epoch: number, request_id: string, command: BrowserViewCommand, };
+
+export type BrowserViewCommandOutcome = { "type": "none" } | { "type": "snapshot", snapshot: BrowserViewSnapshot, } | { "type": "control", control: BrowserViewControlState, } | { "type": "inspection", inspection: BrowserViewInspectResult, } | { "type": "capture_prepared", capture_id: string, descriptor: BrowserViewFrameDescriptor, } | { "type": "draft", draft: BrowserViewDraftState, } | { "type": "draft_inventory", inventory: BrowserViewDraftInventory, } | { "type": "capture", capture: BrowserViewCaptureOutcome, } | { "type": "clipboard", text: string | null, };
+
+export type BrowserViewCommandResponse = { "status": "accepted", view_id: string, stream_epoch: number, request_id: string, outcome: BrowserViewCommandOutcome, } | { "status": "rejected", view_id: string, stream_epoch: number, request_id: string, code: string, message: string, } | { "status": "stale", view_id: string, stream_epoch: number, request_id: string, current_stream_epoch: number, current_metadata_sequence: number, code: string, message: string, } | { "status": "unsupported", view_id: string, stream_epoch: number, request_id: string, capability: string, message: string, } | { "status": "outcome_unknown", view_id: string, stream_epoch: number, request_id: string, code: string, message: string, };
 
 export type SpaceGitSummary = { repository_key: string, repository: string, branch: string | null, checkout_path: string, is_linked_worktree: boolean, };
 

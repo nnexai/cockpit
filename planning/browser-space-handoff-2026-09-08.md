@@ -1,5 +1,7 @@
 # Space browser integration handoff
 
+Current direction: superseded by [the inline browser replacement](inline-space-browser-2026-09-13/README.md). The external extension design below is historical. The no-migration inline implementation has focused verification evidence; the broad A01–A25 matrix is not claimed.
+
 ## Continuation delivery
 
 The continuation fixes extension sender authentication, stale worker loading, local draft recovery, bounded startup, durable saved-ID filtering, capture tab-switch detection, pending-capture capacity, destination revalidation, owner readiness, and explicit current-endpoint selection.
@@ -26,7 +28,7 @@ The detailed historical matrix below is not an assertion that every cross-platfo
 Implementation checkpoint: `be68fc8` — `feat: checkpoint Space browser capture and inline feedback`.
 Earlier tooling evidence: `d51d864`.
 
-The user requested this handoff at a stable checkpoint. **The overall browser integration is not complete.** Resume against [the integration plan](browser-space-integration-2026-09-08.md), especially its acceptance section. That plan has pre-existing user edits deliberately left unstaged; preserve them.
+This checkpoint is historical and superseded by the no-migration inline browser replacement. The inline implementation and focused verification are recorded in [the current handoff](inline-space-browser-2026-09-13/HANDOFF.md); the historical acceptance matrix below is not a current completion claim.
 
 The checkpoint contains the production lifecycle, extension, feedback store, CLI, web/native transports, and interaction polish. The working capture → fetch/read → exact acknowledgement and capture → direct paste paths have real evidence. Failure/recovery coverage and some lifecycle acceptance remain open below. This is not a claim that all 6,519 added lines satisfy the full plan.
 

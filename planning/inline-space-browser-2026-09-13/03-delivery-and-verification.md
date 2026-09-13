@@ -1,6 +1,6 @@
 # Delivery sequence and verification
 
-Status: future implementation work; no row below is claimed passed by writing this plan. [Overview](README.md) · [Transport](01-architecture-and-transport.md) · [Annotations/migration](02-annotations-and-migration.md).
+Status: implementation complete for the user-authorized no-migration cutover. Focused static, browser/gateway, and Linux-native startup checks passed on 2026-09-13. The broad A01–A25, security, performance, and native input/decode matrices are not claimed; A23 is excluded.
 
 ## 1. Execution rules
 
@@ -66,26 +66,26 @@ Use disposable names such as `inline-browser-<run-id>`, dedicated Chromium profi
 
 ### IB-04 — Preserve feedback, ownership and old work
 
-**Outcome:** the complete annotate/save/fetch/ack/send loop works with extension-free captures, and an owned legacy profile can migrate without data loss.
+**Outcome:** preserve the complete extension-free feedback loop and readable saved captures. Legacy profile migration is explicitly excluded by the user's cutover instruction.
 
 - Wire inline feedback/recovery to existing lookup/image/send/ack operations; preserve optional preview and recipient selection rules.
-- Implement versioned capture provenance, legacy reader/import and explicit one-shot migration journal. Include old drafts, pending PNGs and consumed IDs, not only already-saved store records.
-- Exercise duplicate saves, lost responses, unknown paste receipts, capacity, retention and interrupted migration.
+- Do not add legacy reader/import or migration-journal behavior; A23 is outside the authorized scope. Existing saved feedback remains readable.
+- Exercise duplicate saves, lost responses, unknown paste receipts, capacity, retention, and interrupted delivery.
 - Preserve named CLI status/open/close, `--current` after pane move and readable feedback with a closed browser.
 
-**Gate:** A19–A24, source/receipt schema compatibility and migration count/hash reconciliation. Run migrations only on copied/run-owned fixture profiles; source user profiles are never migration test fixtures.
+**Gate:** A19–A22 and A24 remain the defined future matrix for feedback, delivery, ownership, and capacity; they were not broadly exercised by the focused pass. A23 is excluded.
 
 ### IB-05 — Cut over and remove the old runtime
 
 **Outcome:** the inline implementation is the only production Space browser/annotation path, with documented limits and no obsolete extension/external-window dependency.
 
 - Inventory every affected callsite before removing exported symbols; use LSP references and generated-type drift checks.
-- Apply the documented owned-profile migration boundary, then remove extension runtime/HTTP/pairing/build embedding and external-window Show semantics. Keep historical evidence and isolated one-shot legacy import tooling, not a second supported runtime.
+- Apply the documented no-migration cutover boundary, then remove extension runtime/HTTP/pairing/build embedding and external-window Show semantics. Keep historical evidence only, not a second supported runtime or import path.
 - Update native permissions/CSP, packaging/install prerequisites, usage/keybinding/code-guide documentation, architecture decisions and original browser-plan status.
-- Run the full selected acceptance matrix on integrated production adapters and perform a security/lifecycle review. Fix findings and rerun affected gates before commit.
+- Record focused integration evidence and keep the broader acceptance/security matrix explicitly unclaimed; do not expand scope through review-driven follow-up.
 - Remove throwaway fixtures/scripts after proof; keep only behavior regressions that defend plausible failures and receipts needed to understand verification.
 
-**Gate:** A01–A25 integrated; no live extension install/submission endpoints, no second browser/profile, no orphan helper/frame subscriptions and no silently discarded legacy state. Unrelated Herdr/terminal/Files/Review behavior still works. Installing/restarting the user's running application remains a separate activation action.
+**Gate:** focused cutover proof covers the inline path, no extension install/submission runtime, no external Show dependency, one helper per owned browser, hide/show resource handling, and no unrelated work included. The broad A01–A25 gate is not claimed.
 
 ## 3. File boundaries and real parallel work
 
@@ -97,7 +97,7 @@ The names of new modules below are proposed placement, not instructions to scaff
 | Owner/host adapters | `crates/cockpit-host/src/browser_runtime.rs`, `server.rs`, `src-tauri/src/lib.rs`, permissions/capabilities/config | Same command/event/error semantics in native/web/observer paths; delegated frame grants |
 | Client/presenter | `src/client/CockpitClient.ts`, `browser.ts`, `native.ts`; proposed `src/app/browser/` presenter/input modules | Opaque view handle, typed metadata, disposable frame source, presented-frame descriptor |
 | Annotation/drafts | Proposed `src/app/browser/` overlay/picking/capture modules; core browser-draft service | Shared transform, draft revision, immutable capture transaction; calls typed client only |
-| Feedback/migration | `browser_feedback.rs`, `browser/delivery.rs`, feedback methods currently in `browser/extension.rs`, migration utility | Existing pending-ID/paste receipts, versioned historical evidence, idempotent migration |
+| Feedback/delivery | `browser_feedback.rs`, `browser/delivery.rs`, inline draft/capture methods | Existing pending-ID/paste receipts, durable images, and extension-free inline feedback; legacy migration is excluded |
 | Integration owner | `src/app/App.tsx`, shared styles/key routing, protocol exports/generated TS, manifests/build embedding | Pane composition, focus boundary, one contract revision and final integration |
 
 Freeze DTOs, event/stream identity, transform semantics, draft/capture revisions and ownership policy inline before assigning consumers. In IB-01/02, runtime/host work and client presenter work can run concurrently after that contract, but the integrator owns shared registrations and `App.tsx`. In IB-03, overlay authoring and core draft persistence/inspection can run concurrently against the fixed contract. Feedback migration work can begin alongside IB-03 once provenance/storage versions are decided; it does not need completed drawing UI.
@@ -132,7 +132,7 @@ For every row record the actual user action, owner/CDP/Herdr response or event, 
 | A20 | Send browser context and selected feedback, no eligible agent, wrong Space/destination move | Fresh same-Space active-tab recipient, no picker/fallback elsewhere; paste bytes appear unsubmitted with no Enter; rejection preserves work; preview remains optional. |
 | A21 | Unknown paste response, later CLI ack, retention pruning, explicit risky retry | Unknown receipt persists; no automatic duplicate paste; duplicate-risk acknowledgement required; handled images expire only by policy; unsent work is never retention-pruned. |
 | A22 | Agent pane moves between Spaces; Space rename, close and endpoint replacement | `--current` follows fresh authoritative membership; rename preserves association; closure is scoped; endpoint mismatch/reused IDs cannot adopt/kill another browser. |
-| A23 | Legacy saved capture + live/stale draft + pending PNG + consumed IDs; crash at each migration boundary | Counts/IDs/hashes reconcile; exact pending PNG retry; stale legacy drafts are recoverable, not reattached by URL; rerun is idempotent; no profile deletion or duplicate feedback. |
+| A23 | Legacy saved capture/draft/pending PNG/consumed-ID migration | Excluded by user instruction; no migration is implemented or claimed. |
 | A24 | Capacity and multi-client draft races | Ninth unfinished draft fails explicitly without eviction; revision conflicts/tombstones prevent lost/resurrected work; bounded capture/store limits and retention remain consumer-correct. |
 | A25 | Clean-cutover security and long-running integrated surface | No extension install/pairing/submit runtime, no external Show dependency, old credentials rejected, one helper per owned browser, hidden capture stopped, resources released, no unrelated work included. |
 
@@ -169,4 +169,4 @@ A build does not establish input routing, native image decode, element alignment
 | Headless image surface loses native browser facilities | Explicit audio/media limit and browser-blocker capability table; no silent dialog/permission hang. A12. |
 | Binary transport improves downstream memory but not capture encoding cost | Measure capture and presentation separately; no FPS/CPU claim inherited from the POC. A13/performance scenarios. |
 
-No implementation is authorized by this document. It makes the selected outcome, seams, migration obligations and proof requirements concrete for a later implementation task.
+This plan records the selected outcome, seams, and proof requirements. The implementation and focused evidence are recorded in the current [inline handoff](HANDOFF.md); no unlisted acceptance row is inferred as passed.

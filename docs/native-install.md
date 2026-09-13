@@ -79,12 +79,16 @@ python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 
 Uninstall reads the install receipt and removes only the launchers, desktop entry, icon, installed application and CLI binaries, and receipt that it owns. It leaves configuration and changed replacement paths in place. An update also stops before replacing a changed installed file, so resolve that change or uninstall it before continuing.
 
-## Space browser annotations
+## Inline Space browser
 
-Open the selected Space's browser from Commands or its context menu. Cockpit uses the installed Playwright CLI and its default Chrome with a dedicated profile. The extension loads through Chrome's CDP extension API, without deprecated browser extension flags.
+Open the selected Space's browser from Commands or its context menu. The browser appears beside the Herdr layout. Browser tabs stay inside that split. **Hide** preserves the browser, while **Close browser** closes the owned session and keeps its profile and saved feedback. Narrow windows have a browser-only view with **Back to terminals**.
 
-Extension updates use a distinct worker script URL and retain Chrome's local storage. Cockpit publishes new pairing credentials only after the bundle loads successfully. Restart Cockpit after installing an update so the running owner uses the new embedded assets; existing processes keep their previous binary.
+Cockpit attaches to the same named Playwright CLI browser that agents use. The packaged Node helper streams binary JPEG frames from Chromium. Install Node and Playwright CLI before opening a browser. The helper is embedded in the host binary. Configuration can override `[browser]` keys `playwright_cli`, `chromium_executable`, `node_executable`, `browser_helper`, and `playwright_core`. The last value identifies the Playwright-core package paired with the CLI. No second browser is launched for the inline view.
 
-On the page, draw or select an element, then add optional text beside the mark. Capture saves the visible page and annotations. Unrelated page updates do not require position review. After layout movement, use **Review positions**, or choose **Capture anyway (as shown)** to save the marks at their displayed positions. The override does not bypass navigation, wrong-tab, offscreen, or viewport changes during capture.
+Click **Take control** to control an observed browser. Clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own keyboard input. Other clients observe until they explicitly take control. Agents can still change the page through Playwright.
 
-The extension popup retains unfinished drafts and exposes older documents under **Stale draft recovery**. Those marks are not attached to a replacement page. Failed submissions retain captured pixels for retry. Cockpit's feedback view sends selected annotations to the active tab's eligible agent; acknowledgement marks them handled without sending.
+Use Browse, Select, Freehand, Region, or Element in the browser toolbar. Marks have a color and optional inline text. **Capture** saves the displayed page, marks, and comments as a PNG. Draft recovery preserves older documents separately. Failed saves retain the composed image for retry. Saved feedback remains available after closing the browser, and sending feedback pastes into the active tab's eligible agent without pressing Enter.
+
+JPEG streaming has no audio. Browser-local notices report dialogs and unsupported browser facilities. Focused browser verification and an isolated Linux Tauri startup smoke passed on 2026-09-13; full browser/native acceptance, security, performance, and WebKit input/decode parity remain unclaimed.
+
+The inline browser is the sole production browser path. Legacy extension draft migration is outside this replacement. Existing saved feedback remains readable.

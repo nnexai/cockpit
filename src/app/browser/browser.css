@@ -1,0 +1,434 @@
+.browser-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  background: var(--terminal-bg);
+  color: var(--text-primary);
+  font-family: "IBM Plex Sans", "Noto Sans", sans-serif;
+}
+
+.browser-toolbar {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--font-size-sm);
+}
+
+.browser-toolbar strong {
+  font-weight: 600;
+}
+
+.browser-toolbar-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-toolbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.browser-tabs,
+.browser-navigation,
+.browser-annotation-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.browser-tabs {
+  overflow-x: auto;
+  padding-bottom: 0;
+}
+
+.browser-tab-wrap {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+}
+
+.browser-tab-wrap:has([aria-selected="true"]) {
+  border-color: var(--border);
+  background: var(--terminal-bg);
+}
+
+.browser-tabs button,
+.browser-navigation button,
+.browser-annotation-toolbar button,
+.browser-blocker button,
+.browser-notes button,
+.browser-note-editor button {
+  min-height: var(--compact-control-size);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-2xs);
+}
+
+.browser-tab-wrap > button:first-child {
+  min-width: 0;
+  max-width: 12rem;
+  overflow: hidden;
+  padding: 3px 6px;
+  border: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-tab-close,
+.browser-new-tab {
+  width: var(--compact-control-size);
+  padding: 0;
+}
+
+.browser-navigation form {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.browser-navigation input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--compact-control-size);
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--terminal-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-2xs);
+}
+
+.browser-annotation-toolbar {
+  flex-wrap: wrap;
+}
+
+.browser-annotation-toolbar .is-active,
+.browser-tabs button[aria-selected="true"] {
+  border-color: var(--focus-strong);
+  background: var(--surface-hover);
+}
+
+.browser-color-picker {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.browser-color-picker button {
+  width: var(--compact-control-size);
+  padding: 0;
+  background: var(--annotation-color);
+  border-color: color-mix(in srgb, var(--annotation-color) 68%, var(--border));
+}
+
+.browser-color-picker button.is-active {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: 1px;
+}
+
+.browser-toolbar button {
+  min-height: var(--compact-control-size);
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-2xs);
+}
+
+.browser-toolbar button:hover,
+.browser-toolbar button:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.browser-toolbar button:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: 1px;
+}
+
+.browser-surface {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+.browser-surface:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: -2px;
+}
+
+.browser-input-sink {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  resize: none;
+}
+
+.browser-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+}
+
+.browser-annotation-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.browser-tool-select .browser-annotation-layer {
+  pointer-events: auto;
+}
+
+.browser-annotation {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+.browser-annotation-label {
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--terminal-bg);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.browser-annotation-region,
+.browser-annotation-element {
+  fill: color-mix(in srgb, currentColor 9%, transparent);
+  stroke-width: 2;
+  pointer-events: all;
+}
+
+.browser-annotation.is-selected {
+  stroke-width: 5;
+  filter: drop-shadow(0 0 2px var(--focus-strong));
+}
+
+.browser-annotation.is-transient {
+  opacity: 0.75;
+}
+
+.browser-element-hover {
+  fill: color-mix(in srgb, var(--focus-strong) 14%, transparent);
+  stroke: var(--focus-strong);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.browser-blocker,
+.browser-note-editor {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--blocked);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: 0 4px 16px #0008;
+  font-size: var(--font-size-2xs);
+}
+
+.browser-note-editor {
+  right: auto;
+  left: 12px;
+  width: min(20rem, calc(100% - 24px));
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.browser-note-editor textarea {
+  min-height: 5rem;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--terminal-bg);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.browser-note-editor div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.browser-notes {
+  max-height: 14rem;
+  overflow: auto;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--font-size-2xs);
+}
+
+.browser-notes header,
+.browser-notes li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-notes header {
+  justify-content: space-between;
+}
+
+.browser-notes ul {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.browser-notes li > button:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-notes .is-selected {
+  border-color: var(--focus-strong);
+}
+
+.browser-state {
+  display: flex;
+  max-width: 32rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+  font-size: var(--font-size-sm);
+}
+
+.browser-state strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.browser-state span {
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+}
+
+.browser-pane-loading .browser-state strong::before {
+  margin-right: 6px;
+  color: var(--working);
+  content: "◌";
+}
+
+.browser-pane-stale .browser-toolbar-status,
+.browser-pane-error .browser-toolbar-status,
+.browser-pane-unsupported .browser-toolbar-status {
+  color: var(--working);
+}
+
+.browser-pane-error .browser-toolbar-status,
+.browser-pane-unsupported .browser-toolbar-status {
+  color: var(--blocked);
+}
+
+.browser-recovery {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--working) 60%, var(--border));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+  pointer-events: none;
+}
+
+.browser-pane-error .browser-recovery,
+.browser-pane-unsupported .browser-recovery {
+  border-color: var(--blocked);
+}
+
+.browser-pane-hidden {
+  flex: 0 0 auto;
+  min-height: 36px;
+}
+
+.browser-pane-hidden .browser-surface {
+  display: none;
+}
+
+@media (max-width: 800px) {
+  .browser-toolbar {
+    min-height: 34px;
+  }
+
+  .browser-toolbar strong {
+    font-size: var(--font-size-2xs);
+  }
+
+  .browser-toolbar button {
+    padding-inline: 7px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-pane-loading .browser-state strong::before {
+    content: "·";
+  }
+}

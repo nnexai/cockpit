@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Inline Space browser · Cockpit design mock</title>
+<style>
+:root {
+  color-scheme: dark;
+  --font-ui: "IBM Plex Sans", "Noto Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans Mono", monospace;
+  --app-bg: #0B0E13;
+  --sidebar-bg: #11151C;
+  --surface: #151A22;
+  --surface-raised: #1B222D;
+  --surface-hover: #202936;
+  --surface-selected: #243144;
+  --border: #2A3340;
+  --border-strong: #3B4758;
+  --text-primary: #E6EAF0;
+  --text-secondary: #A7B0BE;
+  --text-muted: #737E8E;
+  --accent: #70A7FF;
+  --focus-strong: #8DB8FF;
+  --blocked: #FF6B78;
+  --working: #E7B14A;
+  --done: #69A7FF;
+  --idle: #57C78B;
+  --warning: #E7B14A;
+  --terminal-bg: #0C1016;
+  --terminal-fg: #D8DEE8;
+  --terminal-selection: #315A8F99;
+  --scrim: #07090DB8;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --control-compact: 28px;
+  --control-default: 32px;
+  --tab-height: 36px;
+  --pane-header: 26px;
+  --radius-control: 4px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-width: 280px; min-height: 100%; background: var(--app-bg); }
+body { color: var(--text-primary); font-family: var(--font-ui); font-size: 13px; line-height: 18px; overflow: hidden; }
+button, input { font: inherit; }
+button { color: var(--text-primary); }
+button:not(:disabled) { cursor: pointer; }
+button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: -2px;
+  position: relative;
+  z-index: 8;
+}
+button:disabled { color: var(--text-muted); cursor: not-allowed; }
+[hidden] { display: none !important; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.icon { width: 16px; flex: 0 0 16px; text-align: center; font-family: var(--font-mono); }
+.mono { font-family: var(--font-mono); }
+
+/* Preview controls are deliberately outside the product frame. */
+.mock-shell { height: 100dvh; min-height: 640px; display: flex; flex-direction: column; }
+.design-controls {
+  min-height: 44px; flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: #202631; border-bottom: 1px solid #526071;
+}
+.design-title { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.design-kicker {
+  padding: 1px 5px; border: 1px solid #708095; border-radius: 3px;
+  color: #D6DEE9; font-size: 10px; line-height: 16px; letter-spacing: .04em; text-transform: uppercase;
+}
+.design-description { min-width: 180px; color: #B1BCCB; font-size: 11px; line-height: 16px; }
+.preview-states { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.preview-states > span { color: #B1BCCB; font-size: 11px; margin-right: 2px; }
+.preview-states button {
+  min-height: 26px; padding: 0 8px; border: 1px solid #526071; border-radius: 4px;
+  background: #171C24; font-size: 11px;
+}
+.preview-states button:hover { background: #293240; }
+.preview-states button[aria-pressed="true"] { border-color: var(--focus-strong); background: #263C5A; color: #F2F6FB; }
+
+/* Product frame */
+.workbench { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr); background: var(--app-bg); }
+.sidebar {
+  min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--sidebar-bg); border-right: 1px solid var(--border);
+}
+.session-slot { height: 40px; flex: 0 0 40px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.session-button {
+  width: 100%; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; text-align: left;
+}
+.session-button:hover { border-color: var(--border); background: var(--surface-hover); }
+.session-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.session-state { margin-left: auto; color: var(--idle); font-size: 11px; white-space: nowrap; }
+.session-state::before { content: "● "; font-size: 8px; }
+.chevron { color: var(--text-secondary); }
+.sidebar-section { min-height: 0; display: flex; flex-direction: column; }
+.spaces-section { flex: 1; min-height: 180px; }
+.agents-section { flex: 0 1 236px; min-height: 176px; max-height: 320px; border-top: 1px solid var(--border); }
+.section-heading {
+  height: 28px; flex: 0 0 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px;
+  color: var(--text-secondary); font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em;
+}
+.section-heading .count { margin-left: auto; color: var(--text-muted); font-family: var(--font-mono); font-weight: 400; letter-spacing: 0; }
+.section-action {
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-control);
+  background: transparent; color: var(--text-secondary); opacity: .72;
+}
+.section-action:hover, .section-action:focus-visible { opacity: 1; background: var(--surface-hover); }
+.tree, .agent-list { min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.tree-row {
+  position: relative; width: 100%; height: 28px; display: flex; align-items: center; gap: 5px;
+  padding: 0 8px; border: 0; background: transparent; color: var(--text-secondary); text-align: left; white-space: nowrap;
+}
+.tree-row:hover { background: var(--surface-hover); color: var(--text-primary); }
+.tree-row.selected { background: var(--surface-selected); color: var(--text-primary); font-weight: 600; }
+.tree-row.selected::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--accent); }
+.tree-row.level-1 { padding-left: 24px; }
+.tree-row.level-2 { padding-left: 40px; }
+.tree-row .resource-count { margin-left: auto; color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.tree-row .attention { margin-left: auto; color: var(--working); font-size: 11px; }
+.tree-label { overflow: hidden; text-overflow: ellipsis; }
+.agent-row {
+  position: relative; width: 100%; height: 40px; display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-rows: 20px 16px;
+  gap: 0 6px; padding: 2px 8px; border: 0; background: transparent; text-align: left;
+}
+.agent-row:hover { background: var(--surface-hover); }
+.agent-row.selected { background: var(--surface-selected); }
+.agent-glyph { grid-row: 1 / 3; align-self: center; font-family: var(--font-mono); text-align: center; }
+.agent-glyph.working { color: var(--working); }
+.agent-glyph.idle { color: var(--idle); }
+.agent-glyph.blocked { color: var(--blocked); }
+.agent-name { align-self: end; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 12px; }
+.agent-status { align-self: end; color: var(--text-secondary); font-size: 11px; }
+.agent-context, .agent-freshness { color: var(--text-muted); font-size: 11px; line-height: 16px; }
+.agent-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-freshness { text-align: right; }
+
+.main-workarea { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.space-tabs {
+  height: var(--tab-height); flex: 0 0 var(--tab-height); display: flex; align-items: stretch;
+  overflow-x: auto; overflow-y: hidden; background: var(--surface); border-bottom: 1px solid var(--border); scrollbar-width: none;
+}
+.space-tab {
+  position: relative; min-width: 96px; max-width: 220px; height: 36px; display: flex; align-items: center; gap: 7px;
+  padding: 0 12px; border: 0; border-right: 1px solid var(--border); background: transparent;
+  color: var(--text-secondary); white-space: nowrap;
+}
+.space-tab:hover { background: var(--surface-hover); color: var(--text-primary); }
+.space-tab.active { background: var(--surface-raised); color: var(--text-primary); font-weight: 600; }
+.space-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); }
+.tab-actions { display: flex; align-items: center; gap: 1px; padding: 4px; }
+.tab-action {
+  min-width: 28px; height: 28px; padding: 0 7px; border: 0; border-radius: var(--radius-control);
+  background: transparent; color: var(--text-secondary);
+}
+.tab-action:hover { background: var(--surface-hover); color: var(--text-primary); }
+.space-crumb { margin-left: auto; align-self: center; padding: 0 8px; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.show-browser-product { min-width: 98px; border-left: 1px solid var(--border); color: var(--accent); }
+.workarea-content {
+  flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(320px, 56fr) minmax(360px, 44fr);
+}
+.workarea-content.browser-hidden { grid-template-columns: minmax(0, 1fr); }
+
+/* Unchanged Herdr pane projection */
+.pane-canvas { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(220px, 62fr) minmax(150px, 38fr); background: var(--terminal-bg); }
+.pane { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
+.pane:last-child { border-bottom: 0; }
+.pane.focused { outline: 2px solid var(--focus-strong); outline-offset: -2px; z-index: 1; }
+.pane-header {
+  height: var(--pane-header); flex: 0 0 var(--pane-header); display: flex; align-items: center; gap: 6px;
+  padding: 0 7px; background: var(--surface); border-bottom: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 11px; line-height: 16px;
+}
+.focused .pane-header { color: var(--text-primary); }
+.pane-label { font-size: 12px; font-weight: 600; }
+.process-state { color: var(--working); }
+.attachment { margin-left: auto; color: var(--text-secondary); white-space: nowrap; }
+.pane-menu { width: 22px; height: 22px; border: 0; border-radius: 3px; background: transparent; color: var(--text-secondary); }
+.pane-menu:hover { background: var(--surface-hover); }
+.terminal {
+  flex: 1; min-height: 0; overflow: hidden; padding: 6px 8px; background: var(--terminal-bg); color: var(--terminal-fg);
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.35; font-weight: 400;
+}
+.terminal pre { margin: 0; font: inherit; white-space: pre-wrap; }
+.term-blue { color: #82B3F4; }
+.term-green { color: #75D395; }
+.term-yellow { color: #EDBC6A; }
+.term-muted { color: #737E8E; }
+.terminal-cursor { display: inline-block; width: 7px; height: 14px; vertical-align: -2px; background: #D8DEE8; }
+
+/* Browser presentation split: Cockpit-owned, not a Herdr pane. */
+.browser-region {
+  min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--border-strong); background: var(--surface);
+}
+.browser-pane-header {
+  height: var(--pane-header); flex: 0 0 var(--pane-header); display: flex; align-items: center; gap: 7px;
+  padding: 0 7px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: 11px;
+}
+.browser-pane-header strong { font-size: 12px; }
+.browser-pane-kicker { color: var(--text-muted); }
+.browser-health { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--idle); white-space: nowrap; }
+.browser-health::before { content: "●"; font-size: 8px; }
+.browser-health[data-tone="warning"] { color: var(--warning); }
+.browser-health[data-tone="error"] { color: var(--blocked); }
+.browser-target-tabs {
+  min-height: 29px; flex: 0 0 auto; display: flex; align-items: stretch; overflow-x: auto;
+  background: #12171F; border-bottom: 1px solid var(--border); scrollbar-width: thin;
+}
+.target-tab {
+  position: relative; min-width: 106px; max-width: 170px; height: 28px; display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; border: 0; border-right: 1px solid var(--border); background: transparent;
+  color: var(--text-secondary); font-size: 11px; white-space: nowrap;
+}
+.target-tab span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.target-tab:hover { background: var(--surface-hover); color: var(--text-primary); }
+.target-tab[aria-selected="true"] { background: var(--surface-raised); color: var(--text-primary); }
+.target-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); }
+.target-dot { color: var(--idle); font-size: 8px; }
+.target-new { width: 28px; min-width: 28px; padding: 0; justify-content: center; font-size: 15px; }
+.browser-nav {
+  min-height: 36px; flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+  padding: 4px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.compact-button {
+  height: var(--control-compact); min-width: var(--control-compact); display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 0 7px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent;
+  color: var(--text-secondary); font-size: 11px; white-space: nowrap;
+}
+.compact-button:hover:not(:disabled) { border-color: var(--border); background: var(--surface-hover); color: var(--text-primary); }
+.compact-button:disabled { opacity: .58; }
+.address-wrap { min-width: 100px; flex: 1; display: flex; align-items: center; height: 28px; }
+.address-input {
+  width: 100%; height: 28px; padding: 0 8px 0 25px; border: 1px solid var(--border-strong); border-radius: 4px 0 0 4px;
+  background: var(--app-bg); color: var(--text-primary); font-family: var(--font-mono); font-size: 11px;
+  background-image: radial-gradient(circle at 12px 50%, var(--idle) 0 3px, transparent 3.5px);
+}
+.address-input::selection { background: var(--terminal-selection); }
+.go-button { border: 1px solid var(--border-strong); border-left: 0; border-radius: 0 4px 4px 0; background: var(--surface-raised); color: var(--text-primary); }
+.hide-button { border-color: var(--border); }
+.annotation-toolbar {
+  min-height: 36px; flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 4px;
+  border-bottom: 1px solid var(--border); background: #12171F;
+}
+.tool-button { opacity: .78; }
+.tool-button:hover:not(:disabled), .tool-button:focus-visible { opacity: 1; }
+.tool-button[aria-pressed="true"] { opacity: 1; border-color: #5078AE; background: #223751; color: #F1F5FA; }
+.annotation-divider { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--border); }
+.tool-spacer { flex: 1; }
+.count-badge {
+  min-width: 18px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text-primary); font: 10px/14px var(--font-mono);
+}
+.status-notice {
+  min-height: 30px; flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 4px 7px;
+  border-bottom: 1px solid var(--border); background: #E7B14A18; color: #F0CE86; font-size: 11px;
+}
+.status-notice.error { background: #FF6B7817; color: #FF9AA4; }
+.status-notice strong { color: inherit; }
+.status-notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-action { margin-left: auto; height: 22px; padding: 0 7px; border: 1px solid currentColor; border-radius: 3px; background: transparent; color: inherit; font-size: 11px; }
+.browser-body { position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden; background: #0A0D12; }
+.page-viewport { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #0A0D12; }
+.page-stage { position: absolute; inset: 0; overflow: hidden; background: #F4F6FA; }
+.page-art, .annotation-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+.page-art { display: block; }
+.annotation-overlay { pointer-events: none; }
+.annotation-overlay .persisted-mark { transition: opacity 120ms ease; }
+.page-stage[data-tool="browse"] .persisted-mark { opacity: .8; }
+.page-stage[data-tool="element"] .region-mark,
+.page-stage[data-tool="element"] .freehand-mark { opacity: .34; }
+.page-stage[data-tool="region"] .element-mark,
+.page-stage[data-tool="region"] .freehand-mark { opacity: .34; }
+.page-stage[data-tool="freehand"] .element-mark,
+.page-stage[data-tool="freehand"] .region-mark { opacity: .34; }
+.page-stage[data-tool="text"] .element-mark,
+.page-stage[data-tool="text"] .region-mark,
+.page-stage[data-tool="text"] .freehand-mark { opacity: .5; }
+.annotation-note {
+  position: absolute; left: 55%; top: 39%; max-width: 178px; display: flex; align-items: flex-start; gap: 5px;
+  padding: 4px 6px; border: 1px solid #AD6F00; border-radius: 3px; background: #FFF2C9; color: #35260A;
+  font-size: 11px; line-height: 14px; pointer-events: none;
+}
+.annotation-note strong { flex: 0 0 auto; font: 600 10px/14px var(--font-mono); color: #7C5100; }
+.note-editor {
+  position: absolute; left: 53%; top: 48%; width: min(230px, 42%); padding: 6px;
+  border: 1px solid var(--focus-strong); border-radius: 4px; background: var(--surface-raised); color: var(--text-primary);
+}
+.note-editor label { display: block; margin-bottom: 4px; color: var(--text-secondary); font-size: 11px; }
+.note-editor input { width: 100%; height: 28px; padding: 0 7px; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--app-bg); color: var(--text-primary); font-size: 11px; }
+.editor-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 5px; }
+.editor-actions button { height: 24px; padding: 0 7px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text-secondary); font-size: 11px; }
+.browser-state-surface {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: var(--app-bg); color: var(--text-primary); text-align: center;
+}
+.browser-state-surface.over-frame { background: #07090DD9; }
+.state-copy { max-width: 340px; }
+.state-symbol { width: 34px; height: 34px; display: grid; place-items: center; margin: 0 auto 8px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-secondary); font: 18px/1 var(--font-mono); }
+.state-copy h2 { margin: 0 0 4px; font-size: 13px; line-height: 18px; }
+.state-copy p { margin: 0 0 10px; color: var(--text-secondary); font-size: 11px; line-height: 16px; }
+.state-copy button { height: 28px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface-raised); color: var(--text-primary); font-size: 11px; }
+.spinner { width: 14px; height: 14px; margin: 0 auto 10px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 900ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-color: var(--accent); } }
+.notes-panel {
+  width: 284px; max-width: 54%; flex: 0 0 284px; display: flex; flex-direction: column; overflow: hidden;
+  border-left: 1px solid var(--border-strong); background: var(--surface-raised);
+}
+.notes-header {
+  height: 32px; flex: 0 0 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px;
+  border-bottom: 1px solid var(--border); font-size: 11px;
+}
+.notes-header strong { font-size: 12px; }
+.notes-header .count-badge { margin-right: auto; }
+.notes-header button { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--text-secondary); }
+.notes-header button:hover { background: var(--surface-hover); color: var(--text-primary); }
+.capture-result {
+  margin: 6px; padding: 6px 7px; border: 1px solid #57C78B66; border-radius: 4px; background: #57C78B12;
+  color: var(--text-secondary); font-size: 11px; line-height: 15px;
+}
+.capture-result strong { display: block; color: var(--idle); }
+.capture-actions { display: flex; gap: 4px; margin-top: 5px; }
+.capture-actions button, .note-row button, .empty-notes button {
+  height: 24px; padding: 0 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text-secondary); font-size: 10px;
+}
+.capture-actions button:hover, .note-row button:hover, .empty-notes button:hover { background: var(--surface-hover); color: var(--text-primary); }
+.notes-list { flex: 1; min-height: 0; overflow: auto; }
+.note-row { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.note-row.selected { box-shadow: inset 2px 0 var(--accent); background: #70A7FF0D; }
+.note-meta { display: flex; gap: 5px; color: var(--text-muted); font-size: 10px; line-height: 14px; }
+.note-meta strong { color: var(--text-secondary); font-size: 10px; }
+.note-row p { margin: 2px 0 5px; color: var(--text-primary); font-size: 11px; line-height: 15px; }
+.note-actions { display: flex; gap: 4px; }
+.empty-notes { margin: auto; max-width: 210px; padding: 16px 10px; color: var(--text-secondary); text-align: center; font-size: 11px; }
+.empty-notes strong { display: block; margin-bottom: 3px; color: var(--text-primary); font-size: 12px; }
+.notes-footer {
+  min-height: 34px; flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 5px 8px;
+  border-top: 1px solid var(--border); color: var(--text-muted); font-size: 10px;
+}
+.notes-footer button { margin-left: auto; height: 24px; padding: 0 6px; border: 1px solid var(--border); border-radius: 3px; background: transparent; color: var(--text-secondary); font-size: 10px; }
+.browser-statusbar {
+  min-height: 24px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 7px;
+  border-top: 1px solid var(--border); background: #12171F; color: var(--text-muted); font-size: 10px; line-height: 14px;
+}
+.browser-statusbar .confirmed-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.browser-statusbar .frame-status { margin-left: auto; white-space: nowrap; }
+
+/* Responsive product geometry */
+@media (max-width: 1080px) {
+  .design-description { display: none; }
+  .workbench { grid-template-columns: 224px minmax(0, 1fr); }
+  .workarea-content { grid-template-columns: minmax(280px, 54fr) minmax(320px, 46fr); }
+  .tool-button .long-label { display: none; }
+  .notes-panel { width: 250px; flex-basis: 250px; }
+}
+@media (max-width: 800px) {
+  body { overflow: auto; }
+  .mock-shell { height: auto; min-height: 900px; }
+  .design-controls { align-items: flex-start; flex-wrap: wrap; }
+  .design-title { height: 28px; }
+  .preview-states { width: 100%; margin-left: 0; }
+  .workbench { min-height: 840px; grid-template-columns: 48px minmax(0, 1fr); }
+  .sidebar { align-items: stretch; }
+  .session-slot { padding: 4px 7px; }
+  .session-button { justify-content: center; padding: 0; }
+  .session-name, .session-state, .session-button .chevron, .section-heading .section-label,
+  .section-heading .count, .section-action, .tree-row .tree-label, .tree-row .resource-count,
+  .tree-row .attention, .agent-name, .agent-status, .agent-context, .agent-freshness { display: none; }
+  .section-heading { justify-content: center; padding: 0; }
+  .section-heading::after { content: attr(data-rail-label); color: var(--text-muted); font-size: 9px; letter-spacing: 0; }
+  .tree-row, .tree-row.level-1, .tree-row.level-2 { justify-content: center; padding: 0; gap: 2px; }
+  .tree-row .icon:first-child { display: none; }
+  .agent-row { display: flex; align-items: center; justify-content: center; padding: 0; }
+  .agent-glyph { grid-row: auto; }
+  .main-workarea { min-height: 840px; }
+  .space-crumb { display: none; }
+  .workarea-content { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(250px, 44fr) minmax(380px, 56fr); }
+  .workarea-content.browser-hidden { grid-template-rows: minmax(0, 1fr); }
+  .browser-region { border-left: 0; border-top: 1px solid var(--border-strong); }
+  .pane-canvas { grid-template-rows: minmax(145px, 62fr) minmax(105px, 38fr); }
+  .terminal { font-size: 11px; }
+}
+@media (max-width: 520px) {
+  .space-tab { min-width: 76px; padding: 0 8px; }
+  .tab-actions { display: none; }
+  .show-browser-product { display: block; margin-left: auto; }
+  .browser-nav, .annotation-toolbar { flex-wrap: wrap; }
+  .address-wrap { order: 3; flex-basis: 100%; }
+  .hide-button { margin-left: auto; }
+  .tool-spacer { display: none; }
+  .notes-panel { position: absolute; inset: 0 0 0 auto; z-index: 6; width: min(284px, 86%); max-width: none; }
+  .status-notice { align-items: flex-start; flex-wrap: wrap; }
+  .status-notice span { flex-basis: calc(100% - 18px); white-space: normal; }
+  .notice-action { margin-left: 20px; }
+}
+@media (max-width: 380px) {
+  .mock-shell { min-width: 280px; }
+  .design-controls { padding: 5px 6px; gap: 4px; }
+  .design-title { width: 100%; }
+  .preview-states { gap: 3px; }
+  .preview-states > span { width: 100%; }
+  .preview-states button { flex: 1 1 30%; padding: 0 4px; }
+  .workbench { grid-template-columns: 40px minmax(0, 1fr); }
+  .space-tab { min-width: 70px; }
+  .space-tab .icon { display: none; }
+  .show-browser-product { min-width: 94px; font-size: 10px; }
+  .browser-pane-kicker { display: none; }
+  .browser-target-tabs { flex-wrap: wrap; overflow: visible; }
+  .target-tab { flex: 1 1 96px; max-width: none; }
+  .target-new { flex: 0 0 28px; }
+  .compact-button { padding: 0 5px; }
+  .annotation-toolbar .compact-button { flex: 1 1 auto; }
+  .annotation-divider { display: none; }
+  .browser-statusbar { flex-wrap: wrap; padding-block: 3px; }
+  .browser-statusbar .frame-status { margin-left: 0; }
+  .attachment { display: none; }
+  .note-editor { left: 35%; width: 60%; }
+}
+</style>
+</head>
+<body>
+<div class="mock-shell">
+  <header class="design-controls" aria-label="Design preview controls, not Cockpit product chrome">
+    <div class="design-title">
+      <span class="design-kicker">Design preview</span>
+      <span>Inline Space browser</span>
+    </div>
+    <span class="design-description">Graphite operations workbench · Herdr hierarchy · tmux pane focus · VS Code/Zed density</span>
+    <div class="preview-states" role="group" aria-label="Preview browser state">
+      <span>Browser state</span>
+      <button type="button" data-preview="ready" aria-pressed="true">Ready</button>
+      <button type="button" data-preview="loading" aria-pressed="false">Loading</button>
+      <button type="button" data-preview="stale" aria-pressed="false">Stale</button>
+      <button type="button" data-preview="error" aria-pressed="false">Error</button>
+      <button type="button" data-preview="unsupported" aria-pressed="false">Unsupported</button>
+      <button type="button" data-preview="hidden" aria-pressed="false">Hidden</button>
+    </div>
+  </header>
+
+  <div class="workbench">
+    <aside class="sidebar" aria-label="Herdr session hierarchy">
+      <div class="session-slot">
+        <button class="session-button" type="button" aria-label="Selected session: cockpit-dev, connected" title="Session: cockpit-dev · Connected">
+          <span class="icon" aria-hidden="true">▣</span>
+          <span class="session-name">cockpit-dev</span>
+          <span class="session-state">Connected</span>
+          <span class="chevron" aria-hidden="true">⌄</span>
+        </button>
+      </div>
+
+      <section class="sidebar-section spaces-section" aria-labelledby="spaces-heading">
+        <div class="section-heading" data-rail-label="S">
+          <span id="spaces-heading" class="section-label">SPACES</span><span class="count">4</span>
+          <button class="section-action" type="button" aria-label="Create Space">+</button>
+        </div>
+        <div class="tree" role="tree" aria-label="Spaces">
+          <button class="tree-row" type="button" role="treeitem" aria-expanded="true">
+            <span class="icon" aria-hidden="true">⌄</span><span class="icon" aria-hidden="true">◇</span><span class="tree-label">cockpit</span>
+          </button>
+          <button class="tree-row level-1 selected" type="button" role="treeitem" aria-current="true" aria-selected="true" aria-expanded="true">
+            <span class="icon" aria-hidden="true">⌄</span><span class="icon" aria-hidden="true">◆</span><span class="tree-label">inline-browser</span><span class="resource-count">2 tabs</span>
+          </button>
+          <button class="tree-row level-2" type="button" role="treeitem">
+            <span class="icon" aria-hidden="true">·</span><span class="icon" aria-hidden="true">▤</span><span class="tree-label">transport-proof</span><span class="attention">↻</span>
+          </button>
+          <button class="tree-row level-1" type="button" role="treeitem" aria-expanded="false">
+            <span class="icon" aria-hidden="true">›</span><span class="icon" aria-hidden="true">◇</span><span class="tree-label">workbench-shell</span><span class="resource-count">3</span>
+          </button>
+          <button class="tree-row level-1" type="button" role="treeitem" aria-expanded="false">
+            <span class="icon" aria-hidden="true">›</span><span class="icon" aria-hidden="true">◇</span><span class="tree-label">feedback-store</span><span class="resource-count">1</span>
+          </button>
+          <button class="tree-row" type="button" role="treeitem" aria-expanded="false">
+            <span class="icon" aria-hidden="true">›</span><span class="icon" aria-hidden="true">◇</span><span class="tree-label">release-checks</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="sidebar-section agents-section" aria-labelledby="agents-heading">
+        <div class="section-heading" data-rail-label="A">
+          <span id="agents-heading" class="section-label">AGENTS</span><span class="count">3</span>
+          <button class="section-action" type="button" aria-label="Collapse Agents">⌃</button>
+        </div>
+        <div class="agent-list" aria-label="Agents attention queue">
+          <button class="agent-row selected" type="button" aria-label="browser-runtime, Working, inline-browser Build, updated 8 seconds ago">
+            <span class="agent-glyph working" aria-hidden="true">↻</span>
+            <span class="agent-name">browser-runtime</span><span class="agent-status">Working</span>
+            <span class="agent-context">inline-browser / Build</span><span class="agent-freshness">8s</span>
+          </button>
+          <button class="agent-row" type="button" aria-label="overlay-review, Blocked, inline-browser Inspect, updated 1 minute ago">
+            <span class="agent-glyph blocked" aria-hidden="true">!</span>
+            <span class="agent-name">overlay-review</span><span class="agent-status">Blocked</span>
+            <span class="agent-context">inline-browser / Inspect</span><span class="agent-freshness">1m</span>
+          </button>
+          <button class="agent-row" type="button" aria-label="protocol-watch, Idle, transport-proof Build, updated 2 minutes ago">
+            <span class="agent-glyph idle" aria-hidden="true">·</span>
+            <span class="agent-name">protocol-watch</span><span class="agent-status">Idle</span>
+            <span class="agent-context">transport-proof / Build</span><span class="agent-freshness">2m</span>
+          </button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main-workarea" aria-label="Selected Space work area">
+      <nav class="space-tabs" aria-label="Tabs in inline-browser Space">
+        <button class="space-tab active" type="button" aria-current="page"><span class="icon" aria-hidden="true">▤</span><span>Build</span></button>
+        <button class="space-tab" type="button"><span class="icon" aria-hidden="true">▤</span><span>Inspect</span></button>
+        <button class="space-tab" type="button"><span class="icon" aria-hidden="true">▱</span><span>Context</span></button>
+        <div class="tab-actions" aria-label="Tab actions">
+          <button class="tab-action" type="button" aria-label="New tab">+</button>
+          <button class="tab-action" type="button" aria-label="Change pane layout">⊞</button>
+        </div>
+        <span class="space-crumb">Space: inline-browser</span>
+        <button id="show-browser-product" class="tab-action show-browser-product" type="button" hidden>Show browser</button>
+      </nav>
+
+      <div id="workarea-content" class="workarea-content">
+        <section class="pane-canvas" aria-label="Herdr terminal pane layout">
+          <article class="pane focused" aria-label="Build terminal, focused and writable">
+            <header class="pane-header">
+              <span class="icon" aria-hidden="true">▤</span><span class="pane-label">shell</span>
+              <span class="process-state">↻ browser-runtime</span>
+              <span class="attachment">Writable · Cockpit</span>
+              <button class="pane-menu" type="button" aria-label="Shell pane actions">•••</button>
+            </header>
+            <div class="terminal" tabindex="0" aria-label="Illustrative shell terminal. Focused, writable by Cockpit."><pre><span class="term-blue">~/dev/prj/cockpit</span> <span class="term-muted">git:feature/inline-browser</span>
+<span class="term-green">$</span> bun run dev
+
+<span class="term-blue">VITE</span> v7.1.5  ready in 312 ms
+
+  <span class="term-green">Local:</span>   http://localhost:1420/
+  <span class="term-muted">Network: use --host to expose</span>
+
+<span class="term-yellow">browser</span> association inline-browser
+<span class="term-green">frame</span>   target docs-preview · seq 1842
+<span class="term-green">input</span>   controller lease held by this window
+
+<span class="term-green">$</span> <span class="terminal-cursor" aria-hidden="true"></span></pre></div>
+          </article>
+          <article class="pane" aria-label="Browser event log terminal, observer">
+            <header class="pane-header">
+              <span class="icon" aria-hidden="true">▤</span><span class="pane-label">browser-events</span>
+              <span class="term-muted">observer</span>
+              <span class="attachment">Read-only · live</span>
+              <button class="pane-menu" type="button" aria-label="Browser events pane actions">•••</button>
+            </header>
+            <div class="terminal" tabindex="0" aria-label="Illustrative browser events terminal. Read only."><pre><span class="term-muted">14:32:06.118</span> target.selected  docs-preview
+<span class="term-muted">14:32:06.151</span> document.ready  generation 7
+<span class="term-muted">14:32:06.184</span> frame.presented  960×620  #1842
+<span class="term-muted">14:32:11.402</span> annotation.saved fb-042 (3 marks)
+
+<span class="term-muted">Terminal layout remains Herdr-owned when the browser is shown or hidden.</span></pre></div>
+          </article>
+        </section>
+
+        <section id="browser-region" class="browser-region" data-state="ready" aria-label="Inline browser presentation">
+          <header class="browser-pane-header">
+            <span class="icon" aria-hidden="true">◎</span><strong>Browser</strong>
+            <span class="browser-pane-kicker">Cockpit split · not a Herdr pane</span>
+            <span id="browser-health" class="browser-health" data-tone="ready">Ready</span>
+          </header>
+
+          <div id="target-tabs" class="browser-target-tabs" role="tablist" aria-label="Browser targets">
+            <button class="target-tab" type="button" role="tab" aria-selected="true" data-target="docs" data-title="Project docs" data-url="http://localhost:1420/docs/overview">
+              <span class="target-dot" aria-hidden="true">●</span><span>Project docs</span><span aria-hidden="true">×</span>
+            </button>
+            <button class="target-tab" type="button" role="tab" aria-selected="false" data-target="preview" data-title="Deploy preview" data-url="http://localhost:4173/preview">
+              <span class="target-dot" aria-hidden="true">●</span><span>Deploy preview</span><span aria-hidden="true">×</span>
+            </button>
+            <button class="target-tab target-new" type="button" role="tab" aria-selected="false" aria-label="New browser target" data-target="new" data-title="New tab" data-url="about:blank">+</button>
+          </div>
+
+          <form id="address-form" class="browser-nav" aria-label="Browser navigation">
+            <button id="back-button" class="compact-button browser-command" type="button" aria-label="Back" title="Back">←</button>
+            <button id="forward-button" class="compact-button browser-command" type="button" aria-label="Forward" title="Forward" disabled>→</button>
+            <button id="reload-stop-button" class="compact-button browser-command" type="button" aria-label="Reload page" title="Reload page"><span aria-hidden="true">↻</span><span id="reload-stop-label">Reload</span></button>
+            <div class="address-wrap">
+              <label class="sr-only" for="address-input">Address</label>
+              <input id="address-input" class="address-input" type="text" spellcheck="false" autocomplete="off" value="http://localhost:1420/docs/overview" aria-describedby="confirmed-url">
+              <button id="go-button" class="compact-button go-button browser-command" type="submit">Go</button>
+            </div>
+            <button id="hide-browser" class="compact-button hide-button" type="button">Hide</button>
+          </form>
+
+          <div class="annotation-toolbar" role="toolbar" aria-label="Browser annotation tools">
+            <button class="compact-button tool-button" type="button" data-tool="browse" aria-pressed="true"><span aria-hidden="true">⌁</span><span>Browse</span></button>
+            <button class="compact-button tool-button" type="button" data-tool="element" aria-pressed="false"><span aria-hidden="true">⌖</span><span>Select <span class="long-label">element</span></span></button>
+            <button class="compact-button tool-button" type="button" data-tool="region" aria-pressed="false"><span aria-hidden="true">▧</span><span>Region</span></button>
+            <button class="compact-button tool-button" type="button" data-tool="freehand" aria-pressed="false"><span aria-hidden="true">〰</span><span>Freehand</span></button>
+            <button class="compact-button tool-button" type="button" data-tool="text" aria-pressed="false"><span aria-hidden="true">＋</span><span>Text</span></button>
+            <span class="annotation-divider" aria-hidden="true"></span>
+            <span class="tool-spacer"></span>
+            <button id="capture-button" class="compact-button annotation-command" type="button"><span aria-hidden="true">◉</span><span>Capture</span></button>
+            <button id="notes-button" class="compact-button annotation-command" type="button" aria-expanded="false" aria-controls="notes-panel"><span aria-hidden="true">▰</span><span>Notes</span><span id="notes-count-toolbar" class="count-badge">3</span></button>
+          </div>
+
+          <div id="status-notice" class="status-notice" role="status" hidden>
+            <span id="notice-symbol" aria-hidden="true">!</span>
+            <span><strong id="notice-title"></strong> <span id="notice-detail"></span></span>
+            <button id="notice-action" class="notice-action" type="button">Recover</button>
+          </div>
+
+          <div class="browser-body">
+            <div id="page-viewport" class="page-viewport">
+              <div id="page-stage" class="page-stage" data-tool="browse">
+                <svg id="page-art" class="page-art" viewBox="0 0 960 620" preserveAspectRatio="none" role="img" aria-labelledby="page-art-title page-art-description" xmlns="http://www.w3.org/2000/svg">
+                  <title id="page-art-title">Local product documentation page</title>
+                  <desc id="page-art-description">An offline illustration of a development documentation page with navigation, heading, release status, code sample and activity.</desc>
+                  <rect width="960" height="620" fill="#F5F7FA"/>
+                  <rect width="960" height="58" fill="#FFFFFF"/>
+                  <path d="M0 58H960" stroke="#D8DEE8"/>
+                  <rect x="24" y="17" width="24" height="24" rx="4" fill="#315DCC"/>
+                  <path d="m30 29 6 6 8-12" fill="none" stroke="#FFFFFF" stroke-width="2.5"/>
+                  <g font-family="system-ui,sans-serif">
+                    <text id="page-product-title" x="60" y="36" fill="#182234" font-size="16" font-weight="700">Cockpit SDK</text>
+                    <text x="696" y="34" fill="#536176" font-size="12">Changelog</text>
+                    <text x="786" y="34" fill="#536176" font-size="12">API reference</text>
+                    <circle cx="925" cy="29" r="13" fill="#E4E9F1"/>
+                    <text x="919" y="34" fill="#536176" font-size="12" font-weight="700">N</text>
+                  </g>
+                  <rect x="0" y="59" width="202" height="561" fill="#EEF1F5"/>
+                  <path d="M202 59V620" stroke="#D8DEE8"/>
+                  <g font-family="system-ui,sans-serif">
+                    <text x="20" y="93" fill="#6B778A" font-size="10" font-weight="700" letter-spacing="1.1">GET STARTED</text>
+                    <rect x="10" y="108" width="182" height="32" fill="#DDE7F8"/>
+                    <rect x="10" y="108" width="3" height="32" fill="#315DCC"/>
+                    <text x="22" y="129" fill="#244EAE" font-size="12" font-weight="650">Overview</text>
+                    <text x="22" y="166" fill="#586579" font-size="12">Installation</text>
+                    <text x="22" y="202" fill="#586579" font-size="12">Configuration</text>
+                    <text x="22" y="238" fill="#586579" font-size="12">Browser surface</text>
+                    <text x="20" y="289" fill="#6B778A" font-size="10" font-weight="700" letter-spacing="1.1">WORKFLOWS</text>
+                    <text x="22" y="323" fill="#586579" font-size="12">Capture feedback</text>
+                    <text x="22" y="359" fill="#586579" font-size="12">Agent handoff</text>
+                    <text x="22" y="395" fill="#586579" font-size="12">Recovery</text>
+                  </g>
+                  <g font-family="system-ui,sans-serif">
+                    <text x="242" y="94" fill="#6D7889" font-size="11">Guides / Overview</text>
+                    <text id="page-heading" x="242" y="148" fill="#172235" font-size="31" font-weight="720">Build with the page in view.</text>
+                    <text id="page-subheading" x="242" y="180" fill="#5A6678" font-size="14">Keep terminal state, browser output, and review notes in one workbench.</text>
+                    <rect x="242" y="207" width="675" height="56" rx="4" fill="#E8F4EC" stroke="#B8DBC2"/>
+                    <circle cx="266" cy="235" r="9" fill="#25834B"/>
+                    <path d="m262 235 3 3 5-7" fill="none" stroke="#FFFFFF" stroke-width="1.7"/>
+                    <text x="284" y="231" fill="#245B39" font-size="12" font-weight="700">Development server ready</text>
+                    <text x="284" y="248" fill="#52705E" font-size="11">Latest build completed in 312 ms · 14:32:06</text>
+                    <text x="242" y="311" fill="#172235" font-size="19" font-weight="700">Quick start</text>
+                    <text x="242" y="340" fill="#5A6678" font-size="13">Run the local app, then inspect the live browser result beside your shell.</text>
+                    <rect x="242" y="361" width="675" height="91" rx="4" fill="#18202C"/>
+                    <circle cx="263" cy="379" r="4" fill="#E86872"/><circle cx="277" cy="379" r="4" fill="#D8A657"/><circle cx="291" cy="379" r="4" fill="#63BD83"/>
+                    <text x="260" y="410" fill="#D8DEE8" font-family="ui-monospace,monospace" font-size="13">$ bun install</text>
+                    <text x="260" y="436" fill="#75D395" font-family="ui-monospace,monospace" font-size="13">$ bun run dev</text>
+                    <text x="242" y="500" fill="#172235" font-size="19" font-weight="700">Recent activity</text>
+                    <path d="M242 521H917" stroke="#D8DEE8"/>
+                    <circle cx="254" cy="548" r="5" fill="#315DCC"/>
+                    <text x="270" y="552" fill="#344154" font-size="12">Browser frame confirmed</text>
+                    <text x="818" y="552" fill="#778294" font-size="11">just now</text>
+                    <circle cx="254" cy="581" r="5" fill="#C47C08"/>
+                    <text x="270" y="585" fill="#344154" font-size="12">3 review notes awaiting acknowledgement</text>
+                    <text x="837" y="585" fill="#778294" font-size="11">18s</text>
+                  </g>
+                </svg>
+
+                <svg id="annotation-overlay" class="annotation-overlay" viewBox="0 0 960 620" preserveAspectRatio="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                  <g class="persisted-mark element-mark">
+                    <rect x="231" y="198" width="698" height="74" fill="#70A7FF10" stroke="#2F73DA" stroke-width="3"/>
+                    <path d="M231 211V198H244M916 198H929V211M929 259V272H916M244 272H231V259" fill="none" stroke="#BFD8FF" stroke-width="2"/>
+                    <rect x="232" y="178" width="122" height="20" rx="2" fill="#2158A6"/>
+                    <text x="240" y="192" fill="#FFFFFF" font-family="system-ui,sans-serif" font-size="10" font-weight="700">section[status]</text>
+                  </g>
+                  <g class="persisted-mark region-mark">
+                    <rect x="229" y="349" width="712" height="116" fill="#E7B14A12" stroke="#B87400" stroke-width="2" stroke-dasharray="7 5"/>
+                    <rect x="229" y="347" width="7" height="7" fill="#FFF4CC" stroke="#B87400"/><rect x="937" y="347" width="7" height="7" fill="#FFF4CC" stroke="#B87400"/>
+                    <rect x="229" y="461" width="7" height="7" fill="#FFF4CC" stroke="#B87400"/><rect x="937" y="461" width="7" height="7" fill="#FFF4CC" stroke="#B87400"/>
+                  </g>
+                  <path class="persisted-mark freehand-mark" d="M262 518 C321 493 381 530 438 512 S552 493 608 520 S720 542 804 510" fill="none" stroke="#D64064" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+
+                <div id="annotation-note" class="annotation-note"><strong>N1</strong><span>Keep this status visible after reload.</span></div>
+                <div id="note-editor" class="note-editor" hidden>
+                  <label for="note-input">Annotation note</label>
+                  <input id="note-input" type="text" value="Clarify the recovery copy.">
+                  <div class="editor-actions"><button id="cancel-note" type="button">Cancel</button><button id="save-note" type="button">Save note</button></div>
+                </div>
+              </div>
+
+              <div id="state-surface" class="browser-state-surface" hidden>
+                <div class="state-copy">
+                  <div id="state-spinner" class="spinner" hidden></div>
+                  <div id="state-symbol" class="state-symbol" aria-hidden="true">!</div>
+                  <h2 id="state-title">Browser unavailable</h2>
+                  <p id="state-detail">The inline browser cannot be displayed.</p>
+                  <button id="state-action" type="button">Retry</button>
+                </div>
+              </div>
+            </div>
+
+            <aside id="notes-panel" class="notes-panel" aria-label="Annotation notes and saved feedback" hidden>
+              <header class="notes-header">
+                <strong>Notes &amp; feedback</strong><span id="notes-count-panel" class="count-badge">3</span>
+                <button id="close-notes" type="button" aria-label="Close notes panel">×</button>
+              </header>
+              <div id="capture-result" class="capture-result" role="status" hidden>
+                <strong>Saved locally · fb-042</strong>
+                3 marks composed with the confirmed frame. Browser chrome was excluded.
+                <div class="capture-actions"><button type="button">View PNG</button><button type="button">Send to agent</button></div>
+              </div>
+              <div id="notes-list" class="notes-list">
+                <article class="note-row selected" data-note-row>
+                  <div class="note-meta"><strong>N1 · Element</strong><span>section[status]</span></div>
+                  <p>Keep this status visible after reload.</p>
+                  <div class="note-actions"><button type="button" data-select-tool="element">Select</button><button type="button" data-edit-note>Edit</button><button type="button" data-remove-note>Remove</button></div>
+                </article>
+                <article class="note-row" data-note-row>
+                  <div class="note-meta"><strong>N2 · Region</strong><span>code example</span></div>
+                  <p>Check contrast at native scale.</p>
+                  <div class="note-actions"><button type="button" data-select-tool="region">Select</button><button type="button" data-edit-note>Edit</button><button type="button" data-remove-note>Remove</button></div>
+                </article>
+                <article class="note-row" data-note-row>
+                  <div class="note-meta"><strong>N3 · Freehand</strong><span>activity row</span></div>
+                  <p>No text attached; stroke only.</p>
+                  <div class="note-actions"><button type="button" data-select-tool="freehand">Select</button><button type="button" data-edit-note>+ Text</button><button type="button" data-remove-note>Remove</button></div>
+                </article>
+              </div>
+              <div id="empty-notes" class="empty-notes" hidden>
+                <strong>No annotation notes</strong>
+                Draw or select an element to start local feedback.
+                <div style="margin-top:8px"><button id="empty-add-note" type="button">Add text note</button></div>
+              </div>
+              <footer class="notes-footer"><span>Draft · document generation 7</span><button id="clear-notes" type="button">Clear all</button></footer>
+            </aside>
+          </div>
+
+          <footer class="browser-statusbar">
+            <span id="confirmed-url" class="confirmed-url">http://localhost:1420/docs/overview</span>
+            <span id="browser-mode">Browse · page input enabled</span>
+            <span id="frame-status" class="frame-status">Live frame #1842 · 960×620</span>
+          </footer>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+<div id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+'use strict';
+const byId = (id) => document.getElementById(id);
+const previewButtons = Array.from(document.querySelectorAll('[data-preview]'));
+const targetTabs = Array.from(document.querySelectorAll('.target-tab[data-target]'));
+const toolButtons = Array.from(document.querySelectorAll('[data-tool]'));
+const browserCommands = Array.from(document.querySelectorAll('.browser-command'));
+const annotationCommands = Array.from(document.querySelectorAll('.annotation-command, .tool-button'));
+const region = byId('browser-region');
+const workarea = byId('workarea-content');
+const stage = byId('page-stage');
+const pageArt = byId('page-art');
+const overlay = byId('annotation-overlay');
+const annotationNote = byId('annotation-note');
+const stateSurface = byId('state-surface');
+const notice = byId('status-notice');
+const health = byId('browser-health');
+const address = byId('address-input');
+const notesPanel = byId('notes-panel');
+const showBrowserProduct = byId('show-browser-product');
+const backButton = byId('back-button');
+const forwardButton = byId('forward-button');
+const reloadStopButton = byId('reload-stop-button');
+const reloadStopLabel = byId('reload-stop-label');
+const announcement = byId('announcement');
+let currentState = 'ready';
+let currentTool = 'browse';
+let noteCount = 3;
+let frameNumber = 1842;
+let historyEntries = ['http://localhost:1420/', 'http://localhost:1420/docs/overview'];
+let historyIndex = 1;
+
+const previewStates = {
+  ready: {
+    label: 'Ready', tone: 'ready', frame: 'Live frame #1842 · 960×620',
+    announce: 'Browser ready. Page input and annotation controls are available.'
+  },
+  loading: {
+    label: 'Loading', tone: 'warning', title: 'Waiting for a confirmed frame',
+    detail: 'Navigation is in progress. Page input resumes after matching pixels and geometry arrive.',
+    symbol: '…', spinner: true, action: 'Stop loading', frame: 'Loading · input paused', hidePage: true,
+    announce: 'Browser loading. Waiting for a confirmed frame.'
+  },
+  stale: {
+    label: 'Stale', tone: 'warning', noticeTitle: 'Last confirmed frame.',
+    noticeDetail: 'Page geometry changed; page input is paused.', noticeAction: 'Refresh frame',
+    frame: 'Stale frame #1842 · input paused',
+    announce: 'Browser frame is stale. Last confirmed image remains visible and input is paused.'
+  },
+  error: {
+    label: 'Disconnected', tone: 'error', title: 'Browser view disconnected',
+    detail: 'The last frame is preserved. Terminals and saved feedback remain available while the stream recovers.',
+    symbol: '!', action: 'Reconnect', overFrame: true, noticeTitle: 'Stream error.',
+    noticeDetail: 'No new frames are arriving.', noticeAction: 'Reconnect', frame: 'Disconnected · last frame #1842',
+    announce: 'Browser view disconnected. The last confirmed frame and terminal work remain available.'
+  },
+  unsupported: {
+    label: 'Unsupported', tone: 'error', title: 'Inline browser unsupported',
+    detail: 'This runtime cannot present browser frames. Use terminals or close this presentation split.',
+    symbol: '×', action: 'Hide browser', frame: 'Unsupported capability', hidePage: true,
+    announce: 'Inline browser is unsupported in this runtime.'
+  },
+  hidden: {
+    label: 'Hidden', tone: 'ready', frame: 'Hidden',
+    announce: 'Browser presentation hidden. The Herdr terminal area expanded; the browser page remains open.'
+  }
+};
+
+function announce(message) {
+  announcement.textContent = '';
+  window.setTimeout(() => { announcement.textContent = message; }, 10);
+}
+
+function setProductDisabled(disabled) {
+  browserCommands.forEach((control) => { control.disabled = disabled; });
+  annotationCommands.forEach((control) => { control.disabled = disabled; });
+  targetTabs.forEach((control) => { control.disabled = disabled; });
+  byId('hide-browser').disabled = false;
+}
+
+function updateHistoryButtons() {
+  if (currentState !== 'ready') return;
+  backButton.disabled = historyIndex <= 0;
+  forwardButton.disabled = historyIndex >= historyEntries.length - 1;
+}
+
+function setPreview(name, options = {}) {
+  const config = previewStates[name];
+  if (!config) return;
+  const focusWasInBrowser = region.contains(document.activeElement);
+  currentState = name;
+  previewButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.preview === name)));
+
+  const hidden = name === 'hidden';
+  region.hidden = hidden;
+  workarea.classList.toggle('browser-hidden', hidden);
+  showBrowserProduct.hidden = !hidden;
+  if (hidden) {
+    if (focusWasInBrowser) showBrowserProduct.focus();
+    announce(config.announce);
+    return;
+  }
+
+  health.textContent = config.label;
+  health.dataset.tone = config.tone;
+  byId('frame-status').textContent = config.frame;
+  reloadStopLabel.textContent = name === 'loading' ? 'Stop' : 'Reload';
+  reloadStopButton.setAttribute('aria-label', name === 'loading' ? 'Stop loading' : 'Reload page');
+
+  notice.hidden = !config.noticeTitle;
+  notice.classList.toggle('error', name === 'error');
+  byId('notice-title').textContent = config.noticeTitle || '';
+  byId('notice-detail').textContent = config.noticeDetail || '';
+  byId('notice-action').textContent = config.noticeAction || 'Recover';
+
+  stateSurface.hidden = !config.title;
+  stateSurface.classList.toggle('over-frame', Boolean(config.overFrame));
+  byId('state-spinner').hidden = !config.spinner;
+  byId('state-symbol').hidden = Boolean(config.spinner);
+  byId('state-symbol').textContent = config.symbol || '!';
+  byId('state-title').textContent = config.title || '';
+  byId('state-detail').textContent = config.detail || '';
+  byId('state-action').textContent = config.action || 'Retry';
+  pageArt.hidden = Boolean(config.hidePage);
+  overlay.hidden = Boolean(config.hidePage) || name === 'error';
+  annotationNote.hidden = Boolean(config.hidePage) || name === 'error' || noteCount === 0;
+
+  const disabled = name !== 'ready';
+  setProductDisabled(disabled);
+  updateHistoryButtons();
+  if (options.returnFocus && document.activeElement === showBrowserProduct) byId('hide-browser').focus();
+  announce(config.announce);
+}
+
+previewButtons.forEach((button) => button.addEventListener('click', () => setPreview(button.dataset.preview)));
+byId('hide-browser').addEventListener('click', () => setPreview('hidden'));
+showBrowserProduct.addEventListener('click', () => setPreview('ready', { returnFocus: true }));
+byId('notice-action').addEventListener('click', () => setPreview('ready'));
+byId('state-action').addEventListener('click', () => {
+  if (currentState === 'unsupported') setPreview('hidden');
+  else if (currentState === 'loading') setPreview('stale');
+  else setPreview('ready');
+});
+
+function renderTarget(target) {
+  const title = target.dataset.title;
+  const url = target.dataset.url;
+  targetTabs.forEach((tab) => tab.setAttribute('aria-selected', String(tab === target)));
+  address.value = url;
+  byId('confirmed-url').textContent = url;
+  historyEntries = target.dataset.target === 'preview'
+    ? ['http://localhost:4173/', url]
+    : target.dataset.target === 'new'
+      ? [url]
+      : ['http://localhost:1420/', url];
+  historyIndex = historyEntries.length - 1;
+  byId('page-product-title').textContent = title === 'Deploy preview' ? 'Cockpit Preview' : title === 'New tab' ? 'New browser target' : 'Cockpit SDK';
+  byId('page-heading').textContent = title === 'Deploy preview' ? 'Review the deploy preview.' : title === 'New tab' ? 'Enter an address to begin.' : 'Build with the page in view.';
+  byId('page-subheading').textContent = title === 'Deploy preview'
+    ? 'This target shares the same Space browser and remains separate from Herdr tabs.'
+    : title === 'New tab'
+      ? 'Browser targets stay inside this Cockpit presentation split.'
+      : 'Keep terminal state, browser output, and review notes in one workbench.';
+  updateHistoryButtons();
+  announce('Selected browser target: ' + title + '. Confirmed address ' + url + '.');
+}
+
+targetTabs.forEach((tab) => tab.addEventListener('click', () => renderTarget(tab)));
+
+function normalizeUrl(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return 'about:blank';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  return 'http://' + trimmed;
+}
+
+function commitAddress(value, push = true) {
+  const url = normalizeUrl(value);
+  address.value = url;
+  byId('confirmed-url').textContent = url;
+  if (push) {
+    historyEntries = historyEntries.slice(0, historyIndex + 1);
+    historyEntries.push(url);
+    historyIndex = historyEntries.length - 1;
+  }
+  const activeTarget = targetTabs.find((tab) => tab.getAttribute('aria-selected') === 'true');
+  if (activeTarget) {
+    activeTarget.dataset.url = url;
+    const label = activeTarget.querySelector('span:nth-child(2)');
+    if (label && url === 'about:blank') label.textContent = 'New tab';
+  }
+  frameNumber += 1;
+  byId('frame-status').textContent = 'Live frame #' + frameNumber + ' · 960×620';
+  updateHistoryButtons();
+  announce('Address confirmed: ' + url + '.');
+}
+
+byId('address-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  commitAddress(address.value);
+});
+backButton.addEventListener('click', () => {
+  if (historyIndex <= 0) return;
+  historyIndex -= 1;
+  commitAddress(historyEntries[historyIndex], false);
+});
+forwardButton.addEventListener('click', () => {
+  if (historyIndex >= historyEntries.length - 1) return;
+  historyIndex += 1;
+  commitAddress(historyEntries[historyIndex], false);
+});
+reloadStopButton.addEventListener('click', () => {
+  if (currentState === 'loading') setPreview('stale');
+  else {
+    frameNumber += 1;
+    byId('frame-status').textContent = 'Live frame #' + frameNumber + ' · reloaded';
+    announce('Page reloaded. A new confirmed frame is displayed.');
+  }
+});
+
+function setTool(name, moveFocus = false) {
+  currentTool = name;
+  toolButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.tool === name)));
+  stage.dataset.tool = name;
+  byId('browser-mode').textContent = name === 'browse'
+    ? 'Browse · page input enabled'
+    : name === 'element'
+      ? 'Select element · page input blocked'
+      : name === 'region'
+        ? 'Region · drag on image'
+        : name === 'freehand'
+          ? 'Freehand · 3 px stroke'
+          : 'Text · local editor';
+  if (name === 'text') {
+    byId('note-editor').hidden = false;
+    if (moveFocus) byId('note-input').focus();
+  } else {
+    byId('note-editor').hidden = true;
+  }
+  if (noteCount === 0 && name !== 'browse') restoreTemplateNotes();
+  announce('Annotation tool selected: ' + name + '.');
+}
+
+toolButtons.forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool, button.dataset.tool === 'text')));
+byId('cancel-note').addEventListener('click', () => { byId('note-editor').hidden = true; setTool('browse'); });
+byId('save-note').addEventListener('click', () => {
+  const value = byId('note-input').value.trim() || 'Untitled note';
+  annotationNote.querySelector('span').textContent = value;
+  annotationNote.hidden = false;
+  byId('note-editor').hidden = true;
+  openNotes();
+  announce('Text note saved locally: ' + value + '.');
+});
+
+function openNotes() {
+  notesPanel.hidden = false;
+  byId('notes-button').setAttribute('aria-expanded', 'true');
+}
+function closeNotes() {
+  notesPanel.hidden = true;
+  byId('notes-button').setAttribute('aria-expanded', 'false');
+  byId('notes-button').focus();
+}
+byId('notes-button').addEventListener('click', () => notesPanel.hidden ? openNotes() : closeNotes());
+byId('close-notes').addEventListener('click', closeNotes);
+
+function updateNoteCount() {
+  byId('notes-count-toolbar').textContent = noteCount;
+  byId('notes-count-panel').textContent = noteCount;
+  byId('notes-list').hidden = noteCount === 0;
+  byId('empty-notes').hidden = noteCount !== 0;
+  byId('clear-notes').disabled = noteCount === 0;
+}
+function clearAllNotes() {
+  noteCount = 0;
+  overlay.hidden = true;
+  annotationNote.hidden = true;
+  document.querySelectorAll('[data-note-row]').forEach((row) => { row.hidden = true; });
+  byId('capture-result').hidden = true;
+  updateNoteCount();
+  announce('All local annotation notes cleared. Empty notes state shown.');
+}
+function restoreTemplateNotes() {
+  noteCount = 3;
+  overlay.hidden = false;
+  annotationNote.hidden = false;
+  document.querySelectorAll('[data-note-row]').forEach((row) => { row.hidden = false; });
+  updateNoteCount();
+}
+byId('clear-notes').addEventListener('click', clearAllNotes);
+byId('empty-add-note').addEventListener('click', () => { restoreTemplateNotes(); setTool('text', true); });
+
+document.querySelectorAll('[data-select-tool]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-note-row]').forEach((row) => row.classList.toggle('selected', row.contains(button)));
+  setTool(button.dataset.selectTool);
+}));
+document.querySelectorAll('[data-edit-note]').forEach((button) => button.addEventListener('click', () => setTool('text', true)));
+document.querySelectorAll('[data-remove-note]').forEach((button) => button.addEventListener('click', () => {
+  const row = button.closest('[data-note-row]');
+  if (!row || row.hidden) return;
+  row.hidden = true;
+  noteCount = Math.max(0, noteCount - 1);
+  if (noteCount === 0) {
+    overlay.hidden = true;
+    annotationNote.hidden = true;
+  }
+  updateNoteCount();
+  announce('Annotation removed. ' + noteCount + ' notes remain.');
+}));
+
+byId('capture-button').addEventListener('click', () => {
+  openNotes();
+  byId('capture-result').hidden = false;
+  byId('frame-status').textContent = 'Saved fb-042 · ' + noteCount + ' marks';
+  announce('Capture saved locally as feedback fb-042 with ' + noteCount + ' marks.');
+});
+
+updateHistoryButtons();
+updateNoteCount();
+</script>
+</body>
+</html>

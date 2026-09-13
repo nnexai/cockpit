@@ -34,6 +34,16 @@ import {
 } from "./projectTeardownProtocol";
 import {
   CockpitClientError,
+  matchBrowserViewCommandResponse,
+  matchBrowserViewEvent,
+  parseBrowserViewCommandRequest,
+  parseBrowserDraftRecoveryRequest,
+  parseBrowserViewCommandOutcome,
+  parseBrowserViewCommandResponse,
+  parseBrowserViewEvent,
+  parseBrowserViewFrameDescriptor,
+  parseBrowserViewOpenRequest,
+  parseBrowserViewSnapshot,
   parseBrowserFeedbackAck,
   parseBrowserFeedbackAckRequest,
   parseBrowserFeedbackImage,
@@ -58,11 +68,20 @@ import {
   parseTerminalCommand,
   validateSessionId,
   validateResourceId,
+  type BrowserViewFramePacket,
+  type BrowserViewOpenRequest,
+  type BrowserViewStream,
+  type BrowserDraftRecoveryRequest,
+  type BrowserViewCommandOutcome,
+  type BrowserViewSnapshot,
   type ClosableStream,
   type CockpitClient,
   type TerminalStream,
 } from "./CockpitClient";
 import type {
+  BrowserViewCommandRequest,
+  BrowserViewEvent,
+  BrowserViewFrameDescriptor,
   FocusRequest,
   FocusResponse,
   ResourceMutationRequest,
@@ -81,11 +100,17 @@ export type BrowserFetch = (input: string, init?: RequestInit) => Promise<Respon
 
 export interface BrowserWebSocket {
   readonly readyState: number;
+  /**
+   * Browser WebSockets default to Blob delivery. The default factory changes
+   * this to "arraybuffer"; custom factories may omit the property, so frame
+   * parsing still validates the runtime message type.
+   */
+  binaryType?: BinaryType;
   onopen: ((event: Event) => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: ((event: Event) => void) | null;
   onclose: ((event: CloseEvent) => void) | null;
-  send(data: string): void;
+  send(data: string | ArrayBuffer): void;
   close(code?: number, reason?: string): void;
 }
 
@@ -95,7 +120,9 @@ function defaultFetch(input: string, init?: RequestInit): Promise<Response> {
   return globalThis.fetch(input, init);
 }
 function defaultWebSocket(url: string): BrowserWebSocket {
-  return new WebSocket(url);
+  const socket = new WebSocket(url);
+  socket.binaryType = "arraybuffer";
+  return socket;
 }
 
 async function getJson<T>(
@@ -135,6 +162,7 @@ async function getJson<T>(
 }
 
 function websocketUrl(path: string): string {
+  if (/^wss?:\/\//.test(path)) return path;
   const location = globalThis.location;
   if (location?.host) {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -142,6 +170,220 @@ function websocketUrl(path: string): string {
   }
   return path;
 }
+interface BrowserViewOpenResponse {
+  snapshot: BrowserViewSnapshot;
+  first_frame: BrowserViewFrameDescriptor;
+  frame_endpoint: string;
+}
+
+function parseBrowserViewOpenResponse(value: unknown): BrowserViewOpenResponse {
+  if (typeof value !== "object" || value === null) throw new CockpitClientError("malformed_response", "Browser view open response is malformed");
+  const body = value as Record<string, unknown>;
+  if (typeof body.frame_endpoint !== "string" || body.frame_endpoint.length === 0) throw new CockpitClientError("malformed_response", "Browser view frame endpoint is missing");
+  return {
+    snapshot: parseBrowserViewSnapshot(body.snapshot),
+    first_frame: parseBrowserViewFrameDescriptor(body.first_frame),
+    frame_endpoint: body.frame_endpoint,
+  };
+}
+
+interface BrowserFrameEnvelope {
+  readonly data: ArrayBuffer;
+  readonly frameSequence: number;
+}
+
+function parseBrowserFrameEnvelope(data: unknown, streamEpoch: number): BrowserFrameEnvelope {
+  if (!(data instanceof ArrayBuffer)) throw new CockpitClientError("malformed_response", "Browser frame is not binary");
+  if (data.byteLength < 96 || data.byteLength > 96 + 6 * 1024 * 1024) throw new CockpitClientError("malformed_response", "Browser frame exceeds bounds");
+  const view = new DataView(data);
+  const jpegLength = view.getUint32(80, false);
+  if (view.getUint32(0, false) !== 0x49424656 || view.getUint16(4, false) !== 2 || view.getUint16(6, false) !== 96 || view.getBigUint64(8, false) !== BigInt(streamEpoch) || jpegLength === 0 || data.byteLength !== 96 + jpegLength) {
+    throw new CockpitClientError("malformed_response", "Browser frame envelope is invalid");
+  }
+  const jpeg = new Uint8Array(data, 96, 2);
+  if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new CockpitClientError("malformed_response", "Browser frame payload is not JPEG");
+  return { data, frameSequence: Number(view.getBigUint64(16, false)) };
+}
+
+function parseBrowserFrame(frame: BrowserFrameEnvelope, targetId: string): { descriptor: BrowserViewFrameDescriptor; jpeg: ArrayBuffer } {
+  if (targetId.length === 0) throw new CockpitClientError("malformed_response", "Browser frame target identity is unavailable");
+  const { data } = frame;
+  const view = new DataView(data);
+  const jpegLength = view.getUint32(80, false);
+  const descriptor = parseBrowserViewFrameDescriptor({
+    target_id: targetId,
+    stream_epoch: Number(view.getBigUint64(8, false)),
+    frame_sequence: frame.frameSequence,
+    document_generation: Number(view.getBigUint64(24, false)),
+    viewport_revision: Number(view.getBigUint64(32, false)),
+    image_width: view.getUint32(40, false),
+    image_height: view.getUint32(44, false),
+    viewport_css_width: view.getFloat32(48, false),
+    viewport_css_height: view.getFloat32(52, false),
+    viewport_offset_x: view.getFloat32(56, false),
+    viewport_offset_y: view.getFloat32(60, false),
+    scroll_x: view.getFloat32(64, false),
+    scroll_y: view.getFloat32(68, false),
+    capture_timestamp_micros: Number(view.getBigUint64(72, false)),
+    jpeg_length: jpegLength,
+  });
+  return { descriptor, jpeg: data.slice(96) };
+}
+
+type BrowserFrameRelease = (kind: "ack" | "discard") => void;
+interface PendingBrowserFrame {
+  readonly envelope: BrowserFrameEnvelope;
+  readonly release: BrowserFrameRelease;
+}
+
+function browserFramePacket(frame: PendingBrowserFrame, targetId: string): BrowserViewFramePacket {
+  const parsedFrame = parseBrowserFrame(frame.envelope, targetId);
+  return {
+    descriptor: parsedFrame.descriptor,
+    jpeg: parsedFrame.jpeg,
+    ack: () => frame.release("ack"),
+    discard: () => frame.release("discard"),
+  };
+}
+
+function openBrowserViewStream(
+  request: BrowserFetch,
+  webSocketFactory: BrowserWebSocketFactory,
+  value: BrowserViewOpenRequest,
+  onEvent: (event: BrowserViewEvent) => void,
+  onFrame: (packet: BrowserViewFramePacket) => void,
+  onError: (error: CockpitClientError) => void,
+  signal?: AbortSignal,
+): Promise<BrowserViewStream> {
+  let parsed: BrowserViewOpenRequest;
+  try { parsed = parseBrowserViewOpenRequest(value); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+  return getJson(request, "/api/v1/browser/view/open", "browser view open", parseBrowserViewOpenResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal }).then((opened) => new Promise((resolve, reject) => {
+    const identity = opened.snapshot.identity;
+    const grant = opened.snapshot.frame_grant;
+    if (grant === null) { reject(new CockpitClientError("malformed_response", "Browser view frame grant is missing")); return; }
+    let eventSocket: BrowserWebSocket; let frameSocket: BrowserWebSocket;
+    let closed = false; let closing = false; let settled = false; let openCount = 0;
+    let targetId = opened.snapshot.displayed_target_id ?? "";
+    let metadataAttached = false;
+    // Keep one raw frame until the attached snapshot establishes its target identity.
+    let pendingFrame: PendingBrowserFrame | null = null;
+    const settlePending = () => {
+      const pending = pendingFrame;
+      pendingFrame = null;
+      pending?.release("discard");
+    };
+    const fail = (error: CockpitClientError) => {
+      if (closed || closing) return;
+      closing = true;
+      settlePending();
+      closed = true;
+      eventSocket?.close();
+      frameSocket?.close();
+      if (!settled) { settled = true; reject(error); }
+      else onError(error);
+    };
+    const makeRelease = (frameSequence: number): BrowserFrameRelease => {
+      let released = false;
+      return (kind) => {
+        if (released) return;
+        released = true;
+        if (closed) return;
+        try { frameSocket.send(JSON.stringify({ type: kind, frame_sequence: frameSequence })); }
+        catch (cause) { fail(new CockpitClientError("transport_error", `Could not ${kind} browser frame`, { cause })); }
+      };
+    };
+    const deliverFrame = (frame: PendingBrowserFrame) => {
+      let packet: BrowserViewFramePacket;
+      try { packet = browserFramePacket(frame, targetId); }
+      catch (error) { frame.release("discard"); throw error; }
+      try { onFrame(packet); }
+      catch (cause) {
+        frame.release("discard");
+        throw new CockpitClientError("transport_error", "Browser view frame handler failed", { cause });
+      }
+    };
+    const flushPending = () => {
+      const pending = pendingFrame;
+      pendingFrame = null;
+      if (!pending) return;
+      if (closed || !metadataAttached) { pending.release("discard"); return; }
+      try { deliverFrame(pending); }
+      catch (error) { fail(error instanceof CockpitClientError ? error : new CockpitClientError("transport_error", "Browser view frame handler failed", { cause: error })); }
+    };
+    const packet = (data: unknown) => {
+      if (closed) return;
+      try {
+        const envelope = parseBrowserFrameEnvelope(data, identity.stream_epoch);
+        const frame: PendingBrowserFrame = { envelope, release: makeRelease(envelope.frameSequence) };
+        if (!metadataAttached) {
+          const superseded = pendingFrame;
+          pendingFrame = null;
+          superseded?.release("discard");
+          if (closed) { frame.release("discard"); return; }
+          pendingFrame = frame;
+          return;
+        }
+        deliverFrame(frame);
+      } catch (error) {
+        fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Browser frame is malformed", { cause: error }));
+      }
+    };
+    try {
+      eventSocket = webSocketFactory(websocketUrl(`/api/v1/browser/view/events/${encodeURIComponent(identity.view_id)}`));
+      frameSocket = webSocketFactory(websocketUrl(opened.frame_endpoint));
+    } catch (cause) { fail(new CockpitClientError("transport_error", "Could not open browser view streams", { cause })); return; }
+    let stream: BrowserViewStream;
+    const maybeReady = () => { if (!closed && ++openCount === 2) { settled = true; resolve(stream); } };
+    stream = {
+      close() {
+        if (closed || closing) return;
+        closing = true;
+        settlePending();
+        closed = true;
+        signal?.removeEventListener("abort", abort);
+        eventSocket.close();
+        frameSocket.close();
+      },
+      command(commandValue) {
+        if (closed || !settled) return Promise.reject(new CockpitClientError("stream_error", "Browser view stream is not ready"));
+        let command: BrowserViewCommandRequest;
+        try { command = parseBrowserViewCommandRequest(commandValue); } catch (error) { return Promise.reject(error); }
+        if (command.view_id !== identity.view_id || command.stream_epoch !== identity.stream_epoch) return Promise.reject(new CockpitClientError("malformed_response", "Browser view command identity does not match"));
+        return getJson(request, "/api/v1/browser/view/command", "browser view command", (response) => matchBrowserViewCommandResponse(response, command), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(command), signal });
+      },
+    };
+    const abort = () => fail(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
+    if (signal?.aborted) { abort(); return; } signal?.addEventListener("abort", abort, { once: true });
+    eventSocket.onopen = maybeReady;
+    frameSocket.onopen = () => { frameSocket.send(JSON.stringify({ grant })); maybeReady(); };
+    eventSocket.onmessage = (event) => {
+      if (closed || typeof event.data !== "string") {
+        if (!closed) fail(new CockpitClientError("malformed_response", "Browser view metadata is not JSON text"));
+        return;
+      }
+      try {
+        const parsedEvent = matchBrowserViewEvent(parseBrowserViewEvent(JSON.parse(event.data)), identity);
+        if (parsedEvent.type === "attached") {
+          if (metadataAttached) return;
+          targetId = parsedEvent.snapshot.displayed_target_id ?? "";
+          metadataAttached = true;
+          onEvent(parsedEvent);
+          flushPending();
+        } else if (metadataAttached) {
+          onEvent(parsedEvent);
+        }
+      } catch (error) {
+        fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Browser view metadata is malformed", { cause: error }));
+      }
+    };
+    frameSocket.onmessage = (event) => packet(event.data);
+    eventSocket.onerror = (cause) => fail(new CockpitClientError("transport_error", "Browser view metadata WebSocket failed", { cause }));
+    frameSocket.onerror = (cause) => fail(new CockpitClientError("transport_error", "Browser view frame WebSocket failed", { cause }));
+    eventSocket.onclose = (event) => { if (!closed) fail(streamError(`Browser view metadata WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event)); };
+    frameSocket.onclose = (event) => { if (!closed) fail(streamError(`Browser view frame WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event)); };
+  }));
+}
+
 function streamError(message: string, cause?: unknown, operationCode?: string): CockpitClientError {
   return new CockpitClientError("stream_error", message, { cause, operationCode });
 }
@@ -569,6 +811,12 @@ export function createBrowserClient(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
     },
+    async browserDraftRecovery(value: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> {
+      const body = parseBrowserDraftRecoveryRequest(value);
+      return getJson(request, "/api/v1/browser/drafts/recovery", "browser draft recovery", parseBrowserViewCommandOutcome, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
     async acknowledgeBrowserFeedback(value) {
       const body = parseBrowserFeedbackAckRequest(value);
       return getJson(request, "/api/v1/browser/feedback/ack", "browser feedback acknowledgement", parseBrowserFeedbackAck, {
@@ -632,5 +880,8 @@ export function createBrowserClient(
     },
     subscribeSession(sessionId, onMessage, onError) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError); },
     openTerminal(requestValue, onMessage, onError, signal) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError, signal); },
+    openBrowserView(requestValue, onEvent, onFrame, onError, signal) {
+      return openBrowserViewStream(request, webSocketFactory, requestValue, onEvent, onFrame, onError, signal);
+    },
   };
 }
