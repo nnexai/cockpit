@@ -217,6 +217,12 @@ async function applyRequestedViewport(viewport) {
     screenWidth: requested.width,
     screenHeight: requested.height,
   });
+  // The requested surface is the stable viewport contract shared with the
+  // presenter. Layout metrics may lag during a transition, so they must not
+  // replace these dimensions after the emulation call succeeds.
+  state.cssWidth = requested.width;
+  state.cssHeight = requested.height;
+  state.devicePixelRatio = requested.dpr;
   return requested;
 }
 function pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding) {
@@ -237,8 +243,8 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
     // measured client box can briefly report scrollbar/transition geometry
     // during a reload or resize; adopting it would create alternating
     // viewport revisions and reject otherwise current frames.
-    const scrollX = boundedNumber(viewport.pageX, 0);
-    const scrollY = boundedNumber(viewport.pageY, 0);
+    const scrollX = boundedNumber(viewport.pageX, state.scrollX);
+    const scrollY = boundedNumber(viewport.pageY, state.scrollY);
     const changed = scrollX !== state.scrollX || scrollY !== state.scrollY;
     state.scrollX = scrollX;
     state.scrollY = scrollY;
@@ -909,7 +915,19 @@ async function command(request) {
       if (state.controlled && state.controllerViewId !== request.view_id) {
         return { status: 'rejected', ...base, code: 'browser_control_required', message: 'Another browser view holds the input lease' };
       }
+      const previousViewport = {
+        cssWidth: state.cssWidth,
+        cssHeight: state.cssHeight,
+        devicePixelRatio: state.devicePixelRatio,
+      };
       await applyRequestedViewport(request.command.viewport);
+      if (previousViewport.cssWidth !== state.cssWidth
+        || previousViewport.cssHeight !== state.cssHeight
+        || previousViewport.devicePixelRatio !== state.devicePixelRatio) {
+        state.viewportRevision++;
+        resetFrameTransport();
+        emitEvent('viewport_changed', { viewport: viewportState() });
+      }
       state.controlled = true;
       state.controllerViewId = request.view_id;
       state.leaseGeneration++;
