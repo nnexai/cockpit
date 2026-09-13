@@ -294,6 +294,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "document_changed": next = { ...previous, document: incoming.document }; clearPresentedFrame(); inputJobsRef.current = []; draftRequestRef.current += 1; draftRef.current = null; setDraft(null); setPendingCaptureState(null); setSelectedId(null); setNoteId(null); setNoteValue(""); setInspection(null); queueMicrotask(() => { void openDraft(); }); break;
         case "viewport_changed": next = { ...previous, viewport: incoming.viewport }; clearPresentedFrame(); inputJobsRef.current = []; setInspection(null); break;
         case "navigation_changed": next = { ...previous, navigation: incoming.navigation }; break;
+        case "cursor_changed": next = { ...previous, cursor: incoming.cursor }; break;
         case "blocker_changed": next = { ...previous, blocker: incoming.blocker }; break;
         case "capabilities_changed": next = { ...previous, capabilities: incoming.capabilities }; break;
         case "control_changed": next = { ...previous, control: incoming.control }; break;

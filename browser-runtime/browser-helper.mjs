@@ -334,7 +334,9 @@ async function updateCursor() {
       return element ? getComputedStyle(element).cursor : 'default';
     }, state.pointer));
     const next = { cursor, pointer_sample_sequence: state.pointerSampleSequence, target_id: state.targetId, document_generation: state.documentGeneration, viewport_revision: state.viewportRevision };
-    if (JSON.stringify(next) !== JSON.stringify(state.cursor)) { state.cursor = next; emitCursor(); }
+    const previous = state.cursor;
+    state.cursor = next;
+    if (!previous || previous.cursor !== next.cursor || previous.target_id !== next.target_id || previous.document_generation !== next.document_generation || previous.viewport_revision !== next.viewport_revision) emitCursor();
   } catch {}
 }
 function setBlocker(kind, message, defaultPrompt, resolve) {
@@ -1080,9 +1082,6 @@ async function command(request) {
     }
     if (request.command.type === 'inspect') {
       const i = request.command.command;
-      if (i.pointer_sample_sequence !== state.pointerSampleSequence) {
-        throw Object.assign(new Error('stale pointer'), { code: 'stale_pointer' });
-      }
       const result = await page.evaluate(({ x, y }) => {
         const e = document.elementFromPoint(x, y);
         if (!e) return null;
