@@ -196,6 +196,30 @@ function boundedNumber(value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
   if (!Number.isFinite(number) || number < 0 || number > maximum) throw new Error('geometry value is not finite');
   return number;
 }
+function encodedJpegDimensions(bytes) {
+  let offset = 2;
+  while (offset + 1 < bytes.length) {
+    if (bytes[offset] !== 0xff) throw new Error('screencast JPEG marker is malformed');
+    while (offset < bytes.length && bytes[offset] === 0xff) offset++;
+    if (offset >= bytes.length) break;
+    const marker = bytes[offset++];
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0xd8 || marker === 0x01 || marker >= 0xd0 && marker <= 0xd7) continue;
+    if (offset + 2 > bytes.length) throw new Error('screencast JPEG segment is truncated');
+    const segmentLength = bytes.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) throw new Error('screencast JPEG segment is malformed');
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
+      if (segmentLength < 7) throw new Error('screencast JPEG dimensions are malformed');
+      const height = bytes.readUInt16BE(offset + 3);
+      const width = bytes.readUInt16BE(offset + 5);
+      if (!width || !height) throw new Error('screencast JPEG dimensions are empty');
+      return { width, height };
+    }
+    offset += segmentLength;
+  }
+  throw new Error('screencast JPEG dimensions are unavailable');
+}
 function nextGeneration(previous) {
   return Math.max(Date.now(), Number(previous || 0) + 1);
 }
@@ -629,8 +653,9 @@ function enqueueFrame(frame) {
     if (!frame || typeof frame.data !== 'string') throw new Error('screencast payload is not base64 text');
     const jpeg = Buffer.from(frame.data, 'base64');
     const rawMetadata = frame.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
-    const width = boundedInteger(rawMetadata.deviceWidth, state.cssWidth, MAX_WIDTH);
-    const height = boundedInteger(rawMetadata.deviceHeight, state.cssHeight, MAX_HEIGHT);
+    const dimensions = encodedJpegDimensions(jpeg);
+    const width = boundedInteger(dimensions.width, state.cssWidth, MAX_WIDTH);
+    const height = boundedInteger(dimensions.height, state.cssHeight, MAX_HEIGHT);
     if (!jpeg.length || jpeg.length > MAX_JPEG || jpeg[0] !== 0xff || jpeg[1] !== 0xd8
       || jpeg[jpeg.length - 2] !== 0xff || jpeg[jpeg.length - 1] !== 0xd9
       || width * height > MAX_PIXELS) {
