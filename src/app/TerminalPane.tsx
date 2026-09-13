@@ -24,6 +24,7 @@ export type TerminalPaneProps = {
   terminalMouseInput: boolean;
   onRequestControl?: () => void;
   onSelect?: () => void;
+  onReady?: () => void;
   onResync?: () => void;
   onClosed?: () => void;
   onClosePane?: () => void;
@@ -155,7 +156,7 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
 type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
 
 
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusTransitionPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusTransitionPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -188,6 +189,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const onRequestControlRef = useRef(onRequestControl);
   onRequestControlRef.current = onRequestControl;
   const onSelectRef = useRef(onSelect);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
   onSelectRef.current = onSelect;
   const controlPendingRef = useRef(controlPending);
   controlPendingRef.current = controlPending;
@@ -527,6 +530,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       clearMouseMode();
       cancelled = true;
       controller.abort();
+      onReadyRef.current?.();
       setError({ code, message });
       ownershipRef.current = "released";
       setOwnership("released");
@@ -618,6 +622,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal && fitRef.current) {
         fitRef.current.fit();
       }
+      onReadyRef.current?.();
       flushPending();
       registerStream?.(opened, true);
     }, (cause: unknown) => {

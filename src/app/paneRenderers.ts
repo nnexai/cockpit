@@ -34,6 +34,7 @@ export function usePaneRenderers(
   onResync: () => void,
 ) {
   const [panes, setPanes] = useState<Record<string, PaneRendererState>>({});
+  const [inspectedPanes, setInspectedPanes] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const currentSession = useRef(sessionId);
@@ -43,8 +44,19 @@ export function usePaneRenderers(
   panesRef.current = panes;
   const visibleKey = visiblePaneIds.join("\0");
   const allKey = allPaneIds.join("\0");
+  const markInspected = useCallback((paneId: string) => {
+    setInspectedPanes((current) => {
+      if (current.has(paneId)) return current;
+      const next = new Set(current);
+      next.add(paneId);
+      return next;
+    });
+  }, []);
 
-  useEffect(() => { setPanes((current) => Object.keys(current).length === 0 ? current : {}); }, [sessionId]);
+  useEffect(() => {
+    setPanes((current) => Object.keys(current).length === 0 ? current : {});
+    setInspectedPanes((current) => current.size === 0 ? current : new Set());
+  }, [sessionId]);
   useEffect(() => {
     if (!live) return;
     const existing = new Set(allPaneIds);
@@ -54,6 +66,10 @@ export function usePaneRenderers(
       const next = { ...current };
       for (const id of removed) delete next[id];
       return next;
+    });
+    setInspectedPanes((current) => {
+      const next = new Set(Array.from(current).filter((id) => existing.has(id)));
+      return next.size === current.size ? current : next;
     });
   }, [allKey, live]);
 
@@ -86,8 +102,10 @@ export function usePaneRenderers(
           try {
             const presentation = await client.inspectPane(sessionId, paneId, abort.signal);
             accept(presentation, abort.signal);
+            markInspected(paneId);
           } catch (error) {
             if (abort.signal.aborted) return;
+            markInspected(paneId);
             setPanes((current) => {
               if (abort.signal.aborted || currentSession.current !== sessionId) return current;
               const previous = current[paneId];
@@ -101,7 +119,7 @@ export function usePaneRenderers(
     };
     void poll();
     return () => { abort.abort(); clearTimeout(timer); };
-  }, [client, sessionId, visibleKey, allKey, live, refreshEpoch, refresh, accept]);
+  }, [client, sessionId, visibleKey, allKey, live, refreshEpoch, refresh, accept, markInspected]);
 
   const choose = (paneId: string, choice: "context" | "review" | "terminal") => {
     setPanes((current) => {
@@ -168,5 +186,5 @@ export function usePaneRenderers(
     }
   };
 
-  return { panes, busy, choose, updateView, open, refresh: () => setRefresh((value) => value + 1) };
+  return { panes, inspectedPaneIds: Array.from(inspectedPanes), busy, choose, updateView, open, refresh: () => setRefresh((value) => value + 1) };
 }

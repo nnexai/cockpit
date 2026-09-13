@@ -16,10 +16,12 @@ import type {
 } from "../protocol/generated/v1";
 import { App } from "./App";
 
+const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
-  TerminalPane: ({ request, onSelect }: { request: { pane_id: string }; onSelect?: () => void }) => (
-    <button type="button" data-testid={`terminal-${request.pane_id}`} onClick={onSelect}>terminal</button>
-  ),
+  TerminalPane: ({ request, onSelect, onReady }: { request: { pane_id: string }; onSelect?: () => void; onReady?: () => void }) => {
+    if (onReady) terminalReadyCallbacks.set(request.pane_id, onReady);
+    return <button type="button" data-testid={`terminal-${request.pane_id}`} onClick={onSelect}>terminal</button>;
+  },
 }));
 
 type Deferred<T> = {
@@ -232,6 +234,7 @@ afterEach(() => {
     act(() => root?.unmount());
     root = null;
   }
+  terminalReadyCallbacks.clear();
   container.remove();
   vi.restoreAllMocks();
 });
@@ -245,11 +248,6 @@ async function settle(): Promise<void> {
   });
 }
 
-async function settleFrame(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  });
-}
 
 async function mount(fixture: AppFixture): Promise<void> {
   container = document.createElement("div");
@@ -263,6 +261,8 @@ async function mount(fixture: AppFixture): Promise<void> {
   });
   await settle();
   fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+  await settle();
+  readyTerminal("pane-1");
   await settle();
 }
 
@@ -280,6 +280,11 @@ function selectedTab(): string {
   const selected = container.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   if (!selected) throw new Error("No selected tab");
   return selected.getAttribute("aria-label") ?? "";
+}
+function readyTerminal(paneId: string): void {
+  const ready = terminalReadyCallbacks.get(paneId);
+  if (!ready) throw new Error(`Missing terminal readiness callback for ${paneId}`);
+  act(() => ready());
 }
 
 function mutationResponse(sessionId: string, next = snapshot(sessionId)): ResourceMutationResponse {
@@ -388,38 +393,64 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
   });
-  it("stages a newly selected tab until its pane view has had an initial frame", async () => {
+  it("retains the painted pane while a newly selected tab waits for terminal sizing", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
-    await settleFrame();
     expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-
     const tab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 2: Second tab"]');
     if (!tab) throw new Error("Missing second tab");
     click(tab);
     fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("hidden");
-
-    await settleFrame();
     expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("");
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.parentElement?.style.visibility).toBe("hidden");
+
+    readyTerminal("pane-2");
+    await settle();
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')).toBeNull();
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.parentElement?.style.visibility).toBe("visible");
+
     const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
     if (!firstTab) throw new Error("Missing first tab");
     click(firstTab);
     fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
     await settle();
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("hidden");
+    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.parentElement?.style.visibility).toBe("");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("hidden");
+    readyTerminal("pane-1");
+    await settle();
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')).toBeNull();
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("visible");
+  });
+  it("keeps the painted pane through a rapid tab reversal", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
 
     const secondTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 2: Second tab"]');
-    if (!secondTab) throw new Error("Missing second tab after return");
+    if (!secondTab) throw new Error("Missing second tab");
     click(secondTab);
-    fixture.emitSnapshot("session-1", 1, 4, snapshot("session-1", "tab-2", "pane-2"));
+    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
     await settle();
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("hidden");
-    await settleFrame();
+    const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
+    if (!firstTab) throw new Error("Missing first tab");
+    click(firstTab);
+    fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
+    await settle();
+
     expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
+    const alphaPanes = [...container.querySelectorAll<HTMLElement>('[aria-label="Alpha pane"]')];
+    expect(alphaPanes).toHaveLength(2);
+    expect(alphaPanes.map((pane) => pane.parentElement?.style.visibility)).toEqual(["", "hidden"]);
+
+    readyTerminal("pane-1");
+    await settle();
+    expect(container.querySelectorAll('[aria-label="Alpha pane"]')).toHaveLength(1);
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("visible");
   });
 
   it("retries the retained focus intent after a recovery snapshot", async () => {
