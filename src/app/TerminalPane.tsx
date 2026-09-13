@@ -177,12 +177,15 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
   const pendingIntentRef = useRef<{ epoch: number; paneId: string; token: number } | null>(null);
+  const attachRetryKeyRef = useRef<string | null>(null);
+  const attachRetryCountRef = useRef(0);
   const [controlRequested, setControlRequested] = useState(controlAllowed);
   const controlRequestedRef = useRef(controlAllowed);
   const controlRequestPendingRef = useRef(false);
   const takeoverRequestedRef = useRef(false);
   const controlAllowedRef = useRef(controlAllowed);
   const pendingPasteRef = useRef<{ text: string; intent: { epoch: number; paneId: string; token: number } } | null>(null);
+  const attachRetryTimerRef = useRef<number | null>(null);
   controlAllowedRef.current = controlAllowed;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -524,6 +527,25 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       cell_height_px: openRequest.cell_height_px,
     };
     let cancelled = false;
+    const retryKey = `${request.session_id}:${request.pane_id}`;
+    if (attachRetryKeyRef.current !== retryKey) {
+      attachRetryKeyRef.current = retryKey;
+      attachRetryCountRef.current = 0;
+    }
+    let retryScheduled = false;
+    const schedulePaneVisibilityRetry = (cause: unknown): boolean => {
+      const typed = cause instanceof Error ? cause as Error & { code?: string; operationCode?: string } : null;
+      const code = typed?.operationCode ?? typed?.code;
+      if (code !== "pane_not_visible" || retryScheduled || attachRetryCountRef.current >= 4) return false;
+      retryScheduled = true;
+      const delay = 40 * 2 ** attachRetryCountRef.current;
+      attachRetryCountRef.current += 1;
+      attachRetryTimerRef.current = window.setTimeout(() => {
+        attachRetryTimerRef.current = null;
+        setAttempt((value) => value + 1);
+      }, delay);
+      return true;
+    };
     let stream: TerminalStream | null = null;
     let observedStreamId: string | null = null;
     const controller = new AbortController();
@@ -624,9 +646,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       }
     };
     void client.openTerminal(openRequest, onMessage, (cause: unknown) => {
-      if (cancelled) return;
+      if (cancelled || schedulePaneVisibilityRetry(cause)) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
-      fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
+      const error = typed as Error & { code?: string; operationCode?: string };
+      fail(error.operationCode ?? error.code ?? "terminal_attach_failed", typed.message);
     }, controller.signal).then((opened) => {
       if (cancelled || generation !== attachmentGeneration.current) {
         opened.close();
@@ -642,15 +665,20 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       flushPending();
       registerStream?.(opened, true);
     }, (cause: unknown) => {
-      if (cancelled) return;
+      if (cancelled || schedulePaneVisibilityRetry(cause)) return;
       const typed = cause instanceof Error ? cause : new Error("Could not attach terminal");
-      fail((typed as Error & { code?: string }).code ?? "terminal_attach_failed", typed.message);
+      const error = typed as Error & { code?: string; operationCode?: string };
+      fail(error.operationCode ?? error.code ?? "terminal_attach_failed", typed.message);
     });
     return () => {
       cancelled = true;
       clearMouseMode();
       controller.abort();
       if (streamRef.current === stream) streamRef.current = null;
+      if (attachRetryTimerRef.current !== null) {
+        window.clearTimeout(attachRetryTimerRef.current);
+        attachRetryTimerRef.current = null;
+      }
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };

@@ -500,7 +500,7 @@ function PaneView({ pane, label, selected, paintedSelected, busy, controlAllowed
   registerStream: (stream: TerminalStream, active: boolean) => void;
   onResync: () => void;
   mutate: Mutate;
-  style: { left: string; top: string; width: string; height: string };
+  style: { left: string; top: string; width: string; height: string; visibility?: CSSProperties["visibility"]; pointerEvents?: CSSProperties["pointerEvents"] };
   renderer: PaneRendererState | undefined;
   rendererReady: boolean;
   deferTerminal: boolean;
@@ -529,11 +529,11 @@ function PaneView({ pane, label, selected, paintedSelected, busy, controlAllowed
   }, [graphical, controlAllowed, controlPending]);
   const reportTerminalReady = () => {
     setTerminalAttached(true);
-    if (rendererReady) onReady();
   };
   useEffect(() => {
-    if (rendererReady && (graphical || terminalAttached)) onReady();
-  }, [graphical, onReady, rendererReady, terminalAttached]);
+    if (controlPending) return;
+    if (graphical ? rendererReady : terminalAttached) onReady();
+  }, [controlPending, graphical, onReady, rendererReady, terminalAttached]);
   useEffect(() => {
     if (selected) return;
     const active = document.activeElement;
@@ -834,6 +834,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const panes = panesForTab(snapshot?.panes ?? [], selectedTab?.id ?? null);
   const visiblePaneIds = projectedPaneIds(panes.map((pane) => pane.id), layout, snapshot?.focused_pane_id ?? selection.paneId);
   const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
+  const allPaneIds = (snapshot?.panes ?? []).map((pane) => pane.id);
   const renderers = usePaneRenderers(client, state.sessionId, visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
   // Keep incoming panes mounted for xterm's initial fit, but out of the
   // painted frame until each visible pane reports that its sizing barrier has
@@ -866,6 +867,18 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   });
   const retainedProjection = !paneCanvasReady ? committedProjection.current : null;
   const paneCanvasVisible = paneCanvasReady || retainedProjection !== null || committedProjection.current === null;
+  const projectionHistoryRef = useRef(new Map<string, PaneCanvasProjection>());
+  if (paneProjection.key !== null) {
+    projectionHistoryRef.current.set(paneProjection.key, paneProjection);
+  }
+  const knownPaneIds = new Set(allPaneIds);
+  projectionHistoryRef.current.forEach((projection, key) => {
+    if (projection.panes.length > 0 && !projection.panes.some((pane) => knownPaneIds.has(pane.id))) projectionHistoryRef.current.delete(key);
+  });
+  const currentPaneIds = new Set(paneProjection.visiblePaneIds);
+  projectionHistoryRef.current.forEach((projection, key) => {
+    if (key !== paneProjection.key && projection.visiblePaneIds.some((paneId) => currentPaneIds.has(paneId))) projectionHistoryRef.current.delete(key);
+  });
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editing, setEditing] = useState<ContextTarget | null>(null);
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
@@ -1338,15 +1351,16 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     }),
   ];
   const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;
-  const renderPaneLayer = (projection: PaneCanvasProjection, incoming: boolean) => projection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : projection.visiblePaneIds.map((paneId, index) => {
+  const renderPaneLayer = (projection: PaneCanvasProjection, incoming: boolean, painted: boolean) => projection.visiblePaneIds.map((paneId, index) => {
     const pane = projection.panes.find((candidate) => candidate.id === paneId);
     if (!pane) return null;
     const rectangle = projectedPaneRect(projection.layout, pane.id);
     const area = projection.layout?.area;
-    const style = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / projection.visiblePaneIds.length * 100}%`, top: "0%", width: `${100 / projection.visiblePaneIds.length}%`, height: "100%" };
+    const bounds = rectangle && area && area.width > 0 && area.height > 0 ? { left: `${(rectangle.x - area.x) / area.width * 100}%`, top: `${(rectangle.y - area.y) / area.height * 100}%`, width: `${rectangle.width / area.width * 100}%`, height: `${rectangle.height / area.height * 100}%` } : { left: `${index / projection.visiblePaneIds.length * 100}%`, top: "0%", width: `${100 / projection.visiblePaneIds.length}%`, height: "100%" };
+    const style = { ...bounds, visibility: painted ? "visible" as const : "hidden" as const, pointerEvents: painted ? "auto" as const : "none" as const };
     const renderer = renderers.panes[pane.id];
     const paneRendererKey = renderer ? `${renderer.presentation.renderer ?? "terminal"}:${renderer.choice ?? ""}` : "pending";
-    const paintedSelected = !incoming && pane.id === projection.selectedPaneId;
+    const paintedSelected = painted && pane.id === projection.selectedPaneId;
     const controlPendingForPane = incoming && state.focusPending !== null
       && (state.focusPending.kind === "pane" || state.focusPending.kind === "agent"
         ? state.focusPending.target_id === pane.id
@@ -1355,13 +1369,16 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
           : state.focusPending.kind === "space" && state.focusPending.target_id === pane.space_id);
     const currentPaneStatus = incoming && pane.id === selection.paneId && state.focusPending !== null && !controlPendingForPane;
     const paneFocusError = incoming && state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={Boolean(incoming && retainedProjection)} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} onMenu={(event) => openPaneMenu(event, pane)} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
+    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={Boolean(incoming && !painted)} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => focusPane(pane)} onContext={openContext} onMenu={(event) => openPaneMenu(event, pane)} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
   const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--browser-ratio": `${browserSplitRatio * 100}%`,
   };
   const sidebarClass = "sidebar";
+  const projections = Array.from(projectionHistoryRef.current.values());
+  const paintedProjectionKey = paneCanvasReady ? paneProjection.key : retainedProjection?.key ?? paneProjection.key;
+  const paneInstances = projections.flatMap((projection) => renderPaneLayer(projection, projection.key === paneProjection.key, projection.key === paintedProjectionKey));
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
@@ -1377,8 +1394,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onBrowserToggle={() => { if (selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open"); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="workarea-content">
         <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }}>
-          {retainedProjection ? <div aria-hidden="true" inert style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>{renderPaneLayer(retainedProjection, false)}</div> : null}
-          <div aria-hidden={retainedProjection ? "true" : undefined} inert={retainedProjection !== null} style={{ position: "absolute", inset: 0, visibility: retainedProjection ? "hidden" : "visible", pointerEvents: retainedProjection ? "none" : "auto" }}>{renderPaneLayer(paneProjection, true)}</div>
+          {paneProjection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : paneInstances}
           {retainedProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
         </div>
         {browserVisible && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}

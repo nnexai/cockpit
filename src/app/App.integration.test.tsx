@@ -394,7 +394,7 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
   });
-  it("retains the painted pane while a newly selected tab waits for terminal sizing", async () => {
+  it("retains mounted panes and swaps visibility while a newly selected tab waits for terminal sizing", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
@@ -406,29 +406,23 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
     expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("");
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.parentElement?.style.visibility).toBe("hidden");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("hidden");
 
     readyTerminal("pane-2");
     await settle();
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')).toBeNull();
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.parentElement?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("hidden");
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("visible");
 
     const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
     if (!firstTab) throw new Error("Missing first tab");
     click(firstTab);
     fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
     await settle();
-    expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.parentElement?.style.visibility).toBe("");
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("hidden");
-    readyTerminal("pane-1");
-    await settle();
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')).toBeNull();
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("hidden");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
   });
-  it("keeps the painted pane through a rapid tab reversal", async () => {
+  it("reuses mounted panes through a rapid tab reversal", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
@@ -445,13 +439,13 @@ describe("mounted App mutation and session ordering", () => {
 
     expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
     const alphaPanes = [...container.querySelectorAll<HTMLElement>('[aria-label="Alpha pane"]')];
-    expect(alphaPanes).toHaveLength(2);
-    expect(alphaPanes.map((pane) => pane.parentElement?.style.visibility)).toEqual(["", "hidden"]);
+    expect(alphaPanes).toHaveLength(1);
+    expect(alphaPanes[0]?.style.visibility).toBe("visible");
 
     readyTerminal("pane-1");
     await settle();
     expect(container.querySelectorAll('[aria-label="Alpha pane"]')).toHaveLength(1);
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
   });
 
   it("keeps a terminal mounted when inspection binding identity changes", async () => {
