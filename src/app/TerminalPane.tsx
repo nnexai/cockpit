@@ -492,6 +492,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !terminalReady || focusTransitionPending) return;
+    const restoreFocus = selectedRef.current && Boolean(terminal.element?.contains(document.activeElement));
     const geometry = terminalCellGeometry(terminal);
     // The authoritative snapshot can clear a focus transition one render
     // before the local control request state catches up. Open the confirmed
@@ -622,6 +623,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal && fitRef.current) {
         fitRef.current.fit();
       }
+      if (restoreFocus) terminal.focus();
       onReadyRef.current?.();
       flushPending();
       registerStream?.(opened, true);
