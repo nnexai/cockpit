@@ -758,9 +758,7 @@ function proofMatches(command) {
     if (!proof || typeof proof !== 'object' || proof.target_id !== state.targetId
       || proof.document_generation !== state.documentGeneration) return false;
     if (proof.viewport_revision !== undefined && proof.viewport_revision !== state.viewportRevision) return false;
-    if (proof.presented_frame_sequence !== undefined
-      && proof.presented_frame_sequence !== state.frameSequence
-      && command.type !== 'capture') return false;
+    // A presented frame may lag the helper's latest frame when transport drops packets. Identity and viewport proofs remain authoritative; frame sequence is advisory for input.
     if (proof.lease_generation !== undefined && proof.lease_generation !== state.leaseGeneration) return false;
   }
   if (command.type === 'tab' && command.command?.target_id !== undefined) {
