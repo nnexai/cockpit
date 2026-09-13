@@ -10,6 +10,7 @@ import readline from 'node:readline';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_PATH = path.join(ROOT, 'fixture', 'index.html');
+const CAPTURE_BOOTSTRAP_PATH = path.join(ROOT, 'helper', 'capture-bootstrap.js');
 const DEFAULT_VIEWPORT = { width: 1024, height: 720 };
 const MAX_LINE = 8 * 1024;
 const MAX_PACKET_BYTES = 2 * 1024 * 1024;
@@ -125,21 +126,34 @@ async function startFixture() {
   await new Promise((resolve, reject) => { fixtureServer.once('error', reject); fixtureServer.listen(0, '127.0.0.1', resolve); });
   const address = fixtureServer.address();
   if (!address || typeof address === 'string') throw new Error('unable to determine fixture port');
-  fixtureUrl = `http://127.0.0.1:${address.port}/?ingress=${encodeURIComponent(ingressUrl)}&sequence=0${RESOURCE_TEST ? '&resource-test=1' : ''}`;
+  fixtureUrl = `http://127.0.0.1:${address.port}/${RESOURCE_TEST ? '?resource-test=1' : ''}`;
 }
 async function waitForPacketAfter(generation, timeout = 10_000) { const deadline = performance.now() + timeout; while (packetGeneration <= generation) { if (performance.now() >= deadline) throw new Error('timed out waiting for MediaStream/WebCodecs VP8 packet'); await sleep(25); } return latestPacket; }
 async function waitForKeyframeAfter(generation, timeout = 10_000) { const deadline = performance.now() + timeout; while (!latestPacket?.keyframe || latestPacket.generation <= generation) { requestKeyframe(); if (performance.now() >= deadline) throw new Error('timed out waiting for requested VP8 keyframe'); await sleep(25); } return latestPacket; }
-async function captureFixture() { const before = packetGeneration; await page.getByRole('button', { name: 'Start MediaStream capture' }).click(); await waitForKeyframeAfter(before); }
+async function capturePage() {
+  const before = packetGeneration;
+  const control = page.locator('#poc-media-stream-capture-host').locator('#poc-media-stream-capture');
+  try {
+    await control.waitFor({ state: 'visible', timeout: 10_000 });
+  } catch (error) {
+    const installError = await page.evaluate(() => window.__pocMediaStreamCaptureInstallError || '').catch(() => '');
+    throw new Error(`capture control was not installed after navigation${installError ? `: ${installError}` : ` (${error.message})`}`);
+  }
+  await control.click({ timeout: 10_000 });
+  await waitForKeyframeAfter(before);
+}
 async function startBrowser() {
   try { playwright ??= await import('playwright'); } catch (error) { throw new Error(`Playwright is unavailable; run "bun install --frozen-lockfile" then "bunx playwright install chromium" (${error.message})`); }
   const executablePath = process.env.BROWSER_BINARY || undefined;
   try {
     // Playwright's headless:true passes legacy --headless. This explicit new
     // mode remains windowless while permitting the verified display-capture path.
-    browser = await playwright.chromium.launch({ headless: false, ...(executablePath ? { executablePath } : {}), args: ['--headless=new', '--use-fake-ui-for-media-stream', '--allow-http-screen-capture', '--no-first-run', '--no-default-browser-check', '--disable-background-networking'] });
+    browser = await playwright.chromium.launch({ headless: false, ...(executablePath ? { executablePath } : {}), args: ['--headless=new', '--use-fake-ui-for-media-stream', '--allow-http-screen-capture', '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets', '--no-first-run', '--no-default-browser-check', '--disable-background-networking'] });
     context = await browser.newContext({ viewport: DEFAULT_VIEWPORT, deviceScaleFactor: 1 });
+    await context.addInitScript((captureConfig) => { Object.defineProperty(window, '__pocMediaStreamCapture', { value: captureConfig, configurable: false }); }, { ingressUrl });
+    await context.addInitScript({ path: CAPTURE_BOOTSTRAP_PATH });
     page = await context.newPage(); cdp = await context.newCDPSession(page); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
-    await page.goto(fixtureUrl, { waitUntil: 'domcontentloaded' }); await captureFixture();
+    await page.goto(fixtureUrl, { waitUntil: 'domcontentloaded' }); await capturePage();
   } catch (error) { throw new Error(`could not launch bundled Playwright Chromium with --headless=new MediaStream capture${executablePath ? ` (${executablePath})` : ''}: ${error.message}`); }
 }
 async function currentViewport() { try { const metrics = await cdp.send('Page.getLayoutMetrics'); const viewport = metrics.cssVisualViewport || metrics.visualViewport || {}; latestViewport = { width: boundedDimension(viewport.clientWidth, DEFAULT_VIEWPORT.width), height: boundedDimension(viewport.clientHeight, DEFAULT_VIEWPORT.height), scale: Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1, offsetX: Number.isFinite(viewport.pageX) ? viewport.pageX : 0, offsetY: Number.isFinite(viewport.pageY) ? viewport.pageY : 0 }; } catch {} return latestViewport; }
@@ -169,8 +183,8 @@ async function dispatchInput(event) {
   const state = await evaluatePageState(); return { cursor: String(state.cursor || 'default') };
 }
 function normalizeUrl(value) { let candidate = assertString(value, 'url', 2048).trim(); if (!/^[a-z][a-z\d+.-]*:\/\//i.test(candidate)) candidate = `https://${candidate}`; let parsed; try { parsed = new URL(candidate); } catch { throw protocolError('url must be an absolute http:// or https:// URL'); } if (!['http:','https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) throw protocolError('navigation only supports credential-free http:// and https:// URLs'); return parsed.href; }
-async function reload() { ensureReady(); const nextUrl = new URL(fixtureUrl); nextUrl.searchParams.set('sequence', String(latestPacket.sequence)); fixtureUrl = nextUrl.href; await page.goto(fixtureUrl, { waitUntil:'domcontentloaded' }); await captureFixture(); return snapshot(); }
-async function navigate(url) { ensureReady(); await page.goto(normalizeUrl(url), { waitUntil:'domcontentloaded' }); return snapshot(); }
+async function reload() { ensureReady(); await page.goto(fixtureUrl, { waitUntil:'domcontentloaded' }); await capturePage(); return snapshot(); }
+async function navigate(url) { ensureReady(); await page.goto(normalizeUrl(url), { waitUntil:'domcontentloaded' }); await capturePage(); return snapshot(); }
 async function closeServer(server) { if (!server) return; server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)).catch(() => {}); }
 async function shutdown() { if (shuttingDown) return; shuttingDown = true; for (const client of [...egressClients.values()]) closeEgress(client); for (const socket of sockets) socket.destroy(); sockets.clear(); producer?.socket.destroy(); producer = undefined; latestPacket = undefined; latestKeyframe = undefined; packetGeneration = 0; keyframeRequested = false; await closeServer(streamServer); streamServer = undefined; streamUrl = undefined; ingressUrl = undefined; try { await browser?.close(); } catch {} browser = undefined; context = undefined; page = undefined; cdp = undefined; await closeServer(fixtureServer); fixtureServer = undefined; }
 async function handle(request) { assertObject(request,'request'); const method = assertString(request.method,'method',64); if (method === 'start') { if (!browser) { shuttingDown = false; await startServers(); await startFixture(); try { await startBrowser(); } catch (error) { await shutdown(); throw error; } } return snapshot(); } if (method === 'snapshot') return snapshot(); if (method === 'inspect') return inspect(); if (method === 'input') return dispatchInput(request.event); if (method === 'reload') return reload(); if (method === 'navigate') return navigate(request.url); if (method === 'validateUrl') return { url: normalizeUrl(request.url) }; if (method === 'stop') { await shutdown(); return { status:'stopped' }; } throw protocolError(`unknown method: ${method}`); }
