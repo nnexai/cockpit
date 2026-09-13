@@ -27,6 +27,28 @@ The transport variants keep the same Chromium CDP `Page.startScreencast` capture
 | Binary screencast (`poc/interactive-browser-panel-screencast-transport`) | Raw JPEG bytes and geometry cross a loopback binary WebSocket with latest-only delivery. Chromium capture CPU remains unchanged, but the large JSON/data-URL hop is removed. | Best practical local transport. |
 | MJPEG variant (`poc/interactive-browser-panel-screencast-mjpeg`) | Native Tauri/Wayland self-test passed. WebKitGTK rejected `fetch()` responses declared as `multipart/x-mixed-replace`, so the POC carries the same multipart bytes as bounded `application/octet-stream` with an exposed boundary header. | Compatibility fallback, not the performance default. |
 
+## MediaStream/WebSocket experiment
+
+`poc/interactive-browser-panel-screencast-mediastream` proves a separate transport path without JPEG or CDP screencast frames. The local Chromium fixture receives a trusted Playwright click, calls `getDisplayMedia()` on its own tab with `displaySurface: 'browser'`, `selfBrowserSurface: 'include'`, and `preferCurrentTab: true`, then sends realtime VP8 `VideoEncoder` output through a token-authenticated loopback WebSocket. The native Tauri/WebKit surface decodes the fixed 48-byte `IPWC` packets with `VideoDecoder` and renders each `VideoFrame` to a canvas; CDP remains input control traffic, while the helper re-establishes capture after local fixture reload.
+
+The supplied `chrome.tabCapture`/MV3 route was not usable in this headless automation environment. `getMediaStreamId({ targetTabId })` failed with `Extension has not been invoked for the current page (see activeTab permission)`, and the action/user-gesture invocation required by `tabCapture` is not supplied by the external service-worker message. The POC therefore uses a real `getDisplayMedia()` self-tab capture gesture rather than claiming extension capture parity.
+
+The helper sets `headless: false` and passes explicit `--headless=new`. In this Playwright version, the `headless: true` boolean emitted legacy `--headless`; explicit `--headless=new` exercises the verified unified headless implementation while remaining windowless. Direct probes succeeded with both the deterministic Playwright Chrome for Testing bundle (`153.0.8010.12`) and the installed branded Google Chrome (`153.0.8010.36`). Chrome is not inherently better for this VP8 POC: both use the same Chromium engine, while branded Chrome's main relevant difference is possible proprietary H.264/AAC codec availability that this route deliberately does not require. `BROWSER_BINARY` remains an override; the bundled browser is the reproducible default.
+
+VP8 support is selected with `VideoEncoder.isConfigSupported()`, trying realtime `prefer-hardware` opportunistically before `no-preference`; no hardware acceleration guarantee is made. VP8 avoids the H.264 AVCC decoder-description and keyframe transport requirements found in the probe.
+
+Browser smoke passed with `bun run smoke` and `POC_RESOURCE_TEST=1 bun run smoke`. Native Wayland self-test passed with `POC_SELF_TEST=1 GDK_BACKEND=wayland WINIT_UNIX_BACKEND=wayland bun run dev`, proving `getDisplayMedia → VideoEncoder → bounded WebSocket → native VideoDecoder → rendered frame`. `cargo build --manifest-path src-tauri/Cargo.toml` also passed.
+
+An isolated native animated sample (15-second warmup, 10-second `/proc` sample, one process tree) measured:
+
+| Variant | Processes | Aggregate PSS | Aggregate RSS | CPU, normalized to one core |
+| --- | ---: | ---: | ---: | ---: |
+| MediaStream/WebSocket | 14 | 711.9 MiB | 1686.1 MiB | 68.5% |
+
+This sample was not concurrent with the preceding comparison and is directional, not directly comparable. It does show materially lower sampled CPU than the JPEG transport run, but the capture workload, browser lifecycle, and process-tree composition were not controlled as a cross-variant benchmark.
+
+References: [Chrome `getDisplayMedia()` capture guidance](https://developer.chrome.com/docs/extensions/how-to/web-platform/screen-capture), [Chrome `tabCapture` API](https://developer.chrome.com/docs/extensions/reference/api/tabCapture), [MDN WebCodecs](https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API).
+
 One side-by-side native resource sample over approximately 50 seconds measured:
 
 | Metric | Baseline | Binary |

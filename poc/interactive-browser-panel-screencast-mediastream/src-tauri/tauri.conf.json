@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Interactive Browser Panel MediaStream POC",
+  "version": "0.1.0",
+  "identifier": "dev.cockpit.interactive-browser-panel-screencast-mediastream-poc",
+  "build": { "frontendDist": "../dist" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{ "label": "main", "title": "Interactive Browser Panel MediaStream POC", "width": 1320, "height": 860, "minWidth": 820, "minHeight": 620, "resizable": true }],
+    "security": { "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:*; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" }
+  },
+  "bundle": { "active": false }
+}
