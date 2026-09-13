@@ -815,18 +815,17 @@ async function installPageObservers() {
   const bindingGeneration = pageBindingGeneration;
   const frameGeneration = state?.frameGeneration;
   const bindingCurrent = () => pageBindingIsCurrent(observed, cdp, bindingGeneration) && state.targetId === targetId;
-  const current = () => bindingCurrent() && state.frameGeneration === frameGeneration;
+  const current = () => bindingCurrent();
   const onFrameNavigated = (frame) => {
     if (!bindingCurrent() || frame !== observed.mainFrame()) return;
     state.documentGeneration = nextGeneration(state.documentGeneration);
     state.frameGeneration = nextGeneration(state.frameGeneration);
     resetFrameTransport();
     void dismissPendingBlocker();
-    if (screencastListener && cdp) cdp.off?.('Page.screencastFrame', screencastListener);
-    screencastListener = null;
-    const stopped = cdp.send('Page.stopScreencast').catch(() => {});
+    // Keep the CDP screencast subscription alive. Stopping and recreating it
+    // after navigation can miss the next compositor update and strand the
+    // viewer on the discarded document's final frame.
     frameBarrier = frameBarrier.then(async () => {
-      await stopped;
       if (!bindingCurrent()) return;
       const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
       if (!bindingCurrent()) return;
@@ -837,9 +836,6 @@ async function installPageObservers() {
       if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
       emitEvent('document_changed', { document: documentState() });
       emitNavigation();
-      await installPageObservers();
-      if (!pageBindingIsCurrent(observed, cdp, bindingGeneration)) return;
-      await startScreencast(cdp, bindingGeneration);
     }).catch(() => {});
   };
   const onLoad = () => {
