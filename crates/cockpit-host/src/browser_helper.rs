@@ -336,7 +336,14 @@ impl BrowserHelperSupervisor {
         let mut associations = self.associations.lock().await;
         let ids = associations.get_mut(association_key)?;
         let views = self.views.lock().await;
-        ids.retain(|id| views.contains_key(id));
+        ids.retain(|id| {
+            views.get(id).is_some_and(|view| {
+                view.task
+                    .try_lock()
+                    .map(|task| task.as_ref().is_some_and(|task| !task.is_finished()))
+                    .unwrap_or(true)
+            })
+        });
         let existing = ids.first().cloned();
         if ids.is_empty() {
             associations.remove(association_key);

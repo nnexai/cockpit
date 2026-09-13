@@ -1221,7 +1221,9 @@ async function processInputLine(line) {
     else if (message.type === 'detach') await detach();
     else if (message.type === 'stop') await detach();
   } catch (error) {
-    emit({ type: 'failed', code: 'browser_helper_failed', message: String(error.message || error) });
+    const message = String(error.message || error);
+    emit({ type: 'failed', code: 'browser_helper_failed', message });
+    if (/Target page, context or browser has been closed|Target closed|Connection closed/i.test(message)) await detach();
   }
 }
 input.on('line', (line) => {
