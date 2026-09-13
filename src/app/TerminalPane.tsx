@@ -588,7 +588,13 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         lastSequence.current = sequence;
         try {
           const text = decodeFrame(message.bytes);
-          terminal.write(text);
+          // xterm can briefly detach its hidden textarea while applying a full
+          // screen frame. Restore only that lost terminal focus, never override
+          // an explicit focus change to another control.
+          const retainedFocus = terminal.element?.contains(document.activeElement) ?? false;
+          terminal.write(text, () => {
+            if (retainedFocus && terminalRef.current === terminal && document.activeElement === document.body) terminal.focus();
+          });
         } catch {
           fail("terminal_frame", "Terminal sent an invalid frame");
         }

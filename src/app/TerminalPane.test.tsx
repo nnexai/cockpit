@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => {
     private resizeListeners: Array<(size: { cols: number; rows: number }) => void> = [];
     readonly focus = vi.fn();
     readonly dispose = vi.fn();
-    readonly write = vi.fn((_data: Uint8Array) => {});
+    readonly write = vi.fn((_data: Uint8Array, done?: () => void) => { done?.(); });
     readonly paste = vi.fn((_data: string) => {});
     readonly hasSelection = vi.fn(() => true);
     readonly getSelection = vi.fn(() => "selected");
@@ -184,6 +184,32 @@ describe("TerminalPane fitting and pointer ownership", () => {
       });
       expect(openTerminal).toHaveBeenCalledOnce();
       expect(openTerminal.mock.calls[0]?.[0].mode).toBe("control");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("restores terminal focus only when a frame leaves focus on the document", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false)} />);
+        await settle();
+      });
+      const terminal = mocks.terminals[0]!;
+      terminal.focus.mockClear();
+      const input = document.createElement("textarea");
+      terminal.element!.append(input);
+      input.focus();
+      terminal.write.mockImplementationOnce((_data, done) => { input.remove(); done?.(); });
+      act(() => messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "utf8", width: 80, height: 24, full: true, bytes: btoa("frame") }));
+      expect(terminal.focus).toHaveBeenCalledOnce();
     } finally {
       await act(async () => root.unmount());
       host.remove();

@@ -77,6 +77,8 @@ export function useMutationCoordinator({ client, stateRef, mountedRef, sessionOb
     const epoch = current.epoch;
     const observation = sessionObservationRef.current;
     const focusToken = focusTokenRef.current;
+    const streamGeneration = current.generation;
+    const streamSequence = current.sequence;
     const token = tokenRef.current + 1;
     tokenRef.current = token;
     pendingRef.current = true;
@@ -87,12 +89,15 @@ export function useMutationCoordinator({ client, stateRef, mountedRef, sessionOb
       const snapshot = mutationSnapshot(sessionId, response);
       pendingRef.current = false;
       dispatch({ type: "succeed", epoch, token });
-      focusIntentRef.current = focusFromSnapshot && snapshot.focused_pane_id && observation === sessionObservationRef.current && focusToken === focusTokenRef.current
+      const responseIsCurrent = observation === sessionObservationRef.current
+        && stateRef.current.generation === streamGeneration
+        && stateRef.current.sequence === streamSequence;
+      focusIntentRef.current = focusFromSnapshot && snapshot.focused_pane_id && responseIsCurrent && focusToken === focusTokenRef.current
         ? { epoch, token, paneId: snapshot.focused_pane_id }
         : null;
-      // The mutation response is a newer Herdr snapshot. Render it immediately
-      // while the ordered stream is resubscribed to establish its new cursor.
-      dispatchSession({ type: "snapshot/authoritative", epoch, sessionId, snapshot });
+      // Use the mutation snapshot only until an ordered stream event supersedes it.
+      // A response that arrived behind the stream cannot overwrite a newer user action.
+      if (responseIsCurrent) dispatchSession({ type: "snapshot/authoritative", epoch, sessionId, snapshot });
       dispatchSession({ type: "snapshot/request", epoch, sessionId });
       onResync();
     }).catch((error: unknown) => {
