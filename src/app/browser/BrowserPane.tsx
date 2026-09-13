@@ -279,7 +279,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       }
       const identity = identityRef.current;
       if (!identity || incoming.metadata.view_id !== identity.id || incoming.metadata.stream_epoch !== identity.epoch) return;
-      if (cursor !== null && incoming.metadata.metadata_sequence !== cursor + 1) { setStatus("stale"); setMessage("Browser metadata needs a fresh snapshot."); close(); setRetry((value) => value + 1); return; }
+      if (cursor !== null && incoming.metadata.metadata_sequence <= cursor) return;
       cursor = incoming.metadata.metadata_sequence;
       const previous = snapshotRef.current; if (!previous) return;
       let next = previous;
