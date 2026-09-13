@@ -5,6 +5,7 @@
 
   const CONTROL_ID = 'poc-media-stream-capture';
   const MAX_PACKET_BYTES = 2 * 1024 * 1024;
+  const MAX_TRANSPORT_BUFFERED_BYTES = 512 * 1024;
   const HEADER_BYTES = 48;
   const PACKET_MAGIC = 0x49505743;
   let reader;
@@ -53,6 +54,10 @@
     chunk.copyTo(bytes.subarray(HEADER_BYTES));
     return bytes.buffer;
   }
+  function canSendPacket(byteLength) {
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    return socket.bufferedAmount === 0 || socket.bufferedAmount + byteLength <= MAX_TRANSPORT_BUFFERED_BYTES;
+  }
   async function realtimeConfig(width, height, framerate) {
     for (const candidate of [
       { codec: 'vp8', width, height, bitrate: 2_500_000, framerate, latencyMode: 'realtime', hardwareAcceleration: 'prefer-hardware' },
@@ -72,7 +77,7 @@
     const codec = await realtimeConfig(width, height, framerate);
     encoder = new VideoEncoder({
       output(chunk) {
-        if (!socket || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > MAX_PACKET_BYTES) {
+        if (!canSendPacket(chunk.byteLength + HEADER_BYTES)) {
           forceKeyframe = true;
           return;
         }
@@ -87,7 +92,7 @@
       const { value: frame, done } = await reader.read();
       if (done) break;
       try {
-        if (encoder.encodeQueueSize < 2 && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount <= MAX_PACKET_BYTES) {
+        if (encoder.encodeQueueSize < 2 && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount <= MAX_TRANSPORT_BUFFERED_BYTES) {
           encoder.encode(frame, { keyFrame: forceKeyframe });
           forceKeyframe = false;
         } else {

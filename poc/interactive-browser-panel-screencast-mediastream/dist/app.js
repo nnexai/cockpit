@@ -32,7 +32,7 @@ function ensureDecoder(packet) {
   discardDecoder();
   decoderWidth = packet.width; decoderHeight = packet.height;
   const epoch = decoderEpoch;
-  decoder = new VideoDecoder({ output(frame) { const sequence = decoding.shift(); try { if (epoch !== decoderEpoch) return; canvas.width = frame.displayWidth || frame.codedWidth; canvas.height = frame.displayHeight || frame.codedHeight; context.drawImage(frame, 0, 0, canvas.width, canvas.height); newestSequence = sequence || newestSequence; renderedFrames += 1; emptyState.hidden = true; if (sequence) acknowledge(sequence); } finally { frame.close(); } }, error(error) { if (epoch === decoderEpoch) failDecoder(error); } });
+  decoder = new VideoDecoder({ output(frame) { try { if (epoch !== decoderEpoch) return; const sequence = decoding.shift(); const width = frame.displayWidth || frame.codedWidth; const height = frame.displayHeight || frame.codedHeight; if (canvas.width !== width) canvas.width = width; if (canvas.height !== height) canvas.height = height; context.drawImage(frame, 0, 0, width, height); newestSequence = sequence || newestSequence; renderedFrames += 1; emptyState.hidden = true; if (sequence) acknowledge(sequence); } finally { frame.close(); } }, error(error) { if (epoch === decoderEpoch) failDecoder(error); } });
   decoder.configure({ codec: 'vp8', codedWidth: packet.width, codedHeight: packet.height, optimizeForLatency: true });
 }
 function receivePacket(event) {

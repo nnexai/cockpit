@@ -7,15 +7,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager, RunEvent, State};
 
 const MAX_PROTOCOL_LINE: usize = 8 * 1024;
 
-struct AppState { helper: Mutex<Option<HelperProcess>>, self_test: bool }
-impl Default for AppState { fn default() -> Self { Self { helper: Mutex::new(None), self_test: matches!(env::var("POC_SELF_TEST").as_deref(), Ok("1")) } } }
+struct AppState { helper: Mutex<Option<HelperProcess>>, self_test: bool, shutting_down: AtomicBool, prewarm_generation: AtomicU64 }
+impl Default for AppState { fn default() -> Self { Self { helper: Mutex::new(None), self_test: matches!(env::var("POC_SELF_TEST").as_deref(), Ok("1")), shutting_down: AtomicBool::new(false), prewarm_generation: AtomicU64::new(0) } } }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -81,9 +81,17 @@ impl HelperProcess {
     }
 }
 impl AppState {
-    fn stop(&self) { let helper = match self.helper.lock() { Ok(mut slot) => slot.take(), Err(_) => return }; if let Some(mut helper) = helper { let _ = helper.request("stop", None, Some(Duration::from_millis(500))); helper.terminate(); } }
+    fn stop(&self) { self.prewarm_generation.fetch_add(1, Ordering::AcqRel); let helper = match self.helper.lock() { Ok(mut slot) => slot.take(), Err(_) => return }; if let Some(mut helper) = helper { let _ = helper.request("stop", None, Some(Duration::from_millis(500))); helper.terminate(); } }
+    fn shutdown(&self) { self.shutting_down.store(true, Ordering::Release); self.stop(); }
+    fn prewarm(&self, generation: u64) {
+        let mut slot = match self.helper.lock() { Ok(slot) => slot, Err(_) => return };
+        if self.shutting_down.load(Ordering::Acquire) || self.prewarm_generation.load(Ordering::Acquire) != generation { return; }
+        if slot.is_none() { *slot = match HelperProcess::spawn() { Ok(helper) => Some(helper), Err(_) => return }; }
+        let failed = if slot.as_mut().expect("helper was inserted").request("start", None, Some(Duration::from_secs(5))).is_err() { slot.take() } else { None }; drop(slot); if let Some(helper) = failed { helper.terminate(); }
+    }
     fn request(&self, method: &str, arguments: Option<Value>) -> Result<Value, String> {
         let mut slot = self.helper.lock().map_err(|_| "browser state lock is poisoned".to_string())?;
+        if self.shutting_down.load(Ordering::Acquire) { return Err("browser state is shutting down".to_string()); }
         if slot.is_none() { *slot = Some(HelperProcess::spawn()?); }
         let result = slot.as_mut().expect("helper was inserted").request(method, arguments, None);
         let failed = if result.is_err() { slot.take() } else { None }; drop(slot); if let Some(helper) = failed { helper.terminate(); } result
@@ -100,5 +108,5 @@ fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, String> { ser
 #[tauri::command] fn browser_self_test_enabled(state: State<'_, AppState>) -> bool { state.self_test }
 #[tauri::command] fn browser_self_test_report(state: State<'_, AppState>, success: bool, detail: String) -> Result<(), String> { if !state.self_test { return Err("POC_SELF_TEST is not enabled".to_string()); } if detail.len() > 512 { return Err("self-test detail is too long".to_string()); } if success { eprintln!("interactive-browser-panel-screencast-mediastream-poc self-test passed: {detail}"); } else { eprintln!("interactive-browser-panel-screencast-mediastream-poc self-test failed: {detail}"); } Ok(()) }
 fn main() {
-    tauri::Builder::default().setup(|app| { eprintln!("interactive-browser-panel-screencast-mediastream-poc ready"); if app.state::<AppState>().self_test { let handle = app.handle().clone(); thread::spawn(move || { thread::sleep(Duration::from_millis(750)); let _ = handle.emit("interactive-browser-panel-self-test", ()); }); } Ok(()) }).manage(AppState::default()).invoke_handler(tauri::generate_handler![browser_start, browser_snapshot, browser_input, browser_reload, browser_navigate, browser_inspect, browser_stop, browser_self_test_enabled, browser_self_test_report]).build(tauri::generate_context!()).expect("error while building MediaStream browser panel").run(|app, event| { if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) { app.state::<AppState>().stop(); } });
+    tauri::Builder::default().setup(|app| { eprintln!("interactive-browser-panel-screencast-mediastream-poc ready"); let prewarm_generation = app.state::<AppState>().prewarm_generation.load(Ordering::Acquire); let prewarm_handle = app.handle().clone(); thread::spawn(move || { prewarm_handle.state::<AppState>().prewarm(prewarm_generation); }); if app.state::<AppState>().self_test { let handle = app.handle().clone(); thread::spawn(move || { thread::sleep(Duration::from_millis(750)); let _ = handle.emit("interactive-browser-panel-self-test", ()); }); } Ok(()) }).manage(AppState::default()).invoke_handler(tauri::generate_handler![browser_start, browser_snapshot, browser_input, browser_reload, browser_navigate, browser_inspect, browser_stop, browser_self_test_enabled, browser_self_test_report]).build(tauri::generate_context!()).expect("error while building MediaStream browser panel").run(|app, event| { if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) { app.state::<AppState>().shutdown(); } });
 }

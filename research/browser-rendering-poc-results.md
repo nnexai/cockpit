@@ -37,15 +37,19 @@ The helper sets `headless: false` and passes explicit `--headless=new`. In this 
 
 VP8 support is selected with `VideoEncoder.isConfigSupported()`. The recorded probe rejected realtime `prefer-hardware`, so the verified route falls back to `no-preference`; this is not a hardware-acceleration claim. VP8 avoids the H.264 AVCC decoder-description and keyframe transport requirements found in the probe.
 
-Browser smoke passed with `bun run smoke` and `POC_RESOURCE_TEST=1 bun run smoke`. Native Wayland self-test passed with `POC_SELF_TEST=1 GDK_BACKEND=wayland WINIT_UNIX_BACKEND=wayland bun run dev`, proving `getDisplayMedia → VideoEncoder → bounded WebSocket → native VideoDecoder → rendered frame`. `cargo build --manifest-path src-tauri/Cargo.toml` also passed.
+Browser smoke passed with `bun run smoke`, `POC_RESOURCE_TEST=1 bun run smoke`, and `BROWSER_BINARY=/usr/bin/google-chrome bun run smoke`. Native Wayland self-test passed with `POC_SELF_TEST=1 bun run dev:wayland`, proving `getDisplayMedia → VideoEncoder → bounded WebSocket → native VideoDecoder → rendered frame` after reload and `google.de` navigation. `cargo build --manifest-path src-tauri/Cargo.toml` also passed.
 
-An isolated native animated sample (15-second warmup, 10-second `/proc` sample, one process tree) measured:
+The latency repair keeps one egress packet awaiting a rendered ACK plus one pending keyframe, holds recovery demand through the recovery-keyframe ACK, and limits projected producer WebSocket buffering to 512 KiB; one otherwise-valid oversized packet may pass only when the transport is empty. This prevents slow native output from causing a per-frame keyframe request storm and multi-megabyte stale FIFO. Tauri setup now prewarms the helper so Chromium launch overlaps WebView startup; the trusted capture, encoder setup, and first-keyframe stages remain.
+
+A throwaway 500 ms delayed-ACK probe completed for 11.7 seconds with 23 bounded egress deliveries at a 532 ms mean interval and no helper protocol timeout. This exercises recovery under a deliberately slow consumer; it is not a native end-to-end latency benchmark.
+
+After the latency repair, an isolated native animated sample (15-second warmup, 10-second `/proc` sample, one process tree) measured:
 
 | Variant | Processes | Aggregate PSS | Aggregate RSS | CPU, normalized to one core |
 | --- | ---: | ---: | ---: | ---: |
-| MediaStream/WebSocket | 15 | 720.5 MiB | 1705.0 MiB | 66.0% |
+| MediaStream/WebSocket | 15 | 720.9 MiB | 1707.5 MiB | 29.3% |
 
-This sample was not concurrent with the preceding comparison and is directional, not directly comparable. It does show materially lower sampled CPU than the JPEG transport run, but the capture workload, browser lifecycle, and process-tree composition were not controlled as a cross-variant benchmark.
+This sample was not concurrent with the preceding comparison and is directional, not directly comparable. It shows materially lower sampled CPU than the pre-repair sample and the JPEG transport run, but the capture workload, browser lifecycle, and process-tree composition were not controlled as a cross-variant benchmark.
 
 References: [Chrome `getDisplayMedia()` capture guidance](https://developer.chrome.com/docs/extensions/how-to/web-platform/screen-capture), [Chrome `tabCapture` API](https://developer.chrome.com/docs/extensions/reference/api/tabCapture), [MDN WebCodecs](https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API).
 

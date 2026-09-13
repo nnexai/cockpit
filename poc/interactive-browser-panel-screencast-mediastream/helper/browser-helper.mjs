@@ -22,7 +22,7 @@ const RESOURCE_TEST = process.env.POC_RESOURCE_TEST === '1';
 
 let playwright; let fixtureServer; let streamServer; let streamUrl; let ingressUrl; let frameToken; let ingressToken;
 let browser; let context; let page; let cdp; let fixtureUrl; let shuttingDown = false;
-let producer; let latestPacket; let latestKeyframe; let packetGeneration = 0; let keyframeRequested = false; let latestViewport = { ...DEFAULT_VIEWPORT, scale: 1, offsetX: 0, offsetY: 0 };
+let producer; let latestPacket; let latestKeyframe; let packetGeneration = 0; let sourceKeyframeRequested = false; let recoveryKeyframeRequested = false; let latestViewport = { ...DEFAULT_VIEWPORT, scale: 1, offsetX: 0, offsetY: 0 };
 let lastPointer = { x: 0, y: 0 }; let mouseButtons = 0;
 const egressClients = new Map(); const sockets = new Set();
 
@@ -40,23 +40,38 @@ function serverFrame(opcode, payload = Buffer.alloc(0)) {
   payload.copy(out, head); return out;
 }
 function rejectUpgrade(socket, status = 400) { if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`, () => socket.destroy()); }
-function removeEgress(client) { clearTimeout(client.ackTimer); client.pending = undefined; client.input = Buffer.alloc(0); egressClients.delete(client.socket); }
+function removeEgress(client) { clearTimeout(client.ackTimer); client.pending = undefined; client.input = Buffer.alloc(0); egressClients.delete(client.socket); if (!hasRecoveryClient()) recoveryKeyframeRequested = false; }
 function closeEgress(client, status = 1008) { if (!egressClients.has(client.socket)) return; removeEgress(client); if (!client.socket.destroyed) { if (status === 1000) client.socket.end(serverFrame(8), () => client.socket.destroy()); else client.socket.destroy(); } }
-function sendPacket(client, packet) {
-  client.awaiting = packet.sequence; client.ackTimer = setTimeout(() => closeEgress(client, 1013), CLIENT_ACK_TIMEOUT_MS);
+function sendPacket(client, packet, recovery = false) {
+  client.awaiting = packet.sequence; client.awaitingRecovery = recovery;
+  if (recovery) client.recovering = packet.generation !== latestPacket?.generation;
+  client.ackTimer = setTimeout(() => closeEgress(client, 1013), CLIENT_ACK_TIMEOUT_MS);
   try { client.socket.write(serverFrame(2, packet.bytes)); } catch { closeEgress(client, 1011); }
 }
+function hasRecoveryClient() { for (const client of egressClients.values()) if (client.recovering || client.awaitingRecovery) return true; return false; }
+function needsRecoveryKeyframe() { for (const client of egressClients.values()) if (client.recovering && !client.pending) return true; return false; }
 function queueLatest(client, packet) {
   if (!egressClients.has(client.socket)) return;
-  if (client.awaiting === undefined) { sendPacket(client, packet); return; }
-  // A VP8 delta may depend on a packet replaced by latest-only delivery.
-  // Drop it and request a real source frame marked key instead of decoding an
-  // arbitrary broken chain or accumulating an ordered queue.
-  if (packet.keyframe) client.pending = packet; else { client.pending = undefined; requestKeyframe(); }
+  if (client.awaiting === undefined) {
+    if (client.recovering && !packet.keyframe) { requestRecoveryKeyframe(); return; }
+    sendPacket(client, packet, client.recovering);
+    return;
+  }
+  // A packet that arrives before its predecessor is acknowledged cannot be
+  // delivered as a delta. Retain only the newest independent recovery frame.
+  client.recovering = true;
+  if (packet.keyframe) client.pending = packet;
+  requestRecoveryKeyframe();
 }
 function ackEgress(client, text) {
   if (!/^ack:\d{1,12}$/.test(text) || client.awaiting === undefined || Number(text.slice(4)) !== client.awaiting) return closeEgress(client);
-  clearTimeout(client.ackTimer); client.awaiting = undefined; const pending = client.pending; client.pending = undefined; if (pending) sendPacket(client, pending);
+  clearTimeout(client.ackTimer);
+  const completedRecovery = client.awaitingRecovery;
+  client.awaiting = undefined; client.awaitingRecovery = false;
+  if (completedRecovery) recoveryKeyframeRequested = false;
+  const pending = client.pending; client.pending = undefined;
+  if (pending) sendPacket(client, pending, true);
+  requestRecoveryKeyframe();
 }
 function consumeMaskedFrames(state, chunk, onFrame, onClose) {
   state.input = Buffer.concat([state.input, chunk]);
@@ -78,16 +93,28 @@ function parsePacket(bytes, previousSequence) {
   if (!sequence || sequence <= previousSequence || !pixelWidth || !pixelHeight || pixelWidth > 16_384 || pixelHeight > 16_384 || codec !== 1 || !payloadLength || bytes.byteLength !== HEADER_BYTES + payloadLength) throw protocolError('invalid VP8 MediaStream packet fields');
   return { sequence, pixelWidth, pixelHeight, keyframe: Boolean(bytes.readUInt8(5) & 1), bytes };
 }
-function requestKeyframe() {
-  if (keyframeRequested || !producer || producer.socket.destroyed) return;
-  keyframeRequested = true;
-  try { producer.socket.write(serverFrame(1, Buffer.from('keyframe'))); } catch { keyframeRequested = false; }
+function requestSourceKeyframe() {
+  if (sourceKeyframeRequested || !producer || producer.socket.destroyed) return false;
+  sourceKeyframeRequested = true;
+  try { producer.socket.write(serverFrame(1, Buffer.from('keyframe'))); return true; } catch { sourceKeyframeRequested = false; return false; }
+}
+function requestRecoveryKeyframe() {
+  if (recoveryKeyframeRequested || !needsRecoveryKeyframe() || !producer || producer.socket.destroyed) return;
+  recoveryKeyframeRequested = true;
+  if (!sourceKeyframeRequested && !requestSourceKeyframe()) recoveryKeyframeRequested = false;
 }
 function publishPacket(packet) { for (const client of egressClients.values()) queueLatest(client, packet); }
+function invalidateProducerFrames() {
+  latestPacket = undefined; latestKeyframe = undefined;
+  for (const client of egressClients.values()) { client.pending = undefined; client.recovering = true; }
+}
 function acceptProducerPacket(state, bytes) {
+  if (producer !== state) return;
   const parsed = parsePacket(bytes, state.sequence || 0); state.sequence = parsed.sequence;
   const packet = { ...parsed, bytes: Buffer.from(bytes), generation: ++packetGeneration };
-  latestPacket = packet; if (packet.keyframe) { latestKeyframe = packet; keyframeRequested = false; } publishPacket(packet);
+  latestPacket = packet;
+  if (packet.keyframe) { latestKeyframe = packet; sourceKeyframeRequested = false; }
+  publishPacket(packet);
 }
 
 async function startServers() {
@@ -102,17 +129,19 @@ async function startServers() {
     if (request.method !== 'GET' || head.byteLength || !validKey || request.headers['sec-websocket-version'] !== '13' || request.headers.upgrade?.toLowerCase() !== 'websocket' || !/(?:^|,)\s*upgrade\s*(?:,|$)/i.test(connection) || (!egress && !ingress)) { rejectUpgrade(socket); return; }
     const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64'); socket.setNoDelay(true); socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
     if (egress) {
-      const client = { socket, input: Buffer.alloc(0), awaiting: undefined, pending: undefined, ackTimer: undefined }; egressClients.set(socket, client);
+      const client = { socket, input: Buffer.alloc(0), awaiting: undefined, awaitingRecovery: false, pending: undefined, recovering: false, ackTimer: undefined }; egressClients.set(socket, client);
       socket.on('data', (chunk) => { try { consumeMaskedFrames(client, chunk, (opcode, payload) => { if (opcode !== 1 || payload.byteLength > MAX_CONTROL_BYTES) throw protocolError('egress accepts only bounded text acknowledgements'); ackEgress(client, payload.toString('utf8')); }, () => closeEgress(client, 1000)); } catch { closeEgress(client); } }); socket.on('close', () => removeEgress(client)); socket.on('error', () => removeEgress(client));
-      if (latestKeyframe) queueLatest(client, latestKeyframe); requestKeyframe(); return;
+      if (latestKeyframe) queueLatest(client, latestKeyframe);
+      requestSourceKeyframe();
+      return;
     }
     if (producer) { try { producer.socket.destroy(); } catch {} }
     const state = { socket, input: Buffer.alloc(0), sequence: 0 };
-    producer = state; keyframeRequested = false;
-    socket.on('data', (chunk) => { try { consumeMaskedFrames(state, chunk, (opcode, payload) => { if (opcode === 1) { if (payload.toString('utf8') !== 'ready') throw protocolError('unknown producer control message'); return; } if (opcode !== 2) throw protocolError('producer accepts only binary VP8 packets'); acceptProducerPacket(state, payload); }, () => socket.destroy()); } catch { socket.destroy(); } });
+    producer = state; sourceKeyframeRequested = false; recoveryKeyframeRequested = false; invalidateProducerFrames();
+    socket.on('data', (chunk) => { if (producer !== state) return; try { consumeMaskedFrames(state, chunk, (opcode, payload) => { if (producer !== state) return; if (opcode === 1) { if (payload.toString('utf8') !== 'ready') throw protocolError('unknown producer control message'); return; } if (opcode !== 2) throw protocolError('producer accepts only binary VP8 packets'); acceptProducerPacket(state, payload); }, () => socket.destroy()); } catch { socket.destroy(); } });
     socket.on('close', () => { if (producer === state) producer = undefined; });
     socket.on('error', () => { if (producer === state) producer = undefined; });
-    requestKeyframe();
+    requestSourceKeyframe();
   });
   await new Promise((resolve, reject) => { streamServer.once('error', reject); streamServer.listen(0, '127.0.0.1', resolve); }); const address = streamServer.address(); if (!address || typeof address === 'string') throw new Error('unable to determine WebSocket port');
   streamUrl = `ws://127.0.0.1:${address.port}/frames?token=${frameToken}`; ingressUrl = `ws://127.0.0.1:${address.port}/ingress?token=${ingressToken}`;
@@ -129,7 +158,7 @@ async function startFixture() {
   fixtureUrl = `http://127.0.0.1:${address.port}/${RESOURCE_TEST ? '?resource-test=1' : ''}`;
 }
 async function waitForPacketAfter(generation, timeout = 10_000) { const deadline = performance.now() + timeout; while (packetGeneration <= generation) { if (performance.now() >= deadline) throw new Error('timed out waiting for MediaStream/WebCodecs VP8 packet'); await sleep(25); } return latestPacket; }
-async function waitForKeyframeAfter(generation, timeout = 10_000) { const deadline = performance.now() + timeout; while (!latestPacket?.keyframe || latestPacket.generation <= generation) { requestKeyframe(); if (performance.now() >= deadline) throw new Error('timed out waiting for requested VP8 keyframe'); await sleep(25); } return latestPacket; }
+async function waitForKeyframeAfter(generation, timeout = 10_000) { const deadline = performance.now() + timeout; while (!latestPacket?.keyframe || latestPacket.generation <= generation) { requestSourceKeyframe(); if (performance.now() >= deadline) throw new Error('timed out waiting for requested VP8 keyframe'); await sleep(25); } return latestPacket; }
 async function capturePage() {
   const before = packetGeneration;
   const control = page.locator('#poc-media-stream-capture-host').locator('#poc-media-stream-capture');
@@ -186,7 +215,7 @@ function normalizeUrl(value) { let candidate = assertString(value, 'url', 2048).
 async function reload() { ensureReady(); await page.goto(fixtureUrl, { waitUntil:'domcontentloaded' }); await capturePage(); return snapshot(); }
 async function navigate(url) { ensureReady(); await page.goto(normalizeUrl(url), { waitUntil:'domcontentloaded' }); await capturePage(); return snapshot(); }
 async function closeServer(server) { if (!server) return; server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)).catch(() => {}); }
-async function shutdown() { if (shuttingDown) return; shuttingDown = true; for (const client of [...egressClients.values()]) closeEgress(client); for (const socket of sockets) socket.destroy(); sockets.clear(); producer?.socket.destroy(); producer = undefined; latestPacket = undefined; latestKeyframe = undefined; packetGeneration = 0; keyframeRequested = false; await closeServer(streamServer); streamServer = undefined; streamUrl = undefined; ingressUrl = undefined; try { await browser?.close(); } catch {} browser = undefined; context = undefined; page = undefined; cdp = undefined; await closeServer(fixtureServer); fixtureServer = undefined; }
+async function shutdown() { if (shuttingDown) return; shuttingDown = true; for (const client of [...egressClients.values()]) closeEgress(client); for (const socket of sockets) socket.destroy(); sockets.clear(); producer?.socket.destroy(); producer = undefined; latestPacket = undefined; latestKeyframe = undefined; packetGeneration = 0; sourceKeyframeRequested = false; recoveryKeyframeRequested = false; await closeServer(streamServer); streamServer = undefined; streamUrl = undefined; ingressUrl = undefined; try { await browser?.close(); } catch {} browser = undefined; context = undefined; page = undefined; cdp = undefined; await closeServer(fixtureServer); fixtureServer = undefined; }
 async function handle(request) { assertObject(request,'request'); const method = assertString(request.method,'method',64); if (method === 'start') { if (!browser) { shuttingDown = false; await startServers(); await startFixture(); try { await startBrowser(); } catch (error) { await shutdown(); throw error; } } return snapshot(); } if (method === 'snapshot') return snapshot(); if (method === 'inspect') return inspect(); if (method === 'input') return dispatchInput(request.event); if (method === 'reload') return reload(); if (method === 'navigate') return navigate(request.url); if (method === 'validateUrl') return { url: normalizeUrl(request.url) }; if (method === 'stop') { await shutdown(); return { status:'stopped' }; } throw protocolError(`unknown method: ${method}`); }
 function writeResponse(response) { const line = JSON.stringify(response); process.stdout.write(`${line.length <= MAX_LINE ? line : JSON.stringify({ok:false,error:'response exceeded control protocol limit'})}\n`); }
 const input = readline.createInterface({ input:process.stdin, crlfDelay:Infinity }); process.on('SIGTERM', () => { void shutdown().finally(() => process.exit(0)); }); process.on('SIGINT', () => { void shutdown().finally(() => process.exit(0)); });
