@@ -53,7 +53,7 @@ export type MutationCoordinatorOptions = {
   focusTokenRef: MutableRefObject<number>;
   dispatchSession: Dispatch<SessionAction>;
   describeError(error: unknown, fallback: string): StatusError;
-  mutationSnapshot(sessionId: string, response: unknown): { focused_pane_id: string | null };
+  mutationSnapshot(sessionId: string, response: unknown): SessionState["snapshot"] & { focused_pane_id: string | null };
   onResync(): void;
 };
 
@@ -90,6 +90,9 @@ export function useMutationCoordinator({ client, stateRef, mountedRef, sessionOb
       focusIntentRef.current = focusFromSnapshot && snapshot.focused_pane_id && observation === sessionObservationRef.current && focusToken === focusTokenRef.current
         ? { epoch, token, paneId: snapshot.focused_pane_id }
         : null;
+      // The mutation response is a newer Herdr snapshot. Render it immediately
+      // while the ordered stream is resubscribed to establish its new cursor.
+      dispatchSession({ type: "snapshot/authoritative", epoch, sessionId, snapshot });
       dispatchSession({ type: "snapshot/request", epoch, sessionId });
       onResync();
     }).catch((error: unknown) => {

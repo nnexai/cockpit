@@ -54,6 +54,7 @@ export type SessionAction =
   | { type: "switch"; sessionId: string }
   | { type: "snapshot/request"; epoch: number; sessionId: string }
   | { type: "snapshot/received"; epoch: number; sessionId: string; snapshot: SessionSnapshotResponse }
+  | { type: "snapshot/authoritative"; epoch: number; sessionId: string; snapshot: SessionSnapshotResponse }
   | { type: "stream/message"; epoch: number; sessionId: string; message: SessionStreamMessage }
   | { type: "stream/error"; epoch: number; sessionId: string; code: string; message: string }
   | { type: "focus/request"; epoch: number; sessionId: string; request: FocusRequest; token?: number }
@@ -114,6 +115,9 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return current(state, action.epoch, action.sessionId)
         ? { ...state, sync: "loading" }
         : state;
+    case "snapshot/authoritative":
+      if (!current(state, action.epoch, action.sessionId) || action.snapshot.session_id !== state.sessionId) return state;
+      return { ...state, snapshot: action.snapshot, syncError: null };
     case "snapshot/received":
       if (!current(state, action.epoch, action.sessionId)) return state;
       if (state.sync === "live") return state;

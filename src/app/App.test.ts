@@ -18,6 +18,7 @@ import {
 } from "./App";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex } from "./layout/layoutProjection";
 import { initialMutationCoordinatorState, mutationCoordinatorReducer } from "./session/mutationCoordinator";
+import { initialSessionState, sessionReducer } from "./session/sessionStore";
 import { scheduleFocusFallback } from "./session/focusCoordinator";
 import { prefixCommandForKey, routeWorkbenchKeydown } from "./input/keymap";
 import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
@@ -52,6 +53,11 @@ function routingEvent(overrides: RoutingEventOverrides = {}): KeyboardEvent {
     ...overrides,
   } as unknown as KeyboardEvent;
 }
+it("renders a Herdr mutation snapshot immediately while stream recovery begins", () => {
+  const initial = { ...initialSessionState, epoch: 1, sessionId: "session-1", sync: "live" as const, snapshot: snapshot() };
+  const updated = { ...snapshot(), layouts: [{ space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 120, height: 40 }, focused_pane_id: "pane-1", panes: [{ pane_id: "pane-1", focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }], zoomed: true }] };
+  expect(sessionReducer(initial, { type: "snapshot/authoritative", epoch: 1, sessionId: "session-1", snapshot: updated }).snapshot).toEqual(updated);
+});
 
 
   it("sends Shift+Enter as the bare line feed preserved by Herdr", () => {
