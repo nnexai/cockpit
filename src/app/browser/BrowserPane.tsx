@@ -48,6 +48,10 @@ const statusText = (status: PaneStatus, message: string | null): string => {
 };
 const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
+const navigationUrl = (value: string): string => {
+  const trimmed = value.trim();
+  return /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
 const rectFrom = (first: BrowserPoint, last: BrowserPoint): BrowserRect => ({ x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(last.x - first.x), height: Math.abs(last.y - first.y) });
 const kindFor = (annotation: BrowserViewDraftAnnotation): "freehand" | "region" | "element" => annotation.kind;
 function simplify(points: BrowserPoint[]): BrowserPoint[] {
@@ -501,20 +505,17 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (tool === "element") {
       const point = viewportPointFor(event); if (!point) return;
       void inspect(point).then((result) => {
-        const currentFrame = frameRef.current;
-        if (result?.inspectable && result.evidence && result.bounds
-          && currentFrame
-          && result.location.target_id === currentFrame.descriptor.target_id
-          && result.location.document_generation === currentFrame.descriptor.document_generation
-          && result.location.viewport_revision === currentFrame.descriptor.viewport_revision
-          && result.location.presented_frame_sequence === currentFrame.sequence
-          && result.pointer_sample_sequence === snapshotRef.current?.cursor?.pointer_sample_sequence) {
+        const current = snapshotRef.current;
+        if (result?.inspectable && result.evidence && result.bounds && current?.viewport
+          && result.location.target_id === current.displayed_target_id
+          && result.location.document_generation === current.document?.document_generation
+          && result.location.viewport_revision === current.viewport.viewport_revision) {
           const bounds = {
             ...result.bounds,
-            x: result.bounds.x + currentFrame.descriptor.scroll_x,
-            y: result.bounds.y + currentFrame.descriptor.scroll_y,
+            x: result.bounds.x + current.viewport.scroll_x,
+            y: result.bounds.y + current.viewport.scroll_y,
           };
-          persist({ id: annotationId(), kind: "element", color, points: [{ x: bounds.x, y: bounds.y }], bounds, evidence: result.evidence, comment: null });
+          void persist({ id: annotationId(), kind: "element", color, points: [{ x: bounds.x, y: bounds.y }], bounds, evidence: result.evidence, comment: null });
         } else if (result) setMessage(result.limitation ?? "The selected element changed before it could be saved.");
       });
       return;
@@ -569,7 +570,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   const navigation = (action: "back" | "forward" | "reload" | "stop" | "navigate", address?: string): void => {
     if (!liveInputEnabledRef.current) return;
-    const value = action === "navigate" ? { type: "navigate" as const, url: address ?? "" } : { type: action };
+    const value = action === "navigate" ? { type: "navigate" as const, url: navigationUrl(address ?? "") } : { type: action };
+    urlEditing.current = false;
     draftRequestRef.current += 1; draftRef.current = null; setDraft(null); setPendingCaptureState(null); setSelectedId(null); setNoteId(null); setNoteValue(""); setInspection(null);
     onInteractionFocus?.(); void releaseRemotePointer();
     void enqueueInput("boundary", async () => {
