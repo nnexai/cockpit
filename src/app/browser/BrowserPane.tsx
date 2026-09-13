@@ -684,6 +684,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           await openDraft();
         }
       }
+      if (retried?.type === "capture" && retried.capture.state === "pending") {
+        setPendingCaptureState(retried.capture.pending);
+        errorRef.current = true;
+        setStatus("error");
+        setMessage(retried.capture.pending.last_error ?? "Could not save the pending capture; retry or discard it.");
+      }
       if (retried?.type === "capture" && retried.capture.state === "absent") {
         setPendingCaptureState(null);
         await openDraft();
