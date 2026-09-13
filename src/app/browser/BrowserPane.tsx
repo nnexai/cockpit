@@ -417,7 +417,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (!current?.cursor || !inspected) return null;
     const outcome = await command({ type: "inspect", command: { location: inspected, pointer_sample_sequence: current.cursor.pointer_sample_sequence, x: point.x, y: point.y } });
     if (request !== inspectRequestRef.current) return null;
-    return outcome?.type === "inspection" ? outcome.inspection : null;
+    const result = outcome?.type === "inspection" ? outcome.inspection : null;
+    setInspection(result);
+    return result;
   };
   const remotePointer = (event: PointerEvent<HTMLDivElement>, kind: "move" | "down" | "up" | "cancel"): void => {
     if (!liveInputEnabledRef.current) return;
