@@ -164,15 +164,20 @@ impl BrowserHelperSupervisor {
             attachment.association_key.clone(),
             attachment.browser_incarnation.clone(),
         );
-        let existing_id = {
-            let associations = self.associations.lock().await;
-            associations
-                .get(&association_key)
-                .and_then(|ids| ids.first())
-                .cloned()
-        };
-        if let Some(existing_id) = existing_id {
-            return self.open_shared(existing_id, association_key, attachment, request).await;
+        while let Some(existing_id) = self.existing_view_id(&association_key).await {
+            match self
+                .open_shared(
+                    existing_id,
+                    association_key.clone(),
+                    attachment.clone(),
+                    request.clone(),
+                )
+                .await
+            {
+                Ok(opened) => return Ok(opened),
+                Err(error) if error.code == "browser_view_not_found" => continue,
+                Err(error) => return Err(error),
+            }
         }
         let (input, mut input_rx) = mpsc::channel(HELPER_QUEUE);
         let (events, _) = broadcast::channel(EVENT_QUEUE);
@@ -316,6 +321,20 @@ impl BrowserHelperSupervisor {
             frame_endpoint: endpoint,
         })
     }
+    async fn existing_view_id(&self, association_key: &(String, String)) -> Option<String> {
+        // Associations can outlive a managed view when its final gateway
+        // connection races a subsequent open. Prune those IDs before sharing
+        // so a new attach never targets a removed view.
+        let mut associations = self.associations.lock().await;
+        let ids = associations.get_mut(association_key)?;
+        let views = self.views.lock().await;
+        ids.retain(|id| views.contains_key(id));
+        let existing = ids.first().cloned();
+        if ids.is_empty() {
+            associations.remove(association_key);
+        }
+        existing
+    }
 
     pub(crate) async fn events(&self, view_id: &str) -> Result<BrowserViewEvents, InspectionError> {
         let views = self.views.lock().await;
@@ -352,7 +371,7 @@ impl BrowserHelperSupervisor {
             let views = self.views.lock().await;
             let source = views.get(&existing_id).ok_or_else(|| {
                 InspectionError::new(
-                    "browser_helper_failed",
+                    "browser_view_not_found",
                     "Shared browser helper disappeared",
                 )
             })?;

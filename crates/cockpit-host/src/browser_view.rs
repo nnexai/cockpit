@@ -182,9 +182,15 @@ async fn events(
             "Browser runtime is not configured",
         );
     };
+    // Lease the view before taking the snapshot. A final release from an older
+    // stream must not remove it between lookup and WebSocket upgrade.
+    retain_view_connection(&runtime, &view_id).await;
     let events = match runtime.browser_view_events(&view_id).await {
         Ok(events) => events,
-        Err(error) => return inspection_error(error),
+        Err(error) => {
+            release_view_connection(&runtime, &view_id).await;
+            return inspection_error(error);
+        }
     };
     ws.on_upgrade(move |socket| {
         run_events(socket, runtime, events.snapshot, events.events, view_id)
@@ -206,6 +212,9 @@ async fn frame(
             "Browser runtime is not configured",
         );
     };
+    // Hold the lease before validating the grant so event/frame upgrade order
+    // cannot let the final older stream detach this view.
+    retain_view_connection(&runtime, &view_id).await;
     ws.max_message_size(MAX_JSON)
         .on_upgrade(move |socket| run_frame(socket, runtime, view_id))
         .into_response()
@@ -218,7 +227,6 @@ async fn run_events(
     mut events: tokio::sync::broadcast::Receiver<BrowserViewEvent>,
     view_id: String,
 ) {
-    retain_view_connection(&runtime, &view_id).await;
     let metadata = BrowserViewEventMetadata {
         view_id: snapshot.identity.view_id.clone(),
         stream_epoch: snapshot.identity.stream_epoch,
@@ -256,6 +264,7 @@ async fn run_frame(
     view_id: String,
 ) {
     let Ok(Some(first)) = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await else {
+        release_view_connection(&runtime, &view_id).await;
         return;
     };
     let grant = match first {
@@ -264,12 +273,14 @@ async fn run_frame(
                 Ok(message) if message.grant.view_id == view_id => message.grant,
                 _ => {
                     close_ws(&mut socket, 1008, "invalid browser frame grant").await;
+                    release_view_connection(&runtime, &view_id).await;
                     return;
                 }
             }
         }
         _ => {
             close_ws(&mut socket, 1008, "frame grant required").await;
+            release_view_connection(&runtime, &view_id).await;
             return;
         }
     };
@@ -277,13 +288,10 @@ async fn run_frame(
         Ok(endpoint) => endpoint,
         Err(error) => {
             close_ws(&mut socket, 1008, &error.message).await;
+            release_view_connection(&runtime, &view_id).await;
             return;
         }
     };
-    // The runtime has validated the grant at this point. Hold a connection
-    // lease while the private helper lane is established so a transport
-    // failure cleans up this stream's own view without affecting peers.
-    retain_view_connection(&runtime, &view_id).await;
     let mut helper = match FrameConnection::connect(&endpoint, &grant.grant).await {
         Ok(connection) => connection,
         Err(_) => {
