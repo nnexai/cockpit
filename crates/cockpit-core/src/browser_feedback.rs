@@ -776,8 +776,8 @@ fn validate_capture(
     submission: &BrowserCaptureSubmission,
 ) -> Result<(), InspectionError> {
     validate_association_key(&context.association_key)?;
-    validate_uuid(&context.browser_instance, "browser instance")?;
-    validate_uuid(&submission.browser_instance, "browser instance")?;
+    validate_text(&context.browser_instance, "browser instance", 512)?;
+    validate_text(&submission.browser_instance, "browser instance", 512)?;
     if context.association_key != submission.association_key
         || context.browser_instance != submission.browser_instance
     {
@@ -966,7 +966,7 @@ fn validate_stored(id: &str, stored: &StoredCapture) -> Result<(), InspectionErr
     }
     validate_uuid(&stored.id, "capture ID")?;
     validate_association_key(&stored.context.association_key)?;
-    validate_uuid(&stored.context.browser_instance, "browser instance")?;
+    validate_text(&stored.context.browser_instance, "browser instance", 512)?;
     validate_text(&stored.context.session_id, "session ID", 256)?;
     validate_text(&stored.context.space_id, "space ID", 256)?;
     validate_text(&stored.context.space_label, "space label", 512)?;
