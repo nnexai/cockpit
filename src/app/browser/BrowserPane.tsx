@@ -180,6 +180,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           inputSequence.current = snapshotRef.current?.control.next_input_sequence ?? 1;
           return null;
         }
+        if (response.status === "stale" && (value.type === "pointer" || value.type === "wheel")) return null;
         setMessage(response.message);
         if (response.status === "stale") setStatus("stale");
         else if (response.status === "unsupported") setStatus("unsupported");
