@@ -768,6 +768,7 @@ const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_DEFAULT_WIDTH = 224;
 const SIDEBAR_WIDTH_KEY = "cockpit.sidebar.width";
 const SIDEBAR_COLLAPSED_KEY = "cockpit.sidebar.collapsed";
+const MAX_CACHED_PANES = 24;
 
 function isNarrowViewport(): boolean {
   return typeof window !== "undefined" && window.innerWidth <= 800;
@@ -869,6 +870,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const paneCanvasVisible = paneCanvasReady || retainedProjection !== null || committedProjection.current === null;
   const projectionHistoryRef = useRef(new Map<string, PaneCanvasProjection>());
   if (paneProjection.key !== null) {
+    projectionHistoryRef.current.delete(paneProjection.key);
     projectionHistoryRef.current.set(paneProjection.key, paneProjection);
   }
   const knownPaneIds = new Set(allPaneIds);
@@ -879,6 +881,13 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   projectionHistoryRef.current.forEach((projection, key) => {
     if (key !== paneProjection.key && projection.visiblePaneIds.some((paneId) => currentPaneIds.has(paneId))) projectionHistoryRef.current.delete(key);
   });
+  let cachedPaneCount = new Set(Array.from(projectionHistoryRef.current.values()).flatMap((projection) => projection.visiblePaneIds)).size;
+  for (const [key] of projectionHistoryRef.current) {
+    if (cachedPaneCount <= MAX_CACHED_PANES) break;
+    if (key === paneProjection.key) continue;
+    projectionHistoryRef.current.delete(key);
+    cachedPaneCount = new Set(Array.from(projectionHistoryRef.current.values()).flatMap((candidate) => candidate.visiblePaneIds)).size;
+  }
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editing, setEditing] = useState<ContextTarget | null>(null);
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
