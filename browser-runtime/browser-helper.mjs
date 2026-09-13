@@ -940,19 +940,6 @@ async function command(request) {
       if (state.controlled && state.controllerViewId !== request.view_id) {
         return { status: 'rejected', ...base, code: 'browser_control_required', message: 'Another browser view holds the input lease' };
       }
-      const previousViewport = {
-        cssWidth: state.cssWidth,
-        cssHeight: state.cssHeight,
-        devicePixelRatio: state.devicePixelRatio,
-      };
-      await applyRequestedViewport(request.command.viewport);
-      if (previousViewport.cssWidth !== state.cssWidth
-        || previousViewport.cssHeight !== state.cssHeight
-        || previousViewport.devicePixelRatio !== state.devicePixelRatio) {
-        state.viewportRevision++;
-        resetFrameTransport();
-        emitEvent('viewport_changed', { viewport: viewportState() });
-      }
       state.controlled = true;
       state.controllerViewId = request.view_id;
       state.leaseGeneration++;
