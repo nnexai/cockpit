@@ -327,6 +327,7 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
 
     expect(button("Open Review right").disabled).toBe(false);
+    click(button("All commands"));
     expect(button("Open Review below").disabled).toBe(false);
     click(button("Open Review right"));
     await settle();
@@ -342,11 +343,10 @@ describe("mounted App mutation and session ordering", () => {
     fixture.setPanePresentation(presentation);
     vi.mocked(fixture.client.openContext).mockResolvedValue(presentation);
     await mount(fixture);
-    click(button("Pane actions for Alpha pane"));
-    expect(button("Open files right").disabled).toBe(false);
-    expect(button("Open files below").disabled).toBe(false);
-    expect(button("Open Context right").disabled).toBe(true);
-    click(button("Open files right"));
+    click(button("Pane"));
+    expect(button("Files").disabled).toBe(false);
+    expect(button("Context").disabled).toBe(true);
+    click(button("Files"));
     await settle();
     expect(fixture.client.openContext).toHaveBeenCalledWith("session-1", { pane_id: "pane-1", binding_id: "binding-pane-1", root_id: "folder", direction: "right" });
   });
@@ -361,8 +361,7 @@ describe("mounted App mutation and session ordering", () => {
     expect(button("Commands").closest(".tab-strip")).toBeNull();
     expect(button("Commands").closest(".tab-strip-actions")).not.toBeNull();
     expect(button("Pane").closest(".tab-strip-actions")).not.toBeNull();
-    expect(button("Pane actions for Alpha pane").disabled).toBe(false);
-    expect(button("Pane actions for Alpha pane").closest(".pane-header")).not.toBeNull();
+    expect(button("Pane").disabled).toBe(false);
     click(button("Pane"));
     expect(container.querySelector('[role="menu"][aria-label="pane actions"]')).not.toBeNull();
     click(button("Commands"));
@@ -373,9 +372,9 @@ describe("mounted App mutation and session ordering", () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
-    expect(button("Pane actions for Alpha pane").disabled).toBe(false);
+    expect(button("Pane").disabled).toBe(false);
     click(button("Create tab"));
-    expect(button("Pane actions for Alpha pane").disabled).toBe(true);
+    expect(button("Pane").disabled).toBe(true);
   });
 
   it("keeps the current tab until Herdr confirms a focus request", async () => {
@@ -782,26 +781,26 @@ describe("mounted App mutation and session ordering", () => {
         if (!item) throw new Error(`Missing pane menu item ${label}`);
         return item;
       };
-      click(button("Pane actions for Alpha pane"));
+      click(button("Pane"));
       expect(paneMenuItem("Show terminal view")).toBeTruthy();
       click(paneMenuItem("Show terminal view"));
-      click(button("Pane actions for Alpha pane"));
+      click(button("Pane"));
       click(paneMenuItem("Refresh renderer detection"));
       await settle();
-      click(button("Pane actions for Alpha pane"));
-      expect(paneMenuItem("Render as Review")).toBeTruthy();
-      click(paneMenuItem("Render as Review"));
+      click(button("Pane"));
+      expect(paneMenuItem("Render document")).toBeTruthy();
+      click(paneMenuItem("Render document"));
 
       fixture.emitError("session-1");
       await settle();
-      click(button("Pane actions for Alpha pane"));
+      click(button("Pane"));
       expect(paneMenuItem("Show terminal view")).toBeTruthy();
       click(paneMenuItem("Refresh renderer detection"));
       fixture.queueSnapshot("session-1", Promise.resolve(snapshot("session-1")));
       await advanceTimers(250);
       fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
       await settle();
-      click(button("Pane actions for Alpha pane"));
+      click(button("Pane"));
       expect(paneMenuItem("Show terminal view")).toBeTruthy();
     } finally {
       vi.useRealTimers();
