@@ -263,7 +263,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const latest = snapshotRef.current;
     if (!latest || JSON.stringify(context(latest)) !== JSON.stringify(documentContext)) { setPendingCaptureState(null); return; }
     const currentDraft = listed.inventory.drafts.find((candidate) => candidate.target_id === documentContext.target_id && candidate.document_generation === documentContext.document_generation);
-    const pending = currentDraft && listed.inventory.pending_capture?.draft_id === currentDraft.draft_id ? listed.inventory.pending_capture : null;
+    // A pending capture belongs to the browser association, not necessarily the
+    // current document. It must be recovered before any new composition.
+    const pending = listed.inventory.pending_capture;
     setPendingCaptureState(pending);
     const draftId = currentDraft?.draft_id ?? null;
     await command({ type: "draft", context: documentContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
@@ -670,6 +672,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           draftRequestRef.current += 1; draftRef.current = null; setDraft(null); setSelectedId(null); setNoteId(null); setNoteValue("");
           await openDraft();
         }
+      }
+      if (retried?.type === "capture" && retried.capture.state === "absent") {
+        setPendingCaptureState(null);
+        await openDraft();
       }
       return;
     }
