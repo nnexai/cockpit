@@ -15,6 +15,7 @@ const MAX_HANDSHAKE = 8192;
 const MAX_WS_PAYLOAD = 64 * 1024;
 const MAX_WS_BUFFER = MAX_WS_PAYLOAD + 14;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const FRAME_INTERVAL_MS = 1000 / 30;
 
 const START_PAGE_PATH = '/__cockpit_browser_start__';
 const START_PAGE_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Cockpit browser ready</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f4f6f8;color:#1d2733;font:16px system-ui,sans-serif}main{max-width:34rem;padding:2rem;text-align:center}p{color:#526170}</style></head><body><main><strong>Inline browser ready</strong><p>Enter a URL above to navigate.</p></main></body></html>';
@@ -97,6 +98,7 @@ let frameHistory = new Map();
 let observedPage = null;
 let observedPageHandlers = null;
 let screencastListener = null;
+let lastScreencastAcknowledgement = 0;
 let targetTransition = Promise.resolve();
 let pageBindingGeneration = 0;
 let WebSocketServer;
@@ -711,12 +713,14 @@ function enqueueFrame(frame) {
     return;
   }
   latestFrame = next;
-  let delivered = false;
-  for (const socket of sockets) {
-    if (!socket.authorized || socket.readyState !== WebSocket.OPEN) continue;
-    if (queueFrame(socket, next)) delivered = true;
-  }
-  if (!delivered) acknowledgeFrame(next);
+  for (const socket of sockets) queueFrame(socket, next);
+  // The JPEG is now helper-owned. Viewer acknowledgements only govern their
+  // replacement slot; they must not stall Chromium's screencast cadence.
+  const delay = Math.max(0, FRAME_INTERVAL_MS - (performance.now() - lastScreencastAcknowledgement));
+  setTimeout(() => {
+    ackSession(next.sessionId, next.cdp);
+    lastScreencastAcknowledgement = performance.now();
+  }, delay);
 }
 
 function allowedFrameOrigin(origin) {

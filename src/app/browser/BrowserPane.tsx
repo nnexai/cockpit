@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type FormEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
 import type { BrowserCaptureSubmission, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
 import { BrowserFrameError, FramePresenter, validateFrameDescriptor } from "./framePresenter";
@@ -48,7 +48,6 @@ const statusText = (status: PaneStatus, message: string | null): string => {
 };
 const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
-const textFromKey = (event: KeyboardEvent<HTMLElement>): string | null => !event.nativeEvent.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1 ? event.key : null;
 const rectFrom = (first: BrowserPoint, last: BrowserPoint): BrowserRect => ({ x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(last.x - first.x), height: Math.abs(last.y - first.y) });
 const kindFor = (annotation: BrowserViewDraftAnnotation): "freehand" | "region" | "element" => annotation.kind;
 function simplify(points: BrowserPoint[]): BrowserPoint[] {
@@ -76,7 +75,6 @@ function location(snapshot: BrowserViewSnapshot, frame: BrowserViewFramePacket["
 export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onHide, onBackToTerminals, onExpand, className }: BrowserPaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamRef = useRef<BrowserViewStream | null>(null);
   const identityRef = useRef<{ id: string; epoch: number } | null>(null);
   const snapshotRef = useRef<BrowserViewSnapshot | null>(null);
@@ -93,8 +91,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const remotePointerRef = useRef<number | null>(null);
   const remotePointRef = useRef<BrowserPoint | null>(null);
   const inspectRequestRef = useRef(0);
-  const compositionActiveRef = useRef(false);
-  const suppressInputRef = useRef(false);
   const urlEditing = useRef(false);
   const clientRef = useRef(clientId ?? newId("cockpit-browser-view"));
   const viewportRef = useRef(viewport);
@@ -467,7 +463,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (point) {
         remotePointerRef.current = event.pointerId;
         event.currentTarget.setPointerCapture(event.pointerId);
-        inputRef.current?.focus({ preventScroll: true });
+        event.currentTarget.focus({ preventScroll: true });
         remotePointer(event, "down");
       }
       return;
@@ -550,25 +546,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       await command({ type: "keyboard", context: documentContext, input: { kind, key: event.key, code: event.code, location: event.location, modifiers: modifiers(event), repeat: event.repeat, input_sequence } });
     });
   };
-  const sendText = (event: FormEvent<HTMLTextAreaElement>): void => {
-    if (!liveInputEnabledRef.current) { event.currentTarget.value = ""; suppressInputRef.current = false; return; }
-    const text = event.currentTarget.value;
-    event.currentTarget.value = "";
-    if (suppressInputRef.current) { suppressInputRef.current = false; return; }
-    if (!text || tool !== "browse") return;
-    onInteractionFocus?.();
-    void enqueueInput("boundary", async () => {
-      const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
-      if (!documentContext || !frameMatchesCurrent()) return;
-      const input_sequence = nextInput();
-      await command({ type: "text", context: documentContext, input: { text, input_sequence } });
-    });
-  };
   const sendComposition = (event: CompositionEvent<HTMLElement>, kind: "start" | "update" | "commit"): void => {
-    if (!liveInputEnabledRef.current) { compositionActiveRef.current = false; suppressInputRef.current = false; return; }
-    compositionActiveRef.current = kind !== "commit";
-    if (kind === "commit") suppressInputRef.current = true;
-    if (tool !== "browse") return;
+    if (!liveInputEnabledRef.current || tool !== "browse") return;
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
       if (!documentContext || !frameMatchesCurrent()) return;
@@ -576,7 +555,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       await command({ type: "composition", context: documentContext, input: { kind, text: event.data, input_sequence } });
     });
   };
-  const clipboard = (event: ClipboardEvent<HTMLTextAreaElement>, copy: boolean): void => {
+  const clipboard = (event: ClipboardEvent<HTMLElement>, copy: boolean): void => {
     if (!liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse") return;
     event.preventDefault(); onInteractionFocus?.();
     const commandValue = copy ? { type: "copy" as const } : { type: "paste" as const, text: event.clipboardData.getData("text/plain") };
@@ -767,9 +746,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       {pendingCapture ? <span className="browser-capture-pending" role="status">Pending capture · Send annotations to retry</span> : null}
       <button type="button" disabled={!draft || (!pendingCapture && (!frame || annotations.length === 0))} aria-label="Send annotations" title={pendingCapture ? "Retry pending capture" : "Capture and send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /><span>Send annotations</span></button>
     </div>
-      <div ref={surfaceRef} className="browser-surface" style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel}>
+      <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={(event) => sendKey(event, "down")} onKeyUp={(event) => sendKey(event, "up")} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
-      <textarea ref={inputRef} className="browser-input-sink" data-browser-input aria-label="Browser keyboard input" onInput={sendText} onKeyDown={(event) => sendKey(event, "down")} onKeyUp={(event) => sendKey(event, "up")} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")} />
       {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="xMidYMid meet" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
       {frame && (status === "stale" || status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
       {blocker ? <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => void command({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div> : null}
