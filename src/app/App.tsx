@@ -1143,6 +1143,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       setCommandsOpen(false);
       return;
     }
+    if (action === "close") {
+      // A browser-only view hides the pane canvas. Restore it before awaiting
+      // the remote close so closing the browser never leaves an empty workarea.
+      setBrowserInputActive(false);
+      setBrowserPresentation((currentState) => {
+        const presentation = currentState[key];
+        return presentation?.presentation === "browser_only"
+          ? { ...currentState, [key]: { ...presentation, presentation: "split" } }
+          : currentState;
+      });
+    }
     const token = ++browserRequest.current;
     browserBusyRef.current = true;
     setBrowserBusy(true);
