@@ -21,6 +21,7 @@ export type TerminalPaneProps = {
   focusEpoch: number;
   focusToken: number;
   terminalMouseInput: boolean;
+  deferAttachment?: boolean;
   onRequestControl?: () => void;
   onSelect?: () => void;
   onReady?: () => void;
@@ -154,8 +155,7 @@ function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell
 }
 type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
 
-
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -172,6 +172,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [terminalContextOpen, setTerminalContextOpen] = useState(false);
   const [terminalContextPosition, setTerminalContextPosition] = useState<{ x: number; y: number } | null>(null);
+  const contextSelectionRef = useRef<string | null>(null);
   const lastSequence = useRef<bigint | null>(null);
   const ownershipRef = useRef(ownership);
   const pendingCommands = useRef<TerminalCommand[]>([]);
@@ -278,10 +279,16 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const copySelection = async () => {
     const terminal = terminalRef.current;
     if (!terminal) return;
+    const capturedSelection = contextSelectionRef.current;
+    contextSelectionRef.current = null;
     setClipboardBusy(true);
     setClipboardError(null);
     try {
-      await copyTerminalSelection(terminal);
+      if (capturedSelection !== null) {
+        if (capturedSelection) await createClipboardAccess().writeText(capturedSelection);
+      } else {
+        await copyTerminalSelection(terminal);
+      }
     } catch (cause) {
       setClipboardError({ operation: "copy", message: cause instanceof Error ? cause.message : "Could not copy terminal selection" });
     } finally {
@@ -365,6 +372,9 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
   }, []);
+  useEffect(() => {
+    if (deferAttachment && terminalReady) onReadyRef.current?.();
+  }, [deferAttachment, terminalReady]);
 
   useEffect(() => {
     flushPendingPaste();
@@ -375,8 +385,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   }, []);
 
   useEffect(() => {
-    if (selected && terminalReady) terminalRef.current?.focus();
-  }, [selected, terminalReady]);
+    if (selected && terminalReady && !deferAttachment) terminalRef.current?.focus();
+  }, [deferAttachment, selected, terminalReady]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -487,10 +497,9 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   useEffect(() => {
     ownershipRef.current = ownership;
   }, [ownership]);
-
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal || !terminalReady) return;
+    if (!terminal || !terminalReady || deferAttachment) return;
     const restoreFocus = selectedRef.current && controlAllowedRef.current;
     const geometry = terminalCellGeometry(terminal);
     // The authoritative snapshot can clear a focus transition one render
@@ -645,7 +654,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, request.session_id, request.pane_id, controlAllowed, controlRequested, terminalReady, attempt, registerStream]);
+  }, [client, deferAttachment, request.session_id, request.pane_id, controlAllowed, controlRequested, terminalReady, attempt, registerStream]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;
@@ -660,10 +669,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       className="terminal-host"
       ref={hostRef}
       aria-label={`Terminal ${request.pane_id}`}
-      // Keep terminal clipboard actions local to this pane.
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        contextSelectionRef.current = terminalRef.current?.getSelection() ?? null;
         setTerminalContextPosition({ x: event.clientX, y: event.clientY });
         setTerminalContextOpen(true);
       }}
@@ -715,7 +724,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       }}
     >
       {terminalContextOpen && terminalContextPosition ? <div ref={contextMenuRef} className="terminal-context-menu" role="menu" aria-label="Terminal clipboard actions" style={{ left: terminalContextPosition.x, top: terminalContextPosition.y }} onContextMenu={(event) => event.preventDefault()}>
-        <button type="button" role="menuitem" disabled={clipboardBusy || !terminalRef.current?.hasSelection()} onClick={() => { setTerminalContextOpen(false); void copySelection(); }}>Copy</button>
+        <button type="button" role="menuitem" disabled={clipboardBusy || !(contextSelectionRef.current || terminalRef.current?.getSelection())} onClick={() => { setTerminalContextOpen(false); void copySelection(); }}>Copy</button>
         <button type="button" role="menuitem" disabled={clipboardBusy} onClick={() => { setTerminalContextOpen(false); void pasteClipboard(); }}>Paste</button>
       </div> : null}
       {clipboardBusy ? <span className="terminal-status" role="status" aria-label="Clipboard operation in progress" title="Clipboard operation in progress">⟳</span> : clipboardError ? <span className="terminal-status terminal-status-error" role="alert" aria-label={clipboardError.message} title={clipboardError.message}><span aria-hidden="true">!</span><button type="button" className="terminal-status-retry" aria-label={`Retry ${clipboardError.operation}`} onClick={() => { void (clipboardError.operation === "copy" ? copySelection() : pasteClipboard()); }}>↻</button></span> : null}

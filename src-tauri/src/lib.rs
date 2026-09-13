@@ -67,7 +67,11 @@ async fn cockpit_clipboard_write(text: String) -> Result<(), ErrorResponse> {
     {
         write_linux_clipboard(&text).await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        write_macos_clipboard(&text).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = text;
         Err(stream_error(
@@ -83,7 +87,11 @@ async fn cockpit_clipboard_read() -> Result<String, ErrorResponse> {
     {
         read_linux_clipboard().await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        read_macos_clipboard().await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(stream_error(
             "clipboard_unavailable",
@@ -174,6 +182,85 @@ async fn read_linux_clipboard() -> Result<String, ErrorResponse> {
         Err(stream_error(
             "clipboard_read_failed",
             format!("wl-paste exited with {}", output.status),
+        ))
+    }
+}
+#[cfg(target_os = "macos")]
+async fn write_macos_clipboard(text: &str) -> Result<(), ErrorResponse> {
+    let mut process = TokioCommand::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            stream_error(
+                "clipboard_unavailable",
+                format!("Could not start pbcopy: {error}"),
+            )
+        })?;
+    let result = tokio::time::timeout(CLIPBOARD_TIMEOUT, async {
+        let mut stdin = process.stdin.take().ok_or_else(|| {
+            stream_error("clipboard_unavailable", "pbcopy stdin was unavailable")
+        })?;
+        stdin.write_all(text.as_bytes()).await.map_err(|error| {
+            stream_error(
+                "clipboard_write_failed",
+                format!("Could not write the clipboard: {error}"),
+            )
+        })?;
+        drop(stdin);
+        let status = process.wait().await.map_err(|error| {
+            stream_error(
+                "clipboard_write_failed",
+                format!("Could not finish the clipboard write: {error}"),
+            )
+        })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(stream_error(
+                "clipboard_write_failed",
+                format!("pbcopy exited with {status}"),
+            ))
+        }
+    }).await;
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            let _ = process.kill().await;
+            Err(stream_error(
+                "clipboard_write_timeout",
+                "The native clipboard write exceeded 2 seconds",
+            ))
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn read_macos_clipboard() -> Result<String, ErrorResponse> {
+    let output = tokio::time::timeout(CLIPBOARD_TIMEOUT, TokioCommand::new("pbpaste").output())
+        .await
+        .map_err(|_| {
+            stream_error(
+                "clipboard_read_timeout",
+                "The native clipboard read exceeded 2 seconds",
+            )
+        })?
+        .map_err(|error| {
+            stream_error(
+                "clipboard_unavailable",
+                format!("Could not start pbpaste: {error}"),
+            )
+        })?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|error| {
+            stream_error(
+                "clipboard_read_failed",
+                format!("The clipboard was not valid UTF-8: {error}"),
+            )
+        })
+    } else {
+        Err(stream_error(
+            "clipboard_read_failed",
+            format!("pbpaste exited with {}", output.status),
         ))
     }
 }

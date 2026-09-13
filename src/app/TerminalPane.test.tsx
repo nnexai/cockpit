@@ -190,6 +190,30 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
+  it("waits to attach a hidden incoming tab terminal", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { deferAttachment: true })} />);
+        await settle();
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { deferAttachment: false })} />);
+        await settle();
+      });
+      expect(openTerminal).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
   it("restores terminal focus only when a frame leaves focus on the document", async () => {
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];

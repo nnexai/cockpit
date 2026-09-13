@@ -2,10 +2,9 @@ import { invoke as tauriInvoke, isTauri } from "@tauri-apps/api/core";
 
 export type ClipboardAccess = Pick<Clipboard, "readText" | "writeText">;
 
-function webClipboard(): ClipboardAccess {
+function webClipboard(): ClipboardAccess | null {
   const clipboard = globalThis.navigator?.clipboard;
-  if (!clipboard) throw new Error("Clipboard access is unavailable");
-  return clipboard;
+  return clipboard ?? null;
 }
 
 function nativeClipboard(): ClipboardAccess {
@@ -15,10 +14,27 @@ function nativeClipboard(): ClipboardAccess {
   };
 }
 
+async function withClipboardFallback<T>(primary: () => Promise<T>, fallback: ClipboardAccess | null, operation: (clipboard: ClipboardAccess) => Promise<T>): Promise<T> {
+  try {
+    return await primary();
+  } catch (error) {
+    if (!fallback) throw error;
+    return operation(fallback);
+  }
+}
+
 /** Select the platform clipboard at the user gesture that invokes the operation. */
 export function createClipboardAccess(): ClipboardAccess {
-  // Keep the existing WebView clipboard on macOS/Windows. Linux Tauri uses
-  // the explicit OS adapter because WebKit clipboard permissions are flaky.
-  const isLinux = /Linux/i.test(globalThis.navigator?.userAgent ?? "");
-  return isTauri() && isLinux ? nativeClipboard() : webClipboard();
+  const web = webClipboard();
+  const userAgent = globalThis.navigator?.userAgent ?? "";
+  const isNativePlatform = /Linux|Mac OS X/i.test(userAgent);
+  if (!isTauri() || !isNativePlatform) {
+    if (!web) throw new Error("Clipboard access is unavailable");
+    return web;
+  }
+  const native = nativeClipboard();
+  return {
+    readText: () => withClipboardFallback(() => native.readText(), web, (clipboard) => clipboard.readText()),
+    writeText: (text) => withClipboardFallback(() => native.writeText(text), web, (clipboard) => clipboard.writeText(text)),
+  };
 }
