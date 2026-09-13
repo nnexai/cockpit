@@ -454,6 +454,25 @@ describe("mounted App mutation and session ordering", () => {
     expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.parentElement?.style.visibility).toBe("visible");
   });
 
+  it("keeps a terminal mounted when inspection binding identity changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = new AppFixture();
+      await mount(fixture);
+      const terminal = container.querySelector<HTMLElement>('[data-testid="terminal-pane-1"]');
+      expect(terminal).not.toBeNull();
+
+      const changed = panePresentation("session-1", "pane-1");
+      changed.binding_id = "binding-pane-1-after-process-churn";
+      fixture.setPanePresentation(changed);
+      await advanceTimers(2500);
+      await settle();
+
+      expect(container.querySelector<HTMLElement>('[data-testid="terminal-pane-1"]')).toBe(terminal);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("retries the retained focus intent after a recovery snapshot", async () => {
     vi.useFakeTimers();
     try {
