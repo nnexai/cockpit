@@ -175,16 +175,12 @@ impl BrowserDraftStore {
         drafts: &mut [StoredDraft],
         identity: &BrowserDraftIdentity,
     ) -> Result<(), InspectionError> {
-        let pending = self.load_pending(&identity.association_key)?;
-        let preparation = self.load_preparation(&identity.association_key)?;
         let referenced = self.load_capture_references()?;
         let stored = stored_identity(identity);
         for draft in drafts.iter_mut().filter(|draft| {
             !draft.tombstoned
                 && draft.identity.association_key == stored.association_key
-                && draft.identity.browser_incarnation == stored.browser_incarnation
-                && draft.identity.target_id == stored.target_id
-                && draft.identity.document_generation != stored.document_generation
+                && draft.identity != stored
         }) {
             draft.annotations.clear();
             draft.editor.selected_annotation_id = None;
@@ -193,18 +189,6 @@ impl BrowserDraftStore {
             draft.freshness = BrowserViewInspectionFreshness::Stale;
             draft.revision = draft.revision.saturating_add(1);
             self.write_draft(draft)?;
-        }
-        if pending.is_none() {
-            if let Some(preparation) = preparation {
-                let belongs_to_current = drafts.iter().any(|draft| {
-                    draft.draft_id == preparation.draft_id
-                        && !draft.tombstoned
-                        && draft.identity == stored
-                });
-                if !belongs_to_current {
-                    self.remove_preparation(&identity.association_key)?;
-                }
-            }
         }
         self.compact_retired(drafts, &referenced, &stored.association_key)
     }
@@ -1118,4 +1102,133 @@ fn required_draft_id(draft_id: Option<&str>) -> Result<&str, InspectionError> {
 
 fn required_revision(revision: Option<u64>) -> Result<u64, InspectionError> {
     revision.ok_or_else(|| InspectionError::new("browser_draft_command", "Expected draft revision is required"))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser_feedback::{BrowserFeedbackOptions, BrowserFeedbackStore};
+
+    fn test_store() -> (BrowserDraftStore, PathBuf) {
+        let root = std::env::temp_dir().join(format!("cockpit-browser-drafts-{}", Uuid::new_v4()));
+        let feedback = Arc::new(
+            BrowserFeedbackStore::new(root.clone(), BrowserFeedbackOptions::default()).unwrap(),
+        );
+        let store = BrowserDraftStore::new(root.clone(), feedback).unwrap();
+        (store, root)
+    }
+
+    fn identity(
+        association_key: &str,
+        browser_incarnation: &str,
+        target_id: &str,
+        document_generation: u64,
+    ) -> BrowserDraftIdentity {
+        BrowserDraftIdentity {
+            association_key: association_key.to_owned(),
+            browser_incarnation: browser_incarnation.to_owned(),
+            target_id: target_id.to_owned(),
+            document_generation,
+        }
+    }
+
+    fn draft(identity: &BrowserDraftIdentity, draft_id: String) -> StoredDraft {
+        StoredDraft {
+            format_version: FORMAT_VERSION,
+            identity: stored_identity(identity),
+            draft_id,
+            revision: 1,
+            annotations: Vec::new(),
+            freshness: BrowserViewInspectionFreshness::Fresh,
+            stale: false,
+            editor: BrowserViewDraftEditorState {
+                selected_annotation_id: None,
+                notes_open: false,
+            },
+            consumed_annotation_ids: Vec::new(),
+            tombstoned: false,
+        }
+    }
+
+    #[test]
+    fn opening_new_incarnation_compacts_obsolete_drafts_but_keeps_preparation_reference() {
+        let (store, root) = test_store();
+        let association_key = "0123456789abcdef01234567";
+        let other_association_key = "89abcdef0123456701234567";
+        let old_incarnation = Uuid::new_v4().to_string();
+        let current_incarnation = Uuid::new_v4().to_string();
+        let referenced_id = Uuid::new_v4().to_string();
+        let mut old_ids = Vec::new();
+
+        for generation in 1..=MAX_DRAFTS as u64 {
+            let draft_id = if generation == 1 {
+                referenced_id.clone()
+            } else {
+                Uuid::new_v4().to_string()
+            };
+            old_ids.push(draft_id.clone());
+            let old_identity = identity(
+                association_key,
+                &old_incarnation,
+                "target",
+                generation,
+            );
+            store.write_draft(&draft(&old_identity, draft_id)).unwrap();
+        }
+
+        let preparation = StoredCapturePreparation {
+            format_version: FORMAT_VERSION,
+            association_key: association_key.to_owned(),
+            browser_incarnation: old_incarnation.clone(),
+            capture_id: Uuid::new_v4().to_string(),
+            draft_id: referenced_id.clone(),
+            draft_revision: 1,
+            annotation_ids: Vec::new(),
+            context: BrowserCaptureContext {
+                association_key: association_key.to_owned(),
+                session_id: "session".to_owned(),
+                space_id: "space".to_owned(),
+                space_label: "Space".to_owned(),
+                playwright_session: "playwright".to_owned(),
+                working_directory: "/tmp".to_owned(),
+                invocation: "test".to_owned(),
+                browser_instance: old_incarnation.clone(),
+                inline_provenance: None,
+            },
+        };
+        atomic_write_json(
+            &store.dir().unwrap(),
+            &preparation_name(association_key),
+            &preparation,
+        )
+        .unwrap();
+
+        let other_id = Uuid::new_v4().to_string();
+        let other_identity = identity(
+            other_association_key,
+            &old_incarnation,
+            "other-target",
+            1,
+        );
+        store
+            .write_draft(&draft(&other_identity, other_id.clone()))
+            .unwrap();
+
+        let current_identity = identity(
+            association_key,
+            &current_incarnation,
+            "target",
+            1,
+        );
+        let opened = store.open(&current_identity, None).unwrap();
+        assert_eq!(opened.document_generation, 1);
+        assert_eq!(store.list(association_key).unwrap().drafts.len(), 1);
+        assert!(store.load_preparation(association_key).unwrap().is_some());
+        assert!(store.load_draft(&referenced_id).unwrap().unwrap().tombstoned);
+        for draft_id in old_ids.into_iter().skip(1) {
+            assert!(store.load_draft(&draft_id).unwrap().is_none());
+        }
+        assert!(store.load_draft(&other_id).unwrap().is_some());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
