@@ -643,12 +643,17 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
     return false;
   };
+  const recoverPendingCapture = async (action: "retry_pending" | "discard_pending"): Promise<BrowserViewCommandOutcome | null> => {
+    try {
+      return await client.browserDraftRecovery({ target, action: { type: action } });
+    } catch (error) {
+      errorRef.current = true; setStatus("error"); setMessage(`Could not recover pending capture: ${errorMessage(error)}`);
+      return null;
+    }
+  };
   const discardPendingCapture = async (): Promise<void> => {
-    const pending = pendingCaptureRef.current;
-    const current = snapshotRef.current;
-    const documentContext = current ? context(current) : null;
-    if (!pending || !documentContext) { setMessage("The pending capture is still recovering."); return; }
-    const discarded = await command({ type: "draft", context: documentContext, draft_id: pending.draft_id, expected_revision: pending.draft_revision, command: { type: "discard_pending" } });
+    if (!pendingCaptureRef.current) { setMessage("The pending capture is still recovering."); return; }
+    const discarded = await recoverPendingCapture("discard_pending");
     if (discarded?.type !== "capture" || discarded.capture.state !== "absent") return;
     pendingDeliveryIdsRef.current = null;
     setPendingCaptureState(null);
@@ -668,15 +673,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       return;
     }
     if (pending) {
-      if (!documentContext) { setMessage("The browser draft is still recovering."); return; }
-      const retried = await command({
-        type: "draft",
-        context: documentContext,
-        draft_id: pending.draft_id,
-        expected_revision: pending.draft_revision,
-        command: { type: "retry_pending" },
-      });
+      const retried = await recoverPendingCapture("retry_pending");
       if (retried?.type === "capture" && retried.capture.state === "saved") {
+        setPendingCaptureState(null);
         const ids = [...retried.capture.saved.annotation_ids];
         pendingDeliveryIdsRef.current = ids;
         if (await deliverAnnotations(ids)) {
