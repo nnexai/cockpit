@@ -1130,7 +1130,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const label = pane.title ?? `Pane ${panes.findIndex((candidate) => candidate.id === pane.id) + 1}`;
     return Boolean(window.confirm(`Close ${label}?`) && onMutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }));
   };
-  const browserAction = useCallback(async (spaceId: string, action: "open" | "show" | "close", url?: string) => {
+  const browserAction = useCallback(async (spaceId: string, action: "open" | "show" | "close" | "reconnect", url?: string) => {
     const sessionId = state.sessionId;
     const key = sessionId ? `${sessionId}:${spaceId}` : null;
     if (!sessionId || !key || state.sync !== "live" || browserBusyRef.current || browserTargetRef.current?.sessionId !== sessionId || browserTargetRef.current.spaceId !== spaceId) return;
@@ -1151,7 +1151,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       const response = await client.browserAction({ target, action: action === "close" ? { kind: "close" } : { kind: "open", url: url ?? null } });
       if (!current()) return;
       if (response.association && (response.association.session_id !== sessionId || response.association.space_id !== spaceId)) throw new Error("Browser response belongs to another Space");
-      if (action === "open" || action === "show") {
+      if (action === "open" || action === "show" || action === "reconnect") {
         if (response.connection !== "open" && response.association?.connection !== "open") throw new Error(response.message || "Browser association did not open");
         setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: true, visible: true, presentation: "split" } }));
       } else {
@@ -1382,7 +1382,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         {browserVisible && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}
         {browserVisible && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
           {browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
-          <BrowserPane client={client} target={browserTarget} viewport={browserViewport} visible presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserVisible && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => { if (selection.spaceId) void browserAction(selection.spaceId, "open"); }} onFeedback={sendCapturedFeedback} onHide={hideBrowser} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} />
+          <BrowserPane client={client} target={browserTarget} viewport={browserViewport} visible presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserVisible && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => { if (selection.spaceId) void browserAction(selection.spaceId, "reconnect"); }} onFeedback={sendCapturedFeedback} onHide={hideBrowser} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} />
         </div> : null}
       </div>
     </main>
