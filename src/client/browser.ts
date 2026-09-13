@@ -370,6 +370,8 @@ function openBrowserViewStream(
           onEvent(parsedEvent);
           flushPending();
         } else if (metadataAttached) {
+          if (parsedEvent.type === "targets_changed") targetId = parsedEvent.displayed_target_id ?? "";
+          else if (parsedEvent.type === "document_changed") targetId = parsedEvent.document?.target_id ?? "";
           onEvent(parsedEvent);
         }
       } catch (error) {

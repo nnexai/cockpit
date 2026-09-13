@@ -146,6 +146,14 @@
   padding-inline: 5px;
 }
 
+.browser-annotation-toolbar > button:last-child {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 9rem;
+  gap: 5px;
+  padding-inline: 8px;
+}
+
 .browser-annotation-toolbar > button:hover:not(:disabled),
 .browser-annotation-toolbar > button:focus-visible {
   border-color: var(--border-strong);
@@ -483,6 +491,7 @@
     padding-inline: 7px;
   }
 }
+
 
 @media (prefers-reduced-motion: reduce) {
   .browser-pane-loading .browser-state strong::before {

@@ -87,7 +87,7 @@ Uninstall reads the install receipt and removes only the launchers, desktop entr
 
 ## Inline Space browser
 
-Open the selected Space's browser from Commands or its context menu. The browser appears beside the Herdr layout. Browser tabs stay inside that split. **Hide** preserves the browser, while **Close browser** closes the owned session and keeps its profile and saved feedback. Narrow windows have a browser-only view with **Back to terminals**.
+Open the selected Space's browser from Commands or its context menu. The browser appears beside the Herdr layout. Browser tabs stay inside that split. **Expand browser** switches to a browser-only view and **Restore split** returns to the Herdr layout. **Close browser pane** hides the local browser presentation; **Close browser** closes the owned browser session and keeps its profile and saved feedback.
 
 Cockpit attaches to the same named Playwright CLI browser that agents use. The packaged Node helper streams binary JPEG frames from Chromium. Install Node and Playwright CLI before opening a browser. The helper is embedded in the host binary. Configuration can override `[browser]` keys `playwright_cli`, `chromium_executable`, `node_executable`, `browser_helper`, and `playwright_core`. The last value identifies the Playwright-core package paired with the CLI. No second browser is launched for the inline view.
 
@@ -95,9 +95,9 @@ On initial attachment, an empty `about:blank` is replaced with a loopback-only
 start page before screencast capture begins, guaranteeing a paintable first
 frame. Non-empty pages and later user navigation are left unchanged.
 
-Click **Take control** to control an observed browser. Clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own keyboard input. Other clients observe until they explicitly take control. Agents can still change the page through Playwright.
+Interact with the browser surface to acquire control; clicking a terminal returns keyboard control through Herdr. Address and annotation editors keep their own keyboard input. Other clients observe until they explicitly take control. Agents can still change the page through Playwright.
 
-Use Browse, Select, Freehand, Region, or Element in the browser toolbar. Marks have a color and optional inline text. **Capture** saves the displayed page, marks, and comments as a PNG. Draft recovery preserves older documents separately. Failed saves retain the composed image for retry. Saved feedback remains available after closing the browser, and sending feedback pastes into the active tab's eligible agent without pressing Enter.
+Use Browse, Select, Freehand, Region, or Element in the browser toolbar. Marks have a color and optional inline text; drawing or marking an element opens the inline note editor immediately. **Send annotations** composes the displayed page, marks, and comments as a PNG and delivers it to the active tab's eligible agent without pressing Enter. Failed saves retain the composed image for retry. Saved feedback remains available after closing the browser.
 
 JPEG streaming has no audio. Browser-local notices report dialogs and unsupported browser facilities. Focused browser verification and an isolated Linux Tauri startup smoke passed on 2026-09-13; full browser/native acceptance, security, performance, and WebKit input/decode parity remain unclaimed.
 

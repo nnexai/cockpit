@@ -147,6 +147,7 @@ impl BrowserDraftStore {
         }) {
             return Ok(public_draft(draft));
         }
+        self.retire_obsolete(&mut drafts, identity)?;
         let active = drafts.iter().filter(|draft| !draft.tombstoned).count();
         if active >= MAX_DRAFTS {
             return Err(InspectionError::new(
@@ -169,6 +170,90 @@ impl BrowserDraftStore {
         self.write_draft(&stored)?;
         Ok(public_draft(&stored))
     }
+    fn retire_obsolete(
+        &self,
+        drafts: &mut [StoredDraft],
+        identity: &BrowserDraftIdentity,
+    ) -> Result<(), InspectionError> {
+        let pending = self.load_pending(&identity.association_key)?;
+        let preparation = self.load_preparation(&identity.association_key)?;
+        let referenced = self.load_capture_references()?;
+        let stored = stored_identity(identity);
+        for draft in drafts.iter_mut().filter(|draft| {
+            !draft.tombstoned
+                && draft.identity.association_key == stored.association_key
+                && draft.identity.browser_incarnation == stored.browser_incarnation
+                && draft.identity.target_id == stored.target_id
+                && draft.identity.document_generation != stored.document_generation
+        }) {
+            draft.annotations.clear();
+            draft.editor.selected_annotation_id = None;
+            draft.tombstoned = true;
+            draft.stale = true;
+            draft.freshness = BrowserViewInspectionFreshness::Stale;
+            draft.revision = draft.revision.saturating_add(1);
+            self.write_draft(draft)?;
+        }
+        if pending.is_none() {
+            if let Some(preparation) = preparation {
+                let belongs_to_current = drafts.iter().any(|draft| {
+                    draft.draft_id == preparation.draft_id
+                        && !draft.tombstoned
+                        && draft.identity == stored
+                });
+                if !belongs_to_current {
+                    self.remove_preparation(&identity.association_key)?;
+                }
+            }
+        }
+        self.compact_retired(drafts, &referenced, &stored.association_key)
+    }
+
+    fn load_capture_references(&self) -> Result<HashSet<String>, InspectionError> {
+        let dir = self.dir()?;
+        let mut records = Vec::new();
+        for (index, entry) in dir.entries()
+            .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?
+            .enumerate()
+        {
+            if index >= MAX_ENTRIES {
+                return Err(InspectionError::new("browser_draft_bounded", "Draft directory exceeded its entry limit"));
+            }
+            let entry = entry.map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if let Some(association_key) = name.strip_prefix("pending-").and_then(|name| name.strip_suffix(".json")) {
+                records.push((true, association_key.to_owned()));
+            } else if let Some(association_key) = name.strip_prefix("preparation-").and_then(|name| name.strip_suffix(".json")) {
+                records.push((false, association_key.to_owned()));
+            }
+        }
+        let mut referenced = HashSet::new();
+        for (pending, association_key) in records {
+            validate_association_key(&association_key)?;
+            if pending {
+                if let Some(capture) = self.load_pending(&association_key)? {
+                    referenced.insert(capture.draft_id);
+                }
+            } else if let Some(capture) = self.load_preparation(&association_key)? {
+                referenced.insert(capture.draft_id);
+            }
+        }
+        Ok(referenced)
+    }
+
+    fn compact_retired(
+        &self,
+        drafts: &[StoredDraft],
+        referenced: &HashSet<String>,
+        association_key: &str,
+    ) -> Result<(), InspectionError> {
+        for draft in drafts.iter().filter(|draft| draft.tombstoned && draft.identity.association_key == association_key && !referenced.contains(&draft.draft_id)) {
+            self.remove_draft(&draft.draft_id)?;
+        }
+        Ok(())
+    }
+
 
     pub fn list(&self, association_key: &str) -> Result<BrowserViewDraftInventory, InspectionError> {
         let _guard = self.lock()?;
@@ -569,6 +654,13 @@ impl BrowserDraftStore {
         validate_stored_draft(&draft.draft_id, draft)?;
         atomic_write_json(&self.dir()?, &draft_name(&draft.draft_id), draft)
             .map_err(|error| InspectionError::new("browser_draft_write", error.to_string()))
+    }
+    fn remove_draft(&self, draft_id: &str) -> Result<(), InspectionError> {
+        match self.dir()?.remove_file(draft_name(draft_id)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(InspectionError::new("browser_draft_write", error.to_string())),
+        }
     }
 
     fn load_pending(&self, association_key: &str) -> Result<Option<StoredPendingCapture>, InspectionError> {

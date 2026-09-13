@@ -92,9 +92,13 @@ let grants = new Map();
 let viewGrants = new Map();
 let latestFrame = null;
 let pendingBlocker = null;
+const MAX_FRAME_HISTORY = 8;
+let frameHistory = new Map();
 let observedPage = null;
 let observedPageHandlers = null;
 let screencastListener = null;
+let targetTransition = Promise.resolve();
+let pageBindingGeneration = 0;
 let WebSocketServer;
 let WebSocket;
 
@@ -215,20 +219,34 @@ async function applyRequestedViewport(viewport) {
   });
   return requested;
 }
-async function updatePageState() {
-  state.url = page.url();
-  try { state.title = await page.title(); } catch { state.title = ''; }
+function pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding) {
+  return Boolean(state && page === expectedPage && pageCdp === expectedCdp && pageBindingGeneration === expectedBinding);
+}
+async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
+  if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
+  state.url = expectedPage.url();
+  let title;
+  try { title = await expectedPage.title(); } catch { title = ''; }
+  if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
+  state.title = title;
   try {
-    const metrics = await pageCdp.send('Page.getLayoutMetrics');
+    const metrics = await expectedCdp.send('Page.getLayoutMetrics');
+    if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
     const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
     const width = boundedInteger(viewport.clientWidth, state.cssWidth, MAX_WIDTH);
     const height = boundedInteger(viewport.clientHeight, state.cssHeight, MAX_HEIGHT);
-    const changed = width !== state.cssWidth || height !== state.cssHeight;
+    const scrollX = boundedNumber(viewport.pageX, 0);
+    const scrollY = boundedNumber(viewport.pageY, 0);
+    const changed = width !== state.cssWidth || height !== state.cssHeight
+      || scrollX !== state.scrollX || scrollY !== state.scrollY;
     state.cssWidth = width;
     state.cssHeight = height;
-    state.scrollX = boundedNumber(viewport.pageX, 0);
-    state.scrollY = boundedNumber(viewport.pageY, 0);
-    if (changed) state.viewportRevision++;
+    state.scrollX = scrollX;
+    state.scrollY = scrollY;
+    if (changed) {
+      state.viewportRevision++;
+      resetFrameTransport();
+    }
     return changed;
   } catch {
     // Keep the last known finite geometry when Chromium is between documents.
@@ -245,15 +263,25 @@ function emitBlocker() { emitEvent('blocker_changed', { blocker: pendingBlocker 
 function emitControl() {
   emitEvent('control_changed', { control: snapshot().control });
 }
-async function updateHistory() {
+async function updateHistory(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
   try {
-    const history = await pageCdp.send('Page.getNavigationHistory');
+    const history = await expectedCdp.send('Page.getNavigationHistory');
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding)) return;
     state.canGoBack = history.currentIndex > 0;
     state.canGoForward = history.currentIndex >= 0 && history.currentIndex + 1 < history.entries.length;
-  } catch { state.canGoBack = false; state.canGoForward = false; }
+  } catch {
+    if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) {
+      state.canGoBack = false; state.canGoForward = false;
+    }
+  }
 }
-async function updateFrameId() {
-  try { state.frameId = (await pageCdp.send('Page.getFrameTree')).frameTree.frame.id; } catch { state.frameId = 'main'; }
+async function updateFrameId(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
+  try {
+    const frameTree = await expectedCdp.send('Page.getFrameTree');
+    if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) state.frameId = frameTree.frameTree.frame.id;
+  } catch {
+    if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) state.frameId = 'main';
+  }
 }
 async function updateFocus() {
   try {
@@ -291,6 +319,13 @@ function clearBlocker(id) {
   pendingBlocker = null;
   emitBlocker();
   return true;
+}
+async function dismissPendingBlocker() {
+  const blocker = pendingBlocker;
+  if (!blocker) return;
+  pendingBlocker = null;
+  emitBlocker();
+  try { await blocker.resolve?.('dismiss'); } catch {}
 }
 function commandInputSequence(command) {
   const input = command.input;
@@ -337,7 +372,7 @@ async function releaseHeldInput() {
     state.heldKeys.clear();
   }
 }
-async function enumerateTargets() {
+async function enumerateTargets(requireSelected = true) {
   const all = (await browserCdp.send('Target.getTargets')).targetInfos;
   state.targets = all
     .filter((target) => ['page', 'background_page', 'service_worker'].includes(target.type))
@@ -347,8 +382,8 @@ async function enumerateTargets() {
       title: target.title || '', url: target.url || '', order,
       opener_target_id: target.openerId || null, can_close: target.type === 'page',
     }));
-  if (!state.targets.some((target) => target.target_id === state.targetId)) throw new Error('attached browser target no longer exists');
   const active = state.targets.find((target) => target.target_id === state.targetId);
+  if (!active && requireSelected) throw new Error('attached browser target no longer exists');
   state.url = active?.url || state.url;
   state.title = active?.title || state.title;
 }
@@ -365,7 +400,10 @@ async function pageForTarget(targetId) {
 }
 
 async function bindPage(targetId, restartScreencast = true) {
+  pageBindingGeneration++;
   const previousTarget = state?.targetId;
+  const targetChanged = previousTarget && previousTarget !== targetId;
+  if (targetChanged) await dismissPendingBlocker();
   if (restartScreencast) try { await pageCdp?.send('Page.stopScreencast'); } catch {}
   if (observedPage && observedPageHandlers) {
     for (const [event, handler] of observedPageHandlers) observedPage.off?.(event, handler);
@@ -379,12 +417,14 @@ async function bindPage(targetId, restartScreencast = true) {
   page = selected.page;
   pageCdp = selected.cdp;
   state.targetId = targetId;
-  if (previousTarget && previousTarget !== targetId) {
+  if (targetChanged) {
     state.documentGeneration = nextGeneration(state.documentGeneration);
     state.frameGeneration = nextGeneration(state.frameGeneration);
     state.viewportRevision++;
     state.cursor = null;
-    latestFrame = null;
+    state.pointer = null;
+    state.pointerSampleSequence++;
+    resetFrameTransport();
   }
   if (!restartScreencast) await ensureInitialPage();
 
@@ -393,16 +433,85 @@ async function bindPage(targetId, restartScreencast = true) {
   await updatePageState();
   await updateFrameId();
   await updateHistory();
-  if (previousTarget && previousTarget !== targetId) {
+  if (targetChanged) {
     emitEvent('document_changed', { document: documentState() });
+    emitEvent('viewport_changed', { viewport: viewportState() });
     emitNavigation();
   }
   if (restartScreencast) await startScreencast();
 }
 
-async function refreshTargets() {
+function queueTargetTransition(action) {
+  const next = targetTransition.then(action, action);
+  targetTransition = next.catch(() => {});
+  return next;
+}
+
+async function resetInputTransition() {
+  await releaseHeldInput();
+  state.pointer = null;
+  state.cursor = null;
+  state.pointerSampleSequence++;
+  state.focus = { page_focused: false, editable: false, selection_available: false, composition_active: false };
+  if (state.controlled) {
+    state.leaseGeneration++;
+    state.nextInputSequence = 1;
+    emitControl();
+  }
+}
+
+async function closeSelectedPage() {
+  return queueTargetTransition(async () => {
+    await enumerateTargets();
+    const pages = state.targets.filter((target) => target.kind === 'page');
+    const selectedIndex = pages.findIndex((target) => target.target_id === state.targetId);
+    if (selectedIndex < 0) throw new Error('selected browser target no longer exists');
+    if (pages.length < 2) {
+      throw Object.assign(new Error('The final browser tab must remain open'), { code: 'browser_last_page' });
+    }
+    const successor = pages[selectedIndex + 1] || pages[selectedIndex - 1];
+    await resetInputTransition();
+    await dismissPendingBlocker();
+    await page.close();
+    await bindPage(successor.target_id);
+  });
+}
+
+async function reconcileDestroyedTarget() {
+  return queueTargetTransition(async () => {
+    const previousPages = state.targets.filter((target) => target.kind === 'page');
+    const previousIndex = previousPages.findIndex((target) => target.target_id === state.targetId);
+    await enumerateTargets(false);
+    if (state.targets.some((target) => target.target_id === state.targetId)) {
+      emitEvent('targets_changed', { targets: state.targets, displayed_target_id: state.targetId });
+      return;
+    }
+    const pages = state.targets.filter((target) => target.kind === 'page');
+    const successor = previousPages.slice(previousIndex + 1).find((candidate) => pages.some((target) => target.target_id === candidate.target_id))
+      || previousPages.slice(0, Math.max(previousIndex, 0)).reverse().find((candidate) => pages.some((target) => target.target_id === candidate.target_id))
+      || pages[0];
+    await resetInputTransition();
+    if (successor) {
+      await bindPage(successor.target_id);
+    } else {
+      const created = await context.newPage();
+      const cdp = await context.newCDPSession(created);
+      const targetId = (await cdp.send('Target.getTargetInfo')).targetInfo?.targetId;
+      await cdp.detach();
+      if (!targetId) throw new Error('replacement tab has no target');
+      await bindPage(targetId);
+      await ensureInitialPage();
+    }
+    await refreshTargetsNow();
+  });
+}
+
+async function refreshTargetsNow() {
   await enumerateTargets();
   emitEvent('targets_changed', { targets: state.targets, displayed_target_id: state.targetId });
+}
+function refreshTargets() {
+  return queueTargetTransition(refreshTargetsNow);
 }
 
 function envelope(descriptor, jpeg) {
@@ -499,12 +608,17 @@ function cleanupSocket(socket) {
 }
 function resetFrameTransport() {
   latestFrame = null;
+  frameHistory.clear();
   for (const socket of sockets) {
     forgetSocketFrame(socket, 'awaitingFrame');
     forgetSocketFrame(socket, 'pendingFrame');
   }
 }
 function enqueueFrame(frame) {
+  if (!state || (frame?._cdp && frame._cdp !== pageCdp)) {
+    ackSession(frame?.sessionId, frame?._cdp);
+    return;
+  }
   let next;
   try {
     if (!frame || typeof frame.data !== 'string') throw new Error('screencast payload is not base64 text');
@@ -519,6 +633,13 @@ function enqueueFrame(frame) {
     }
     const scrollX = boundedNumber(rawMetadata.scrollOffsetX, state.scrollX);
     const scrollY = boundedNumber(rawMetadata.scrollOffsetY, state.scrollY);
+    if (scrollX !== state.scrollX || scrollY !== state.scrollY) {
+      state.scrollX = scrollX;
+      state.scrollY = scrollY;
+      state.viewportRevision++;
+      resetFrameTransport();
+      emitEvent('viewport_changed', { viewport: viewportState() });
+    }
     const timestamp = boundedNumber(rawMetadata.timestamp, Date.now() / 1000, Number.MAX_SAFE_INTEGER / 1_000_000);
     const descriptor = {
       target_id: state.targetId,
@@ -545,6 +666,10 @@ function enqueueFrame(frame) {
       references: 0,
       acknowledged: false,
     };
+    frameHistory.set(descriptor.frame_sequence, descriptor);
+    while (frameHistory.size > MAX_FRAME_HISTORY) {
+      frameHistory.delete(frameHistory.keys().next().value);
+    }
     emit({ type: 'frame', descriptor });
   } catch (error) {
     emit({ type: 'failed', code: 'browser_frame_invalid', message: String(error.message || error) });
@@ -560,12 +685,23 @@ function enqueueFrame(frame) {
   if (!delivered) acknowledgeFrame(next);
 }
 
+function allowedFrameOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return ['http:', 'https:', 'tauri:'].includes(parsed.protocol)
+      && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+        || parsed.hostname === '::1' || parsed.hostname.endsWith('.localhost'));
+  } catch {
+    return false;
+  }
+}
 function startFrameServer() {
   return new Promise((resolve, reject) => {
     server = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: MAX_WS_PAYLOAD, perMessageDeflate: false });
     server.once('listening', () => { port = server.address().port; resolve(); });
     server.on('connection', (socket, request) => {
-      if (request.headers.origin && request.headers.origin !== `http://127.0.0.1:${port}`) { socket.close(1008, 'unexpected origin'); return; }
+      if (!allowedFrameOrigin(request.headers.origin)) { socket.close(1008, 'unexpected origin'); return; }
       socket.authorized = false;
       sockets.add(socket);
       socket.on('close', () => cleanupSocket(socket));
@@ -592,11 +728,16 @@ function proofMatches(command) {
     if (!proof || typeof proof !== 'object' || proof.target_id !== state.targetId
       || proof.document_generation !== state.documentGeneration) return false;
     if (proof.viewport_revision !== undefined && proof.viewport_revision !== state.viewportRevision) return false;
-    if (proof.presented_frame_sequence !== undefined && proof.presented_frame_sequence !== state.frameSequence) return false;
+    if (proof.presented_frame_sequence !== undefined
+      && proof.presented_frame_sequence !== state.frameSequence
+      && command.type !== 'capture') return false;
     if (proof.lease_generation !== undefined && proof.lease_generation !== state.leaseGeneration) return false;
   }
-  if (command.type === 'tab' && command.command && command.command.target_id !== undefined
-    && command.command.target_id !== state.targetId) return false;
+  if (command.type === 'tab' && command.command?.target_id !== undefined) {
+    if (command.command.type === 'close') return state.targets.some((target) => target.kind === 'page' && target.can_close && target.target_id === command.command.target_id);
+    if (command.command.type === 'select') return state.targets.some((target) => target.kind === 'page' && target.target_id === command.command.target_id);
+    return false;
+  }
   return true;
 }
 
@@ -617,8 +758,9 @@ function validateNavigationUrl(value) {
   if (parsed.username || parsed.password) throw new Error('browser URL must not contain userinfo');
   return parsed.href;
 }
-async function startScreencast() {
-  await pageCdp.send('Page.startScreencast', {
+async function startScreencast(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
+  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding)) return;
+  await expectedCdp.send('Page.startScreencast', {
     format: 'jpeg', quality: 80, maxWidth: state.cssWidth, maxHeight: state.cssHeight, everyNthFrame: 1,
   });
 }
@@ -629,36 +771,56 @@ async function installPageObservers() {
   if (screencastListener && pageCdp) pageCdp.off?.('Page.screencastFrame', screencastListener);
   const observed = page;
   const cdp = pageCdp;
+  const targetId = state?.targetId;
+  const bindingGeneration = pageBindingGeneration;
+  const current = () => pageBindingIsCurrent(observed, cdp, bindingGeneration) && state.targetId === targetId;
   const onFrameNavigated = (frame) => {
-    if (frame !== observed.mainFrame()) return;
+    if (!current() || frame !== observed.mainFrame()) return;
     state.documentGeneration = nextGeneration(state.documentGeneration);
     state.frameGeneration = nextGeneration(state.frameGeneration);
     resetFrameTransport();
+    void dismissPendingBlocker();
     void cdp.send('Page.stopScreencast').catch(() => {});
     frameBarrier = frameBarrier.then(async () => {
-      const viewportChanged = await updatePageState();
-      await updateFrameId();
-      await updateHistory();
+      if (!current()) return;
+      const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
+      if (!current()) return;
+      await updateFrameId(cdp, bindingGeneration);
+      if (!current()) return;
+      await updateHistory(cdp, bindingGeneration);
+      if (!current()) return;
       if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
       emitEvent('document_changed', { document: documentState() });
       emitNavigation();
-      await startScreencast();
-    });
+      await startScreencast(cdp, bindingGeneration);
+    }).catch(() => {});
   };
-  const onLoad = () => { void updatePageState().then(updateHistory).then(emitNavigation).catch(() => {}); };
+  const onLoad = () => {
+    if (!current()) return;
+    void updatePageState(observed, cdp, bindingGeneration)
+      .then((viewportChanged) => {
+        if (!current()) return;
+        if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
+        return updateHistory(cdp, bindingGeneration);
+      })
+      .then(() => { if (current()) emitNavigation(); })
+      .catch(() => {});
+  };
   const onDialog = (dialog) => {
+    if (!current()) { void dialog.dismiss().catch(() => {}); return; }
     const blocker = setBlocker('dialog', dialog.message(), dialog.defaultValue?.(), async (decision, text) => {
       if (decision === 'accept') await dialog.accept(text);
       else await dialog.dismiss();
     });
-    void dialog.type().then((type) => { blocker.message = `${type}: ${blocker.message}`; }).catch(() => {});
+    void dialog.type().then((type) => { if (current() && pendingBlocker === blocker) blocker.message = `${type}: ${blocker.message}`; }).catch(() => {});
   };
   const onFileChooser = (chooser) => {
+    if (!current()) { void chooser.setFiles([]).catch(() => {}); return; }
     const blocker = setBlocker('file_chooser', 'File upload requires a local file-selection adapter', null, async () => chooser.setFiles([]));
     blocker.cancellable = true;
   };
   const onDownload = (download) => {
-    setBlocker('download', `Download requested: ${download.suggestedFilename()}`, null, async () => {});
+    if (current()) setBlocker('download', `Download requested: ${download.suggestedFilename()}`, null, async () => {});
   };
   observedPageHandlers = [
     ['framenavigated', onFrameNavigated],
@@ -671,8 +833,21 @@ async function installPageObservers() {
   observedPage = observed;
   screencastListener = (frame) => {
     frame._cdp = cdp;
+    const identity = {
+      targetId,
+      documentGeneration: state?.documentGeneration,
+      viewportRevision: state?.viewportRevision,
+    };
     const barrier = frameBarrier;
-    void barrier.then(() => enqueueFrame(frame)).catch(() => cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {}));
+    void barrier.then(() => {
+      if (!current()
+        || identity.documentGeneration !== state.documentGeneration
+        || identity.viewportRevision !== state.viewportRevision) {
+        ackSession(frame.sessionId, cdp);
+        return;
+      }
+      enqueueFrame(frame);
+    }).catch(() => ackSession(frame.sessionId, cdp));
   };
   cdp.on('Page.screencastFrame', screencastListener);
 }
@@ -702,7 +877,7 @@ async function attach(message) {
   await bindPage(message.target_id, false);
   await enumerateTargets();
   browserCdp.on('Target.targetCreated', () => { void refreshTargets().catch(() => {}); });
-  browserCdp.on('Target.targetDestroyed', () => { void refreshTargets().catch(() => {}); });
+  browserCdp.on('Target.targetDestroyed', () => { void reconcileDestroyedTarget().catch(() => {}); });
   browserCdp.on('Target.targetInfoChanged', () => { void refreshTargets().catch(() => {}); });
   await startScreencast();
   emit({
@@ -720,10 +895,10 @@ async function command(request) {
       message: 'target, document, viewport, frame, or lease proof changed',
     };
   }
+  if (['resize', 'navigation', 'pointer', 'wheel', 'keyboard', 'text', 'composition', 'clipboard'].includes(request.command.type) && state.controllerViewId !== request.view_id) {
+    return { status: 'rejected', ...base, code: 'browser_control_required', message: 'Another browser view holds the input lease' };
+  }
   try {
-    if (['resize', 'navigation', 'pointer', 'wheel', 'keyboard', 'text', 'composition', 'clipboard'].includes(request.command.type) && state.controllerViewId !== request.view_id) {
-      return { status: 'rejected', ...base, code: 'browser_control_required', message: 'Another browser view holds the input lease' };
-    }
     if (request.command.type === 'take_control') {
       if (state.controlled && state.controllerViewId !== request.view_id) {
         return { status: 'rejected', ...base, code: 'browser_control_required', message: 'Another browser view holds the input lease' };
@@ -747,7 +922,18 @@ async function command(request) {
       emitControl();
       return { status: 'accepted', ...base, outcome: { type: 'control', control: snapshot().control } };
     }
-    if (request.command.type === 'resize') { requireControl(request.command); await applyRequestedViewport(request.command.viewport); state.viewportRevision++; await updatePageState(); emitEvent('viewport_changed', { viewport: viewportState() }); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
+    if (request.command.type === 'resize') {
+      requireControl(request.command);
+      const requested = await applyRequestedViewport(request.command.viewport);
+      const changed = await updatePageState();
+      state.devicePixelRatio = requested.dpr;
+      if (!changed) {
+        state.viewportRevision++;
+        resetFrameTransport();
+      }
+      emitEvent('viewport_changed', { viewport: viewportState() });
+      return { status: 'accepted', ...base, outcome: { type: 'none' } };
+    }
     if (request.command.type === 'navigation') {
       requireControl(request.command);
       const action = request.command.command;
@@ -810,7 +996,37 @@ async function command(request) {
     }
     if (request.command.type === 'composition') { const sequence = requireControl(request.command); const i = request.command.input; if (i.kind === 'commit') await pageCdp.send('Input.insertText', { text: i.text }); else await pageCdp.send('Input.imeSetComposition', { text: i.kind === 'cancel' ? '' : i.text, selectionStart: i.text.length, selectionEnd: i.text.length, replacementStart: 0, replacementEnd: 0 }); state.focus.composition_active = i.kind === 'start' || i.kind === 'update'; advanceInput(sequence); emitFocus(); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
     if (request.command.type === 'clipboard') { const sequence = requireControl(request.command); if (request.command.command.type === 'paste') { await pageCdp.send('Input.insertText', { text: request.command.command.text }); advanceInput(sequence); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text: null } }; } const text = await page.evaluate(() => window.getSelection()?.toString().slice(0, 16384) || ''); advanceInput(sequence); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text } }; }
-    if (request.command.type === 'tab') { const action = request.command.command; if (action.type === 'select') await bindPage(action.target_id); else if (action.type === 'create') { const created = await context.newPage(); if (action.url) await created.goto(validateNavigationUrl(action.url)); const cdp = await context.newCDPSession(created); const targetId = (await cdp.send('Target.getTargetInfo')).targetInfo?.targetId; await cdp.detach(); if (!targetId) throw new Error('created tab has no target'); await bindPage(targetId); } else if (action.type === 'close') { if (action.target_id === state.targetId) return { status: 'rejected', ...base, code: 'browser_selected_tab', message: 'Select another tab before closing this tab' }; const closing = await pageForTarget(action.target_id); await closing.page.close(); } await refreshTargets(); return { status: 'accepted', ...base, outcome: { type: 'snapshot', snapshot: snapshot() } }; }
+    if (request.command.type === 'tab') {
+      const action = request.command.command;
+      if (action.type === 'select') {
+        await queueTargetTransition(async () => {
+          await resetInputTransition();
+          await bindPage(action.target_id);
+        });
+      } else if (action.type === 'create') {
+        await queueTargetTransition(async () => {
+          await resetInputTransition();
+          const created = await context.newPage();
+          if (action.url) await created.goto(validateNavigationUrl(action.url));
+          const cdp = await context.newCDPSession(created);
+          const targetId = (await cdp.send('Target.getTargetInfo')).targetInfo?.targetId;
+          await cdp.detach();
+          if (!targetId) throw new Error('created tab has no target');
+          await bindPage(targetId);
+        });
+      } else if (action.type === 'close') {
+        if (action.target_id === state.targetId) {
+          await closeSelectedPage();
+        } else {
+          await queueTargetTransition(async () => {
+            const closing = await pageForTarget(action.target_id);
+            await closing.page.close();
+          });
+        }
+      }
+      await refreshTargets();
+      return { status: 'accepted', ...base, outcome: { type: 'snapshot', snapshot: snapshot() } };
+    }
     if (request.command.type === 'dialog') {
       if (!pendingBlocker || pendingBlocker.blocker_id !== request.command.blocker_id || pendingBlocker.kind !== 'dialog') {
         throw Object.assign(new Error('stale dialog'), { code: 'stale_dialog' });
@@ -869,13 +1085,17 @@ async function command(request) {
       };
     }
     if (request.command.type === 'capture') {
-      if (!latestFrame
-        || latestFrame.descriptor.target_id !== state.targetId
-        || latestFrame.descriptor.document_generation !== state.documentGeneration
-        || latestFrame.descriptor.frame_sequence !== request.command.command.location.presented_frame_sequence) {
+      const location = request.command.command.location;
+      const presented = frameHistory.get(location.presented_frame_sequence);
+      if (!presented
+        || presented.target_id !== state.targetId
+        || presented.stream_epoch !== state.streamEpoch
+        || presented.document_generation !== state.documentGeneration
+        || presented.viewport_revision !== state.viewportRevision
+        || presented.frame_sequence !== location.presented_frame_sequence) {
         throw Object.assign(new Error('stale capture frame'), { code: 'stale_capture' });
       }
-      return { status: 'accepted', ...base, outcome: { type: 'capture_prepared', capture_id: randomUUID(), descriptor: latestFrame.descriptor } };
+      return { status: 'accepted', ...base, outcome: { type: 'capture_prepared', capture_id: randomUUID(), descriptor: presented } };
     }
     return { status: 'unsupported', ...base, capability: request.command.type, message: 'This browser-view command is not implemented by the inline helper' };
   } catch (error) {
@@ -884,7 +1104,7 @@ async function command(request) {
       emitNavigation();
     }
     const code = error?.code;
-    if (['browser_control_required', 'stale_input_sequence', 'stale_control', 'stale_dialog', 'stale_pointer', 'stale_capture'].includes(code)) {
+    if (['browser_control_required', 'stale_input_sequence', 'stale_control', 'stale_dialog', 'stale_pointer', 'stale_capture', 'browser_last_page'].includes(code)) {
       return { status: 'rejected', ...base, code, message: String(error.message || error) };
     }
     return { status: 'outcome_unknown', ...base, code: 'browser_command_uncertain', message: String(error.message || error) };

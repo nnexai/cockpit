@@ -44,6 +44,8 @@ export interface FrameValidationContext {
   readonly viewportRevision: number;
   readonly viewportCssWidth: number;
   readonly viewportCssHeight: number;
+  readonly scrollX?: number;
+  readonly scrollY?: number;
 }
 
 export type FrameRejectionReason =
@@ -128,12 +130,44 @@ export function parseBrowserViewFrame(
   return { streamEpoch, frameSequence, documentGeneration, viewportRevision, imageWidth, imageHeight, viewportCssWidth, viewportCssHeight, viewportOffsetX, viewportOffsetY, scrollX, scrollY, captureTimestampMicros, jpeg: jpeg.buffer };
 }
 
-export function validateFrameDescriptor(descriptor: BrowserViewFrameDescriptor, context: FrameValidationContext, limits: BrowserViewFrameEnvelopeV2 = IBFV_V2_DEFAULT_LIMITS): void {
-  if (descriptor.stream_epoch !== context.streamEpoch || descriptor.target_id !== context.targetId || descriptor.target_id !== context.displayedTargetId || descriptor.document_generation !== context.documentGeneration || descriptor.viewport_revision !== context.viewportRevision || Math.abs(descriptor.viewport_css_width - context.viewportCssWidth) > 0.01 || Math.abs(descriptor.viewport_css_height - context.viewportCssHeight) > 0.01) {
-    throw new BrowserFrameError("identity_mismatch", "Browser frame is for a stale target, document, epoch, or viewport");
+const FRAME_MAX_ID = 512;
+
+function validateFrameDescriptorShape(
+  descriptor: BrowserViewFrameDescriptor,
+  limits: BrowserViewFrameEnvelopeV2 = IBFV_V2_DEFAULT_LIMITS,
+): void {
+  if (typeof descriptor !== "object" || descriptor === null
+    || typeof descriptor.target_id !== "string" || descriptor.target_id.length === 0 || descriptor.target_id.length > FRAME_MAX_ID
+    || !Number.isSafeInteger(descriptor.stream_epoch) || descriptor.stream_epoch < 0
+    || !Number.isSafeInteger(descriptor.frame_sequence) || descriptor.frame_sequence < 0
+    || !Number.isSafeInteger(descriptor.document_generation) || descriptor.document_generation < 0
+    || !Number.isSafeInteger(descriptor.viewport_revision) || descriptor.viewport_revision < 0) {
+    throw new BrowserFrameError("invalid_envelope", "Browser frame descriptor identity is malformed");
   }
-  if (!Number.isInteger(descriptor.image_width) || !Number.isInteger(descriptor.image_height) || descriptor.image_width <= 0 || descriptor.image_height <= 0 || descriptor.image_width > limits.max_width || descriptor.image_height > limits.max_height || descriptor.image_width * descriptor.image_height > limits.max_pixels || descriptor.jpeg_length <= 0 || descriptor.jpeg_length > limits.max_jpeg_bytes) {
+  if (!Number.isInteger(descriptor.image_width) || !Number.isInteger(descriptor.image_height)
+    || descriptor.image_width <= 0 || descriptor.image_height <= 0
+    || descriptor.image_width > limits.max_width || descriptor.image_height > limits.max_height
+    || descriptor.image_width * descriptor.image_height > limits.max_pixels
+    || !Number.isInteger(descriptor.jpeg_length) || descriptor.jpeg_length <= 0
+    || descriptor.jpeg_length > limits.max_jpeg_bytes) {
     throw new BrowserFrameError("invalid_dimensions", "Browser frame descriptor exceeds bounds");
+  }
+  if (!Number.isFinite(descriptor.viewport_css_width) || descriptor.viewport_css_width <= 0
+    || !Number.isFinite(descriptor.viewport_css_height) || descriptor.viewport_css_height <= 0
+    || !Number.isFinite(descriptor.viewport_offset_x) || !Number.isFinite(descriptor.viewport_offset_y)
+    || !Number.isFinite(descriptor.scroll_x) || !Number.isFinite(descriptor.scroll_y)
+    || !Number.isSafeInteger(descriptor.capture_timestamp_micros) || descriptor.capture_timestamp_micros < 0) {
+    throw new BrowserFrameError("invalid_envelope", "Browser frame descriptor geometry is malformed");
+  }
+}
+
+
+export function validateFrameDescriptor(descriptor: BrowserViewFrameDescriptor, context: FrameValidationContext, limits: BrowserViewFrameEnvelopeV2 = IBFV_V2_DEFAULT_LIMITS): void {
+  validateFrameDescriptorShape(descriptor, limits);
+  if (descriptor.stream_epoch !== context.streamEpoch || descriptor.target_id !== context.targetId || descriptor.target_id !== context.displayedTargetId || descriptor.document_generation !== context.documentGeneration || descriptor.viewport_revision !== context.viewportRevision || Math.abs(descriptor.viewport_css_width - context.viewportCssWidth) > 0.01 || Math.abs(descriptor.viewport_css_height - context.viewportCssHeight) > 0.01
+    || (context.scrollX !== undefined && Math.abs(descriptor.scroll_x - context.scrollX) > 0.01)
+    || (context.scrollY !== undefined && Math.abs(descriptor.scroll_y - context.scrollY) > 0.01)) {
+    throw new BrowserFrameError("identity_mismatch", "Browser frame is for a stale target, document, epoch, or viewport");
   }
 }
 
@@ -146,6 +180,13 @@ export function packetBytes(packet: BrowserViewFramePacket): ArrayBuffer {
 export interface FramePresenterOptions {
   readonly limits?: BrowserViewFrameEnvelopeV2;
   readonly validate?: (descriptor: BrowserViewFrameDescriptor) => void;
+  /**
+   * Identity races are expected while a browser navigation/target switch is
+   * being reconciled. This predicate runs after envelope and descriptor
+   * validation, so only structurally valid obsolete frames are discarded.
+   * Envelope/descriptor corruption still reaches onError.
+   */
+  readonly isExpectedStale?: (descriptor: BrowserViewFrameDescriptor) => boolean;
   readonly present: (image: ImageBitmap | HTMLImageElement, descriptor: BrowserViewFrameDescriptor) => void;
   readonly onError?: (error: BrowserFrameError | Error) => void;
 }
@@ -164,7 +205,13 @@ function sameNumericDescriptor(left: ParsedBrowserFrame, right: BrowserViewFrame
     left.imageWidth === right.image_width &&
     left.imageHeight === right.image_height &&
     Math.abs(left.viewportCssWidth - right.viewport_css_width) <= 0.01 &&
-    Math.abs(left.viewportCssHeight - right.viewport_css_height) <= 0.01;
+    Math.abs(left.viewportCssHeight - right.viewport_css_height) <= 0.01 &&
+    Math.abs(left.viewportOffsetX - right.viewport_offset_x) <= 0.01 &&
+    Math.abs(left.viewportOffsetY - right.viewport_offset_y) <= 0.01 &&
+    Math.abs(left.scrollX - right.scroll_x) <= 0.01 &&
+    Math.abs(left.scrollY - right.scroll_y) <= 0.01 &&
+    left.captureTimestampMicros === right.capture_timestamp_micros &&
+    left.jpeg.byteLength === right.jpeg_length;
 }
 
 function packetJpeg(packet: BrowserViewFramePacket, limits: BrowserViewFrameEnvelopeV2): ArrayBuffer {
@@ -187,6 +234,7 @@ function packetJpeg(packet: BrowserViewFramePacket, limits: BrowserViewFrameEnve
 export class FramePresenter {
   private readonly limits: BrowserViewFrameEnvelopeV2;
   private readonly validate?: FramePresenterOptions["validate"];
+  private readonly isExpectedStale?: FramePresenterOptions["isExpectedStale"];
   private readonly present: FramePresenterOptions["present"];
   private readonly onError?: FramePresenterOptions["onError"];
   private active: ActiveFrame | null = null;
@@ -210,6 +258,7 @@ export class FramePresenter {
   constructor(options: FramePresenterOptions) {
     this.limits = options.limits ?? IBFV_V2_DEFAULT_LIMITS;
     this.validate = options.validate;
+    this.isExpectedStale = options.isExpectedStale;
     this.present = options.present;
     this.onError = options.onError;
   }
@@ -218,7 +267,6 @@ export class FramePresenter {
     if (this.closed) { this.discard(packet); return; }
     let jpeg: ArrayBuffer;
     try {
-      this.validate?.(packet.descriptor);
       validateFrameDescriptor(packet.descriptor, {
         streamEpoch: packet.descriptor.stream_epoch,
         targetId: packet.descriptor.target_id,
@@ -229,6 +277,8 @@ export class FramePresenter {
         viewportCssHeight: packet.descriptor.viewport_css_height,
       }, this.limits);
       jpeg = packetJpeg(packet, this.limits);
+      if (this.isExpectedStale?.(packet.descriptor)) { this.discard(packet); return; }
+      this.validate?.(packet.descriptor);
     } catch (error) {
       this.discard(packet);
       this.onError?.(error instanceof BrowserFrameError ? error : new BrowserFrameError("invalid_envelope", String(error)));
@@ -282,7 +332,8 @@ export class FramePresenter {
       if ("close" in image) image.close();
     } catch (error) {
       this.discard(current.packet);
-      this.onError?.(error instanceof BrowserFrameError ? error : new Error(error instanceof Error ? error.message : String(error)));
+      const expectedStale = error instanceof BrowserFrameError && error.reason === "identity_mismatch" && this.isExpectedStale?.(current.descriptor);
+      if (!expectedStale) this.onError?.(error instanceof BrowserFrameError ? error : new Error(error instanceof Error ? error.message : String(error)));
     } finally {
       if (this.active === current) this.active = null;
       if (!this.closed && this.pending) {

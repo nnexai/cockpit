@@ -809,31 +809,3 @@ describe("mounted App mutation and session ordering", () => {
     }
   });
 });
-
-
-it("loads browser feedback for the selected Space independently of agent panes", async () => {
-  const fixture = new AppFixture();
-  const readFeedback = vi.fn<CockpitClient["browserFeedback"]>(async () => ({
-    browser: { association: null, connection: "closed", message: "browser is closed" },
-    feedback: { captures: [], pending_count: 0, retention_seconds: 86400 },
-    drafts: null,
-  }));
-  fixture.client.browserFeedback = readFeedback;
-  await mount(fixture);
-  const next = snapshot("session-1", "tab-2", "pane-2");
-  next.agents = [
-    { pane_id: "foreign-pane", space_id: "other-space", tab_id: "foreign-tab", name: "Other agent", status: "idle", title: null, focused: false, state_change_seq: 1 },
-    { pane_id: "pane-2", space_id: "space-1", tab_id: "tab-2", name: "Local agent", status: "idle", title: null, focused: false, state_change_seq: 1 },
-  ];
-  act(() => fixture.emitSnapshot("session-1", 1, 2, next));
-  await settle();
-  click(button("Commands"));
-  const feedbackCommand = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Browser feedback"));
-  if (!feedbackCommand) throw new Error("Missing Browser feedback command");
-  click(feedbackCommand);
-  await settle();
-  expect(readFeedback).toHaveBeenCalledWith({ target: { session_id: "session-1", space_id: "space-1", pane_id: null, endpoint_path: null } });
-  const panel = container.querySelector('.feedback-panel');
-  expect(panel?.textContent).toContain("No pending browser annotations.");
-  expect(panel?.textContent).toContain("To Local agent");
-});
