@@ -808,6 +808,16 @@ async function startScreencast(expectedCdp = pageCdp, expectedBinding = pageBind
     format: 'jpeg', quality: 80, maxWidth: state.cssWidth, maxHeight: state.cssHeight, everyNthFrame: 1,
   });
 }
+async function captureCurrentFrame(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
+  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding)) return;
+  try {
+    const capture = await expectedCdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 80, captureBeyondViewport: false });
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || typeof capture.data !== 'string') return;
+    enqueueFrame({ data: capture.data, metadata: { timestamp: Date.now() / 1000 }, _cdp: expectedCdp });
+  } catch (error) {
+    if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) emit({ type: 'failed', code: 'browser_frame_capture', message: String(error.message || error) });
+  }
+}
 async function installPageObservers() {
   if (observedPage && observedPageHandlers) {
     for (const [event, handler] of observedPageHandlers) observedPage.off?.(event, handler);
@@ -840,6 +850,7 @@ async function installPageObservers() {
       if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
       emitEvent('document_changed', { document: documentState() });
       emitNavigation();
+      await captureCurrentFrame(cdp, bindingGeneration);
     }).catch(() => {});
   };
   const onLoad = () => {
@@ -850,7 +861,7 @@ async function installPageObservers() {
         if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
         return updateHistory(cdp, bindingGeneration);
       })
-      .then(() => { if (current()) emitNavigation(); })
+      .then(async () => { if (current()) { emitNavigation(); await captureCurrentFrame(cdp, bindingGeneration); } })
       .catch(() => {});
   };
   const onDialog = (dialog) => {
