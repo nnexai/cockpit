@@ -571,6 +571,13 @@ impl BrowserService {
                 receipt.cdp_endpoint = None;
                 receipt.cdp_browser_identity = None;
                 self.store(receipt)?;
+                // Association state outlives installed Cockpit versions. Refresh
+                // the owned launch config only when creating a new browser
+                // process; a live browser keeps its original launch contract.
+                atomic_write_json(
+                    Path::new(&receipt.config_path),
+                    &launch_configuration(&self.configuration)?,
+                )?;
                 let mut args = vec![format!("-s={}", receipt.playwright_session), "open".into()];
                 if let Some(url) = url {
                     args.push(url.into());
@@ -1321,6 +1328,14 @@ fn launch_configuration(
         "--remote-debugging-port=0",
         "--force-dark-mode"
     ]);
+    // Retain the actual headless nature of the private browser while giving
+    // site operators an attributable Cockpit product identity.
+    config["browser"]["contextOptions"] = serde_json::json!({
+        "userAgent": format!(
+            "Cockpit/{} (personal embedded browser; headless Chromium)",
+            env!("CARGO_PKG_VERSION")
+        )
+    });
     Ok(config)
 }
 
