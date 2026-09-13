@@ -904,10 +904,10 @@ fn validate_annotation(
     }
     if let Some(element) = &annotation.element {
         validate_text(&element.tag, "element tag", 128)?;
-        validate_text(&element.text, "element text", 8 * 1024)?;
+        validate_display_text(&element.text, "element text", 8 * 1024)?;
         validate_optional_text(element.role.as_deref(), "element role", 512)?;
         validate_optional_text(element.name.as_deref(), "element name", 512)?;
-        validate_text(&element.excerpt, "element excerpt", 4 * 1024)?;
+        validate_display_text(&element.excerpt, "element excerpt", 4 * 1024)?;
         if element.locators.len() > 16 {
             return Err(InspectionError::new(
                 "browser_feedback_element",
@@ -1149,6 +1149,20 @@ fn validate_text(value: &str, field: &str, max_bytes: usize) -> Result<(), Inspe
     Ok(())
 }
 
+/// Browser DOM text normally includes line breaks between block elements. It
+/// is serialized as JSON into a bracketed terminal paste, so horizontal and
+/// vertical whitespace is data, while all other control characters remain
+/// forbidden.
+fn validate_display_text(value: &str, field: &str, max_bytes: usize) -> Result<(), InspectionError> {
+    if value.len() > max_bytes || value.chars().any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t')) {
+        return Err(InspectionError::new(
+            "browser_feedback_text",
+            format!("{field} is oversized or contains control characters"),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_optional_text(
     value: Option<&str>,
     field: &str,
@@ -1261,6 +1275,12 @@ fn delivery_record_name(operation_id: &str) -> String {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn element_evidence_preserves_normal_browser_line_breaks() {
+        assert!(validate_display_text("Heading\n\nParagraph\tvalue", "element text", 128).is_ok());
+        assert!(validate_display_text("escape\u{1b}[2J", "element text", 128).is_err());
+    }
     #[test]
     fn unknown_delivery_survives_acknowledgement_and_retention() {
         let root =
