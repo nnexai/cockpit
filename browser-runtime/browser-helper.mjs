@@ -374,9 +374,10 @@ function requireControl(command) {
   if (sequence !== null && sequence !== state.nextInputSequence) throw Object.assign(new Error('Browser input sequence is stale'), { code: 'stale_input_sequence' });
   return sequence;
 }
-function virtualKeyCode(key) {
+function virtualKeyCode(key, code) {
   const named = { Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18, Pause: 19, CapsLock: 20, Escape: 27, Space: 32, PageUp: 33, PageDown: 34, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46 };
-  return named[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+  const punctuation = { Backquote: 192, Minus: 189, Equal: 187, BracketLeft: 219, Backslash: 220, BracketRight: 221, Semicolon: 186, Quote: 222, Comma: 188, Period: 190, Slash: 191, NumpadDecimal: 110 };
+  return named[key] ?? punctuation[code] ?? (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
 }
 function advanceInput(sequence) { if (sequence !== null) state.nextInputSequence = sequence + 1; }
 async function releaseHeldInput() {
@@ -1048,8 +1049,8 @@ async function command(request) {
         location: i.location,
         modifiers: i.modifiers,
         autoRepeat: i.repeat,
-        windowsVirtualKeyCode: virtualKeyCode(i.key),
-        nativeVirtualKeyCode: virtualKeyCode(i.key),
+        windowsVirtualKeyCode: virtualKeyCode(i.key, i.code),
+        nativeVirtualKeyCode: virtualKeyCode(i.key, i.code),
         ...(text ? { text, unmodifiedText: text } : {}),
       });
       if (i.kind === 'down') state.heldKeys.set(i.code, i);

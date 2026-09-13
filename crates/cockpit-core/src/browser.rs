@@ -1318,7 +1318,8 @@ fn launch_configuration(
     // the local owner helper.
     config["browser"]["launchOptions"]["args"] = serde_json::json!([
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=0"
+        "--remote-debugging-port=0",
+        "--force-dark-mode"
     ]);
     Ok(config)
 }
@@ -1340,9 +1341,8 @@ fn receipt_config_has_inline_debugging(receipt: &BrowserReceipt) -> Result<bool,
     else {
         return Ok(false);
     };
-    Ok(args.len() == 2
-        && args[0].as_str() == Some("--remote-debugging-address=127.0.0.1")
-        && args[1].as_str() == Some("--remote-debugging-port=0"))
+    Ok(args.iter().any(|argument| argument.as_str() == Some("--remote-debugging-address=127.0.0.1"))
+        && args.iter().any(|argument| argument.as_str() == Some("--remote-debugging-port=0")))
 }
 #[derive(Debug)]
 struct CdpBinding {
