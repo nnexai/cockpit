@@ -9,7 +9,7 @@ export interface BrowserPaneProps {
   client: CockpitClient; target: BrowserTarget; viewport: BrowserViewViewportRequest;
   visible?: boolean; presentation?: BrowserViewPresentation; clientId?: string;
   inputActive?: boolean; liveInputEnabled?: boolean; onInteractionFocus?: () => void; onFeedback?: (captureIds: string[]) => void;
-  onReconnect?: () => void; onHide?: () => void; onBackToTerminals?: () => void; onExpand?: () => void; className?: string;
+  onReconnect?: () => void; onBackToTerminals?: () => void; onExpand?: () => void; className?: string;
 }
 
 type PaneStatus = "hidden" | "loading" | "ready" | "stale" | "error" | "unsupported" | "empty";
@@ -27,6 +27,7 @@ const annotationIconPaths = {
   remove: "M3 4.5h10M6 2.5h4M5 4.5l.6 9h4.8l.6-9M7 7v4M9 7v4",
   notes: "M14 11a3 3 0 0 1-3 3H6l-3 2v-8a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3Z",
   feedback: "M14 11a3 3 0 0 1-3 3H6l-3 2v-8a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3Z",
+  expand: "M6 1H1v5m8-5h5v5M1 9v5h5m8-5v5H9",
 } as const;
 type AnnotationIconName = keyof typeof annotationIconPaths;
 const AnnotationIcon = ({ name }: { name: AnnotationIconName }) => <svg className={`browser-annotation-icon browser-annotation-icon-${name}`} viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round"><path d={annotationIconPaths[name]} /></svg>;
@@ -75,7 +76,7 @@ function context(snapshot: BrowserViewSnapshot) {
 function location(snapshot: BrowserViewSnapshot, frame: BrowserViewFramePacket["descriptor"]): BrowserViewLocation | null {
   return snapshot.document && snapshot.viewport && snapshot.displayed_target_id ? { target_id: snapshot.displayed_target_id, document_generation: snapshot.document.document_generation, viewport_revision: snapshot.viewport.viewport_revision, presented_frame_sequence: frame.frame_sequence, lease_generation: snapshot.control.lease_generation } : null;
 }
-export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onHide, onBackToTerminals, onExpand, className }: BrowserPaneProps) {
+export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onBackToTerminals, onExpand, className }: BrowserPaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<BrowserViewStream | null>(null);
@@ -736,7 +737,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     void enqueueInput("boundary", async () => { await command(commandValue); });
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
-    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{presentation === "browser_only" && onBackToTerminals ? <button type="button" onClick={onBackToTerminals}>Restore split</button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" onClick={onExpand}>Expand browser</button> : null}{(status === "stale" || status === "error") ? <button type="button" onClick={() => onReconnect ? onReconnect() : setRetry((value) => value + 1)}>Retry</button> : null}{onHide ? <button type="button" onClick={onHide}>Close browser pane</button> : null}</div></header>
+    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><AnnotationIcon name="expand" /></button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><AnnotationIcon name="expand" /></button> : null}{(status === "stale" || status === "error") ? <button type="button" onClick={() => onReconnect ? onReconnect() : setRetry((value) => value + 1)}>Retry</button> : null}</div></header>
     <div className="browser-tabs" role="tablist" aria-label="Browser tabs">{targetTabs.map((browserTarget) => <div key={browserTarget.target_id} className="browser-tab-wrap"><button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{browserTarget.title || browserTarget.url || "New tab"}</button>{browserTarget.can_close ? <button type="button" className="browser-tab-close" aria-label="Close browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } })}>×</button> : null}</div>)}<button type="button" className="browser-new-tab" aria-label="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}>+</button></div>
     <div className="browser-navigation"><button type="button" disabled={!snapshot?.navigation?.can_go_back} onClick={() => navigation("back")}>←</button><button type="button" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}>→</button><button type="button" disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}>{snapshot?.navigation?.loading ? "■" : "↻"}</button><form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}><input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" /></form></div>
     <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">

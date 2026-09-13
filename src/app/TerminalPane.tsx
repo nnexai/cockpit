@@ -491,7 +491,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !terminalReady) return;
-    const restoreFocus = selectedRef.current && Boolean(terminal.element?.contains(document.activeElement));
+    const restoreFocus = selectedRef.current && controlAllowedRef.current;
     const geometry = terminalCellGeometry(terminal);
     // The authoritative snapshot can clear a focus transition one render
     // before the local control request state catches up. Open the confirmed

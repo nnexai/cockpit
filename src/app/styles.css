@@ -2312,6 +2312,27 @@ kbd {
 .pane-overflow { display: inline-flex; align-items: center; justify-content: center; }
 .pane-overflow .ui-icon { stroke-width: 3px; }
 .pane-view.is-selected .pane-header { box-shadow: inset 0 1px var(--accent); }
+.pane-header-expand {
+  display: inline-flex;
+  width: var(--compact-control-size);
+  height: var(--compact-control-size);
+  flex: 0 0 var(--compact-control-size);
+  align-items: center;
+  justify-content: center;
+  margin-right: -8px;
+  padding: 5px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.pane-header-expand:hover,
+.pane-header-expand:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.pane-header-expand .ui-icon { width: 15px; height: 15px; }
 .context-menu .ui-icon { width: 14px; height: 14px; flex-basis: 14px; color: var(--text-muted); }
 .command-search-box { display: flex; align-items: center; gap: 9px; margin: 12px 14px 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal-bg); color: var(--text-muted); }
 .command-search-box .command-search { width: 100%; margin: 0; padding: 9px 0; border: 0; background: transparent; font-size: 13px; }

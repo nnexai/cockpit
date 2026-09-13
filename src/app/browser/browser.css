@@ -46,6 +46,15 @@
   gap: 4px;
   margin-left: auto;
 }
+.browser-toolbar-icon {
+  display: inline-flex;
+  width: var(--compact-control-size);
+  height: var(--compact-control-size);
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+}
+.browser-toolbar-icon .browser-annotation-icon { width: 16px; height: 16px; }
 
 .browser-tabs,
 .browser-navigation,

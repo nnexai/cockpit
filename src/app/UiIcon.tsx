@@ -7,6 +7,7 @@ const paths = {
   file: "M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6",
   search: "M15 15l6 6M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0",
   sidebar: "M9 4v16M3 4h18v16H3Z",
+  browser: "M3 5h18v14H3ZM3 9h18M6 7h.01M9 7h.01",
   grid: "M3 3h7v7H3Zm11 0h7v7h-7ZM3 14h7v7H3Zm11 0h7v7h-7Z",
   down: "m6 9 6 6 6-6",
   right: "m9 5 7 7-7 7",
