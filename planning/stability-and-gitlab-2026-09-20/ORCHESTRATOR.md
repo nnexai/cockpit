@@ -12,6 +12,8 @@ Required: the 25 `required: true` tasks in `tasks.json`, including real macOS pr
 
 The campaign is complete only when every required task is `done`, each acceptance criterion has passing evidence on its required surface, all owned changes have commits, and ACCEPT-01 reconciles issues and resources. Missing macOS access, a needed MR fixture, or a failed verification leaves the affected task blocked, not done. Do all independently reachable work meanwhile. Scope reductions require the user's explicit decision, recorded in the observation ledger and task notes.
 
+One-trigger autonomous execution is defined in [AUTORUN.md](AUTORUN.md). Keep one campaign goal active across accepted increments; do not require a new user command for each task. The goal completes only after every required acceptance criterion and the final campaign gate pass.
+
 ## Ledger and task states
 
 `tasks.json` is the **only authoritative task-status ledger**. Briefs and the README do not duplicate mutable status. One orchestrator writes the ledger; workers report results but never mark themselves done.
@@ -19,7 +21,7 @@ The campaign is complete only when every required task is `done`, each acceptanc
 - `pending`: not claimed. Ready when all `depends_on` entries are done and no external prerequisite blocks it.
 - `in_progress`: one named worker/integration owner holds its declared locks. Set `owner` and `started_at` (UTC ISO-8601).
 - `verifying`: edits integrated; integration owner is running review/static/runtime gates. Still holds locks.
-- `blocked`: record precise `blockers`, attempted discovery, and the next unblock action. Explicitly retain locks in notes if partial edits exist; do not assume blocked work released shared files.
+- `blocked`: record precise `blockers`, attempted discovery, and the next unblock action. Keep `owner` non-null while partial edits or retained resources require its locks; the readiness helper conservatively retains all declared locks. Clear `owner` only after a safe committed checkpoint/cleanup leaves no partial edits or exclusive resources; record that release in notes. A blocked task never becomes ready automatically.
 - `done`: passing evidence, completed review where required, and actual commit hashes recorded; set `completed_at`, clear blockers, release locks.
 - `deferred`: outside required campaign scope; never auto-promote.
 
@@ -35,6 +37,8 @@ jq -r '. as $b | .tasks[] | select(.required and .status == "pending") | select(
 ```
 
 The second command reports dependency readiness only. Check platform/fixture prerequisites and locks before dispatching. Update fields through normal reviewed file edits; do not maintain a second checkbox board.
+
+For automated execution prefer `python3 planning/stability-and-gitlab-2026-09-20/campaign.py ready`; unlike the jq dependency query it also accounts for held locks. `check` validates ledger and recorded completion evidence; `complete` additionally rejects any unfinished required task. These are read-only bookkeeping gates, not substitutes for scenario proof or independent review. Ready candidates may conflict with each other: claim/recheck or explicitly select disjoint ownership before dispatch.
 
 ## Scheduling and file ownership
 
@@ -66,6 +70,8 @@ Suggested ready-work progression (not an extra dependency chain):
 5. Finish terminal/browser/viewer correctness, authenticated GitLab proof, and local workflows. Run platform, security, performance and integrated gates on the resulting code, not a moving target.
 
 Do not invent padding work to fill workers. A task spanning too many shared files can be split only into independently observable outcomes; update IDs, dependencies, issue coverage and acceptance ownership together, preserving original requirements. Never create a compile-only scaffold task and call its parent feature complete.
+
+Before implementation, record the selected increment in the task's run evidence: exact user-visible outcome, original acceptance criteria covered, non-goals, exclusive files, positive and negative scenario, required surfaces, and expected observable result. For broad tasks, execute one such increment at a time and preserve the remaining criteria. Append results and commit references after each accepted increment; keep the parent task `in_progress` until its complete original contract passes. Do not introduce a second mutable status ledger. Continue to the next increment/task without a user handoff.
 
 ## Worker contract
 

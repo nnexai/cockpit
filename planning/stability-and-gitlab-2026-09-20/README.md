@@ -1,6 +1,12 @@
 # Cockpit stability and GitLab campaign
 
-**Start with [ORCHESTRATOR.md](ORCHESTRATOR.md), then [tasks.json](tasks.json).** This package is the execution plan for the user's GitLab integration, bugfix and daily-use polish campaign. It is not a claim that the work has been implemented.
+**Start the entire campaign with this one command in OMP, opened at the Cockpit repository root:**
+
+```text
+/goal Execute planning/stability-and-gitlab-2026-09-20/AUTORUN.md
+```
+
+No custom command installation, plugin reload, per-task restart, or manual agent-message relay is needed. [AUTORUN.md](AUTORUN.md) is the autonomous execution contract; [ORCHESTRATOR.md](ORCHESTRATOR.md) defines scheduling/safety; [tasks.json](tasks.json) remains the sole status ledger. This package prepares execution; it does not claim product work has started.
 
 Planning checks and review findings/resolutions are recorded in [PLAN_VALIDATION.md](PLAN_VALIDATION.md).
 
@@ -10,6 +16,8 @@ Planning checks and review findings/resolutions are recorded in [PLAN_VALIDATION
 stability-and-gitlab-2026-09-20/
   README.md             scope, task index, launch prompt
   ORCHESTRATOR.md       scheduling, ownership, safety, completion rules
+  AUTORUN.md            one-trigger goal and bounded increment execution
+  campaign.py           read-only readiness and completion bookkeeping gate
   tasks.json            single mutable task-status ledger
   INVENTORY.md          dated GitHub/source/GitLab evidence
   ACCEPTANCE.md         complete behavior/platform/issue coverage
@@ -75,27 +83,17 @@ Priority 0 protects basic usability/data; priority 1 completes the selected func
 
 GitLab validation target: [nnex.ai/integration](https://gitlab.com/nnex.ai/integration). The authorized existing [fixture issue #1](https://gitlab.com/nnex.ai/integration/-/work_items/1) is open for this campaign. No MR exists at inventory; permission for fixture branch/MR writes must be established separately. Production adapters remain read-only.
 
-## Orchestrator launch prompt
+## Autonomous execution
 
-```text
-Execute planning/stability-and-gitlab-2026-09-20/README.md as the active
-stability/GitLab campaign. Read ORCHESTRATOR.md, INVENTORY.md,
-ACCEPTANCE.md, OBSERVATIONS.md and tasks.json first, then repository
-skills/authorities and each selected task brief.
+The single campaign goal stays active across small, independently verified increments. The orchestrator selects work, delegates disjoint slices, integrates, verifies, commits, updates the ledger, and immediately continues. It must not call the goal complete at a task boundary or ask the user to relay the next assignment.
 
-Use tasks.json as the sole status ledger. Start with RUN-01; select only
-dependency-ready work, assign exclusive files/symbols and honor locks.
-Delegate independent bounded slices to configured workers, retaining
-integration, user intent and verification ownership. Workers skip shared
-validation and commits while edits run. No user-session or live-install
-mutations. Use the designated GitLab fixture and explicit permissions.
+Broad task briefs are decomposed just before execution; each increment has a concrete outcome, positive/negative proof, required surfaces and owned files. Original task acceptance remains intact. Multiple increment commits may satisfy one task, but partial work never marks that task done.
 
-Deliver all required tasks in verified increments with real browser/native
-and macOS proof where required, evidence and commit hashes. Record and
-work around external blockers without silently dropping acceptance.
-Keep GitHub PR/Jira expansion deferred and #6's remaining scope explicit.
-Do not mark work done from an agent message, historical tests, or a build.
-```
+The orchestrator runs `python3 planning/stability-and-gitlab-2026-09-20/campaign.py ready` itself. Its output is a candidate list, not a concurrency-safe batch or proof of runtime success. `check` validates ledger/evidence integrity; `complete` additionally requires all required tasks done. The helper never starts work or changes the ledger.
+
+Unavailable external access/authorization blocks only affected work. Finish other reachable tasks first, then ask once for the precise remaining prerequisites; do not invent permission, loop on the same missing resource, or claim campaign completion. All original macOS and GitLab MR proof requirements remain mandatory.
+
+See [AUTORUN.md](AUTORUN.md) for interruption recovery and bounded context checkpoints. Execution needs a running OMP session; this is not a daemon that survives closing OMP.
 
 ## Plan verification versus product verification
 

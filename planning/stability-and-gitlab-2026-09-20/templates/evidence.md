@@ -8,6 +8,20 @@ Record task ID, run ID, UTC time, integration owner/reviewer, baseline and teste
 
 List the named Herdr session, endpoint, fixture repository/worktree/companion, config/state roots, process/profile/display/port identities and the resource-guard ledger. State which resources are protected and which this scenario created. For GitLab include only the authorized project/fixture IDs, marker, API method and mutation permissions—not tokens.
 
+## Increment contracts and receipts
+
+Before each bounded increment, record:
+
+- A local increment label (for example `WEB-02/01`) and one observable outcome.
+- The original task acceptance criteria it covers and those still outstanding.
+- Exclusive writable paths/symbols, shared interface contracts and non-goals.
+- Exact positive and important negative scenarios: starting fixture/state, action, expected authoritative response and visible result, required platforms.
+- The focused static/behavior gates and integration/review owner.
+
+After verification, append actual results, evidence locations, changed paths and the resulting commit reference (record the SHA after that commit, not inside itself). Keep failed attempts and the reason for a changed approach concise. These are contracts and receipts, not a second task-status ledger. A partial increment does not satisfy the parent task; `tasks.json` stays `in_progress` until every original criterion has passed.
+
+At a context checkpoint, state the next exact action, outstanding criteria, unresolved decision/blocker, current owned edits, and retained runtime/fixture identities. Resume from this compact state rather than replaying worker transcripts.
+
 ## Original behavior and decision
 
 Describe the user's reported failure and safe measurable reproduction or negative control, including actual output/visible result. Source-review hypotheses are labeled as such until exercised. Describe the root cause established by evidence and why the repair preserves the current authority/ownership contract. For an already-correct feature, record the real passing scenario instead of inventing a code change.
