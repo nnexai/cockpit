@@ -75,13 +75,21 @@ class ResourceGuardTests(unittest.TestCase):
             with self.assertRaises(ResourceGuardError):
                 prepare_subprocess(ledger, RUN_ID, SESSION, ("status", "server", "--json"))
 
-    def test_tui_rejects_missing_or_foreign_home_before_invocation(self) -> None:
-        self._write_ledger(status="running")
-        ledger = load_ledger(self.ledger_path)
-        for environment in ({}, {"HOME": str(self.protected_config.parent)}):
-            with self.subTest(environment=environment):
+    def test_server_and_tui_cannot_inherit_a_foreign_home(self) -> None:
+        for command, status in ((("server",), "planned"), (("tui",), "running")):
+            self._write_ledger(status=status)
+            for inherited in ({}, {"HOME": str(self.protected_config.parent)}):
+                with self.subTest(command=command, inherited=inherited):
+                    _, _, environment = self._plan(command, base_environment=inherited)
+                    self.assertEqual(environment["HOME"], str(self.resource_root / "home"))
+
+    def test_process_home_cannot_escape_through_a_symlink(self) -> None:
+        (self.resource_root / "home").symlink_to(self.protected_config.parent)
+        for command, status in ((("server",), "planned"), (("tui",), "running")):
+            self._write_ledger(status=status)
+            with self.subTest(command=command):
                 with self.assertRaises(ResourceGuardError):
-                    prepare_subprocess(ledger, RUN_ID, SESSION, ("tui",), base_environment=environment)
+                    self._plan(command)
 
     def test_running_tui_requires_exact_target_and_owned_home(self) -> None:
         self._write_ledger(status="running")
@@ -203,7 +211,7 @@ class ResourceGuardTests(unittest.TestCase):
                 self.assertEqual(environment["XDG_STATE_HOME"], str(self.xdg_state_home))
                 self.assertEqual(environment["HERDR_CONFIG_PATH"], str(self.config))
                 self.assertEqual(environment["HERDR_SOCKET_PATH"], str(self.socket))
-                self.assertEqual(environment["HOME"], "/home/ambient")
+                self.assertEqual(environment["HOME"], str(self.resource_root / "home"))
                 self.assertNotIn("HERDR_SESSION", environment)
 
     def test_prepare_rejects_every_forbidden_or_generic_operation_before_a_plan_exists(self) -> None:

@@ -45,12 +45,37 @@ Linux-native artifact exists with unknown source provenance until rebuilt. DISPL
 
 ## Cleanup and restart recipe
 
-Hub stopped csg-tui PID 218407 and csg-herdr PID 215312, both exit 0. Failed TUI launches already exited. No user/default session, personal browser or installed executable was mutated. Retain owned /tmp/csg-a3e9b950 repositories/config/resources.json/artifacts for TERM-01; Main/ACCEPT-01 owns final cleanup. GitLab issue remains open. Local GitLab fixture has local initial commit and matching origin only; no remote clone/push.
+Hub stopped csg-tui PID 218407 and csg-herdr PID 215312, both exit 0. Failed TUI launches already exited. No user/default Herdr session or personal browser was mutated; the original assertion about installed files was invalidated by OBS-008 below. Retain owned /tmp/csg-a3e9b950 repositories/config/resources.json/artifacts for TERM-01; Main/ACCEPT-01 owns final cleanup. GitLab issue remains open. Local GitLab fixture has local initial commit and matching origin only; no remote clone/push.
 
-Before relaunch, revalidate executable hash and absence of a live recorded socket owner. Set owned resource status planned, use resource_guard.prepare_subprocess(load_ledger(...), run_id, session, ['server']) and Hub with returned argv/environment and fixture cwd. After snapshot readiness, set status running. Guarded ['tui'] uses HOME=/tmp/csg-a3e9b950/home and TERM=xterm-256color; nested opt-in is run-local. Recheck loopback ports before gateway launch; 37619/34585 were free candidates, not held reservations.
+Before relaunch, revalidate executable hash and absence of a live recorded socket owner. Set owned resource status planned, use resource_guard.prepare_subprocess(load_ledger(...), run_id, session, ['server']) and Hub with the complete returned argv/environment and fixture cwd. Every guarded invocation now has HOME=/tmp/csg-a3e9b950/home; inspect the actual launched server environment rather than trusting a prepared mapping. After snapshot readiness, set status running. TUI adds TERM=xterm-256color; nested opt-in is run-local. Recheck loopback ports before gateway launch; 37619/34585 were free candidates, not held reservations.
 
 Raw artifacts under /tmp/csg-a3e9b950/artifacts have hashes in baseline.json. Compact observations remain durable here. No product code change or project-wide suite; separate code review unnecessary for this no-code inventory.
 
+## Safety correction — OBS-008
+
+Discovered 2026-09-20 during TERM-02 oracle capture. Accumulated Hub TUI output reports installation of pi, omp, Claude and opencode integrations into the real home. The six paths below have modification timestamps at 09:51:52Z during this baseline probe. The earlier Enter/printf attempt was not a harmless proven shell action: it reached the first-run integration UI. Server HOME was inherited as `/home/nnex`, despite isolated XDG roots and the TUI's owned HOME. Original containment claims do not cover these unintended writes.
+
+- `/home/nnex/.pi/agent/extensions/herdr-agent-state.ts`
+- `/home/nnex/.omp/agent/extensions/herdr-omp-agent-state.ts`
+- `/home/nnex/.claude/hooks/herdr-agent-state.sh`
+- `/home/nnex/.claude/settings.json`
+- `/home/nnex/.config/opencode/plugins/herdr-agent-state.js`
+- `/home/nnex/.config/opencode/herdr-tui-session.js`
+
+Exact-name backup globs found no copies for the initially identified five paths; the sixth was resolved through a narrow opencode filename lookup. Current hashes/timestamps, not contents or credentials, are in [RUN-01-safety.json](RUN-01-safety.json). No pre-probe hashes/copies exist, so exact changes cannot be reconstructed from timestamps alone. Main disclosed this to the user and stopped TUI, server and gateway. Never delete or overwrite these user files speculatively. ACCEPT-01 retains reconciliation as an explicit blocker.
+
+### Accepted corrective plan
+
+ACCEPTED Main/Astra, 2026-09-20. This is a bounded correction to RUN-01's fixture safety requirement, not new product scope. Own only `scripts/verify/resource_guard.py`, its existing tests, this evidence, OBSERVATIONS and ledger notes. Python LSP is unavailable. Locate references before editing. Set every guarded process HOME to a validated `resource_root/home` rather than preserving ambient HOME; remove the TUI-only special case. Keep exact session/config/socket/executable validation unchanged. Reject an owned-home symlink escaping the root. Existing ambient HOME behavior assertions must become containment assertions; preserve real behavior tests, not incidental implementation expectations.
+
+Main implements inline; current TERM-02 and VIEW-01 writers have no conflicting paths or runtime permissions. Focused guard checks run after the concurrent writing wave settles. Review lifecycle and safety independently; restart owned Herdr with the returned isolated environment and verify its actual process HOME and absence of changed protected-file hashes. No integration installation is needed for that proof. Resume product verification only with the corrected environment. This containment repair cannot resolve the earlier user-file disposition: retain OBS-008 for the grouped prerequisite decision.
+
+### Corrective verification and cleanup
+
+The new server/TUI HOME and escaping-symlink regression fails against c360e68's guard (exit 1) and the corrected guard/startup-inventory suite passes 32 tests. FixtureSafetyReview found no evidence-backed defect in this bounded repair; preserving other non-Herdr environment variables is not a general filesystem sandbox. The actual launched server PID 378954 reports owned HOME/config/socket through `/proc`, and its authoritative snapshot reports all ten owned tabs. All six protected-file hashes remain unchanged across this restart; no integration installation was attempted. See [RUN-01-safety.json](RUN-01-safety.json) for exact hashes and limits.
+
+Removed the owned throwaway guard-red code directory after proof. Retain the corrected owned server and private native compositor for TERM-02 under Main's runtime lock; gateway/TUI remain stopped until their next explicit proof step. This fixes future HOME containment, not the earlier incident disposition.
+
 ## Delivery checkpoint
 
-All six inventory criteria pass within their original scope. Incompatibility, unrun scenarios and unavailable macOS/MR authorization remain distinct. After evidence commit/ledger checkpoint select TERM-01; WEB-07 and NATIVE-01 are independently eligible only after their own accepted plans. Keep umbrella goal active and deferred tasks unchanged. Record this evidence commit SHA in tasks.json after commit.
+Original inventory evidence remains available, with its containment error explicitly superseded by the correction above. Current guarded runtime is ready for TERM-02/VIEW-01 verification. macOS/MR prerequisites and OBS-008 reconciliation remain unresolved; the umbrella campaign cannot complete until their required criteria pass.

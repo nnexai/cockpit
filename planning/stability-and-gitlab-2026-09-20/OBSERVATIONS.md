@@ -23,3 +23,10 @@ For each new entry record: stable ID; date; reporter/evidence; exact observed ac
 - **Scope change:** requires explicit user approval if it removes a required criterion, adds deferred provider products, or changes a safety/authority contract. Record approval, not an inferred permission.
 
 An in-scope unresolved finding prevents campaign completion. Assign it to an existing task or add a separately owned required task and update dependency/coverage records. This section is intentionally empty of new findings at planning delivery; no additional runtime investigation is claimed.
+
+### OBS-008 — fixture server inherited the real home
+
+- 2026-09-20, Main. During TERM-02 oracle capture, accumulated `csg-tui` logs exposed an earlier integration-install action. Six protected integration/settings paths have matching 09:51:52Z modification timestamps, during RUN-01. No pre-probe copies were recorded; exact previous bytes and whether each install changed content are unknown.
+- Blocking for protected-home restoration/reconciliation under ACCEPT-01; isolated product implementation may continue. Stopped owned TUI, server and gateway immediately after discovery. No automatic deletion/rollback of user files.
+- RUN-01 containment correction verified: all guarded invocations receive owned HOME; the new negative control fails against baseline, 32 focused tests pass, actual server HOME is owned, and the six protected hashes are unchanged across restart. Main informed the user. This is not resolution of the earlier writes.
+- Evidence and exact paths: `runs/run-20260920-a3e9b950/RUN-01.md`, Safety correction section. Final disposition remains unresolved; campaign completion requires verified restoration or the user's explicit decision to retain these integrations.

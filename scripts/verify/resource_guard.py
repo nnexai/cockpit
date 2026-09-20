@@ -626,12 +626,15 @@ def build_subprocess_environment(
     target: GuardedTarget,
     base_environment: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Replace inherited Herdr selectors and XDG roots with ledger-owned paths."""
+    """Replace inherited home, Herdr selectors and XDG roots with owned paths."""
 
     source = os.environ if base_environment is None else base_environment
     environment = {
         key: value for key, value in source.items() if not key.startswith("HERDR_")
     }
+    home = os.path.join(target.resource_root, "home")
+    _validate_runtime_path(target, home, "process HOME")
+    environment["HOME"] = home
     environment["XDG_CONFIG_HOME"] = target.session.xdg_config_home
     environment["XDG_STATE_HOME"] = target.session.xdg_state_home
     environment["HERDR_CONFIG_PATH"] = target.session.config_path
@@ -653,8 +656,6 @@ def prepare_subprocess(
     target = validate_target(ledger, run_id, session_name, cleanup=cleanup)
     validate_recorded_executable(target)
     environment = build_subprocess_environment(target, base_environment)
-    if tuple(command) == ("tui",):
-        _validate_runtime_path(target, environment.get("HOME", ""), "TUI HOME")
     return (
         target,
         build_subprocess_argv(target, command, cleanup=cleanup),

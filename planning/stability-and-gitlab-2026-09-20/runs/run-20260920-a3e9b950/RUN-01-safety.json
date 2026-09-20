@@ -1,0 +1,61 @@
+{
+  "run_id": "run-20260920-a3e9b950",
+  "observation": "OBS-008",
+  "discovered_at": "2026-09-20T10:42:38.728115+00:00",
+  "incident": {
+    "reported_write_time": "2026-09-20T09:51:52Z",
+    "protected_files": [
+      {
+        "path": "/home/nnex/.claude/settings.json",
+        "mtime": "2026-09-20T09:51:52.608564+00:00",
+        "sha256": "8400896311d5b90c8c72f71d7e3caa57b2ced1f6d4ca2211d13d73f612552dd0"
+      },
+      {
+        "path": "/home/nnex/.claude/hooks/herdr-agent-state.sh",
+        "mtime": "2026-09-20T09:51:52.601564+00:00",
+        "sha256": "7f117c303ffc1a66975b76dda8189d70b718fc04af4cf7cb11449e4ee5b4ae86"
+      },
+      {
+        "path": "/home/nnex/.pi/agent/extensions/herdr-agent-state.ts",
+        "mtime": "2026-09-20T09:51:52.598564+00:00",
+        "sha256": "2c5272d732b475bbf91a027203b1f98d25fe43d2c1402530a442b288aeaca1e4"
+      },
+      {
+        "path": "/home/nnex/.omp/agent/extensions/herdr-omp-agent-state.ts",
+        "mtime": "2026-09-20T09:51:52.599564+00:00",
+        "sha256": "e3c650752bb9c2eb8bc1eecc9ce845c27434f6b7331af161353dd06ca6de48b7"
+      },
+      {
+        "path": "/home/nnex/.config/opencode/plugins/herdr-agent-state.js",
+        "mtime": "2026-09-20T09:51:52.611564+00:00",
+        "sha256": "1a6aebf6632324fec63d1de226737b9fa6b35f3ddb51ce687439e66b6c7cb475"
+      },
+      {
+        "path": "/home/nnex/.config/opencode/herdr-tui-session.js",
+        "mtime": "2026-09-20T09:51:52.611564+00:00",
+        "sha256": "f9b5c2db169b0f0c38a78bc2c8341178673bc0d00e5f7057765aea73ddc57f95"
+      }
+    ],
+    "prior_bytes_available": false,
+    "disposition": "Unresolved; no rollback attempted; explicit user decision or verified restoration required before ACCEPT-01"
+  },
+  "containment_proof": {
+    "pid": 378954,
+    "home": "/tmp/csg-a3e9b950/home",
+    "config": "/tmp/csg-a3e9b950/config/herdr/config.toml",
+    "socket": "/tmp/csg-a3e9b950/config/herdr/sessions/csg-a3e9b950/herdr.sock",
+    "tabs": 10,
+    "protected_file_hashes_unchanged": 6,
+    "scope": "Restart and authoritative snapshot only; no integration installation attempted"
+  },
+  "checks": {
+    "baseline_new_regression_exit": 1,
+    "focused_tests": "python3 -m unittest scripts.verify.test_resource_guard scripts.verify.test_startup_inventory: 32 passed",
+    "review": "FixtureSafetyReview: no evidence-backed bounded HOME fix findings; arbitrary future inherited selectors are not sandboxed"
+  },
+  "raw_artifacts": {
+    "guard-home-red.txt": "604a9b6d63a34bf280ab675ff08734c06223bdfde3b13fe045dd57ac401f0279",
+    "guard-home-smoke.json": "5aeeacd579b5de725fbbb3242d974563067dc5b010f2f05bdca9f3c9bfa591f8",
+    "protected-integration-incident.json": "acae30a12f975941fa1a701397a4a8756236a0eab66b08038407c4a09eb74f9d"
+  }
+}
