@@ -15,14 +15,14 @@
       ],
       "issues": [],
       "brief": "tasks/RUN-01.md",
-      "status": "pending",
-      "owner": null,
-      "started_at": null,
+      "status": "in_progress",
+      "owner": "Main",
+      "started_at": "2026-09-20T09:49:03.861224Z",
       "completed_at": null,
       "blockers": [],
-      "evidence": [],
+      "evidence": ["runs/run-20260920-a3e9b950/RUN-01.md"],
       "commits": [],
-      "notes": []
+      "notes": ["Accepted Astra baseline plan; verification-runtime lock held. Exact observed timestamps are recorded in run evidence."]
     },
     {
       "id": "TERM-01",

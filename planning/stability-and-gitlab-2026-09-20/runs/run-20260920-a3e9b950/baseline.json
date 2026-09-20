@@ -1,0 +1,83 @@
+{
+  "run_id": "run-20260920-a3e9b950",
+  "source_commit": "a3e9b9504339f128e14c21a8a24b40a7b8d79953",
+  "observed_at": "2026-09-20T09:49:03.861224Z",
+  "runtime_root": "/tmp/csg-a3e9b950",
+  "herdr": {
+    "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.9.1/bin/herdr",
+    "sha256": "bc142adab5eabcc53fd0471a664f87e784ef80280cdf4962e81239e632915957",
+    "version": "0.9.1",
+    "protocol": 22,
+    "schema_version": 1
+  },
+  "versions": {
+    "herdr": {
+      "path": "/home/linuxbrew/.linuxbrew/bin/herdr",
+      "resolved": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.9.1/bin/herdr",
+      "version": "herdr 0.9.1"
+    },
+    "bun": {
+      "path": "/home/nnex/.bun/bin/bun",
+      "resolved": "/home/nnex/.bun/bin/bun",
+      "version": "1.3.14"
+    },
+    "node": {
+      "path": "/home/linuxbrew/.linuxbrew/bin/node",
+      "resolved": "/home/linuxbrew/.linuxbrew/Cellar/node/26.9.0/bin/node",
+      "version": "v26.9.0"
+    },
+    "glab": {
+      "path": "/home/linuxbrew/.linuxbrew/bin/glab",
+      "resolved": "/home/linuxbrew/.linuxbrew/Cellar/glab/1.118.0/bin/glab",
+      "version": "glab 1.118.0 (570955d42)"
+    },
+    "playwright-cli": {
+      "path": "/home/linuxbrew/.linuxbrew/bin/playwright-cli",
+      "resolved": "/home/linuxbrew/.linuxbrew/lib/node_modules/@playwright/cli/playwright-cli.js",
+      "version": "0.1.19"
+    },
+    "cargo": {
+      "path": "/home/nnex/.cargo/bin/cargo",
+      "resolved": "/home/nnex/.cargo/bin/rustup",
+      "version": "cargo 1.98.0 (797e8a9bc 2026-08-05)"
+    },
+    "rustc": {
+      "path": "/home/nnex/.cargo/bin/rustc",
+      "resolved": "/home/nnex/.cargo/bin/rustup",
+      "version": "rustc 1.98.0 (88d9e12ae 2026-08-18)"
+    },
+    "Xvfb": {
+      "path": null,
+      "resolved": null,
+      "version": ""
+    },
+    "xdotool": {
+      "path": null,
+      "resolved": null,
+      "version": ""
+    },
+    "ghostty": {
+      "path": "/usr/bin/ghostty",
+      "resolved": "/usr/bin/ghostty",
+      "version": ""
+    }
+  },
+  "candidate_loopback_ports": [
+    37619,
+    34585
+  ],
+  "artifacts": {
+    "oracle-log.json": "425c5eece5c4ffbae2ded4b61041fe3695791836799838ce75602b06dc76fa66",
+    "cockpit-baseline-status.json": "df7ff15714e53c4cc76deb717ee1fb0b136e100da46b2d288b75583a8f6c95e8",
+    "workspace.json": "51329ec4657eb0cd831e96259dbfedf0f7186c3cb5b828e76e3b775fe443b3de",
+    "initial-snapshot.json": "8090bbaefb194aa2477a6b5df479fbfa3db8bddb73ec1591173c20589ee3a40e",
+    "herdr-schema.json": "226d4ecbd128d2e6bc84e4c8ddcec21ba9c7e51a0aafffcf087111ead3f1fa9a",
+    "versions.json": "929697a07ca8f2051bd529c184e460a5ce30b33e1507feb2d3d3f9c093e2ccf4"
+  },
+  "services": {
+    "csg-tui": "stopped exit 0",
+    "csg-herdr": "stopped exit 0"
+  },
+  "macos": "No SSH capability hosts, only gitea SSH alias, no Herdr machines and no CI workflow configuration discovered",
+  "linux_native": "Wayland socket /run/user/1000/wayland-1 exists; launch/interaction unrun; no Xvfb or xdotool installed"
+}
