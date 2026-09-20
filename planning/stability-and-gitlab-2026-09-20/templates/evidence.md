@@ -1,0 +1,42 @@
+# Task evidence record template
+
+Copy to `runs/<run-id>/<TASK-ID>.md` inside this package when executing a task. Replace these instructions with observed facts; an unfilled template is not evidence. Keep raw screenshots/traces outside Git unless small and intentionally owned, and record durable locations plus hashes. Never store credentials.
+
+## Identity and ownership
+
+Record task ID, run ID, UTC time, integration owner/reviewer, baseline and tested source commits, changed paths, OS/architecture, host/native/browser/Herdr/Node/CLI versions, protocol/schema and exact built artifact identity. Distinguish browser, Linux-native and macOS runs.
+
+List the named Herdr session, endpoint, fixture repository/worktree/companion, config/state roots, process/profile/display/port identities and the resource-guard ledger. State which resources are protected and which this scenario created. For GitLab include only the authorized project/fixture IDs, marker, API method and mutation permissions—not tokens.
+
+## Original behavior and decision
+
+Describe the user's reported failure and safe measurable reproduction or negative control, including actual output/visible result. Source-review hypotheses are labeled as such until exercised. Describe the root cause established by evidence and why the repair preserves the current authority/ownership contract. For an already-correct feature, record the real passing scenario instead of inventing a code change.
+
+## Acceptance results
+
+Create one row for every numbered acceptance criterion in the task brief:
+
+| Criterion | Surface/platform | Result (PASS / FAIL / BLOCKED) | Action, authoritative result and rendered observation | Evidence location/hash |
+| --- | --- | --- | --- | --- |
+
+Populate actual rows before requesting completion. Record initial and post-fix results separately where applicable. A successful HTTP request, mock, screenshot of startup or compiler result cannot stand in for the complete interaction. Explain any unavailable case; it remains blocked if required.
+
+## Checks executed
+
+Record exact commands/scenarios, cwd/environment identity where relevant, exit/results and pertinent output. Separate narrow tests/static gates from actual surface proof. Include negative/error/recovery cases, ordering/cancellation/unknown-outcome handling, and real native checks when required. Do not copy historical test totals.
+
+## Performance evidence
+
+When relevant, record fixed fixture/dimensions/build, warm-up duration, sample count and method, clock relationship, p50/p95, frame/request/queue/object counts, CPU/PSS units/range/slope and capture artifacts. State target and actual result. Never change thresholds after measurement without an explicit recorded decision.
+
+## Review and advisory decisions
+
+Record reviewer scope, concrete findings, resolutions and rechecks. If an advisor was consulted, record consequential advice and the integrating engineer's decision plus evidence; advisor agreement is not verification. State why review is unnecessary for a bounded no-risk documentation-only task if applicable.
+
+## Cleanup and retained resources
+
+List every created resource and removal receipt or named next consumer/final cleanup owner. Verify unrelated sentinel/user resources survive. Record fixture issue/comment/branch/MR changes with the applicable authorization; retain the GitLab issue while downstream validation needs it. Remove throwaway scripts after proof or retain only intentional behavior regressions. Keep compact evidence durable after runtime teardown.
+
+## Delivery and remaining blockers
+
+Record actual implementation/evidence commit hashes, task ledger path, any reopened downstream task, and exact remaining blocker/unblock action. The implementation SHA can be recorded in the ledger after committing this report; do not embed a commit's own hash in itself. No task is done while a required criterion is FAIL/BLOCKED or owned changes lack a commit.

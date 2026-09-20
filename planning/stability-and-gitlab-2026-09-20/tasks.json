@@ -1,0 +1,745 @@
+{
+  "schema_version": 1,
+  "campaign": "stability-and-gitlab-2026-09-20",
+  "baseline_commit": "6f6222b74e4f552ce697e61364cf653f4b6be29f",
+  "scope": "GitLab issue/MR integration, known bugs, existing-function stability and polish. GitHub PR and Jira expansion remain deferred.",
+  "tasks": [
+    {
+      "id": "RUN-01",
+      "title": "Establish safe runtime and evidence baseline",
+      "required": true,
+      "priority": 0,
+      "depends_on": [],
+      "locks": [
+        "verification-runtime"
+      ],
+      "issues": [],
+      "brief": "tasks/RUN-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "TERM-01",
+      "title": "Accept compatible Herdr patch releases",
+      "required": true,
+      "priority": 0,
+      "depends_on": [
+        "RUN-01"
+      ],
+      "locks": [
+        "herdr-adapter"
+      ],
+      "issues": [
+        13
+      ],
+      "brief": "tasks/TERM-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "TERM-02",
+      "title": "Attach terminals only for visible panes",
+      "required": true,
+      "priority": 0,
+      "depends_on": [
+        "TERM-01"
+      ],
+      "locks": [
+        "app-shell",
+        "terminal"
+      ],
+      "issues": [
+        9,
+        12
+      ],
+      "brief": "tasks/TERM-02.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "SYNC-01",
+      "title": "Cancel obsolete work without false errors",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "TERM-02"
+      ],
+      "locks": [
+        "app-shell",
+        "terminal",
+        "client-transports",
+        "browser-ui",
+        "host-streams"
+      ],
+      "issues": [
+        9,
+        12
+      ],
+      "brief": "tasks/SYNC-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "TERM-03",
+      "title": "Stabilize terminal scrolling focus and input",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "SYNC-01"
+      ],
+      "locks": [
+        "app-shell",
+        "terminal",
+        "herdr-adapter"
+      ],
+      "issues": [
+        1,
+        4,
+        9,
+        12
+      ],
+      "brief": "tasks/TERM-03.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "VIEW-01",
+      "title": "Preserve Context and Review navigation continuity",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "TERM-01"
+      ],
+      "locks": [
+        "context-review"
+      ],
+      "issues": [],
+      "brief": "tasks/VIEW-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "FLOW-01",
+      "title": "Verify durable local development workflows",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "VIEW-01",
+        "SETUP-02",
+        "SYNC-01"
+      ],
+      "locks": [
+        "app-shell",
+        "core-projects",
+        "context-review",
+        "comment-delivery"
+      ],
+      "issues": [
+        2,
+        7
+      ],
+      "brief": "tasks/FLOW-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "SETUP-01",
+      "title": "Separate source inspection from explicit setup",
+      "required": true,
+      "priority": 0,
+      "depends_on": [
+        "TERM-01"
+      ],
+      "locks": [
+        "app-shell",
+        "setup-ui",
+        "core-projects"
+      ],
+      "issues": [
+        7
+      ],
+      "brief": "tasks/SETUP-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "SETUP-02",
+      "title": "Recover companion setup safely across platforms",
+      "required": true,
+      "priority": 0,
+      "depends_on": [
+        "SETUP-01"
+      ],
+      "locks": [
+        "core-projects",
+        "filesystem-publication"
+      ],
+      "issues": [
+        7
+      ],
+      "brief": "tasks/SETUP-02.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "GLAB-01",
+      "title": "Import GitLab issues through existing source flow",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "SETUP-01"
+      ],
+      "locks": [
+        "source-identity",
+        "providers",
+        "core-projects",
+        "protocol"
+      ],
+      "issues": [
+        6
+      ],
+      "brief": "tasks/GLAB-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "GLAB-02",
+      "title": "Import standalone GitLab merge requests",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "GLAB-01"
+      ],
+      "locks": [
+        "source-identity",
+        "providers",
+        "core-projects",
+        "protocol"
+      ],
+      "issues": [
+        6
+      ],
+      "brief": "tasks/GLAB-02.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "GLAB-03",
+      "title": "Stabilize provider refresh conflicts and resource UI",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "GLAB-02"
+      ],
+      "locks": [
+        "source-identity",
+        "providers",
+        "context-review",
+        "protocol"
+      ],
+      "issues": [
+        6
+      ],
+      "brief": "tasks/GLAB-03.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "GLAB-04",
+      "title": "Prove authenticated GitLab end to end",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "GLAB-03",
+        "SETUP-02"
+      ],
+      "locks": [
+        "verification-runtime",
+        "gitlab-fixtures"
+      ],
+      "issues": [
+        6
+      ],
+      "brief": "tasks/GLAB-04.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-01",
+      "title": "Preserve browser page drafts and saved feedback",
+      "required": true,
+      "priority": 0,
+      "depends_on": [
+        "TERM-01"
+      ],
+      "locks": [
+        "app-shell",
+        "browser-ui",
+        "browser-helper",
+        "browser-store"
+      ],
+      "issues": [
+        9,
+        11
+      ],
+      "brief": "tasks/WEB-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-02",
+      "title": "Deliver first browser click and element pick",
+      "required": true,
+      "priority": 0,
+      "depends_on": [
+        "TERM-01"
+      ],
+      "locks": [
+        "browser-ui",
+        "browser-helper"
+      ],
+      "issues": [
+        9,
+        10
+      ],
+      "brief": "tasks/WEB-02.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-03",
+      "title": "Keep resized browser frames sharp and aligned",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "TERM-01"
+      ],
+      "locks": [
+        "browser-ui",
+        "browser-helper",
+        "frame-presenter"
+      ],
+      "issues": [
+        8
+      ],
+      "brief": "tasks/WEB-03.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-04",
+      "title": "Complete browser input navigation and ownership",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "WEB-02",
+        "WEB-03",
+        "SYNC-01"
+      ],
+      "locks": [
+        "app-shell",
+        "browser-ui",
+        "browser-helper",
+        "client-transports"
+      ],
+      "issues": [
+        9,
+        10
+      ],
+      "brief": "tasks/WEB-04.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-05",
+      "title": "Complete annotation capture and delivery reliability",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "WEB-01",
+        "WEB-02",
+        "WEB-03"
+      ],
+      "locks": [
+        "browser-ui",
+        "browser-helper",
+        "browser-store",
+        "comment-delivery"
+      ],
+      "issues": [
+        3,
+        9,
+        11
+      ],
+      "brief": "tasks/WEB-05.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-06",
+      "title": "Bound browser frame input and lifecycle resources",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "WEB-01",
+        "WEB-04"
+      ],
+      "locks": [
+        "browser-ui",
+        "browser-helper",
+        "frame-presenter",
+        "client-transports",
+        "host-streams"
+      ],
+      "issues": [
+        9
+      ],
+      "brief": "tasks/WEB-06.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-07",
+      "title": "Make browser dependency failures actionable",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "RUN-01"
+      ],
+      "locks": [
+        "config-host",
+        "browser-runtime-launch"
+      ],
+      "issues": [
+        3,
+        9
+      ],
+      "brief": "tasks/WEB-07.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "WEB-08",
+      "title": "Verify inline browser security boundaries",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "WEB-04",
+        "WEB-05",
+        "WEB-06",
+        "WEB-07"
+      ],
+      "locks": [
+        "browser-ui",
+        "browser-helper",
+        "browser-store",
+        "host-streams",
+        "client-transports"
+      ],
+      "issues": [
+        9
+      ],
+      "brief": "tasks/WEB-08.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "NATIVE-01",
+      "title": "Install and update the macOS application bundle",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "RUN-01"
+      ],
+      "locks": [
+        "installer"
+      ],
+      "issues": [
+        5
+      ],
+      "brief": "tasks/NATIVE-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "NATIVE-02",
+      "title": "Verify macOS native daily use and recovery",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "NATIVE-01",
+        "SETUP-02",
+        "TERM-03",
+        "FLOW-01",
+        "WEB-05",
+        "WEB-06",
+        "WEB-07",
+        "GLAB-04"
+      ],
+      "locks": [
+        "verification-runtime"
+      ],
+      "issues": [
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "brief": "tasks/NATIVE-02.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "PERF-01",
+      "title": "Prove sustained whole application responsiveness",
+      "required": true,
+      "priority": 1,
+      "depends_on": [
+        "TERM-03",
+        "FLOW-01",
+        "GLAB-04",
+        "WEB-06",
+        "WEB-07",
+        "WEB-08"
+      ],
+      "locks": [
+        "verification-runtime"
+      ],
+      "issues": [
+        1,
+        9,
+        12
+      ],
+      "brief": "tasks/PERF-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "ACCEPT-01",
+      "title": "Close campaign with evidence and issue reconciliation",
+      "required": true,
+      "priority": 2,
+      "depends_on": [
+        "NATIVE-02",
+        "PERF-01"
+      ],
+      "locks": [
+        "verification-runtime"
+      ],
+      "issues": [
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "brief": "tasks/ACCEPT-01.md",
+      "status": "pending",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "LATER-GHPR",
+      "title": "Add GitHub pull request source support",
+      "required": false,
+      "priority": 3,
+      "depends_on": [],
+      "locks": [
+        "source-identity",
+        "providers",
+        "protocol"
+      ],
+      "issues": [
+        6
+      ],
+      "brief": "tasks/LATER-GHPR.md",
+      "status": "deferred",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    },
+    {
+      "id": "LATER-JIRA",
+      "title": "Add Jira work item source support",
+      "required": false,
+      "priority": 3,
+      "depends_on": [],
+      "locks": [
+        "source-identity",
+        "providers",
+        "protocol"
+      ],
+      "issues": [
+        6
+      ],
+      "brief": "tasks/LATER-JIRA.md",
+      "status": "deferred",
+      "owner": null,
+      "started_at": null,
+      "completed_at": null,
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
+      "notes": []
+    }
+  ]
+}
