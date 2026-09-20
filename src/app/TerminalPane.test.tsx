@@ -18,13 +18,24 @@ const mocks = vi.hoisted(() => {
     options: Record<string, unknown>;
     element: HTMLElement | null = null;
     private resizeListeners: Array<(size: { cols: number; rows: number }) => void> = [];
+    private renderListeners: Array<() => void> = [];
+    dataHandler: ((data: string) => void) | null = null;
     readonly focus = vi.fn();
     readonly dispose = vi.fn();
     readonly write = vi.fn((_data: Uint8Array, done?: () => void) => { done?.(); });
+    readonly onRender = vi.fn((listener: () => void) => {
+      this.renderListeners.push(listener);
+      return { dispose: () => { this.renderListeners = this.renderListeners.filter((entry) => entry !== listener); } };
+    });
+    readonly refresh = vi.fn((_start: number, _end: number) => this.emitRender());
+    emitRender() { this.renderListeners.forEach((listener) => listener()); }
     readonly paste = vi.fn((_data: string) => {});
     readonly hasSelection = vi.fn(() => true);
     readonly getSelection = vi.fn(() => "selected");
-    readonly onData = vi.fn((_listener: (data: string) => void) => ({ dispose: vi.fn() }));
+    readonly onData = vi.fn((listener: (data: string) => void) => {
+      this.dataHandler = listener;
+      return { dispose: vi.fn() };
+    });
     readonly onBinary = vi.fn(() => ({ dispose: vi.fn() }));
     readonly onResize = vi.fn((listener: (size: { cols: number; rows: number }) => void) => {
       this.resizeListeners.push(listener);
@@ -209,6 +220,82 @@ describe("TerminalPane fitting and pointer ownership", () => {
         await settle();
       });
       expect(openTerminal).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+  it("closes an outgoing stream without reopening a hidden observer, then reattaches input on revisit", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const opened: Array<{ commands: TerminalCommand[]; terminal: TerminalStream }> = [];
+    openTerminal.mockImplementation((_request: TerminalOpenRequest, receive: (value: TerminalStreamMessage) => void) => {
+      const commands: TerminalCommand[] = [];
+      const terminal = stream(commands);
+      opened.push({ commands, terminal });
+      messages.push(receive);
+      return Promise.resolve(terminal);
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false)} />);
+        await settle();
+      });
+      expect(openTerminal).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { selected: false, controlAllowed: false, deferAttachment: true })} />);
+        await settle();
+      });
+      expect(opened[0].terminal.close).toHaveBeenCalledOnce();
+      expect(openTerminal).toHaveBeenCalledOnce();
+      mocks.terminals.at(-1)?.dataHandler?.("hidden input");
+      expect(opened[0].commands).toEqual([]);
+
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, { deferAttachment: false })} />);
+        await settle();
+      });
+      expect(openTerminal.mock.calls.at(-1)?.[0].mode).toBe("control");
+      for (const retired of opened.slice(0, -1)) expect(retired.terminal.close).toHaveBeenCalledOnce();
+      act(() => messages.at(-1)?.(message("owned")));
+      mocks.terminals.at(-1)?.dataHandler?.("revisited");
+      expect(opened.at(-1)?.commands).toEqual([{ type: "terminal.input", text: "revisited", bytes: null }]);
+      for (const retired of opened.slice(0, -1)) expect(retired.commands).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+  it("waits for a rendered full frame and ignores retired write completion", async () => {
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient([], messages);
+    const ready = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { onReady: ready })} />); await settle(); });
+      expect(ready).not.toHaveBeenCalled();
+      const writes: Array<() => void> = [];
+      mocks.terminals.at(-1)!.refresh.mockImplementation(() => undefined);
+      mocks.terminals.at(-1)!.write.mockImplementation((_text, done) => { if (done) writes.push(done); });
+      const frame: TerminalStreamMessage = { type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 80, height: 24, full: true, bytes: btoa("current contents") };
+      act(() => messages[0](frame));
+      expect(ready).not.toHaveBeenCalled();
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { onReady: ready, deferAttachment: true })} />); });
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { onReady: ready })} />); await settle(); });
+      act(() => writes[0]());
+      expect(ready).not.toHaveBeenCalled();
+      act(() => messages.at(-1)!(frame));
+      act(() => writes[1]());
+      expect(ready).not.toHaveBeenCalled();
+      act(() => mocks.terminals.at(-1)!.emitRender());
+      expect(ready).toHaveBeenCalledOnce();
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -611,12 +698,15 @@ describe("TerminalPane fitting and pointer ownership", () => {
       await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
       await act(async () => { messages[0](message("conflict")); });
       expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe"]);
+      await act(async () => { messages[1](message("observing")); });
+      expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe"]);
       await act(async () => {
         messages[1]({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 80, height: 24, full: true, bytes: btoa("observer output") });
       });
       expect(new TextDecoder().decode(mocks.terminals.at(-1)!.write.mock.calls[0][0])).toBe("observer output");
       await act(async () => { host.querySelector(".terminal-host")!.dispatchEvent(pointer("pointerdown", 10)); });
       expect(openTerminal.mock.calls.at(-1)![0]).toMatchObject({ mode: "control", takeover: true });
+      expect(openTerminal.mock.calls.map(([request]) => request.mode)).toEqual(["control", "observe", "control"]);
       expect(sent).toEqual([]);
     } finally {
       await act(async () => root.unmount());

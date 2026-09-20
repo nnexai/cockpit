@@ -1,0 +1,150 @@
+{
+  "task": "TERM-02",
+  "run_id": "run-20260920-a3e9b950",
+  "policy": "Only the selected authoritative tab attaches. Retain at most one inert, detached outgoing projection until the incoming first full frame renders or a genuine current failure settles readiness. This is one frozen visual projection, not a <=16ms time promise.",
+  "browser_one_pane": {
+    "tabs": 10,
+    "switches": 60,
+    "frames": 365,
+    "frames_without_healthy_visible_terminal": 0,
+    "hidden_attempts": 0,
+    "max_hosts": 2,
+    "max_ui_sockets": 1,
+    "rest_hosts": 1,
+    "rest_streams": [
+      "w1:pA"
+    ],
+    "max_sampled_frozen_ms": 910.5999999996275
+  },
+  "browser_split": {
+    "tabs": 10,
+    "switches": 60,
+    "frames": 395,
+    "frames_without_healthy_visible_terminal": 0,
+    "hidden_attempts": 0,
+    "max_hosts": 3,
+    "max_ui_sockets": 2,
+    "rest_streams": [
+      "w1:pA",
+      "w1:pC"
+    ],
+    "max_sampled_frozen_ms": 929.2000000011176
+  },
+  "native_one_pane": {
+    "switches": 60,
+    "frames": 333,
+    "hidden_attempts": 0,
+    "frames_without_healthy_visible_terminal": 0,
+    "max_hosts": 2,
+    "max_open": 2,
+    "rest": {
+      "selected": "10Visibility 10",
+      "alerts": [],
+      "hosts": 1
+    },
+    "retired_errors": [
+      "stream_not_found",
+      "stream_not_found",
+      "stream_not_found",
+      "stream_not_found"
+    ]
+  },
+  "native_split": {
+    "switches": 60,
+    "frames": 328,
+    "hidden_attempts": 0,
+    "frames_without_healthy_visible_terminal": 0,
+    "max_hosts": 3,
+    "max_open": 2,
+    "rest": {
+      "selected": "10Visibility 10",
+      "alerts": [],
+      "hosts": 2
+    },
+    "retired_errors": [
+      "stream_not_found",
+      "stream_not_found",
+      "stream_not_found",
+      "stream_not_found",
+      "stream_not_found",
+      "stream_not_found"
+    ],
+    "frozen_selected_interval_estimate_ms": 569,
+    "estimate_note": "Derived from visible pane identity versus the sampled selected-tab intervals; not an independent inert-attribute timer."
+  },
+  "ownership": {
+    "real_loss_events": 1,
+    "retired_commands": 0,
+    "retired_open_attempts": 0,
+    "positive_input_commands": 42,
+    "sent_input": "printf 'TERM02-OWNERSHIP-1789905428124\\n'\r",
+    "input_panes": [
+      "w1:p1"
+    ],
+    "captured_consecutive_frame_streams": 6,
+    "native_trusted_keydowns": 46,
+    "native_trusted_keys": true
+  },
+  "focus_negative_control": {
+    "failure": null,
+    "failed": {
+      "selected": "10Visibility 10",
+      "alerts": [
+        {
+          "text": "!↻",
+          "visible": true
+        }
+      ],
+      "hosts": [
+        {
+          "pane": "Terminal w1:pA",
+          "visible": true
+        },
+        {
+          "pane": "Terminal w1:pC",
+          "visible": true
+        }
+      ]
+    },
+    "recovered": {
+      "alerts": 0,
+      "selected": "true"
+    },
+    "responses": [
+      {
+        "status": 503,
+        "body": {
+          "code": "tab_not_found",
+          "message": "tab w1:tZZZZ not found"
+        }
+      },
+      {
+        "status": 200,
+        "body": {
+          "session_id": "csg-a3e9b950",
+          "kind": "tab",
+          "target_id": "w1:t1",
+          "accepted": true
+        }
+      },
+      {
+        "status": 200,
+        "body": {
+          "session_id": "csg-a3e9b950",
+          "kind": "tab",
+          "target_id": "w1:tA",
+          "accepted": true
+        }
+      }
+    ]
+  },
+  "review": {
+    "reviewer": "VisibilityReview",
+    "result": "No actionable patch-introduced findings; readiness comment corrected. Reviewer did not rerun runtime checks."
+  },
+  "limitations": [
+    "OBS-010 extended zoom/output-continuity defect remains required under TERM-03; no zoom pass claimed.",
+    "OBS-008 protected-home incident requires verified restoration or explicit user retention decision before campaign completion.",
+    "macOS is unavailable; these native proofs are Linux WebKitGTK/wry, not macOS."
+  ]
+}

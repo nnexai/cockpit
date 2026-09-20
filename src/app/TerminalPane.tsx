@@ -375,9 +375,6 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
   }, []);
-  useEffect(() => {
-    if (deferAttachment && terminalReady) onReadyRef.current?.();
-  }, [deferAttachment, terminalReady]);
 
   useEffect(() => {
     flushPendingPaste();
@@ -472,6 +469,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         controlRequestedRef.current = true;
         setControlRequested(true);
       }
+      flushPending();
       return;
     }
     if (!controlPending) {
@@ -500,16 +498,14 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   useEffect(() => {
     ownershipRef.current = ownership;
   }, [ownership]);
+  const wantsControl = controlRequested;
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !terminalReady || deferAttachment) return;
+    // The control effect queues its intent-state update before this effect runs.
+    if (wantsControl !== controlRequestedRef.current) return;
     const restoreFocus = selectedRef.current && controlAllowedRef.current;
     const geometry = terminalCellGeometry(terminal);
-    // The authoritative snapshot can clear a focus transition one render
-    // before the local control request state catches up. Open the confirmed
-    // target directly in control mode so an observe handshake is not started
-    // only to be aborted on the next render.
-    const wantsControl = (controlRequested || controlAllowed) && ownership !== "conflict" && ownership !== "lost";
     const openRequest: TerminalOpenRequest = {
       ...request,
       mode: wantsControl ? "control" : "observe",
@@ -554,19 +550,21 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     };
     let stream: TerminalStream | null = null;
     let observedStreamId: string | null = null;
+    let readinessRender: { dispose(): void } | null = null;
     const controller = new AbortController();
     const generation = ++attachmentGeneration.current;
     clearMouseMode();
     lastSequence.current = null;
     setError(null);
     setClosed(false);
-    ownershipRef.current = controlRequested ? "pending" : "observing";
+    ownershipRef.current = wantsControl ? "pending" : "observing";
     setOwnership(ownershipRef.current);
     const fail = (code: string, message: string) => {
       clearPendingCommands();
       clearMouseMode();
       cancelled = true;
       controller.abort();
+      readinessRender?.dispose();
       onReadyRef.current?.();
       setError({ code, message });
       ownershipRef.current = "released";
@@ -614,6 +612,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
           fail("terminal_sequence", "Terminal sent an invalid sequence");
           return;
         }
+        const firstFrame = lastSequence.current === null;
         if (lastSequence.current === null && !message.full) {
           fail("terminal_sequence", "Terminal stream must begin with a full frame");
           return;
@@ -630,7 +629,16 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
           // an explicit focus change to another control.
           const retainedFocus = terminal.element?.contains(document.activeElement) ?? false;
           terminal.write(text, () => {
-            if (retainedFocus && terminalRef.current === terminal && document.activeElement === document.body) terminal.focus();
+            if (cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) return;
+            if (firstFrame) {
+              readinessRender = terminal.onRender(() => {
+                readinessRender?.dispose();
+                readinessRender = null;
+                if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) onReadyRef.current?.();
+              });
+              terminal.refresh(0, terminal.rows - 1);
+            }
+            if (retainedFocus && selectedRef.current && controlAllowedRef.current && document.activeElement === document.body) terminal.focus();
           });
         } catch {
           fail("terminal_frame", "Terminal sent an invalid frame");
@@ -643,8 +651,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       } else if (message.type === "closed") {
         cancelled = true;
         clearMouseMode();
+        readinessRender?.dispose();
         setClosed(true);
         setError(null);
+        onReadyRef.current?.();
         setOwnership("released");
         streamRef.current = null;
         onClosed?.();
@@ -668,7 +678,6 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         fitRef.current.fit();
       }
       if (restoreFocus) terminal.focus();
-      onReadyRef.current?.();
       flushPending();
       registerStream?.(opened, true);
     }, (cause: unknown) => {
@@ -681,6 +690,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       cancelled = true;
       clearMouseMode();
       controller.abort();
+      readinessRender?.dispose();
       if (streamRef.current === stream) streamRef.current = null;
       if (attachRetryTimerRef.current !== null) {
         window.clearTimeout(attachRetryTimerRef.current);
@@ -689,7 +699,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (stream) registerStream?.(stream, false);
       stream?.close();
     };
-  }, [client, deferAttachment, request.session_id, request.pane_id, controlAllowed, controlRequested, terminalReady, attempt, registerStream]);
+  }, [client, deferAttachment, request.session_id, request.pane_id, wantsControl, terminalReady, attempt, registerStream]);
 
   const sendPointerMouse = (kind: TerminalMouseKind, button: TerminalMouseButton | null, event: React.PointerEvent<HTMLDivElement>) => {
     const terminal = terminalRef.current;

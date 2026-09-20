@@ -30,3 +30,15 @@ An in-scope unresolved finding prevents campaign completion. Assign it to an exi
 - Blocking for protected-home restoration/reconciliation under ACCEPT-01; isolated product implementation may continue. Stopped owned TUI, server and gateway immediately after discovery. No automatic deletion/rollback of user files.
 - RUN-01 containment correction verified: all guarded invocations receive owned HOME; the new negative control fails against baseline, 32 focused tests pass, actual server HOME is owned, and the six protected hashes are unchanged across restart. Main informed the user. This is not resolution of the earlier writes.
 - Evidence and exact paths: `runs/run-20260920-a3e9b950/RUN-01.md`, Safety correction section. Final disposition remains unresolved; campaign completion requires verified restoration or the user's explicit decision to retain these integrations.
+
+### OBS-009 — browser-first debugging
+
+- 2026-09-20, user steering: make work/debugging efficient; establish the web solutions with Playwright CLI first.
+- All remaining tasks: adopted persistent named CLI attachment to the sole owned Chromium page on the guarded web gateway. Shared frontend regressions run in batched, bounded browser scenarios. Native is reserved for native-specific work and final required acceptance, not the debugging loop. No acceptance criterion is removed.
+
+### OBS-010 — terminal output loss during split zoom/restore
+
+- 2026-09-20, Main, browser-only extended layout probe. A continuously mounted terminal became blank after zoom/restore; Herdr `pane.read` still returned the executed marker and the shell PID remained alive. Local xterm had `cols=60`, `rows=40`, `baseY=viewportY=169` and blank visible buffer rows, so this was not merely missing DOM paint.
+- Queued to TERM-03, which explicitly owns terminal frame writes, output continuity, and split/zoom parity. Its original criteria 5–7 remain required; this finding prevents campaign completion until resolved. No zoom/output-continuity pass is claimed under TERM-02.
+- Follow-up trace showed received frame grids and local fitted grids can differ. Replaying a real 60-column frame into a 30-column xterm lost a visible row and introduced scrollback; the correctly sized grid did neither. This confirms a grid mismatch hazard, not the complete cause of the original blanking. Distinguish pane-read history from visible frame contents and capture resize HTTP commands before editing.
+- Evidence: `runs/run-20260920-a3e9b950/TERM-02.md`; raw owned `term02-browser-split-failure.json/png` and `term02-zoom-diagnostic.json/png`. Root-cause/baseline classification and final disposition remain open. No speculative frame-geometry product change has been applied.

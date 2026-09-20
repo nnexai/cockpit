@@ -1,0 +1,57 @@
+{
+  "source_baseline": "3422bfe",
+  "tested_at": "2026-09-20T12:00:42.257691+00:00",
+  "native_origin": "tauri://localhost",
+  "native_wry": "0.55.1",
+  "native_build": "cargo build -p cockpit-tauri --features tauri/custom-protocol",
+  "native_display": "headless GNOME 1440x900 /tmp/csg-a3e9b950/native-runtime/csg-native",
+  "browser_gateway": "http://127.0.0.1:37619",
+  "browser_workflow": "playwright-cli -s=csg-web; only owned Chromium page",
+  "artifacts": {
+    "term02-browser-before.json": "9e1a2ebfe6fd09c2667fd38c374dda5d54c0cfa69def85c1ac6ca9b088e30315",
+    "term02-browser-before.png": "f42e16e8ddce0b8120f11c930d6d11a7138411b8c6b86db565b54817c4db5bd8",
+    "term02-browser-one-pane.json": "80351e6b26c78714272ff1e98ba1b7fa39de6372aa82aa29ae21ecdfdd0b3d77",
+    "term02-browser-one-pane.png": "c8dfa2a739db33d61c67f80bc1f27fe37fe75ca9f5c4ab17936c0bbe0a71e498",
+    "term02-browser-oracle-cycle.json": "dd5118270a59ed5ceb9e575160c8342a80742682eceea619381e93ae3c0a2b6c",
+    "term02-browser-oracle-cycle.png": "9ee39972a6bbb823e559f283649cadf76c44b6bec0f01cc3432c434de680605c",
+    "term02-native-after.json": "65994bab861d3740667dc34e16b0472728084e94b417ec75934e5ccf7f8c89c7",
+    "term02-native-after.png": "6f63ae4ff33c820c80ffa5f8febe07fa8fa195c1f3100969ece29a5706286d9e",
+    "term02-native-oracle-cycle.json": "6a8b814d40b54741e31c2abee78fa54129bf35bece27dc33659b0fe676c593e3",
+    "term02-native-oracle-cycle.png": "fcd4229890f8aad396a12d879a8724f9557f650eb6eae695da0407c0c7ca7f8f",
+    "term02-native-input.json": "5b26aadba7933bfded3bfcde16840fb1579bb83e0418d6630bc69a74d96be6ab",
+    "term02-native-input.png": "3d76342f0549231996ebb6c053d703270fe087a3f51a75e9b2418d5e8325aafe",
+    "term02-browser-revisit.json": "c957b28ffdccf08c556926ab3b140d8b43a6cea2e467b797f271debfe91cdb99",
+    "term02-browser-revisit.png": "14d122dc6b44c1ec3839df568fc7be1f98c1af8b43c715074a0fec72f78da974",
+    "term02-browser-focus-failure.json": "0e12c41cad0a535c8ed26e6701b4c912e32cd38dc03bc8a583734049bdf6953b",
+    "term02-browser-focus-failure.png": "d9faee2c4cd33b2e228c20bef724675ec0a2d315e65f3b14113bad5150350216",
+    "term02-hidden-rejection.json": "807400d5393b9428ead23ae5a5cd866c6d110796f8880a3b39ae9a0b8052e96d",
+    "term02-final-authority.json": "2289cd2b2991799defaebe79faf4191688c3c8c5a2132c5e270494867a2e46e3",
+    "term02-tui-before.txt": "2d0531be52c0d1f9c71366d7492cafd7918ceb3126208873789666834e6ba496",
+    "term02-tui-before-snapshot.json": "5f5c9e1ddb9d7cc2414ebf75ef132622f3ddab2928211bfb68a5dddf39ac21c0",
+    "term02-tui-after.txt": "24f4b218724c66aabf343892b5aec3d30a70f40ecd5f7645a4491272295e0824",
+    "term02-tui-after-snapshot.json": "b34c6427e7a08db07ea7675aab71f287b0ee94d3b59a98d9ae48a01643c97d18",
+    "term02-tui-comparison.json": "d9fe4c4f76f96225ab1fd05cafc86ef430c78bf480fadf1c2d0c73e2c19bf614",
+    "term02-browser-split-failure.json": "66c23202b405c15550c2acbc23b5234712077cf05f2dc0e5644b17ee14292a58",
+    "term02-browser-split-failure.png": "918514c6dbabee5d4bfc426dc19fc51050f3479dc46a85576a2d7736136a3859",
+    "term02-zoom-diagnostic.json": "d73c6dd237f13e1282cf26d754b2f09bd8d06f7cc7e956f45ac8e4ea9ab89b55",
+    "term02-zoom-diagnostic.png": "8e6673961f57985c83feda294b431dd25ea1a82a8f4f5ee147da59358b0b2849"
+  },
+  "binaries": {
+    "target/debug/cockpit-tauri": "6e4feeef7e851b32eaf773c6b6778f95da3f7c411895da42dd74536270aded9c"
+  },
+  "frontend_assets": {
+    "dist/assets/index-DlEcMc0j.js": "eec398f71e0c2557064412ef8ae2ee83dc4941d29a59bb20ec05681af5b26254"
+  },
+  "checks": [
+    "bunx vitest run src/app/TerminalPane.test.tsx src/app/App.integration.test.tsx src/app/review/ReviewPane.test.tsx src/app/review/ReviewViewer.test.tsx: 61 passed",
+    "bun run build: passed",
+    "cargo build -p cockpit-tauri --features tauri/custom-protocol: passed"
+  ],
+  "artifact_root": "/tmp/csg-a3e9b950/artifacts",
+  "open_finding_artifacts": [
+    "term02-browser-split-failure.json",
+    "term02-browser-split-failure.png",
+    "term02-zoom-diagnostic.json",
+    "term02-zoom-diagnostic.png"
+  ]
+}

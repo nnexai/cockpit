@@ -77,6 +77,34 @@ function snapshot(sessionId: string, focusedTabId = "tab-1", focusedPaneId = "pa
     agents: [],
   };
 }
+function manyTabsSnapshot(sessionId: string, focusedTabId = "tab-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
+  const base = snapshot(sessionId, focusedTabId, focusedPaneId);
+  return {
+    ...base,
+    focused_tab_id: focusedTabId,
+    focused_pane_id: focusedPaneId,
+    spaces: [{ ...base.spaces[0], tab_count: 10, pane_count: 10 }],
+    tabs: Array.from({ length: 10 }, (_, index) => ({
+      id: `tab-${index + 1}`,
+      space_id: "space-1",
+      label: index === 0 ? "Alpha tab" : `Tab ${index + 1}`,
+      number: index + 1,
+      pane_count: 1,
+      focused: focusedTabId === `tab-${index + 1}`,
+    })),
+    panes: Array.from({ length: 10 }, (_, index) => ({
+      id: `pane-${index + 1}`,
+      terminal_id: `terminal-${index + 1}`,
+      space_id: "space-1",
+      tab_id: `tab-${index + 1}`,
+      title: index === 0 ? "Alpha pane" : `Pane ${index + 1}`,
+      focused: focusedPaneId === `pane-${index + 1}`,
+      agent: null,
+      agent_status: "idle",
+      revision: 1,
+    })),
+  };
+}
 
 function panePresentation(sessionId: string, paneId: string, canOpenReview = false): PanePresentation {
   return {
@@ -394,7 +422,7 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
   });
-  it("retains mounted panes and swaps visibility while a newly selected tab waits for terminal sizing", async () => {
+  it("retains an inert painted frame until the newly selected terminal hydrates", async () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
@@ -408,10 +436,14 @@ describe("mounted App mutation and session ordering", () => {
     expect(container.querySelector<HTMLElement>(".pane-canvas")?.style.visibility).toBe("visible");
     expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
     expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("hidden");
+    const retained = container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')!;
+    expect(retained.hasAttribute("inert")).toBe(true);
+    click(retained.querySelector<HTMLButtonElement>(".pane-header-select")!);
+    expect(selectedTab()).toBe("Tab 2: Second tab");
 
     readyTerminal("pane-2");
     await settle();
-    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("hidden");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')).toBeNull();
     expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("visible");
 
     const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
@@ -419,7 +451,11 @@ describe("mounted App mutation and session ordering", () => {
     click(firstTab);
     fixture.emitSnapshot("session-1", 1, 3, snapshot("session-1", "tab-1", "pane-1"));
     await settle();
-    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("hidden");
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')?.style.visibility).toBe("visible");
+    expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("hidden");
+    readyTerminal("pane-1");
+    await settle();
+    expect(container.querySelector<HTMLElement>('[aria-label="Second pane"]')).toBeNull();
     expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
   });
   it("reuses mounted panes through a rapid tab reversal", async () => {
@@ -446,6 +482,36 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
     expect(container.querySelectorAll('[aria-label="Alpha pane"]')).toHaveLength(1);
     expect(container.querySelector<HTMLElement>('[aria-label="Alpha pane"]')?.style.visibility).toBe("visible");
+  });
+  it("bounds outgoing terminal hosts while switching through many tabs and reattaches on revisit", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const tenTabs = manyTabsSnapshot("session-1");
+    fixture.emitSnapshot("session-1", 1, 2, tenTabs);
+    await settle();
+
+    for (let index = 2; index <= 10; index += 1) {
+      const tab = container.querySelector<HTMLButtonElement>(`[role="tab"][aria-label="Tab ${index}: Tab ${index}"]`);
+      if (!tab) throw new Error(`Missing tab ${index}`);
+      click(tab);
+      fixture.emitSnapshot("session-1", 1, index + 1, manyTabsSnapshot("session-1", `tab-${index}`, `pane-${index}`));
+      await settle();
+      expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(2);
+    }
+
+    readyTerminal("pane-10");
+    await settle();
+    expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(1);
+
+    const firstTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Tab 1: Alpha tab"]');
+    if (!firstTab) throw new Error("Missing first tab on revisit");
+    click(firstTab);
+    fixture.emitSnapshot("session-1", 1, 12, manyTabsSnapshot("session-1", "tab-1", "pane-1"));
+    await settle();
+    expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(2);
+    readyTerminal("pane-1");
+    await settle();
+    expect(container.querySelectorAll('[data-testid^="terminal-"]')).toHaveLength(1);
   });
 
   it("keeps a terminal mounted when inspection binding identity changes", async () => {
