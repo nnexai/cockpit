@@ -8,6 +8,21 @@ Record task ID, run ID, UTC time, integration owner/reviewer, baseline and teste
 
 List the named Herdr session, endpoint, fixture repository/worktree/companion, config/state roots, process/profile/display/port identities and the resource-guard ledger. State which resources are protected and which this scenario created. For GitLab include only the authorized project/fixture IDs, marker, API method and mutation permissions—not tokens.
 
+
+## Accepted just-in-time task plan
+
+Write this section before dispatching implementation or running the planned verification scenario. It is the durable plan in this existing run record, not a second ledger, a new plan file, or a completion receipt. Record `ACCEPTED` only after the orchestrator has reviewed it and no design decision for the assigned slice remains unresolved.
+
+- **Selection and baseline:** task/increment ID, dependency-ready evidence and why this slice is selected now; source/authority/dependency baseline and observed findings, clearly separated from assumptions or hypotheses.
+- **Planner identity:** Sol/Astra planning owner and actual configured model; any bounded Astra advisory input and the orchestrator's decision. Record the implementation worker separately; worker effort or agent names are not proof of planning capability.
+- **Coverage:** map every numbered task criterion to one or more bounded increments and name any outstanding criterion; state the observable outcome, required surface and platform for each increment.
+- **Design and locations:** chosen design, APIs/interfaces, invariants and ownership rules; exact files, symbols, callsites and relevant existing patterns inspected. For a no-code task, describe only the scenario/state transitions and evidence path—do not invent code changes.
+- **Recipe and ownership:** ordered bounded worker steps, exclusive writable paths/symbols, disjoint parallel ownership, shared contracts, non-goals and integration handoff. Include the expected authoritative result, not merely a command to run.
+- **Proof, risks and resources:** positive, negative, edge, error, recovery and lifecycle checks; platform/browser/native requirements; resource identities, authorization and cleanup; known risks and the condition that makes each one a blocker or escalation.
+- **Dispatch and acceptance:** cheapest capable worker and why it is sufficient; capability limits, stop/escalate conditions and independent integration/review owner; orchestrator acceptance owner/time. State how source/contracts and the plan will be revalidated after drift or resume and when the affected slice must return to strong planning.
+
+An accepted plan authorizes only the named bounded slice. It does not prove behavior, satisfy an acceptance criterion, or permit weakening the original task scope.
+
 ## Increment contracts and receipts
 
 Before each bounded increment, record:

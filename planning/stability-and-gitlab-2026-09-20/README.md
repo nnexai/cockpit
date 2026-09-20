@@ -6,7 +6,7 @@
 /goal Execute planning/stability-and-gitlab-2026-09-20/AUTORUN.md
 ```
 
-No custom command installation, plugin reload, per-task restart, or manual agent-message relay is needed. [AUTORUN.md](AUTORUN.md) is the autonomous execution contract; [ORCHESTRATOR.md](ORCHESTRATOR.md) defines scheduling/safety; [tasks.json](tasks.json) remains the sole status ledger. This package prepares execution; it does not claim product work has started.
+No custom command installation, plugin reload, per-task restart, or manual agent-message relay is needed. [AUTORUN.md](AUTORUN.md) is the autonomous execution contract; [ORCHESTRATOR.md](ORCHESTRATOR.md) defines scheduling/safety; [tasks.json](tasks.json) remains the sole status ledger. Each dependency-ready task is strongly planned just in time, then assigned to the cheapest configured worker that can safely follow that bounded plan; integration verification remains independent. This package prepares execution; it does not claim product work has started.
 
 Planning checks and review findings/resolutions are recorded in [PLAN_VALIDATION.md](PLAN_VALIDATION.md).
 
@@ -76,18 +76,26 @@ Priority 0 protects basic usability/data; priority 1 completes the selected func
 ## Operational starting point
 
 1. Read the inventory and authority precedence; inspect the current worktree without absorbing pre-existing changes.
-2. Claim RUN-01 in the central ledger and establish safe runtime/evidence identities. Do not start by rerunning historical migration plans or creating another fixture issue unnecessarily.
-3. Choose dependency-ready tasks with disjoint write ownership. Parallelize real independent slices, not multiple writers of BrowserPane/App/helper.
-4. Integrate, review, validate and exercise the actual surface once edits settle. Commit each accepted increment and record its evidence/SHA.
+2. Select one dependency-ready task (including a no-code verification task), inspect its current source/authority/dependency evidence, and record a strong just-in-time plan in the existing per-task run record before dispatch. Do not speculatively plan every task.
+3. Dispatch the cheapest configured worker capable of the accepted bounded slice, with explicit ownership, recipe, proof and stop/escalation conditions. Parallelize only genuinely disjoint slices; do not start product work before the plan gate passes.
+4. Integrate, independently review and verify the actual surface once edits settle. Commit each accepted increment and record its evidence/SHA.
 5. Resume from the ledger and durable run records; continue reachable tasks when one platform/fixture is blocked. Finish with PERF-01/NATIVE-02 and ACCEPT-01, not merely a green unit suite.
+
+The plan is a dispatch contract, not a second mutable ledger or a fake completion receipt. It records observed baseline/findings separately from assumptions; criterion-to-increment coverage; exact paths, symbols, callsites and existing patterns; chosen APIs/invariants; ordered bounded steps and disjoint ownership; edge/error/lifecycle checks, platforms, resources and authorization; worker capability and stop conditions; and orchestrator acceptance/revalidation rules. A no-code task gets a scenario-and-evidence plan, never invented code changes.
 
 GitLab validation target: [nnex.ai/integration](https://gitlab.com/nnex.ai/integration). The authorized existing [fixture issue #1](https://gitlab.com/nnex.ai/integration/-/work_items/1) is open for this campaign. No MR exists at inventory; permission for fixture branch/MR writes must be established separately. Production adapters remain read-only.
 
 ## Autonomous execution
 
 The single campaign goal stays active across small, independently verified increments. The orchestrator selects work, delegates disjoint slices, integrates, verifies, commits, updates the ledger, and immediately continues. It must not call the goal complete at a task boundary or ask the user to relay the next assignment.
+**Model roles:** Sol or Astra plans and accepts each task; cheaper capable workers implement the accepted recipe. Use only enabled bundled agents plus the retained Astra advisor, not disabled project-specific profiles. Luna is not a planner. Model routing is not changed by this package.
 
-Broad task briefs are decomposed just before execution; each increment has a concrete outcome, positive/negative proof, required surfaces and owned files. Original task acceptance remains intact. Multiple increment commits may satisfy one task, but partial work never marks that task done.
+
+Broad task briefs are decomposed just before execution; each dependency-ready task gets a strong planning round, including no-code scenario verification. The orchestrator owns top-level decomposition and plan acceptance; it may commission bounded read-only slice design only when genuine independent uncertainty warrants it. The accepted plan must inspect current authorities and dependency evidence, resolve consequential unknowns, and leave no unresolved design decision for the assigned slice before dispatching a cheaper capable worker. It is recorded in the existing `runs/<run-id>/<TASK-ID>.md` record, not a new plan file or mutable board.
+
+The plan must give the worker a decision-complete recipe: baseline findings versus assumptions; full criterion-to-increment coverage; exact paths, symbols, callsites and current patterns; APIs/invariants; ordered steps and disjoint ownership; edge/error/lifecycle proof, platforms, resources and authorization; capability and stop/escalation boundaries. The worker implements only that slice. An independent integration owner then revalidates source/contracts and exercises the real surface; drift, resume changes, ambiguity or repeated failure sends the affected slice back through strong planning while independent work continues. An accepted plan is not behavior proof, a task receipt or permission to weaken original acceptance.
+
+Multiple increment commits may satisfy one task, but partial work never marks that task done. The one `/goal` trigger remains the only user handoff; execution does not begin product work until its per-task plan gate passes.
 
 The orchestrator runs `python3 planning/stability-and-gitlab-2026-09-20/campaign.py ready` itself. Its output is a candidate list, not a concurrency-safe batch or proof of runtime success. `check` validates ledger/evidence integrity; `complete` additionally requires all required tasks done. The helper never starts work or changes the ledger.
 

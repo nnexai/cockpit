@@ -68,3 +68,11 @@ Integration review corrected the blocked-owner/start-time mismatch before those 
 The temporary repository, fixture evidence, symlink and unreachable commit object were removed with their owned temporary directory. No permanent smoke harness, synthetic product evidence, native session, remote fixture or product change was created. Focused Ruff formatting and lint passed; final CLI behavior was rerun after cleanup. The README and autorun trigger agree and all 80 local Markdown links resolve.
 
 This gate validates scheduling/completion bookkeeping only. It cannot certify the truth of a runtime claim from Markdown; the future orchestrator must still exercise and review every required product acceptance scenario before completing the goal.
+
+## Mandatory strong-planning setup verification
+
+The execution contract now requires a just-in-time accepted task plan before implementation or a no-code acceptance scenario. Sol or Astra owns planning and acceptance; cheaper capable bundled workers receive bounded recipes. Disabled project-specific agents are not required or re-enabled. The retained Astra advisor remains bounded and read-only. Source drift, unresolved design questions and repeated failures return the affected slice to planning without weakening original criteria or requiring routine user approval.
+
+Two initially assigned Luna documentation workers were cancelled after the user's model-role correction. Their partial documentation edits were reviewed by the Astra orchestrator; explicit Sol/Astra ownership and enabled-agent restrictions were added before delivery. No campaign task was dispatched, model configuration changed, or product runtime started.
+
+Actual read-only verification: all 81 local Markdown links resolve; the README and autorun retain the same single goal trigger; `tasks.json` and `campaign.py` remain byte-identical to the pre-edit baseline. All 25 required tasks remain pending, both deferred tasks remain deferred, and no `runs/` execution records exist. The actual helper returned exit 0 for `check` and `ready`, with only RUN-01 eligible and no active/blocked tasks; `complete` returned the expected exit 1 for unfinished required work. These checks establish setup integrity, not enforcement by a runtime model router or proof of product behavior.

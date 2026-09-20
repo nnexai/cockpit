@@ -71,11 +71,34 @@ Suggested ready-work progression (not an extra dependency chain):
 
 Do not invent padding work to fill workers. A task spanning too many shared files can be split only into independently observable outcomes; update IDs, dependencies, issue coverage and acceptance ownership together, preserving original requirements. Never create a compile-only scaffold task and call its parent feature complete.
 
-Before implementation, record the selected increment in the task's run evidence: exact user-visible outcome, original acceptance criteria covered, non-goals, exclusive files, positive and negative scenario, required surfaces, and expected observable result. For broad tasks, execute one such increment at a time and preserve the remaining criteria. Append results and commit references after each accepted increment; keep the parent task `in_progress` until its complete original contract passes. Do not introduce a second mutable status ledger. Continue to the next increment/task without a user handoff.
+Before implementation, the selected increment must have an accepted plan under the mandatory planning round below. Its run evidence records the exact user-visible outcome, original acceptance criteria covered, non-goals, exclusive files, positive and negative scenario, required surfaces, and expected observable result. For broad tasks, execute one such increment at a time and preserve the remaining criteria. Append results and commit references after each accepted increment; keep the parent task `in_progress` until its complete original contract passes. Do not introduce a second mutable status ledger. Continue to the next increment/task without a user handoff.
+
+## Mandatory planning round and dispatch gate
+
+Planning is a just-in-time control for each selected dependency-ready task, including a no-code verification task; it is not speculative detailed planning for every task up front. After safe selection and before any worker edits, execution, service start, fixture mutation, or other implementation action, the strong orchestrator conducts a planning round and writes the plan into the existing `runs/<run-id>/<TASK-ID>.md` record. The plan is run evidence, not a new ledger state, status value, mutable board, or approval queue.
+
+Planning and plan acceptance belong to **Sol or Astra**, never Luna or a cheaper implementation worker. The Sol/Astra orchestrator owns top-level decomposition and acceptance; it may request bounded read-only design input through the enabled Astra advisor when needed, following its consultation limits. Read-only scouts gather facts, not design decisions. A trivial or lone task does not require a planning subagent. Routine user approval is not a dispatch prerequisite.
+
+The planning round must inspect the current source/worktree, repository authorities, selected brief, dependency evidence, observations, and relevant locks/resources. It resolves consequential unknowns before dispatch and records:
+
+1. The current source/commit baseline and requirement-to-increment coverage, preserving every original acceptance criterion and explicit non-goal.
+2. Exact writable paths and symbols, current patterns and callsites, shared seams, ownership/lock boundaries, and any API/data identities that must remain compatible.
+3. The chosen design, APIs and invariants, with ordered bounded implementation steps and any parallel ownership that is genuinely disjoint.
+4. Edge, error, lifecycle, concurrency, authorization, cleanup, and platform cases, plus positive and negative checks on each required real surface and their expected observations.
+5. Required resources/permissions and fixture identities, the cheapest capable configured worker profile, its self-contained implementation recipe, and explicit escalation/stop boundaries.
+
+Dispatch is hard-gated: no implementation worker or execution may start until the orchestrator has accepted the current plan and no design decision remains unresolved for the assigned slice. The worker receives the accepted recipe, authorities, baseline, dependencies, non-goals, checks, resources, and escalation boundaries; do not assume every task is safe for the weakest model or change global routing merely to economize. Missing prerequisites block only the affected slice while independent work continues.
+
+Revalidate the relevant source, authorities, dependencies, locks, and plan baseline before every increment and when resuming. If source or interface evidence drifts, a dependency/authority changes, or the plan becomes stale, stop dispatch for the affected slice, reconcile and replan it before continuing. Nontrivial ambiguity, an unexpected interface/source change, or repeated failure returns the affected slice to strong planning; stop that slice, record the reason and evidence, and continue independent work. A successful planner or worker message never substitutes for plan acceptance or behavior proof.
+
+No-code work follows the same gate: plan the exact evidence-producing action, source/authority basis, real-surface positive and negative checks, resource/authorization boundaries, and completion evidence before dispatch. Do not add task statuses or a second board to represent planning; `tasks.json` remains the only authoritative task-status ledger.
+
+The concise autorun enforcement is in [AUTORUN.md](AUTORUN.md); this section is authoritative when the two descriptions meet.
+
 
 ## Worker contract
 
-Use the configured bounded implementation profiles (for example Luna for a file-owned UI slice, Terra for cross-module lifecycle/storage). Read-only exploratory research uses `scout`; risky integrated changes get a read-only reviewer. Keep advisory depth available as required by repository rules. A worker brief must include:
+Use only enabled bundled agents and the retained `astra-advisor`; disabled project-specific profiles are not dependencies and must not be re-enabled or substituted silently. Inspect the configured model for an agent before assigning its role: an agent name or higher effort setting alone does not establish Sol/Astra planning capability. Use the cheapest capable bundled implementation worker for the accepted recipe, `scout` for factual exploration, and a read-only reviewer for risky integrated changes. If no Sol/Astra planner is available, block planning rather than downgrade it. Keep advisory depth available as required by repository rules. Do not change global model routing. A worker brief must include:
 
 1. Exact task ID, outcome, issue links, source baseline and evidence distinctions.
 2. Exclusive writable paths/symbols and non-goals; shared API/data identities fixed before siblings start.
