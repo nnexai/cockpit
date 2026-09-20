@@ -20,9 +20,9 @@
       "started_at": "2026-09-20T09:49:03.861224Z",
       "completed_at": "2026-09-20T09:56:00Z",
       "blockers": [],
-      "evidence": ["runs/run-20260920-a3e9b950/RUN-01.md"],
-      "commits": ["1412c7cbef1315c9ab2474a87d7c34531b7f2dfc"],
-      "notes": ["All six inventory criteria passed; owned probe services stopped. Fixture files retained for TERM-01. macOS execution and MR fixture authorization remain downstream prerequisites."]
+      "evidence": ["runs/run-20260920-a3e9b950/RUN-01.md", "runs/run-20260920-a3e9b950/RUN-01-safety.json"],
+      "commits": ["1412c7cbef1315c9ab2474a87d7c34531b7f2dfc", "baa4a16b2c1e6ea9363183341671f57b4413ceba"],
+      "notes": ["Original inventory committed; OBS-008 exposed unintended protected integration writes. Guarded HOME containment is now repaired and verified at baa4a16 (32 tests, red control, actual server HOME, six unchanged protected hashes across restart). Earlier writes still require explicit ACCEPT-01 reconciliation; no speculative rollback."]
     },
     {
       "id": "TERM-01",
@@ -65,12 +65,12 @@
         12
       ],
       "brief": "tasks/TERM-02.md",
-      "status": "pending",
-      "owner": null,
-      "started_at": null,
+      "status": "in_progress",
+      "owner": "Main",
+      "started_at": "2026-09-20T10:19:11.269695Z",
       "completed_at": null,
       "blockers": [],
-      "evidence": [],
+      "evidence": ["runs/run-20260920-a3e9b950/TERM-02.md"],
       "commits": [],
       "notes": []
     },
@@ -145,12 +145,12 @@
       ],
       "issues": [],
       "brief": "tasks/VIEW-01.md",
-      "status": "pending",
-      "owner": null,
-      "started_at": null,
+      "status": "in_progress",
+      "owner": "Main",
+      "started_at": "2026-09-20T10:19:11.269695Z",
       "completed_at": null,
       "blockers": [],
-      "evidence": [],
+      "evidence": ["runs/run-20260920-a3e9b950/VIEW-01.md"],
       "commits": [],
       "notes": []
     },
@@ -691,7 +691,7 @@
       "blockers": [],
       "evidence": [],
       "commits": [],
-      "notes": []
+      "notes": ["OBS-008: campaign completion requires verified restoration or user-authorized retention of unintended RUN-01 integration/settings writes. No pre-probe copies found; see RUN-01 safety correction."]
     },
     {
       "id": "LATER-GHPR",
