@@ -329,6 +329,34 @@ async fn normal_status_and_sessions_use_installation_compatibility_cache() {
     assert!(service.sessions().await.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn incompatible_status_disables_mouse_and_retry_inspects_again() {
+    let adapter = fake();
+    let controls = adapter.inspect_controls.clone();
+    let calls = adapter.inspect_calls.clone();
+    let (started, result, control) = controlled_inspection();
+    controls.lock().await.push_back(control);
+    result
+        .send(Ok(HerdrCompatibility::Incompatible {
+            identity: None,
+            code: "protocol_mismatch".into(),
+            message: "unsupported wire protocol".into(),
+        }))
+        .unwrap();
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+    let status = service.status().await;
+    started.await.unwrap();
+    assert!(!status.capabilities.terminal_mouse_input);
+    assert!(matches!(
+        status.herdr,
+        HerdrCompatibility::Incompatible { .. }
+    ));
+    let retry = service.status().await;
+    assert!(matches!(retry.herdr, HerdrCompatibility::Compatible { .. }));
+    assert!(retry.capabilities.terminal_mouse_input);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
 #[tokio::test]
 async fn late_status_probe_cannot_repopulate_after_installation_clear() {
     let mut adapter = fake();

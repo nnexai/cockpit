@@ -275,7 +275,7 @@ impl CockpitService {
             capabilities: CockpitCapabilities {
                 // Herdr encodes structured pointer events; each terminal stream
                 // separately reports whether its application requests mouse input.
-                terminal_mouse_input: self.mode == CockpitMode::Normal,
+                terminal_mouse_input: matches!(herdr, HerdrCompatibility::Compatible { .. }),
             },
             herdr,
         }

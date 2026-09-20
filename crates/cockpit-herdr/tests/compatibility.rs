@@ -235,9 +235,9 @@ async fn wait_processes_gone(_pids: &[(u32, u32)]) {
 #[tokio::test]
 async fn installed_schema_fixture_is_compatible() {
     let schema = include_str!("fixtures/herdr-0.9.0-protocol-22-schema-1.json");
-    let status = r#"{"version":"0.9.0","protocol":22}"#;
+    let status = r#"{"version":"0.9.1","protocol":22}"#;
     assert!(
-        matches!(inspect(status, schema).await, HerdrCompatibility::Compatible { identity } if identity.version == "0.9.0" && identity.protocol == 22 && identity.schema_version == 1)
+        matches!(inspect(status, schema).await, HerdrCompatibility::Compatible { identity } if identity.version == "0.9.1" && identity.protocol == 22 && identity.schema_version == 1)
     );
 }
 
@@ -330,11 +330,8 @@ async fn bounded_autostart_case_caller_cancellation_reaps_children() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn version_protocol_schema_and_method_mismatches_are_incompatible() {
+async fn protocol_schema_and_method_mismatches_are_incompatible() {
     let schema = r#"{"schema_version":1,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"ping"}}},{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"events.subscribe"}}}]}}}"#;
-    assert!(
-        matches!(inspect(r#"{"version":"0.7.0","protocol":20}"#, schema).await, HerdrCompatibility::Incompatible { identity: None, code, .. } if code == "version_mismatch")
-    );
     assert!(
         matches!(inspect(r#"{"version":"0.9.0","protocol":20}"#, schema).await, HerdrCompatibility::Incompatible { identity: None, code, .. } if code == "protocol_mismatch")
     );

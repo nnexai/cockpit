@@ -197,7 +197,7 @@ The behavioral authority is Herdr; the presentation is graphical. Pane/layout ac
 
 Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js owns rendering and input capture only.
 
-- The active target is Herdr 0.9.0, protocol 22, schema 1. Each visible pane opens a direct ANSI terminal stream using `TerminalHello` and `ControlTerminal` or `ObserveTerminal`. This does not restore the historical client-shell/graphics implementation.
+- Compatibility requires Herdr protocol 22, schema 1, and the adapter's required methods, not an exact display-version patch. Each visible pane opens a direct ANSI terminal stream using `TerminalHello` and `ControlTerminal` or `ObserveTerminal`. This does not restore the historical client-shell/graphics implementation.
 - Herdr's JSON API owns hierarchy, focus, and layout. Stable `TerminalFrame` messages supply sequence numbers, dimensions, and ANSI bytes for each attached pane.
 - Attachment uses fitted per-pane dimensions and measured cell pixels. The first frame must be full; every later sequence must be consecutive, including full repaints.
 - A full frame is an ANSI baseline, not permission to reset xterm. Socket framing has one uninterrupted reader with bounded buffering and deterministic shutdown.

@@ -1,0 +1,26 @@
+{
+  "source_baseline": "b5188bc",
+  "tested_at": "2026-09-20T10:13:43.834793+00:00",
+  "native_origin": "tauri://localhost",
+  "native_wry": "0.55.1",
+  "native_build": "cargo build -p cockpit-tauri --features tauri/custom-protocol",
+  "native_display": "headless GNOME 1440x900 /tmp/csg-a3e9b950/native-runtime/csg-native",
+  "browser_native_payload_parity": true,
+  "artifacts": {
+    "term01-native-retry.png": "b39730413615196cef5c1bb61117d03fa3c8e98f4a765bd614b0c8ab3b033101",
+    "term01-native-negative.json": "36a26fa4e7a88650325075a44426966a8b993dac4af3d763badfad4cabc41070",
+    "term01-native-unavailable.png": "9ac07167453be666b5db687291d7e94ac14f8e7bb77ed4f9eaad3ef405763dc1",
+    "term01-native-malformed.png": "0ea013a6d02aefdafafc89f9994029d0678b9b831191041dc8b6d3682b045006",
+    "term01-native-methods.png": "3ae1e7a94d16fe90d81d0e646a00cccf2e188c221a280ff1a1fcc9a1d46417dd",
+    "term01-native-schema.png": "0dc032e6eabd5ce819351f857bd9c8e69b43fe7024d0fc838852bae8f10ac219",
+    "term01-native-protocol.png": "f2f47cf09e90978ac291a6783ba712f1b49cc9123423ed274ac5a1367c4763c9",
+    "term01-native-compatible.png": "da6a9ed44e1f29a3f2f14ee0d1e2d583aba525efd339fb75e277f055c48ec973",
+    "term01-browser-minimum.png": "e3fae2552c86ce694cef827f6a02bb507fbfb1441d80ea7b827a67e5afd05a25",
+    "term01-browser-retry.png": "c5c5a18f2eb1feeea454fd97213f1b2f871914a4a36ff50e2017588e2097c636",
+    "term01-browser-negative.json": "6a351dba9312752d42ab6382948037cf1d1a2273ad6dc673022a0fa1e61564ac"
+  },
+  "binaries": {
+    "target/debug/cockpit": "31e53f4eb5d63c79432a21eab819dc7f6bac76d11259f7041decdcd5ad3cf025",
+    "target/debug/cockpit-tauri": "840eb5d7ae5d29bc043421cb4b5413bdbbf4c55b0d9a971e9e0ad63ef1118d8a"
+  }
+}

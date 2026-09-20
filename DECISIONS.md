@@ -87,7 +87,7 @@ This records the decisions made during the architecture refinement interview. It
 ### Terminal attachment
 
 - Herdr owns the PTY, process, and terminal model. xterm.js owns rendering and input capture only.
-- The selected runtime is Herdr 0.9.0, protocol 22, schema 1. Each visible pane uses a direct ANSI `TerminalHello` stream with `ControlTerminal` or `ObserveTerminal`.
+- The supported contract is Herdr protocol 22, schema 1, and the adapter's required methods. The display version is diagnostic identity, not a patch-release allowlist. Each visible pane uses a direct ANSI `TerminalHello` stream with `ControlTerminal` or `ObserveTerminal`.
 - Stable `TerminalFrame` ANSI bytes are authoritative. The first frame is full; every later sequence must be consecutive. Full repaints never reset xterm.
 - The JSON API remains authoritative for hierarchy, focus, and layout. One bounded reader owns each framed terminal socket without cancellation between its header and payload.
 - xterm.js renderers are mounted only for panes visible in the selected tab. Hidden tabs detach renderers/subscriptions while Herdr processes continue running.
@@ -172,7 +172,7 @@ This records the decisions made during the architecture refinement interview. It
 
 ## Known risks
 
-1. **Compatibility is a hard runtime boundary.** The active adapter targets Herdr 0.9.0, protocol 22/schema 1, with a captured release schema. Incompatible versions and protocols are rejected before attachment. The historical protocol-22 client-shell/graphics implementation remains separate.
+1. **Compatibility is a hard runtime boundary.** Protocol 22/schema 1 and all required methods are checked before attachment; compatible patch releases are accepted without exact display-version matching. The historical protocol-22 client-shell/graphics implementation remains separate.
 2. **Mouse autodetection is verified; broader terminal acceptance remains scoped.** Browser and Linux-native mode transitions, press/drag/release, wheel, text selection, and ownership handoff are verified. Exact pixel coordinates, idle hover forwarding, Kitty graphics, and the full G01 temporal matrix are not part of this migration.
 3. **Accessibility is intentionally best effort for this personal proof of concept, not a gate for broader distribution.**
 4. **No index/scratchpad means context membership is derived from the companion tree and frontmatter; human-created files are displayed but not managed by Cockpit.**
@@ -391,3 +391,9 @@ The user authorized the complete inline browser plan and the no-migration cutove
 The browser is a Space-scoped Cockpit split beside the unchanged Herdr layout. It does not add a Herdr pane, tab, or PTY. Clicking it suspends local terminal writable intent without fabricating Herdr focus. Returning to a terminal uses the existing confirmed focus path. Hide affects presentation; Close remains an explicit browser lifecycle action.
 
 Cockpit owns annotation overlays and durable revisioned drafts. PNG capture retains exact retry bytes and existing feedback/paste receipt semantics. The user explicitly excluded legacy migration. The inline runtime directly replaces the extension and external-window integration without an import layer. Existing saved feedback remains readable. The focused pass covered browser open/frame, region draft persistence, hide/show, URL navigation, static gates, and Linux Tauri startup; full security, performance, native input/decode, and A01–A25 evidence remains unrun.
+
+## 2026-09-20: compatible Herdr patch releases
+
+Removed the exact 0.9.0 display-version gate while retaining protocol 22, schema 1 and all 24 required methods. Incompatible/unavailable status does not advertise terminal mouse support; compatible streams still require their own MouseCapture application demand. Installation/session cache generations remain unchanged, and rejected status is freshly inspected on retry.
+
+Real Herdr 0.9.1 reached the session/Space/tab/live terminal UI in browser and Linux Tauri. Protocol/schema/method faults, malformed JSON and executable failure produced identical browser/native status payloads and visible notices without session work. Retry after fixture repair restored the live session. Evidence: `planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/TERM-01.md`. This does not claim arbitrary protocol support, macOS proof or the remaining campaign.

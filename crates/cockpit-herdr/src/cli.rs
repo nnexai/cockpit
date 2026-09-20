@@ -53,7 +53,6 @@ use transport::{
 };
 
 use crate::schema::{schema_fields, status_fields};
-pub const REQUIRED_VERSION: &str = "0.9.0";
 pub const REQUIRED_PROTOCOL: u32 = 22;
 pub const REQUIRED_SCHEMA_VERSION: u32 = 1;
 const MAX_SAFE_REVISION: u64 = 9_007_199_254_740_991;
@@ -1219,13 +1218,6 @@ impl HerdrCliAdapter {
     ) -> Result<HerdrCompatibility, InspectionError> {
         let (version, protocol) = status_fields(&status)
             .ok_or_else(|| malformed("Herdr status omitted top-level version or protocol"))?;
-        if version != REQUIRED_VERSION {
-            return Ok(Self::incompatible(
-                None,
-                "version_mismatch",
-                format!("expected Herdr {REQUIRED_VERSION}"),
-            ));
-        }
         if protocol != REQUIRED_PROTOCOL {
             return Ok(Self::incompatible(
                 None,
