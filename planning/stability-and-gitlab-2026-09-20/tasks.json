@@ -65,14 +65,20 @@
         12
       ],
       "brief": "tasks/TERM-02.md",
-      "status": "in_progress",
+      "status": "done",
       "owner": "Main",
       "started_at": "2026-09-20T10:19:11.269695Z",
-      "completed_at": null,
+      "completed_at": "2026-09-20T12:03:21Z",
       "blockers": [],
-      "evidence": ["runs/run-20260920-a3e9b950/TERM-02.md"],
-      "commits": [],
-      "notes": []
+      "evidence": [
+        "runs/run-20260920-a3e9b950/TERM-02.md",
+        "runs/run-20260920-a3e9b950/TERM-02-evidence.json",
+        "runs/run-20260920-a3e9b950/TERM-02-artifacts.json"
+      ],
+      "commits": ["3ad68c5d547085719af7ab3cd101e57002a56284"],
+      "notes": [
+        "All seven original criteria passed on browser/Linux-native/TUI. Browser-first per OBS-009. Extended zoom/output finding OBS-010 remains required under TERM-03; protected-home incident OBS-008 remains unresolved for ACCEPT-01."
+      ]
     },
     {
       "id": "SYNC-01",
@@ -130,7 +136,9 @@
       "blockers": [],
       "evidence": [],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-010: reproduce and repair browser split zoom/restore output loss; local xterm visible buffer became blank while Herdr history/process remained live. Capture frame grid versus fitted grid and HTTP resize chronology. Browser-first per OBS-009; this remains a required unresolved campaign finding."
+      ]
     },
     {
       "id": "VIEW-01",
