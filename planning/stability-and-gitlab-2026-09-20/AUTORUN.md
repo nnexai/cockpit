@@ -26,6 +26,16 @@ At campaign start, inspect native goal state. If the matching campaign goal is p
 
 The completion outcome is all 25 original required tasks plus any documented in-scope required additions done, every original criterion passed on its required surface, every owned implementation/evidence change committed with real full SHA values, and `ACCEPT-01` complete. `LATER-GHPR` and `LATER-JIRA` remain `deferred`; do not promote, erase, or silently satisfy them. Keep GitHub issue #6 explicitly partial for those deferred provider scopes. A blocked platform, missing MR authorization, failed gate, unresolved observation, missing commit, or missing evidence keeps the umbrella goal incomplete.
 
+### Explicit user scope amendments
+
+OBS-012 authorizes uniquely marked disposable issue/MR fixtures in project `nnex.ai/integration` (86672117), including their dedicated non-main source branch/commit and controlled fixture content changes. Record exact ownership; production adapters remain GET-only. This does not authorize protected-branch changes, merges, approvals or remote deletion.
+
+OBS-013 supersedes the macOS-execution blocker and mandatory macOS-run clauses throughout this autorun. The user will perform macOS verification. Deliver all reachable implementation and available-platform proof plus a concrete checklist covering every original unexecuted macOS criterion. Preserve those criteria explicitly as **user verification—not executed**, never as passed. No runner acquisition, emulation or repeated substitute verification is required.
+
+All 25 required task identities remain. A macOS-dependent task may close for this delivery only when its reachable work and explicit user handoff are complete; its evidence must distinguish that adjusted deliverable from actual macOS runtime acceptance. Other browser/Linux-native/Herdr/provider/security/performance criteria, owned commits, cleanup and unresolved observations remain required. The final gate audits this explicit user-approved scope, not fictitious macOS passes.
+
+OBS-014 supersedes the exhaustive-matrix requirement as a gate for each delivery increment. Deliver working fixes after lightweight, targeted proof of the affected path; do not delay near-ready deliverables for another broad audit or low-severity follow-up. Preserve the required product outcomes, protected-resource rules and task identities. A task may close for this adjusted delivery when its behavior is implemented, its relevant quick checks pass, its changes are committed and remaining minor findings/deeper unexecuted scenarios are recorded. Do not describe those scenarios as passed or claim full original matrix acceptance. A known data-loss/ownership hazard or broken primary action still blocks its affected path, not unrelated increments.
+
 ## Bootstrap after the trigger
 
 Perform this bootstrap once for the campaign (and again only when a recovery checkpoint says the authority set changed):
@@ -44,7 +54,7 @@ The required set is exactly:
 
 `RUN-01`, `TERM-01`, `TERM-02`, `SYNC-01`, `TERM-03`, `VIEW-01`, `FLOW-01`, `SETUP-01`, `SETUP-02`, `GLAB-01`, `GLAB-02`, `GLAB-03`, `GLAB-04`, `WEB-01`, `WEB-02`, `WEB-03`, `WEB-04`, `WEB-05`, `WEB-06`, `WEB-07`, `WEB-08`, `NATIVE-01`, `NATIVE-02`, `PERF-01`, and `ACCEPT-01`.
 
-The only deferred records are `LATER-GHPR` and `LATER-JIRA`. Use the exact `depends_on` values in `tasks.json`; do not invent a parallel dependency chain or mark a task ready solely because its dependency names appear in a heading. Dependency readiness is necessary but not sufficient: verify platform, fixture, authorization, source, and lock prerequisites first. Never call a compile-only scaffold or an inventory-only partial outcome a completed parent task.
+Keep the exact `depends_on` values in `tasks.json` as the completion dependency graph. Under the user's implementation-first steering in OBS-011, implementation may advance against settled, integrated parent interfaces before the parent's exhaustive acceptance round; an independent slice may use an unchanged existing interface without waiting for unrelated parent UI proof. Record the interface handoff and exclusive writing ownership explicitly. This changes validation timing, not required outcomes: no task is `done` until its original criteria and completion dependencies pass. Never claim readiness from headings, waive safety/authorization prerequisites, or call a compile-only scaffold a completed parent.
 
 ## Bounded increment protocol
 

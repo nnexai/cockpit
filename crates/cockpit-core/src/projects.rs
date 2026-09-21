@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::project_adapter::{
-    ProjectTerminalRequest, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
+    ProjectInventory, ProjectTerminalRequest, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
     ProjectWorktreeResult,
 };
 use crate::project_store::{
@@ -37,7 +37,9 @@ use crate::project_teardown::{
     self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree,
 };
 use crate::repositories::{self, RepositoryCatalog};
-use crate::sources::{SourceFetchRequest, SourceService, source_authority_for_checkout};
+use crate::sources::{
+    SourceFetchRequest, SourceMetadata, SourceService, source_authority_for_checkout,
+};
 use crate::{InspectionError, ProjectHerdrAdapter};
 /// sessions, workspaces, tabs, panes, and worktrees; this service only journals
 /// its own effects and the companion association.
@@ -151,7 +153,7 @@ impl ProjectService {
                     .project_inventory(session, &repository.checkout_path)
                     .await?;
                 verify_inventory(&inventory, &repository)?;
-                let artifact = match artifact_url.as_deref() {
+                let mut artifact = match artifact_url.as_deref() {
                     Some(url) => {
                         let artifact = repositories::resolve_artifact(&self.configuration, url)?;
                         if artifact.canonical_url.contains('@') {
@@ -164,7 +166,8 @@ impl ProjectService {
                     }
                     None => None,
                 };
-                if let Some(artifact) = artifact.as_ref() {
+                let mut source_metadata = None;
+                if let Some(artifact) = artifact.as_mut() {
                     let sources = self.sources.as_ref().ok_or_else(|| {
                         InspectionError::new(
                             "source_provider_unsupported",
@@ -177,16 +180,70 @@ impl ProjectService {
                         &artifact.provider_id,
                     )
                     .await?;
-                    sources
+                    let validated = sources
                         .validate_artifact(SourceFetchRequest {
                             provider_id: artifact.provider_id.clone(),
-                            artifact_url: artifact.canonical_url.clone(),
-                            authority,
+                            artifact_url: artifact.original_url.clone(),
+                            authority: authority.clone(),
                         })
                         .await?;
+                    artifact.canonical_url =
+                        reviewed_artifact_url(artifact, &validated)?.to_owned();
+                    if artifact.kind == "review" {
+                        source_metadata = Some(
+                            sources
+                                .metadata(SourceFetchRequest {
+                                    provider_id: artifact.provider_id.clone(),
+                                    artifact_url: artifact.canonical_url.clone(),
+                                    authority,
+                                })
+                                .await?,
+                        );
+                    }
+                }
+                let source_base = if artifact
+                    .as_ref()
+                    .is_some_and(|artifact| artifact.kind == "review")
+                {
+                    source_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.source_commit.clone())
+                } else {
+                    None
+                };
+                if let (Some(artifact), Some(metadata)) =
+                    (artifact.as_ref(), source_metadata.as_ref())
+                {
+                    validate_review_metadata(&self.configuration, artifact, metadata)?;
+                    if artifact.kind == "review"
+                        && let (Some(source_branch), Some(commit)) = (
+                            metadata.source_branch.as_deref(),
+                            metadata.source_commit.as_deref(),
+                        )
+                    {
+                        verify_source_branch(&catalog, &repository, source_branch, commit).await?;
+                    }
                 }
                 let branch = match branch.as_deref() {
                     Some(branch) => branch.to_owned(),
+                    None if artifact
+                        .as_ref()
+                        .is_some_and(|artifact| artifact.kind == "review") =>
+                    {
+                        let metadata = source_metadata.as_ref().ok_or_else(|| {
+                            InspectionError::new(
+                                "source_provider_contract",
+                                "review setup metadata is unavailable",
+                            )
+                        })?;
+                        let source_branch = metadata.source_branch.as_deref().ok_or_else(|| {
+                            InspectionError::new(
+                                "source_branch_unavailable",
+                                "GitLab merge request has no usable source branch",
+                            )
+                        })?;
+                        source_branch.to_owned()
+                    }
                     None => expand_template(
                         &self.configuration.branch_template,
                         &repository,
@@ -221,8 +278,20 @@ impl ProjectService {
                     }
                 };
                 let base = match base_ref.as_deref() {
-                    Some(base) => Some(catalog.resolve_base(&repository, base).await?),
-                    None => None,
+                    Some(base) => {
+                        let resolved = catalog.resolve_base(&repository, base).await?;
+                        if source_base
+                            .as_deref()
+                            .is_some_and(|source_commit| source_commit != resolved)
+                        {
+                            return Err(InspectionError::new(
+                                "source_base_mismatch",
+                                "explicit base does not match the reviewed merge-request head commit",
+                            ));
+                        }
+                        Some(resolved)
+                    }
+                    None => source_base,
                 };
                 let label = label.clone().unwrap_or_else(|| {
                     task_name.clone().unwrap_or_else(|| repository.name.clone())
@@ -300,7 +369,14 @@ impl ProjectService {
         effects.push(
             "Create a new context-aware terminal with allowlisted COCKPIT_* environment".to_owned(),
         );
+        if mode == WorkspaceSetupMode::Create {
+            effects.push(
+                "Run configured repository actions automatically (trust_repository remains unset)"
+                    .to_owned(),
+            );
+        }
         if artifact.is_some() {
+            effects.push("Hydrate the selected source into the companion Context".to_owned());
             effects.push("Record the selected artifact in the companion manifest".to_owned());
         }
         let plan = WorkspaceSetupPlan {
@@ -353,6 +429,19 @@ impl ProjectService {
             return Err(InspectionError::new(
                 "invalid_operation_state",
                 "only a planned operation can start",
+            ));
+        }
+        // Re-check the reviewed authority and effects before taking the
+        // execution lease. A changed repository, endpoint, path, or source
+        // authority must force a fresh plan rather than silently executing a
+        // different operation.
+        if let Err(error) = self.preflight_plan(session, &operation.plan).await {
+            if error.code.starts_with("source_") {
+                return Err(error);
+            }
+            return Err(InspectionError::new(
+                "stale_plan",
+                format!("reviewed setup is no longer valid: {}", error.message),
             ));
         }
         let lease = self
@@ -1369,6 +1458,114 @@ impl ProjectService {
         }
         Ok(operation)
     }
+    async fn preflight_plan(
+        &self,
+        session: &str,
+        plan: &WorkspaceSetupPlan,
+    ) -> Result<Option<ProjectInventory>, InspectionError> {
+        validate_project_root(Path::new(&self.configuration.worktree_root))?;
+        self.store
+            .preflight_companion_publication(&self.configuration.companion_root)?;
+        let before = if plan.mode == WorkspaceSetupMode::Create {
+            let repository = plan.repository.as_ref().ok_or_else(|| {
+                InspectionError::new("repository_missing", "create plan has no repository")
+            })?;
+            let fresh_repository = RepositoryCatalog::new(self.configuration.clone())
+                .resolve(&repository.repository_id)
+                .await?;
+            if fresh_repository.root != repository.root
+                || fresh_repository.common_dir != repository.common_dir
+                || fresh_repository.checkout_path != repository.checkout_path
+            {
+                return Err(InspectionError::new(
+                    "repository_identity_stale",
+                    "repository changed since the setup plan was reviewed",
+                ));
+            }
+            let inventory = self
+                .adapter
+                .project_inventory(session, &repository.checkout_path)
+                .await?;
+            verify_inventory(&inventory, repository)?;
+            if inventory.endpoint_identity != plan.endpoint_identity {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "Herdr endpoint identity differs from the reviewed setup plan",
+                ));
+            }
+            Some(inventory)
+        } else {
+            accessible_directory(&plan.checkout_path)?;
+            if self.adapter.project_endpoint_identity(session).await? != plan.endpoint_identity {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    "Herdr endpoint identity differs from the reviewed setup plan",
+                ));
+            }
+            None
+        };
+        if let Some(artifact) = plan.artifact.as_ref() {
+            let repository = plan.repository.as_ref().ok_or_else(|| {
+                InspectionError::new(
+                    "source_repository_missing",
+                    "source setup requires a reviewed repository",
+                )
+            })?;
+            let sources = self.sources.as_ref().ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_unsupported",
+                    "source validation is not configured in this host",
+                )
+            })?;
+            let authority = source_authority_for_checkout(
+                &self.configuration,
+                Path::new(&repository.checkout_path),
+                &artifact.provider_id,
+            )
+            .await?;
+            let validated = sources
+                .validate_artifact(SourceFetchRequest {
+                    provider_id: artifact.provider_id.clone(),
+                    artifact_url: artifact.original_url.clone(),
+                    authority: authority.clone(),
+                })
+                .await?;
+            if reviewed_artifact_url(artifact, &validated)? != artifact.canonical_url {
+                return Err(InspectionError::new(
+                    "stale_plan",
+                    "source provenance changed; review a fresh setup plan before starting",
+                ));
+            }
+            if artifact.kind == "review" {
+                let metadata = sources
+                    .metadata(SourceFetchRequest {
+                        provider_id: artifact.provider_id.clone(),
+                        artifact_url: artifact.canonical_url.clone(),
+                        authority,
+                    })
+                    .await?;
+                validate_review_metadata(&self.configuration, artifact, &metadata)?;
+                validate_review_plan_source(
+                    &RepositoryCatalog::new(self.configuration.clone()),
+                    repository,
+                    plan,
+                    &metadata,
+                )
+                .await
+                .map_err(|error| {
+                    if error.code.starts_with("source_ref_") {
+                        InspectionError::new(
+                            "stale_plan",
+                            format!("reviewed source ref is no longer valid: {}", error.message),
+                        )
+                    } else {
+                        error
+                    }
+                })?;
+            }
+        }
+        Ok(before)
+    }
 
     async fn execute(&self, session: &str, id: &str, _lease: crate::project_store::ExecutionLease) {
         let result = self.execute_inner(session, id).await;
@@ -1389,44 +1586,7 @@ impl ProjectService {
         let mut operation = self.store.load(id)?;
         let plan = operation.plan.clone();
         let repository = plan.repository.as_ref();
-        validate_project_root(Path::new(&self.configuration.worktree_root))?;
-        validate_project_root(Path::new(&self.configuration.companion_root))?;
-        let before = if plan.mode == WorkspaceSetupMode::Create {
-            let repository = repository.expect("Create plan has repository");
-            let fresh_repository = RepositoryCatalog::new(self.configuration.clone())
-                .resolve(&repository.repository_id)
-                .await?;
-            if fresh_repository.root != repository.root
-                || fresh_repository.common_dir != repository.common_dir
-                || fresh_repository.checkout_path != repository.checkout_path
-            {
-                return Err(InspectionError::new(
-                    "repository_identity_stale",
-                    "repository changed since operation planning",
-                ));
-            }
-            let before = self
-                .adapter
-                .project_inventory(session, &repository.checkout_path)
-                .await?;
-            verify_inventory(&before, repository)?;
-            if before.endpoint_identity != plan.endpoint_identity {
-                return Err(InspectionError::new(
-                    "stale_identity",
-                    "Herdr endpoint identity differs from reviewed plan",
-                ));
-            }
-            Some(before)
-        } else {
-            accessible_directory(&plan.checkout_path)?;
-            if self.adapter.project_endpoint_identity(session).await? != plan.endpoint_identity {
-                return Err(InspectionError::new(
-                    "stale_identity",
-                    "Herdr endpoint identity differs from reviewed plan",
-                ));
-            }
-            None
-        };
+        let before = self.preflight_plan(session, &plan).await?;
         let borrowed = operation
             .owned_resources
             .iter()
@@ -1597,6 +1757,8 @@ impl ProjectService {
                     &plan.endpoint_identity,
                     companion_id,
                 )?;
+                self.store
+                    .sync_companion_publication(&self.configuration.companion_root, &existing)?;
                 Path::new(&self.configuration.companion_root).join(companion_id)
             }
             Err(error) if error.code == "companion_missing" => {
@@ -1775,7 +1937,7 @@ impl ProjectService {
                     .fetch_to_companion(
                         SourceFetchRequest {
                             provider_id: artifact.provider_id.clone(),
-                            artifact_url: artifact.canonical_url.clone(),
+                            artifact_url: artifact.original_url.clone(),
                             authority,
                         },
                         Some((&companion_root, companion_id)),
@@ -2063,6 +2225,115 @@ fn step_at_least(current: WorkspaceOperationStep, wanted: WorkspaceOperationStep
         Completed => 11,
     };
     rank(current) >= rank(wanted)
+}
+
+fn reviewed_artifact_url<'a>(
+    artifact: &'a ProjectArtifact,
+    response: &'a cockpit_protocol::sources::SourceImportResponse,
+) -> Result<&'a str, InspectionError> {
+    let primary = response
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.provider_id == artifact.provider_id
+                && entry.resource_type == artifact.kind
+                && entry.canonical_id == artifact.canonical_id
+        })
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_identity_mismatch",
+                "source provider did not return the reviewed artifact identity",
+            )
+        })?;
+    Ok(primary
+        .source_url
+        .as_deref()
+        .unwrap_or(&artifact.canonical_url))
+}
+async fn verify_source_branch(
+    catalog: &RepositoryCatalog,
+    repository: &RepositoryCandidate,
+    branch: &str,
+    expected_commit: &str,
+) -> Result<(), InspectionError> {
+    catalog.validate_branch(repository, branch).await?;
+    if let Some(commit) = catalog.local_branch_commit(repository, branch).await? {
+        if commit != expected_commit {
+            return Err(InspectionError::new(
+                "source_ref_mismatch",
+                "the existing local source branch is not at the reviewed merge-request commit",
+            ));
+        }
+        return Ok(());
+    }
+    if let Some(commit) = catalog.origin_tracking_commit(repository, branch).await? {
+        if commit == expected_commit {
+            return Ok(());
+        }
+        return Err(InspectionError::new(
+            "source_ref_mismatch",
+            "the origin tracking source ref is not at the reviewed merge-request commit",
+        ));
+    }
+    Err(InspectionError::new(
+        "source_ref_unavailable",
+        "the reviewed merge-request source ref is unavailable locally; fetch it before setup",
+    ))
+}
+fn validate_review_metadata(
+    configuration: &ProjectConfiguration,
+    artifact: &ProjectArtifact,
+    metadata: &SourceMetadata,
+) -> Result<(), InspectionError> {
+    if artifact.kind != "review" {
+        return Ok(());
+    }
+    if metadata.source_branch.is_none() {
+        return Err(InspectionError::new(
+            "source_branch_unavailable",
+            "merge request metadata has no usable source branch",
+        ));
+    }
+    let is_gitlab = configuration
+        .providers
+        .iter()
+        .find(|provider| provider.id == artifact.provider_id)
+        .is_some_and(|provider| {
+            Path::new(&provider.executable)
+                .file_name()
+                .is_some_and(|name| name == "glab")
+        });
+    if is_gitlab && metadata.source_commit.is_none() {
+        return Err(InspectionError::new(
+            "source_commit_unavailable",
+            "merge request metadata has no complete source commit",
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_review_plan_source(
+    catalog: &RepositoryCatalog,
+    repository: &RepositoryCandidate,
+    plan: &WorkspaceSetupPlan,
+    metadata: &SourceMetadata,
+) -> Result<(), InspectionError> {
+    let source_branch = metadata.source_branch.as_deref().ok_or_else(|| {
+        InspectionError::new(
+            "source_branch_unavailable",
+            "merge request metadata has no usable source branch",
+        )
+    })?;
+    if let Some(commit) = metadata.source_commit.as_deref() {
+        if plan.base.as_deref() != Some(commit) {
+            return Err(InspectionError::new(
+                "stale_plan",
+                "merge request head commit changed; review a fresh setup plan",
+            ));
+        }
+        verify_source_branch(catalog, repository, source_branch, commit).await?;
+    }
+    Ok(())
 }
 
 fn verify_inventory(

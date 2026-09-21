@@ -42,3 +42,30 @@ An in-scope unresolved finding prevents campaign completion. Assign it to an exi
 - Queued to TERM-03, which explicitly owns terminal frame writes, output continuity, and split/zoom parity. Its original criteria 5–7 remain required; this finding prevents campaign completion until resolved. No zoom/output-continuity pass is claimed under TERM-02.
 - Follow-up trace showed received frame grids and local fitted grids can differ. Replaying a real 60-column frame into a 30-column xterm lost a visible row and introduced scrollback; the correctly sized grid did neither. This confirms a grid mismatch hazard, not the complete cause of the original blanking. Distinguish pane-read history from visible frame contents and capture resize HTTP commands before editing.
 - Evidence: `runs/run-20260920-a3e9b950/TERM-02.md`; raw owned `term02-browser-split-failure.json/png` and `term02-zoom-diagnostic.json/png`. Root-cause/baseline classification and final disposition remain open. No speculative frame-geometry product change has been applied.
+
+### OBS-011 — minimize intermediate validation
+
+- 2026-09-21, user steering: too many iterations; keep validation minimal during implementation and do the long, hard rounds at the end.
+- All remaining tasks: batch independent implementation and integrate once; use only the smallest immediate regression/smoke checks, reuse existing fixtures, and rerun only affected failures. Defer full suites, exhaustive browser/native/TUI matrices, sustained performance and packaging acceptance to the final integration round.
+- Timing changes, not scope reduction: original criteria remain required. Implemented or smoke-checked work is not full task acceptance; no done status or campaign-completion claim until the required final evidence exists.
+- Follow-up user steering: required browser checks should be delegated rather than occupy Main's implementation path. The prepared VIEW-01 smoke has not run and is deferred. Main integrates and advances implementation; bounded checks run off that path, with no expanded per-task matrices.
+- Completion dependencies remain unchanged. To make final-round acceptance possible without serializing implementation behind every full matrix, settled interface handoffs may unblock dependent code work; unchanged, independently owned interfaces may be implemented concurrently. Record handoffs/ownership and keep incomplete acceptance explicit. No parent/task is marked done from implementation alone.
+
+### OBS-012 — authorized disposable GitLab fixtures
+
+- 2026-09-21, user: “feel free to create mr and issue fixture in glab for testing”.
+- Main will create uniquely marked issue/MR fixtures in the already authorized `nnex.ai/integration` project (86672117), including the dedicated non-main branch/commit needed for the MR. Controlled title/body/comment changes are restricted to these new test fixtures. Record IDs, before/after state and cleanup ownership before acceptance use.
+- No main/protected-branch writes, merges, approvals, protection changes, unrelated project mutations or credential export. Production provider requests remain GET-only. Fixture creation removes the missing-authorization blocker; successful real acceptance still requires execution evidence. Do not delete remote resources without separate authority; retain/close owned fixtures with explicit accounting.
+
+### OBS-013 — macOS verification handed to the user
+
+- 2026-09-21, user: “macos will stay unavailable so only do what can be done. do not force verification etc. include what can be done and i will verify on a mac”.
+- Implement and verify reachable work on the available platform. Do not acquire/emulate a macOS runner or repeat substitute checks to force Darwin/native acceptance.
+- Deliver the macOS implementation plus a concrete handoff checklist identifying unexecuted platform-specific checks and known limitations. These checks are user-owned, not passed; unavailable macOS execution no longer blocks delivery of the reachable campaign scope. Preserve original criteria as the checklist rather than deleting or falsely satisfying them.
+
+### OBS-014 — lightweight checks and earlier deliverables
+
+- 2026-09-21, user: the goal is solving the issue and having deliverables; small fixes can follow, and slow verification must not delay momentum. Quick checks should cover most work.
+- Supersedes exhaustive verification as an increment-delivery gate. Prioritize working, near-ready fixes; use the compiler plus a narrow real-path smoke or relevant regression, then commit. Do not launch another broad rewrite/review matrix before delivering those increments.
+- Preserve expected product behavior and safety/ownership constraints. Known data-loss, unauthorized-action and broken-main-path defects remain blockers for their affected path; minor findings and unexecuted exhaustive scenarios are explicit follow-ups, not reasons to hold unrelated working changes.
+- Report exactly what was exercised. Do not call deferred browser/native/performance matrices passed or use a compile-only result as UI proof. Keep all task identities and the macOS user handoff.

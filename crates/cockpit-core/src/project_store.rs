@@ -14,6 +14,10 @@ use uuid::Uuid;
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use nix::fcntl::{RenameFlags, renameat2};
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+use rustix::fs::{Mode, OFlags, fsync, openat};
+#[cfg(target_os = "macos")]
+use rustix::fs::{RenameFlags, fcntl_fullfsync, renameat_with};
 
 use crate::InspectionError;
 
@@ -355,6 +359,23 @@ impl ProjectStore {
             .map(|file| file.map(|file| ExecutionLease { _file: file }))
     }
 
+    /// Check publication support and validate the companion parent before any
+    /// Herdr resource is created. The final no-replace operation remains
+    /// authoritative if the parent or destination changes after this check.
+    pub fn preflight_companion_publication(
+        &self,
+        companion_root: impl AsRef<Path>,
+    ) -> Result<(), InspectionError> {
+        if !companion_publication_supported() {
+            return Err(InspectionError::new(
+                "companion_publish_unsupported",
+                "atomic no-replace companion publication is unsupported on this platform",
+            ));
+        }
+        let _ = prepare_root(companion_root.as_ref(), "companion")?;
+        Ok(())
+    }
+
     pub fn write_companion(
         &self,
         companion_root: impl AsRef<Path>,
@@ -368,11 +389,12 @@ impl ProjectStore {
                 "companion ownership must be cockpit",
             ));
         }
+        self.preflight_companion_publication(companion_root.as_ref())?;
 
         let (root_path, root) = prepare_root(companion_root.as_ref(), "companion")?;
         let id = manifest.cockpit_operation_id.as_str();
         let (temporary_name, temporary_dir) = create_companion_staging_dir(&root)?;
-        if let Err(error) = atomic_write_json(&temporary_dir, "manifest.json", manifest) {
+        if let Err(error) = write_staged_manifest(&temporary_dir, manifest) {
             let _ = temporary_dir.remove_open_dir_all();
             return Err(if error.kind() == io::ErrorKind::InvalidInput {
                 InspectionError::new(
@@ -383,9 +405,16 @@ impl ProjectStore {
                 map_io(error, "companion_manifest")
             });
         }
+        if let Err(error) = verify_staging_dir(&root, &temporary_name, &temporary_dir) {
+            let _ = temporary_dir.remove_open_dir_all();
+            return Err(if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new("unsafe_path", "companion staging path was replaced")
+            } else {
+                map_io(error, "companion_stage")
+            });
+        }
 
-        let publish_result = publish_companion_no_replace(&root, &temporary_name, id);
-        if let Err(error) = publish_result {
+        if let Err(error) = publish_companion_no_replace(&root, &temporary_name, id) {
             let _ = temporary_dir.remove_open_dir_all();
             if error.kind() == io::ErrorKind::AlreadyExists {
                 return Err(InspectionError::new(
@@ -395,8 +424,86 @@ impl ProjectStore {
             }
             return Err(map_io(error, "companion_publish"));
         }
+        if let Err(error) = sync_directory(&root) {
+            drop(temporary_dir);
+            return Err(map_io(error, "companion_publish"));
+        }
         drop(temporary_dir);
         Ok(root_path.join(id))
+    }
+
+    /// Reconcile a publication whose no-replace rename may have succeeded
+    /// before the caller persisted its acknowledgement. This only succeeds
+    /// after revalidating the exact operation manifest and syncing the
+    /// published child and its parent through descriptor-bound handles.
+    pub(crate) fn sync_companion_publication(
+        &self,
+        companion_root: impl AsRef<Path>,
+        expected: &CompanionManifest,
+    ) -> Result<(), InspectionError> {
+        validate_operation_id(&expected.cockpit_operation_id)?;
+        validate_resource_id(&expected.herdr_workspace_id, "workspace")?;
+        if expected.ownership != "cockpit" {
+            return Err(InspectionError::new(
+                "invalid_ownership",
+                "companion ownership must be cockpit",
+            ));
+        }
+        if !companion_publication_supported() {
+            return Err(InspectionError::new(
+                "companion_publish_unsupported",
+                "companion durability is unsupported on this platform",
+            ));
+        }
+        let absolute = absolute_root(companion_root.as_ref()).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new("unsafe_path", "unsafe companion root path")
+            } else {
+                map_io(error, "companion_recovery")
+            }
+        })?;
+        let root = open_dir_nofollow_absolute(&absolute).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput
+                || error.kind() == io::ErrorKind::NotFound
+            {
+                InspectionError::new("unsafe_path", "companion root is not a real directory")
+            } else {
+                map_io(error, "companion_recovery")
+            }
+        })?;
+        let id = expected.cockpit_operation_id.as_str();
+        let child = root.open_dir_nofollow(id).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                InspectionError::new("companion_missing", "published companion is missing")
+            } else {
+                map_io(error, "companion_recovery")
+            }
+        })?;
+        verify_staging_dir(&root, id, &child).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new("unsafe_path", "published companion path was replaced")
+            } else {
+                map_io(error, "companion_recovery")
+            }
+        })?;
+        let (manifest_file, actual) = open_companion_manifest_for_sync(&child)?;
+        if actual != *expected {
+            return Err(InspectionError::new(
+                "association_conflict",
+                "published companion manifest does not match the operation",
+            ));
+        }
+        sync_file(&manifest_file).map_err(|error| map_io(error, "companion_recovery"))?;
+        sync_directory(&child).map_err(|error| map_io(error, "companion_recovery"))?;
+        verify_staging_dir(&root, id, &child).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidInput {
+                InspectionError::new("unsafe_path", "published companion path was replaced")
+            } else {
+                map_io(error, "companion_recovery")
+            }
+        })?;
+        sync_directory(&root).map_err(|error| map_io(error, "companion_recovery"))?;
+        Ok(())
     }
 
     pub fn read_companion(
@@ -883,6 +990,10 @@ fn create_companion_staging_dir(root: &Dir) -> Result<(String, Dir), InspectionE
                         return Err(map_io(error, "companion_stage"));
                     }
                 };
+                if let Err(error) = sync_directory(root) {
+                    let _ = dir.remove_open_dir_all();
+                    return Err(map_io(error, "companion_stage"));
+                }
                 return Ok((name, dir));
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -892,6 +1003,155 @@ fn create_companion_staging_dir(root: &Dir) -> Result<(String, Dir), InspectionE
     Err(InspectionError::new(
         "companion_stage",
         "could not allocate a unique staging directory",
+    ))
+}
+
+fn write_staged_manifest(dir: &Dir, manifest: &CompanionManifest) -> io::Result<()> {
+    let name = "manifest.json";
+    match dir.symlink_metadata(name) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "staged manifest destination already exists",
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let tmp = format!(".manifest-{}.tmp", Uuid::new_v4());
+    let bytes = serde_json::to_vec_pretty(manifest)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(cap_fs_ext::FollowSymlinks::No);
+    let mut file = dir.open_with(&tmp, &options)?;
+    file.write_all(&bytes)?;
+    sync_file(&file)?;
+    dir.rename(&tmp, dir, name)?;
+    sync_directory(dir)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_staging_dir(root: &Dir, name: &str, expected: &Dir) -> io::Result<()> {
+    use cap_std::fs::MetadataExt;
+
+    let actual = root.open_dir_nofollow(name)?;
+    let actual_metadata = actual.dir_metadata()?;
+    let expected_metadata = expected.dir_metadata()?;
+    if actual_metadata.dev() != expected_metadata.dev()
+        || actual_metadata.ino() != expected_metadata.ino()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "staging directory was replaced",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_staging_dir(_root: &Dir, _name: &str, _expected: &Dir) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-bound staging verification is unsupported",
+    ))
+}
+
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+fn sync_directory(dir: &Dir) -> io::Result<()> {
+    let fd = openat(
+        dir,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(io::Error::from)?;
+    #[cfg(target_os = "macos")]
+    {
+        fcntl_fullfsync(&fd).map_err(io::Error::from)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        fsync(&fd).map_err(io::Error::from)
+    }
+}
+
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
+fn sync_directory(_dir: &Dir) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "companion durability is unsupported on this platform",
+    ))
+}
+
+fn sync_file(file: &cap_std::fs::File) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        return fcntl_fullfsync(file).map_err(io::Error::from);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        file.sync_all()
+    }
+}
+
+fn open_companion_manifest_for_sync(
+    dir: &Dir,
+) -> Result<(cap_std::fs::File, CompanionManifest), InspectionError> {
+    let metadata = dir.symlink_metadata("manifest.json").map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            InspectionError::new("companion_missing", "companion manifest does not exist")
+        } else {
+            map_io(error, "companion_recovery")
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES
+    {
+        return Err(InspectionError::new(
+            "unsafe_path",
+            "companion manifest is not a bounded regular file",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .follow(cap_fs_ext::FollowSymlinks::No)
+        .nonblock(true);
+    let mut file = dir
+        .open_with("manifest.json", &options)
+        .map_err(|error| map_io(error, "companion_recovery"))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| map_io(error, "companion_recovery"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() > MAX_RECORD_BYTES {
+        return Err(InspectionError::new(
+            "unsafe_path",
+            "opened companion manifest is not a bounded regular file",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    (&mut file)
+        .take(MAX_RECORD_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| map_io(error, "companion_recovery"))?;
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(InspectionError::new(
+            "unsafe_path",
+            "companion manifest exceeded its bounded size while reading",
+        ));
+    }
+    let manifest = serde_json::from_slice(&bytes)
+        .map_err(|error| InspectionError::new("association_conflict", error.to_string()))?;
+    Ok((file, manifest))
+}
+
+fn companion_publication_supported() -> bool {
+    cfg!(any(
+        all(target_os = "linux", target_env = "gnu"),
+        target_os = "macos"
     ))
 }
 
@@ -911,7 +1171,23 @@ fn publish_companion_no_replace(
     .map_err(|error| io::Error::from_raw_os_error(error as i32))
 }
 
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+#[cfg(target_os = "macos")]
+fn publish_companion_no_replace(
+    root: &Dir,
+    temporary_name: &str,
+    operation_id: &str,
+) -> io::Result<()> {
+    renameat_with(
+        root,
+        temporary_name,
+        root,
+        operation_id,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from)
+}
+
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
 fn publish_companion_no_replace(
     _root: &Dir,
     _temporary_name: &str,
@@ -919,7 +1195,7 @@ fn publish_companion_no_replace(
 ) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "atomic no-replace companion publication is supported only on GNU/Linux",
+        "atomic no-replace companion publication is unsupported on this platform",
     ))
 }
 
@@ -1322,6 +1598,32 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    #[test]
+    fn companion_preflight_checks_capability_before_final_creation() {
+        let state = temp_root("companion-preflight-state");
+        let companions = temp_root("companion-preflight-companions").join("nested");
+        let id = Uuid::new_v4().to_string();
+        let store = ProjectStore::new(&state).expect("store");
+        let result = store.preflight_companion_publication(&companions);
+        if companion_publication_supported() {
+            result.expect("supported publication");
+            assert!(companions.is_dir());
+            assert!(!companions.join(id).exists());
+        } else {
+            let error = result.expect_err("unsupported publication");
+            assert_eq!(error.code, "companion_publish_unsupported");
+            assert!(!companions.exists());
+        }
+        fs::remove_dir_all(state).expect("cleanup state");
+        let parent = companions
+            .parent()
+            .expect("companion preflight parent")
+            .to_path_buf();
+        if parent.exists() {
+            fs::remove_dir_all(parent).expect("cleanup companions");
+        }
+    }
+
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn foreign_empty_companion_destination_is_preserved_and_retry_publishes() {
@@ -1353,6 +1655,32 @@ mod tests {
                 .expect("read manifest"),
             manifest(&id)
         );
+        fs::remove_dir_all(state).expect("cleanup state");
+        fs::remove_dir_all(companions).expect("cleanup companions");
+    }
+
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+    #[test]
+    fn publication_recovery_requires_exact_manifest_before_acknowledgement() {
+        let state = temp_root("publication-recovery-state");
+        let companions = temp_root("publication-recovery-companions");
+        let store = ProjectStore::new(&state).expect("store");
+        let id = Uuid::new_v4().to_string();
+        let expected = manifest(&id);
+        store
+            .write_companion(&companions, &expected)
+            .expect("publish companion");
+        store
+            .sync_companion_publication(&companions, &expected)
+            .expect("sync published companion");
+
+        let mut mismatch = expected.clone();
+        mismatch.updated_at = "2".to_owned();
+        let error = store
+            .sync_companion_publication(&companions, &mismatch)
+            .expect_err("mismatched recovery must fail");
+        assert_eq!(error.code, "association_conflict");
+
         fs::remove_dir_all(state).expect("cleanup state");
         fs::remove_dir_all(companions).expect("cleanup companions");
     }

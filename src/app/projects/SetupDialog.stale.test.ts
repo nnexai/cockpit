@@ -161,7 +161,7 @@ describe("SetupDialog", () => {
     expect(document.activeElement).toBe(branch);
     expect(branch.value).toBe("retain-focus");
   });
-  it("selects a repository through subsequence search and submits its ID", async () => {
+  it("selects a repository through subsequence search and requires explicit approval", async () => {
     const planWorkspace = vi.fn(async () => createPlan());
     const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
     await renderDialog({ ...client, planWorkspace, startWorkspace });
@@ -170,9 +170,12 @@ describe("SetupDialog", () => {
     await act(async () => { repositoryInput.focus(); writeInput(repositoryInput, "rps"); });
     expect([...container!.querySelectorAll(".setup-repository mark")].map((mark) => mark.textContent).join("")).toBe("Rps");
     await act(async () => { repositoryInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-    const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
-    await act(async () => { submit.click(); await Promise.resolve(); });
+    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
+    await act(async () => { review.click(); await Promise.resolve(); });
     expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "repository" }));
+    expect(startWorkspace).not.toHaveBeenCalled();
+    const approve = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Start setup")!;
+    await act(async () => { approve.click(); await Promise.resolve(); });
     expect(startWorkspace).toHaveBeenCalledTimes(1);
   });
   it("opens repository matches as a focused overlay without adding form height", async () => {
@@ -211,11 +214,8 @@ describe("SetupDialog", () => {
       await settle();
       const input = container!.querySelector<HTMLInputElement>("#setup-repository")!;
       act(() => input.focus());
-      expect(container!.querySelector<HTMLElement>("[data-setup-repository-result-index='1']")?.classList).toContain("is-active");
-      expect(input.getAttribute("aria-activedescendant")).toBe("setup-repository-result-1");
-      await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
-      const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
-      await act(async () => { submit.click(); await Promise.resolve(); });
+      const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
+      await act(async () => { review.click(); await Promise.resolve(); });
       expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "nested" }));
     } finally {
       vi.useRealTimers();
@@ -262,15 +262,14 @@ describe("SetupDialog", () => {
     expect(container!.querySelector("#setup-repository")).toBeNull();
     expect(container!.querySelector("#setup-artifact-url")).toBeNull();
     expect(container!.querySelector("#setup-branch")).toBeNull();
-
     const path = container!.querySelector<HTMLInputElement>("#setup-checkout")!;
     writeInput(path, "/tmp/borrowed");
     await settle();
-    const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Open Space")!;
-    await act(async () => { submit.click(); await Promise.resolve(); });
+    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
+    await act(async () => { review.click(); await Promise.resolve(); });
     expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ operation: "open", path: "/tmp/borrowed" }));
+    expect(startWorkspace).not.toHaveBeenCalled();
   });
-
   it("does not reuse an opened directory as a worktree destination", async () => {
     const planWorkspace = vi.fn(async () => createPlan());
     const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
@@ -290,8 +289,8 @@ describe("SetupDialog", () => {
 
     act(() => buttons().find((button) => button.textContent?.includes("New worktree"))?.click());
     await settle();
-    const submit = buttons().find((button) => button.textContent === "Create Space")!;
-    await act(async () => { submit.click(); await Promise.resolve(); });
+    const review = buttons().find((button) => button.textContent === "Review setup")!;
+    await act(async () => { review.click(); await Promise.resolve(); });
     expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ operation: "create", checkout_path: null }));
   });
 
@@ -302,12 +301,45 @@ describe("SetupDialog", () => {
     const dialogClient: SetupClient = { ...client, planWorkspace, startWorkspace };
     await renderDialog(dialogClient);
 
-    const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
-    act(() => submit.click());
+    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
+    act(() => review.click());
     writeInput(container!.querySelector<HTMLInputElement>("#setup-branch")!, "new-task");
     await act(async () => { planned.resolve(createPlan()); await Promise.resolve(); });
     expect(startWorkspace).not.toHaveBeenCalled();
   });
+  it("invalidates the reviewed plan when an input changes before approval", async () => {
+    const planWorkspace = vi.fn(async () => createPlan());
+    const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace });
+
+    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
+    await act(async () => { review.click(); await Promise.resolve(); });
+    expect(container!.textContent).toContain("Reviewed setup effects");
+    await act(async () => { writeInput(container!.querySelector<HTMLInputElement>("#setup-branch")!, "deliberate-edit"); });
+    expect(container!.textContent).not.toContain("Reviewed setup effects");
+    expect(startWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("returns a rejected approval to editable review using the backend operation code", async () => {
+    const failure = Object.assign(new Error("The reviewed endpoint changed"), {
+      code: "http_error", operationCode: "stale_plan",
+    });
+    const planWorkspace = vi.fn(async () => createPlan());
+    const startWorkspace = vi.fn(async () => { throw failure; });
+    await renderDialog({ ...client, planWorkspace, startWorkspace });
+    const button = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent === label)!;
+    await act(async () => { button("Review setup").click(); await Promise.resolve(); });
+    await act(async () => { button("Start setup").click(); await Promise.resolve(); });
+    await settle();
+
+    expect(container!.querySelector<HTMLInputElement>("#setup-branch")?.disabled).toBe(false);
+    expect(container!.querySelector("[role='alert']")?.textContent).toContain(failure.message);
+    expect(button("Review setup").disabled).toBe(false);
+    await act(async () => { button("Review setup").click(); await Promise.resolve(); });
+    expect(button("Start setup").disabled).toBe(false);
+    expect(startWorkspace).toHaveBeenCalledTimes(1);
+  });
+
 
   it("retains a failed start receipt across close and reopens it for inspection", async () => {
     const plan = createPlan();
@@ -325,8 +357,10 @@ describe("SetupDialog", () => {
     });
     await settle();
 
-    const submit = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create Space")!;
-    await act(async () => { submit.click(); await Promise.resolve(); });
+    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
+    await act(async () => { review.click(); await Promise.resolve(); });
+    const approve = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Start setup")!;
+    await act(async () => { approve.click(); await Promise.resolve(); });
     await settle();
     expect(planWorkspace).toHaveBeenCalledTimes(1);
     expect(container!.querySelector<HTMLInputElement>("#setup-branch")?.disabled).toBe(true);

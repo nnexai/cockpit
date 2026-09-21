@@ -18,12 +18,13 @@ impl ProjectService {
         if let Some(repository_id) = request.repository_id.as_deref() {
             super::validate_text(repository_id, "repository_id", 256)?;
         }
-        let artifact = repositories::resolve_artifact(&self.configuration, &request.artifact_url)?;
-        let catalog = RepositoryCatalog::new(self.configuration.clone())
-            .list()
-            .await?;
+        let mut artifact =
+            repositories::resolve_artifact(&self.configuration, &request.artifact_url)?;
+        let catalog = RepositoryCatalog::new(self.configuration.clone());
+        let repository_list = catalog.list().await?;
         let repositories =
-            matching_repositories(&self.configuration, &artifact, catalog.repositories).await;
+            matching_repositories(&self.configuration, &artifact, repository_list.repositories)
+                .await;
         let selected = select_repository(&repositories, request.repository_id.as_deref())?;
 
         let Some(repository) = selected else {
@@ -55,6 +56,9 @@ impl ProjectService {
                 authority,
             })
             .await?;
+        if let Some(source_url) = metadata.source_url.clone() {
+            artifact.canonical_url = source_url;
+        }
         let branch = match artifact.kind.as_str() {
             "issue" => super::expand_template(
                 &self.configuration.branch_template,
@@ -75,6 +79,7 @@ impl ProjectService {
                 ));
             }
         };
+        catalog.validate_branch(&repository, &branch).await?;
 
         Ok(WorkspaceDefaults {
             artifact,

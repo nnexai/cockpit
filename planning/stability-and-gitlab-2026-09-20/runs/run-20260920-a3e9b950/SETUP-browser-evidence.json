@@ -1,0 +1,69 @@
+{
+  "smoke": "SETUP-01/02 explicit local setup gateway",
+  "page": "http://127.0.0.1:37619/",
+  "browser_session": "glab03-smoke-20260921",
+  "herdr_session": "csg-a3e9b950",
+  "review": {
+    "operation": "Create Space",
+    "review_identity": "74b12ce7-c098-4138-b969-c7465f35f196",
+    "generation": 1,
+    "repository": "/tmp/csg-a3e9b950/repositories/gitlab",
+    "branch_base": "cockpit/gitlab/task",
+    "label": "glab03-smoke-20260921",
+    "checkout": "/tmp/csg-a3e9b950/worktrees/gitlab-74b12ce7-c098-4138-b969-c7465f35f196",
+    "companion": "/tmp/csg-a3e9b950/companions/74b12ce7-c098-4138-b969-c7465f35f196",
+    "effects": [
+      "Create configured Herdr worktree",
+      "Associate Cockpit companion",
+      "Create a new context-aware terminal",
+      "Run configured repository actions automatically"
+    ],
+    "inspect_did_not_create_resources": "Before Start setup, Spaces count remained 1 and no new workspace/tab appeared; only review identity/effects were rendered."
+  },
+  "start_result": {
+    "status": "completed",
+    "status_text": "Space and terminal are ready.",
+    "spaces_seen": [
+      "gitlab",
+      "glab03-smoke-20260921"
+    ],
+    "selected_tab": "glab03-smoke-20260921 context",
+    "terminal": "w3:p3",
+    "retained_resources": [
+      "/tmp/csg-a3e9b950/worktrees/gitlab-74b12ce7-c098-4138-b969-c7465f35f196",
+      "/tmp/csg-a3e9b950/companions/74b12ce7-c098-4138-b969-c7465f35f196"
+    ]
+  },
+  "screenshots": {
+    "review": "SETUP-review.png",
+    "result": "SETUP-result.png"
+  },
+  "authoritative_receipt": {
+    "operation_id": "74b12ce7-c098-4138-b969-c7465f35f196",
+    "generation": 11,
+    "sequence": 10,
+    "state": "completed",
+    "workspace_id": "w3",
+    "tab_id": "w3:t2",
+    "pane_id": "w3:p3",
+    "companion_id": "74b12ce7-c098-4138-b969-c7465f35f196",
+    "owned_resources": [
+      {
+        "kind": "worktree",
+        "path": "/tmp/csg-a3e9b950/worktrees/gitlab-74b12ce7-c098-4138-b969-c7465f35f196",
+        "created_by_operation": true
+      },
+      {
+        "kind": "companion",
+        "path": "/tmp/csg-a3e9b950/companions/74b12ce7-c098-4138-b969-c7465f35f196",
+        "created_by_operation": true
+      }
+    ],
+    "error": null
+  },
+  "retained_for": [
+    "GitLab source-resource UI check",
+    "Main-owned campaign cleanup"
+  ],
+  "verification_scope": "One browser gateway path and authoritative completed receipt; not native or exhaustive recovery acceptance"
+}

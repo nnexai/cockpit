@@ -86,6 +86,19 @@ function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
   return fallback;
 }
+function errorCode(error: unknown): string | null {
+  if (typeof error === "object" && error !== null && "operationCode" in error && typeof error.operationCode === "string") return error.operationCode;
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
+  return null;
+}
+
+function requiresPlanReview(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "stale_plan"
+    || code === "stale_identity"
+    || code === "repository_identity_stale"
+    || code?.startsWith("source_") === true;
+}
 
 function modeLabel(mode: WorkspaceSetupMode): string {
   return mode === "create" ? "Create Space" : "Open Space";
@@ -273,16 +286,18 @@ function DiagnosticList({ diagnostics }: { diagnostics: Array<{ code: string; me
 }
 
 function PlanDetails({ plan }: { plan: WorkspaceSetupPlan }) {
-  return <details className="setup-disclosure">
-    <summary>Operation details</summary>
+  return <details open className="setup-disclosure">
+    <summary>Reviewed setup effects</summary>
     <div className="setup-plan-summary">
       <div className="setup-summary-row"><span>Operation</span><strong>{modeLabel(plan.mode)}</strong></div>
+      <div className="setup-summary-row"><span>Review identity</span><code>{plan.operation_id} · generation {plan.generation}</code></div>
       <div className="setup-summary-row"><span>Ownership</span><span>{plan.ownership.replaceAll("_", " ")}</span></div>
+      {plan.artifact ? <div className="setup-summary-row"><span>Source</span><span>{plan.artifact.provider_id} · {plan.artifact.kind} · {plan.artifact.canonical_id}<code>{plan.artifact.canonical_url}</code></span></div> : null}
+      {plan.repository ? <div className="setup-summary-row"><span>Repository</span><code>{plan.repository.root}</code></div> : null}
+      <div className="setup-summary-row"><span>Branch / base</span><code>{plan.branch ?? "none"}{plan.base ? ` ← ${plan.base}` : ""}</code></div>
+      <div className="setup-summary-row"><span>Label</span><span>{plan.label}</span></div>
       <div className="setup-summary-row"><span>Checkout</span><code>{plan.checkout_path}</code></div>
       <div className="setup-summary-row"><span>Companion</span><code>{plan.companion_path}</code></div>
-      {plan.repository ? <div className="setup-summary-row"><span>Repository</span><code>{plan.repository.root}</code></div> : null}
-      {plan.branch ? <div className="setup-summary-row"><span>Branch</span><code>{plan.branch}{plan.base ? ` ← ${plan.base}` : ""}</code></div> : null}
-      {plan.artifact ? <div className="setup-summary-row"><span>Source</span><span>{plan.artifact.kind} · {plan.artifact.canonical_id}</span></div> : null}
       <div className="setup-effects"><strong>Effects</strong><ul>{plan.effects.map((effect, index) => <li key={`${effect}-${index}`}>{effect}</li>)}</ul></div>
       {plan.warnings.length > 0 ? <div className="setup-warnings"><strong>Warnings</strong><ul>{plan.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}
     </div>
@@ -561,38 +576,23 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     setPlanState({ plan: null, error: null, pending: true });
     setOperationError(null);
     try {
-      const plan = await client.planWorkspace(sessionId, makeRequest(form));
+      const request = makeRequest(form);
+      const plan = await client.planWorkspace(sessionId, request);
       if (token !== planRequestToken.current || dispatchRef.current) return;
-      if (plan.session_id !== sessionId || plan.mode !== form.mode || (form.mode === "create" && plan.repository?.repository_id !== form.repositoryId)) {
-        setPlanState({ plan: null, error: "The setup plan did not match the current form. Check the fields and try again.", pending: false });
+      const requestArtifactUrl = request.operation === "create" ? request.artifact_url : null;
+      const planArtifactUrl = plan.artifact?.original_url ?? null;
+      if (plan.session_id !== sessionId
+        || plan.mode !== form.mode
+        || (form.mode === "create" && plan.repository?.repository_id !== form.repositoryId)
+        || (form.mode === "open" && plan.checkout_path !== form.openPath.trim())
+        || planArtifactUrl !== requestArtifactUrl) {
+        setPlanState({ plan: null, error: "The setup plan did not match the current form. Check the fields and review it again.", pending: false });
         return;
       }
-      dispatchRef.current = true;
       setPlanState({ plan, error: null, pending: false });
-      setActionPending(true);
-      try {
-        const next = await client.startWorkspace(sessionId, { operation_id: plan.operation_id, expected_generation: plan.generation });
-        if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
-          setOperationError("The workspace operation response did not match the retained setup receipt.");
-          return;
-        }
-        acceptOperation(next);
-      } catch (error: unknown) {
-        setOperationError(errorMessage(error, "Start request outcome is unknown. Cockpit retained the operation receipt and is checking its status."));
-        try {
-          const next = await client.workspaceOperation(sessionId, plan.operation_id);
-          if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
-            setOperationError("Start request outcome is unknown. The returned operation did not match the retained receipt.");
-            return;
-          }
-          acceptOperation(next);
-        } catch (inspectionError: unknown) {
-          setOperationError(`${errorMessage(error, "Start request outcome is unknown.")} ${errorMessage(inspectionError, "The operation receipt is retained. Use Check operation before any further action.")}`);
-        }
-      }
     } catch (error: unknown) {
       if (token !== planRequestToken.current || dispatchRef.current) return;
-      const message = errorMessage(error, "Could not set up this workspace.");
+      const message = errorMessage(error, "Could not prepare this workspace.");
       if (form.mode === "open") {
         setPathError(message);
         setPlanState((current) => ({ ...current, pending: false }));
@@ -602,7 +602,43 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     } finally {
       setActionPending(false);
     }
-  }, [acceptOperation, actionPending, client, form, planState.pending, sessionId]);
+  }, [actionPending, client, form, planState.pending, sessionId]);
+
+  const approve = useCallback(async () => {
+    const plan = planState.plan;
+    if (!plan || actionPending || dispatchRef.current) return;
+    dispatchRef.current = true;
+    setActionPending(true);
+    setOperationError(null);
+    try {
+      const next = await client.startWorkspace(sessionId, { operation_id: plan.operation_id, expected_generation: plan.generation });
+      if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
+        setOperationError("The workspace operation response did not match the retained setup receipt.");
+        return;
+      }
+      acceptOperation(next);
+    } catch (error: unknown) {
+      if (requiresPlanReview(error)) {
+        dispatchRef.current = false;
+        setPlanState({ plan: null, error: `${errorMessage(error, "The reviewed setup changed before it could start.")} Review the fresh authoritative plan before approving again.`, pending: false });
+        setOperationError(null);
+        return;
+      }
+      setOperationError(errorMessage(error, "Start request outcome is unknown. Cockpit retained the operation receipt and is checking its status."));
+      try {
+        const next = await client.workspaceOperation(sessionId, plan.operation_id);
+        if (next.operation_id !== plan.operation_id || next.generation < plan.generation) {
+          setOperationError("Start request outcome is unknown. The returned operation did not match the retained receipt.");
+          return;
+        }
+        acceptOperation(next);
+      } catch (inspectionError: unknown) {
+        setOperationError(`${errorMessage(error, "Start request outcome is unknown.")} ${errorMessage(inspectionError, "The operation receipt is retained. Use Check operation before any further action.")}`);
+      }
+    } finally {
+      setActionPending(false);
+    }
+  }, [acceptOperation, actionPending, client, planState.plan, sessionId]);
 
   const pollOperation = useCallback(async (operationId: string, generation: number) => {
     const token = ++pollToken.current;
@@ -702,8 +738,8 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
         {planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}
         {planState.plan ? <PlanDetails plan={planState.plan} /> : null}
         {operation ? <Progress operation={operation} readError={operationReadError} busy={actionPending} onCancel={cancel} onResume={resume} onReview={reconcile} /> : null}
-        {!operation && planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Close</button><button type="button" className="setup-primary" onClick={() => void inspectReceipt()} disabled={actionPending}>{actionPending ? "Checking…" : "Check operation"}</button></div> : null}
-        {!operation && !planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Cancel</button><button type="button" className="setup-primary" disabled={planState.pending || actionPending || (form.mode === "create" && (!form.repositoryId || loadState !== "ready"))} onClick={() => void submit()}>{planState.pending || actionPending ? "Preparing…" : modeLabel(form.mode)}</button></div> : null}
+        {!operation && planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Close</button><button type="button" className="setup-primary" onClick={() => void (dispatchRef.current ? inspectReceipt() : approve())} disabled={actionPending}>{actionPending ? (dispatchRef.current ? "Checking…" : "Starting…") : (dispatchRef.current ? "Check operation" : "Start setup")}</button></div> : null}
+        {!operation && !planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Cancel</button><button type="button" className="setup-primary" disabled={planState.pending || actionPending || (form.mode === "create" && (!form.repositoryId || loadState !== "ready"))} onClick={() => void submit()}>{planState.pending || actionPending ? "Preparing review…" : "Review setup"}</button></div> : null}
         {operationError ? <p className="setup-error" role="alert">{operationError}</p> : null}
       </section></main>
     </section>
