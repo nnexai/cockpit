@@ -1,0 +1,22 @@
+{
+  "scope": "Actual GitlabSourceProvider fetch and metadata calls through installed glab; GET-only; no browser/setup acceptance claimed",
+  "fixture_ledger": "gitlab-fixtures.json",
+  "issue": {
+    "body_has_marker": true,
+    "complete": true,
+    "diagnostics": [],
+    "id": "nnex.ai/integration#2"
+  },
+  "merge_request": {
+    "body_has_marker": true,
+    "complete": true,
+    "diagnostics": [],
+    "discussion_marker": true,
+    "id": "nnex.ai/integration!1",
+    "source_branch": "cockpit-fixture/csg-a3e9b950-20260921",
+    "source_commit": "8493e6e72e56df62006b084eb211f2f5156390e0"
+  },
+  "temporary_probe": "Temporary cockpit-providers Rust example removed after the successful run",
+  "remote_changes": false,
+  "credentials": "CLI-owned; no token read, copy, injection or export"
+}

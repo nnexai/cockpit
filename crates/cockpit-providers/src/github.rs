@@ -359,6 +359,8 @@ impl SourceProvider for GithubSourceProvider {
         Ok(SourceMetadata {
             title: issue.title,
             source_branch: None,
+            source_url: None,
+            source_commit: None,
         })
     }
 
@@ -418,7 +420,10 @@ impl SourceProvider for GithubSourceProvider {
             },
             title: issue.title,
             source_url: Some(request.artifact_url.clone()),
+            original_url: None,
             source_revision: issue.updated_at,
+            complete: true,
+            diagnostics: Vec::new(),
             body,
         }])
     }
@@ -549,7 +554,10 @@ Link: <https://api.github.com/repos/nnexai/cockpit/issues/4/comments?page=2>; re
             comments.comments[0].created_at.as_deref(),
             Some("2026-09-09T10:00:00Z")
         );
-        assert_eq!(comments.comments[0].html_url.as_deref(), Some("https://github.com/nnexai/cockpit/issues/4#issuecomment-17"));
+        assert_eq!(
+            comments.comments[0].html_url.as_deref(),
+            Some("https://github.com/nnexai/cockpit/issues/4#issuecomment-17")
+        );
         assert_eq!(
             ensure_comment_continuation(MAX_COMMENT_PAGES)
                 .unwrap_err()
@@ -591,5 +599,4 @@ Link: <https://api.github.com/repos/nnexai/cockpit/issues/4/comments?page=2>; re
                 .unwrap_err();
         assert_eq!(error.code, "source_provider_invalid");
     }
-
 }

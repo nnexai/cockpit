@@ -54,8 +54,13 @@ pub struct SourceRef {
 pub struct SourceAsset {
     pub source: SourceRef,
     pub title: String,
+    /// API-verified canonical URL, when the provider returned one.
     pub source_url: Option<String>,
+    /// URL supplied by the user, retained as provenance without becoming identity.
+    pub original_url: Option<String>,
     pub source_revision: Option<String>,
+    pub complete: bool,
+    pub diagnostics: Vec<ProjectDiagnostic>,
     pub body: String,
 }
 
@@ -84,6 +89,8 @@ pub struct SourceFetchRequest {
 pub struct SourceMetadata {
     pub title: String,
     pub source_branch: Option<String>,
+    pub source_url: Option<String>,
+    pub source_commit: Option<String>,
 }
 
 /// Derive source authority from the primary checkout's origin without trusting
@@ -96,7 +103,13 @@ pub(crate) async fn source_authority_for_checkout(
     let mut command = Command::new("git");
     command
         .current_dir(checkout)
-        .args(["-c", "core.hooksPath=/dev/null", "remote", "get-url", "origin"])
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "remote",
+            "get-url",
+            "origin",
+        ])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE");
@@ -270,22 +283,22 @@ fn origin_repository(
                 "primary origin does not match the configured provider base path",
             )
         })?
+        .trim_matches('/')
         .trim_end_matches(".git");
-    let mut parts = remainder.split('/');
-    let owner = parts.next().unwrap_or("");
-    let repository = parts.next().unwrap_or("");
-    if owner.is_empty()
-        || repository.is_empty()
-        || parts.next().is_some()
-        || owner.chars().any(char::is_control)
-        || repository.chars().any(char::is_control)
+    let parts: Vec<&str> = remainder.split('/').collect();
+    if parts.len() < 2
+        || parts.iter().any(|part| {
+            part.is_empty() || *part == "." || *part == ".." || part.chars().any(char::is_control)
+        })
     {
         return Err(InspectionError::new(
             "source_primary_origin_invalid",
-            "origin remote does not identify owner/repository",
+            "origin remote does not identify a namespace and repository",
         ));
     }
-    Ok((owner.to_owned(), repository.to_owned()))
+    let repository = parts.last().expect("at least two parts").to_string();
+    let owner = parts[..parts.len() - 1].join("/");
+    Ok((owner, repository))
 }
 
 #[async_trait]
@@ -306,7 +319,6 @@ pub trait SourceProvider: Send + Sync {
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError>;
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CachedSource {
@@ -314,7 +326,13 @@ struct CachedSource {
     source: SourceRef,
     title: String,
     source_url: Option<String>,
+    #[serde(default)]
+    original_url: Option<String>,
     source_revision: Option<String>,
+    #[serde(default = "default_complete")]
+    complete: bool,
+    #[serde(default)]
+    diagnostics: Vec<ProjectDiagnostic>,
     content_hash: String,
     markdown: String,
     cached_at: String,
@@ -324,6 +342,7 @@ struct CacheOutcome {
     cached: CachedSource,
     freshness: SourceFreshness,
     inconsistency: Option<ProjectDiagnostic>,
+    previous_identity: Option<(Option<String>, String)>,
 }
 
 /// Bounded evidence of an explicitly requested reference hydration. The
@@ -407,7 +426,7 @@ impl SourceService {
     pub async fn validate_artifact(
         &self,
         request: SourceFetchRequest,
-    ) -> Result<(), InspectionError> {
+    ) -> Result<SourceImportResponse, InspectionError> {
         let response = self.fetch_to_companion(request, None).await?;
         if response.entries.is_empty() {
             return Err(InspectionError::new(
@@ -415,7 +434,7 @@ impl SourceService {
                 "source provider returned no primary artifact",
             ));
         }
-        Ok(())
+        Ok(response)
     }
 
     /// Resolve provider metadata without writing the source cache or companion.
@@ -442,23 +461,31 @@ impl SourceService {
                     "source metadata exceeded the configured operation deadline",
                 )
             })??;
+        let valid_commit = metadata.source_commit.as_deref().is_none_or(|commit| {
+            matches!(commit.len(), 40 | 64) && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        });
         if !bounded_text(&metadata.title, 256)
             || metadata
                 .source_branch
                 .as_deref()
                 .is_some_and(|branch| !bounded_text(branch, 256))
+            || metadata
+                .source_url
+                .as_deref()
+                .is_some_and(|url| !bounded_text(url, MAX_URL_BYTES))
+            || !valid_commit
         {
             return Err(InspectionError::new(
                 "source_provider_contract",
-                "source metadata contains invalid title or branch text",
+                "source metadata contains invalid title, branch, URL, or commit text",
             ));
         }
         Ok(metadata)
     }
 
-    /// Reads the bounded current index only. Hash-named immutable records are
-    /// intentionally never selected by directory enumeration.
-    pub fn list_cached(&self) -> Result<Vec<SourceEntry>, InspectionError> {
+    fn list_cached_records(
+        &self,
+    ) -> Result<Vec<(SourceEntry, bool, Vec<ProjectDiagnostic>)>, InspectionError> {
         let _lock = self
             .cache
             .acquire_named_lock(LOCK_NAME, "source_cache_lock")?;
@@ -474,52 +501,60 @@ impl SourceService {
                         "current source pointer mismatches immutable record",
                     ));
                 }
-                Ok(entry_from_cached(
+                let entry = entry_from_cached(
                     &cached,
                     cached_freshness(&cached),
                     SourceMaterializationStatus::Unchanged,
                     None,
-                ))
+                );
+                Ok((entry, cached.complete, cached.diagnostics))
             })
             .collect()
+    }
+
+    /// Reads the bounded current index only. Hash-named immutable records are
+    /// intentionally never selected by directory enumeration.
+    pub fn list_cached(&self) -> Result<Vec<SourceEntry>, InspectionError> {
+        Ok(self
+            .list_cached_records()?
+            .into_iter()
+            .map(|(entry, _, _)| entry)
+            .collect())
     }
 
     pub fn list_for_companion(
         &self,
         root: &Dir,
         companion_id: &str,
-    ) -> Result<Vec<SourceEntry>, InspectionError> {
-        self.list_cached()?
-            .into_iter()
-            .map(|mut entry| {
-                let (freshness, status, path) = source_materialization_state(
-                    root,
-                    companion_id,
-                    &entry.provider_id,
-                    &entry.provider_instance,
-                    &entry.resource_type,
-                    &entry.canonical_id,
-                    &entry.content_hash,
-                )?;
-                entry.freshness = freshness;
-                if entry.source_revision.is_none()
-                    && matches!(
-                        entry.freshness,
-                        SourceFreshness::Fresh | SourceFreshness::Changed
-                    )
-                {
-                    entry.freshness = SourceFreshness::Unknown;
-                }
-                entry.status = status;
-                entry.relative_path = path;
-                Ok(entry)
-            })
-            .filter(|result| {
-                result
-                    .as_ref()
-                    .map_or(true, |entry| entry.relative_path.is_some())
-            })
-            .collect()
+    ) -> Result<(Vec<SourceEntry>, Vec<ProjectDiagnostic>), InspectionError> {
+        let mut entries = Vec::new();
+        let mut diagnostics = Vec::new();
+        for (mut entry, complete, entry_diagnostics) in self.list_cached_records()? {
+            let (freshness, status, path) = source_materialization_state(
+                root,
+                companion_id,
+                &entry.provider_id,
+                &entry.provider_instance,
+                &entry.resource_type,
+                &entry.canonical_id,
+                &entry.content_hash,
+            )?;
+            entry.freshness = freshness;
+            if matches!(
+                entry.freshness,
+                SourceFreshness::Fresh | SourceFreshness::Changed
+            ) && (!complete || entry.source_revision.is_none())
+            {
+                entry.freshness = SourceFreshness::Unknown;
+            }
+            entry.status = status;
+            entry.relative_path = path;
+            if entry.relative_path.is_some() {
+                diagnostics.extend(entry_diagnostics);
+                entries.push(entry);
+            }
+        }
+        Ok((entries, diagnostics))
     }
 
     pub async fn refresh_cached(
@@ -552,7 +587,7 @@ impl SourceService {
                 "cached source has no provider URL",
             )
         })?;
-        self.fetch_to_companion_hydrated(
+        self.fetch_to_companion_hydrated_preserving(
             SourceFetchRequest {
                 provider_id: cached.source.provider_id,
                 artifact_url,
@@ -560,6 +595,7 @@ impl SourceService {
             },
             companion,
             hydrate_references,
+            cached.original_url.as_deref(),
         )
         .await
     }
@@ -600,7 +636,7 @@ impl SourceService {
         request: SourceFetchRequest,
         companion: Option<(&Dir, &str)>,
     ) -> Result<SourceImportResponse, InspectionError> {
-        self.fetch_to_companion_hydrated(request, companion, false)
+        self.fetch_to_companion_hydrated_preserving(request, companion, false, None)
             .await
     }
 
@@ -609,6 +645,17 @@ impl SourceService {
         request: SourceFetchRequest,
         companion: Option<(&Dir, &str)>,
         hydrate_references: bool,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        self.fetch_to_companion_hydrated_preserving(request, companion, hydrate_references, None)
+            .await
+    }
+
+    async fn fetch_to_companion_hydrated_preserving(
+        &self,
+        request: SourceFetchRequest,
+        companion: Option<(&Dir, &str)>,
+        hydrate_references: bool,
+        preserved_original_url: Option<&str>,
     ) -> Result<SourceImportResponse, InspectionError> {
         validate_request(&request)?;
         // One nonblocking durable lease spans fetch, cache selection and
@@ -700,8 +747,16 @@ impl SourceService {
         let mut entries = Vec::with_capacity(assets.len());
         let mut diagnostics = hydration.diagnostics;
         for (index, asset) in assets.into_iter().enumerate() {
+            let mut asset = asset;
+            if index == 0 {
+                if let Some(original_url) = preserved_original_url {
+                    asset.original_url = Some(original_url.to_owned());
+                }
+            }
             validate_provider_asset(&request, &asset)?;
             let artifact_url = asset.source_url.clone();
+            let asset_diagnostics = asset.diagnostics.clone();
+            diagnostics.extend(asset_diagnostics);
             let outcome = match self.cache_asset(asset) {
                 Ok(outcome) => outcome,
                 Err(error) if hydrate_references && index > 0 => {
@@ -717,6 +772,14 @@ impl SourceService {
                 }
                 Err(error) => return Err(error),
             };
+            let provider_freshness = outcome.freshness;
+            let changed_diagnostic = changed_diagnostic(
+                provider_freshness,
+                outcome.previous_identity.as_ref(),
+                &outcome.cached,
+            );
+            let previous_identity = outcome.previous_identity;
+            let inconsistency = outcome.inconsistency;
             let cached = outcome.cached;
             let (freshness, relative_path, status) = match companion {
                 Some((root, companion_id)) => match materialize_source_markdown(
@@ -731,18 +794,17 @@ impl SourceService {
                     cached.markdown.as_bytes(),
                 ) {
                     Ok((path, true)) => (
-                        outcome.freshness,
+                        provider_freshness,
                         Some(path),
                         SourceMaterializationStatus::Materialized,
                     ),
                     Ok((path, false)) => (
-                        outcome.freshness,
+                        provider_freshness,
                         Some(path),
                         SourceMaterializationStatus::Unchanged,
                     ),
-                    Err(error) if error.code == "source_sync_conflict" => (
-                        SourceFreshness::Conflict,
-                        source_materialization_state(
+                    Err(error) if error.code == "source_sync_conflict" => {
+                        let (relative_path, state_error) = match source_materialization_state(
                             root,
                             companion_id,
                             &cached.source.provider_id,
@@ -750,14 +812,34 @@ impl SourceService {
                             &cached.source.resource_type,
                             &cached.source.canonical_id,
                             &cached.content_hash,
-                        )?
-                        .2,
-                        SourceMaterializationStatus::Conflict,
-                    ),
+                        ) {
+                            Ok((_, _, path)) => (path, None),
+                            Err(state_error) => (None, Some(state_error)),
+                        };
+                        diagnostics.push(materialization_diagnostic(
+                            "source_materialization_conflict",
+                            "local generated source was edited; provider content was preserved in the immutable cache",
+                            &cached,
+                            previous_identity.as_ref(),
+                            relative_path.as_deref().or(cached.source_url.as_deref()),
+                        ));
+                        if let Some(state_error) = state_error {
+                            diagnostics.push(materialization_failure_diagnostic(
+                                "source_materialization_state_failed",
+                                state_error,
+                                cached.source_url.as_deref(),
+                            ));
+                        }
+                        (
+                            SourceFreshness::Conflict,
+                            relative_path,
+                            SourceMaterializationStatus::Conflict,
+                        )
+                    }
                     Err(error) if hydrate_references && index > 0 => {
                         diagnostics.push(ProjectDiagnostic {
                             code: "source_hydration_materialization_failed".into(),
-                            message: error.message,
+                            message: truncate_diagnostic_text(&error.message),
                             path: cached.source_url.clone(),
                         });
                         if let Some(report) = &mut hydration_report {
@@ -769,16 +851,46 @@ impl SourceService {
                             SourceMaterializationStatus::Failed,
                         )
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        let relative_path = source_materialization_state(
+                            root,
+                            companion_id,
+                            &cached.source.provider_id,
+                            &cached.source.provider_instance,
+                            &cached.source.resource_type,
+                            &cached.source.canonical_id,
+                            &cached.content_hash,
+                        )
+                        .ok()
+                        .and_then(|(_, _, path)| path);
+                        diagnostics.push(materialization_failure_diagnostic(
+                            "source_materialization_failed",
+                            error,
+                            cached.source_url.as_deref(),
+                        ));
+                        if hydrate_references {
+                            if let Some(report) = &mut hydration_report {
+                                report.failed += 1;
+                            }
+                        }
+                        (
+                            SourceFreshness::Unavailable,
+                            relative_path,
+                            SourceMaterializationStatus::Failed,
+                        )
+                    }
                 },
                 None => (
-                    outcome.freshness,
+                    provider_freshness,
                     None,
                     SourceMaterializationStatus::Materialized,
                 ),
             };
             entries.push(entry_from_cached(&cached, freshness, status, relative_path));
-            if let Some(diagnostic) = outcome.inconsistency {
+            if let Some(diagnostic) = inconsistency {
+                diagnostics.push(diagnostic);
+            }
+            if let Some(diagnostic) = changed_diagnostic {
                 diagnostics.push(diagnostic);
             }
         }
@@ -826,7 +938,10 @@ impl SourceService {
             source: asset.source,
             title: asset.title,
             source_url: asset.source_url,
+            original_url: asset.original_url,
             source_revision: asset.source_revision,
+            complete: asset.complete,
+            diagnostics: asset.diagnostics,
             content_hash: content_hash.clone(),
             markdown,
             cached_at: timestamp(),
@@ -903,17 +1018,33 @@ impl SourceService {
             }
         }
         let freshness = freshness(previous.as_ref(), &result);
+        let previous_identity = previous.as_ref().map(|previous| {
+            (
+                previous.source_revision.clone(),
+                previous.content_hash.clone(),
+            )
+        });
         let inconsistency = previous.as_ref().and_then(|previous| {
-            (previous.source_revision.is_some() && previous.source_revision == result.source_revision && previous.content_hash != result.content_hash).then(|| ProjectDiagnostic {
-                code: "source_provider_revision_inconsistent".to_owned(),
-                message: "provider returned different content for the same source revision; both immutable records were retained".to_owned(),
-                path: result.source_url.clone(),
-            })
+            (previous.source_revision.is_some()
+                && previous.source_revision == result.source_revision
+                && previous.content_hash != result.content_hash)
+                .then(|| {
+                    revision_content_diagnostic(
+                        "source_provider_revision_inconsistent",
+                        "provider returned different content for the same source revision; both immutable records were retained",
+                        previous.source_revision.as_deref(),
+                        result.source_revision.as_deref(),
+                        &previous.content_hash,
+                        &result.content_hash,
+                        result.source_url.as_deref(),
+                    )
+                })
         });
         Ok(CacheOutcome {
             cached: result,
             freshness,
             inconsistency,
+            previous_identity,
         })
     }
 
@@ -965,7 +1096,10 @@ impl SourceService {
             source: cached.source.clone(),
             title: cached.title.clone(),
             source_url: cached.source_url.clone(),
+            original_url: cached.original_url.clone(),
             source_revision: cached.source_revision.clone(),
+            complete: cached.complete,
+            diagnostics: cached.diagnostics.clone(),
             body: String::new(),
         })?;
         Ok(cached)
@@ -1057,6 +1191,95 @@ impl SourceService {
     }
 }
 
+fn changed_diagnostic(
+    freshness: SourceFreshness,
+    previous: Option<&(Option<String>, String)>,
+    current: &CachedSource,
+) -> Option<ProjectDiagnostic> {
+    if freshness != SourceFreshness::Changed {
+        return None;
+    }
+    let Some((previous_revision, previous_content)) = previous else {
+        return None;
+    };
+    if previous_revision.as_deref() == current.source_revision.as_deref()
+        && previous_content != &current.content_hash
+    {
+        return None;
+    }
+    Some(revision_content_diagnostic(
+        "source_provider_changed",
+        "provider content changed; the previous immutable record remains available for comparison",
+        previous_revision.as_deref(),
+        current.source_revision.as_deref(),
+        previous_content,
+        &current.content_hash,
+        current.source_url.as_deref(),
+    ))
+}
+
+fn revision_content_diagnostic(
+    code: &str,
+    summary: &str,
+    previous_revision: Option<&str>,
+    current_revision: Option<&str>,
+    previous_content: &str,
+    current_content: &str,
+    path: Option<&str>,
+) -> ProjectDiagnostic {
+    let message = format!(
+        "{summary}; previous revision={}; current revision={}; previous content={}; current content={}",
+        bounded_diagnostic_value(previous_revision),
+        bounded_diagnostic_value(current_revision),
+        bounded_diagnostic_value(Some(previous_content)),
+        bounded_diagnostic_value(Some(current_content)),
+    );
+    ProjectDiagnostic {
+        code: code.to_owned(),
+        message: truncate_diagnostic_text(&message),
+        path: path.map(truncate_diagnostic_text),
+    }
+}
+
+fn bounded_diagnostic_value(value: Option<&str>) -> String {
+    value
+        .map(truncate_diagnostic_text)
+        .unwrap_or_else(|| "<none>".to_owned())
+}
+
+fn materialization_diagnostic(
+    code: &str,
+    summary: &str,
+    current: &CachedSource,
+    previous: Option<&(Option<String>, String)>,
+    path: Option<&str>,
+) -> ProjectDiagnostic {
+    let (previous_revision, previous_content) = previous
+        .map(|(revision, content)| (revision.as_deref(), content.as_str()))
+        .unwrap_or((None, "<none>"));
+    revision_content_diagnostic(
+        code,
+        summary,
+        previous_revision,
+        current.source_revision.as_deref(),
+        previous_content,
+        &current.content_hash,
+        path,
+    )
+}
+
+fn materialization_failure_diagnostic(
+    code: &str,
+    error: InspectionError,
+    path: Option<&str>,
+) -> ProjectDiagnostic {
+    ProjectDiagnostic {
+        code: code.to_owned(),
+        message: truncate_diagnostic_text(&error.message),
+        path: path.map(truncate_diagnostic_text),
+    }
+}
+
 fn entry_from_cached(
     cached: &CachedSource,
     freshness: SourceFreshness,
@@ -1071,6 +1294,7 @@ fn entry_from_cached(
         canonical_id: cached.source.canonical_id.clone(),
         title: cached.title.clone(),
         source_url: cached.source_url.clone(),
+        original_url: cached.original_url.clone(),
         source_revision: cached.source_revision.clone(),
         content_hash: cached.content_hash.clone(),
         freshness,
@@ -1078,9 +1302,8 @@ fn entry_from_cached(
         relative_path,
     }
 }
-
 fn cached_freshness(cached: &CachedSource) -> SourceFreshness {
-    if cached.source_revision.is_some() {
+    if cached.complete && cached.source_revision.is_some() {
         SourceFreshness::Fresh
     } else {
         SourceFreshness::Unknown
@@ -1091,6 +1314,9 @@ fn freshness(previous: Option<&CachedSource>, current: &CachedSource) -> SourceF
     let Some(previous) = previous else {
         return cached_freshness(current);
     };
+    if !previous.complete || !current.complete {
+        return SourceFreshness::Unknown;
+    }
     match (&previous.source_revision, &current.source_revision) {
         (Some(previous_revision), Some(current_revision))
             if previous_revision == current_revision
@@ -1137,6 +1363,15 @@ fn validate_provider_asset(
 }
 
 fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
+    let diagnostics_valid = asset.diagnostics.len() <= 32
+        && asset.diagnostics.iter().all(|diagnostic| {
+            bounded_text(&diagnostic.code, 128)
+                && bounded_text(&diagnostic.message, MAX_METADATA_BYTES)
+                && diagnostic
+                    .path
+                    .as_deref()
+                    .is_none_or(|path| bounded_text(path, MAX_URL_BYTES))
+        });
     if !bounded_text(&asset.source.provider_id, 128)
         || !bounded_text(&asset.source.provider_instance, 512)
         || !identifier(&asset.source.resource_type, 64)
@@ -1148,9 +1383,14 @@ fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
             .as_deref()
             .is_some_and(|value| !bounded_text(value, MAX_URL_BYTES))
         || asset
+            .original_url
+            .as_deref()
+            .is_some_and(|value| !bounded_text(value, MAX_URL_BYTES))
+        || asset
             .source_revision
             .as_deref()
             .is_some_and(|value| !bounded_text(value, MAX_METADATA_BYTES))
+        || !diagnostics_valid
         || asset.body.len() > MAX_ASSET_BYTES
         || asset.body.contains('\0')
     {
@@ -1160,6 +1400,9 @@ fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
         ));
     }
     Ok(())
+}
+fn default_complete() -> bool {
+    true
 }
 fn bounded_text(value: &str, max: usize) -> bool {
     !value.is_empty()
@@ -1176,12 +1419,14 @@ fn identifier(value: &str, max: usize) -> bool {
 
 fn canonical_markdown(asset: &SourceAsset) -> String {
     format!(
-        "---\nschema_version: 1\nprovider: {}\nresource_type: {}\ncanonical_id: {}\nprovider_instance: {}\nsource_url: {}\nfetched_at: {}\nsource_revision: {}\ncontent_hash: {}\ngenerated: true\n---\n\n# {}\n\n{}\n",
+        "---\nschema_version: 1\nprovider: {}\nresource_type: {}\ncanonical_id: {}\nprovider_instance: {}\nsource_url: {}\noriginal_url: {}\ncomplete: {}\nfetched_at: {}\nsource_revision: {}\ncontent_hash: {}\ngenerated: true\n---\n\n# {}\n\n{}\n",
         yaml_scalar(&asset.source.provider_id),
         yaml_scalar(&asset.source.resource_type),
         yaml_scalar(&asset.source.canonical_id),
         yaml_scalar(&asset.source.provider_instance),
         yaml_scalar(asset.source_url.as_deref().unwrap_or("")),
+        yaml_scalar(asset.original_url.as_deref().unwrap_or("")),
+        asset.complete,
         yaml_scalar(&timestamp()),
         yaml_scalar(asset.source_revision.as_deref().unwrap_or("")),
         yaml_scalar(&semantic_hash(asset)),
@@ -1201,12 +1446,16 @@ fn semantic_hash(asset: &SourceAsset) -> String {
         &asset.source.canonical_id,
         &asset.title,
         asset.source_url.as_deref().unwrap_or(""),
+        asset.original_url.as_deref().unwrap_or(""),
         asset.source_revision.as_deref().unwrap_or(""),
         &asset.body,
     ] {
         hash.update(value.as_bytes());
         hash.update([0]);
     }
+    hash.update([u8::from(asset.complete)]);
+    hash.update([0]);
+    hash.update(serde_json::to_vec(&asset.diagnostics).expect("diagnostic serialization"));
     format!("sha256:{:x}", hash.finalize())
 }
 fn source_id(source: &SourceRef) -> String {
@@ -1280,6 +1529,7 @@ fn write_json_bounded<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_std::fs::Dir;
     use cockpit_protocol::projects::{ProjectLimits, ProjectProvider};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
@@ -1359,7 +1609,10 @@ mod tests {
             },
             title: "issue".into(),
             source_url: Some("https://forge.test/gitea/acme/repo/issues/1".into()),
+            original_url: None,
             source_revision: Some("1".into()),
+            complete: true,
+            diagnostics: Vec::new(),
             body: body.into(),
         }
     }
@@ -1415,7 +1668,10 @@ mod tests {
             },
             title: format!("issue {index}"),
             source_url: Some(format!("https://forge.test/gitea/acme/repo/issues/{index}")),
+            original_url: None,
             source_revision: Some(index.to_string()),
+            complete: true,
+            diagnostics: Vec::new(),
             body: body.into(),
         }
     }
@@ -1495,12 +1751,21 @@ mod tests {
             .await
             .expect("refresh");
         assert_eq!(second.entries[0].freshness, SourceFreshness::Changed);
-        assert!(
-            second
-                .diagnostics
-                .iter()
-                .any(|entry| entry.code == "source_provider_revision_inconsistent")
-        );
+        let diagnostic = second
+            .diagnostics
+            .iter()
+            .find(|entry| entry.code == "source_provider_revision_inconsistent")
+            .expect("revision diagnostic");
+        assert!(diagnostic.message.contains("previous revision=1"));
+        assert!(diagnostic.message.contains("current revision=1"));
+        assert!(diagnostic.message.contains(&format!(
+            "previous content={}",
+            first.entries[0].content_hash
+        )));
+        assert!(diagnostic.message.contains(&format!(
+            "current content={}",
+            second.entries[0].content_hash
+        )));
         assert_ne!(
             first.entries[0].content_hash,
             second.entries[0].content_hash
@@ -1518,6 +1783,35 @@ mod tests {
             service.list_cached().expect("list")[0].freshness,
             SourceFreshness::Unknown
         );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+    #[tokio::test]
+    async fn primary_materialization_failure_keeps_cached_entry_and_diagnostic() {
+        let (service, _, root) = service(asset("body"));
+        let companion =
+            Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("companion");
+        let response = service
+            .fetch_to_companion(request(), Some((&companion, "missing-companion")))
+            .await
+            .expect("provider success is distinct from local materialization failure");
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].freshness, SourceFreshness::Unavailable);
+        assert_eq!(
+            response.entries[0].status,
+            SourceMaterializationStatus::Failed
+        );
+        assert!(response.entries[0].relative_path.is_none());
+        assert!(
+            response
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == "source_materialization_failed")
+        );
+        assert_eq!(
+            service.list_cached().expect("cached provider record").len(),
+            1
+        );
+        drop(companion);
         std::fs::remove_dir_all(root).expect("cleanup");
     }
     #[tokio::test]

@@ -181,11 +181,12 @@ impl ContextService {
                 "source import is not configured",
             )
         })?;
+        let (entries, diagnostics) = service.list_for_companion(&authorized.dir, companion_id)?;
         Ok(SourceImportResponse {
             binding_id: request.binding_id.clone(),
             root_id: authorized.root.root_id,
-            entries: service.list_for_companion(&authorized.dir, companion_id)?,
-            diagnostics: Vec::new(),
+            entries,
+            diagnostics,
         })
     }
     /// Resolve the current Context pane and its companion-only source

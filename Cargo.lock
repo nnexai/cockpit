@@ -601,6 +601,7 @@ dependencies = [
  "fs2",
  "libproc",
  "nix",
+ "percent-encoding",
  "rustix",
  "serde",
  "serde_json",
@@ -673,6 +674,7 @@ dependencies = [
  "cockpit-protocol",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "url",
 ]

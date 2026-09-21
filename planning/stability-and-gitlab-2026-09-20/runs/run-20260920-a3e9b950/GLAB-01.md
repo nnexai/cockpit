@@ -1,0 +1,42 @@
+# GLAB-01 — read-only issue source increment
+
+## Accepted plan
+
+Accepted by Main, 2026-09-21. Baseline commit: `6593cf4ecba87687c809ee9f3d2a295c757db787`; the working tree also contains returned SYNC-01, VIEW-01, WEB-07, SETUP-01, and NATIVE-01 implementation. Those tasks are not accepted from implementation alone. Original GLAB-01 criteria and completion dependency on SETUP-01 remain unchanged.
+
+Observable outcome: a configured glab provider resolves and imports a verified GitLab issue, including an API-proven issue behind a work-item URL, through the existing source cache and routes. Setup still requires the selected primary-origin checkout. No MR implementation in this increment.
+
+### Implementation handoff and ownership
+
+OBS-011 permits advancing code against settled interfaces while deferring exhaustive acceptance. SETUP-01 has returned its complete source changes and relinquishes the core-projects writing lock to Main for this increment; its UI approval changes and all required acceptance remain tracked separately. No worker may edit `projects.rs` concurrently: Main owns that shared integration boundary after the focused SETUP-01 review.
+
+- Source-contract worker: `cockpit-core` repositories/sources/defaults, existing gh/tea constructor migrations, source protocol definition and necessary handwritten source validators/fixtures. Do not edit `projects.rs`, the new GitLab module, provider dispatcher/Cargo manifest, or generated files.
+- GitLab adapter worker: new `crates/cockpit-providers/src/gitlab.rs`, provider dispatcher and provider Cargo manifest if an existing workspace dependency is needed. No edits to core, protocol, gh/tea, or frontend.
+- Main: `projects.rs` integration, generated protocol output, lockfile generation when necessary, shared integration, validation and commits.
+- Independent read-only reviewers: returned explicit setup and native installer changes. They do not edit or run validation.
+
+### Fixed shared contract
+
+1. Add `pub fn resolve_gitlab_artifact(provider_id: &str, base: &url::Url, artifact_url: &str) -> Result<ProjectArtifact, InspectionError>` in `cockpit_core::repositories`. Validate raw URL/path before URL normalization can erase traversal. Accept only issue/work-item forms in this slice, nested project paths, exact host/effective port/base path, positive bounded numeric IID; reject credentials, query/fragment, empty or ambiguously encoded/traversing components. Return original supplied URL unchanged and a normalized provisional URL; API metadata later supplies the verified canonical URL. Canonical issue ID is `<full-project-path>#<iid>`.
+2. Primary-origin authority supports full nested GitLab namespaces without changing gh/tea semantics. `SourceAuthority.owner` contains the namespace path; `repository` contains its final repository component. A secondary remote cannot authorize setup.
+3. `SourceMetadata` gains `source_url: Option<String>` for the validated API canonical URL. Existing providers migrate with their valid canonical URL or None, without behavioral expansion. Defaults and Main's project integration retain original provenance while using the validated canonical URL.
+4. `SourceAsset` gains `original_url: Option<String>`, `complete: bool`, and `diagnostics: Vec<ProjectDiagnostic>`. Existing providers set complete=true and empty diagnostics; do not invent historical provenance. These are the smallest demonstrated neutral gaps: SourceAsset/CachedSource currently cannot retain original versus canonical URL or distinguish a bounded partial result from complete freshness.
+5. Persist these fields in the existing CachedSource record, safely decoding existing schema-1 records as complete with no new provenance/diagnostics. Expose original URL via the existing SourceEntry contract using existing schema conventions; return cached diagnostics through existing source responses. Incomplete data yields conservative Unknown freshness while existing conflict/unavailable precedence remains intact. Include completeness/diagnostic semantics in deterministic content identity; preserve unchanged historical-record validation and retention. Refresh retains original provenance and uses a validated usable URL, not an arbitrary rewritten alias. Bound new metadata and keep provider error strings out of assets.
+6. Adapter uses only structured explicit `glab api ... --method GET` argv. One private command builder rejects every other method. Requests use a validated absolute API URL under configured base_url plus `/api/v4/`, with a narrowly selected CLI hostname. Installed glab 1.118's `--hostname` validator rejects colon/slash, while its HTTP implementation accepts absolute endpoint URLs; do not pass host:port/base-path as that flag or drop the configured API port/base path. Diagnose unsupported CLI host forms rather than silently routing elsewhere. Credentials stay CLI-owned: never read/copy/inject a token, echo raw command stderr, or enable HTTP debugging.
+7. Resolve project via percent-encoded full path, verify project ID/path/web authority, then fetch issue by verified numeric project ID and IID. Verify returned project_id, IID, reference and web URL. Work-item URLs require explicit issue_type=issue; no coercion of task/epic/incident/unknown. Equivalent issues/work_items spellings must resolve to that same verified issue, and preserve the API-returned spelling.
+8. Fetch required issue metadata and comments with deterministic ordering/deduplication and one shared bounded page/byte budget (at most five comment pages of 100; reuse existing source/output limits). Capture comment IDs, authors, timestamps, URLs, bodies and continuation information. A budget stop is explicit diagnostic/incomplete state, not silent loss or an apparently empty list. Required metadata/identity failures are hard errors. Canonical provenance must be verified before cache writes.
+9. Preserve stable actionable distinctions for CLI unavailable/timeout, authentication, permission, missing resource, rate limiting, malformed/empty response, identity mismatch and unsupported type. Do not return raw stderr or credentials in errors. Revision includes deterministic metadata/comment content, not merely one timestamp.
+
+### Verification and delivery
+
+Under OBS-014, deliver the working adapter boundary with lightweight proof rather than waiting for an exhaustive matrix. Original broader setup/import/list/refresh and cross-provider scenarios remain explicitly unexecuted until exercised; they are not implied by the adapter result. OBS-012 authorizes the new issue #2 and standalone MR !1 fixtures; their ownership is recorded in `gitlab-fixtures.json`.
+
+Primary CLI implementation evidence: [hostname/subfolder handling](https://gitlab.com/gitlab-org/cli/-/raw/v1.118.0/internal/glinstance/host.go), [API host selection](https://gitlab.com/gitlab-org/cli/-/raw/v1.118.0/internal/commands/api/api.go), and [absolute endpoint construction](https://gitlab.com/gitlab-org/cli/-/raw/v1.118.0/internal/commands/api/http.go).
+
+## Evidence
+
+The actual `GitlabSourceProvider::fetch` and metadata path through installed `glab` successfully read owned work-item issue #2 as `nnex.ai/integration#2`; its body contains the owned marker, completeness is true and diagnostics are empty. The same bounded throwaway Rust example exercised standalone MR !1. It performed only GET requests and was removed afterward. [GLAB-adapter-evidence.json](GLAB-adapter-evidence.json) records sanitized results.
+
+`cargo check -p cockpit-core -p cockpit-providers -p cockpit-host --all-targets`, `bun run typecheck`, `bun run build` and `cargo build -p cockpit-host --bin cockpit` passed on the integrated working tree. A single focused source regression, `cargo test -p cockpit-core primary_materialization_failure -- --nocapture`, passed: fetched/cached content remains represented when local materialization fails. Source/authority review findings were repaired before the real adapter smoke. This is adapter/cache-contract proof, not a claim of browser/native setup or exhaustive acceptance.
+
+Delivery boundary: GitLab adapter, strict nested-project authority/resolution, neutral source/cache metadata, existing-provider constructor migrations, source-list consumer migration and SourceEntry/client decoding. Setup/UI/browser work remains unstaged for separate increments.

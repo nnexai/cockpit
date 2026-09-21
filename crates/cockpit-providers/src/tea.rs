@@ -294,10 +294,13 @@ impl TeaSourceProvider {
             },
             title,
             source_url: Some(request.artifact_url.clone()),
+            original_url: None,
             source_revision: value_string(
                 &review,
                 &["headSha", "head_commit", "head-commit", "updated"],
             ),
+            complete: true,
+            diagnostics: Vec::new(),
             body,
         }])
     }
@@ -404,7 +407,10 @@ impl TeaSourceProvider {
             },
             title,
             source_url: Some(request.artifact_url.clone()),
+            original_url: None,
             source_revision: Some(source_revision),
+            complete: true,
+            diagnostics: Vec::new(),
             body,
         }])
     }
@@ -634,6 +640,8 @@ impl SourceProvider for TeaSourceProvider {
                 Ok(SourceMetadata {
                     title: issue.title,
                     source_branch: None,
+                    source_url: None,
+                    source_commit: None,
                 })
             }
             ArtifactKind::Review(index) => {
@@ -668,12 +676,17 @@ impl SourceProvider for TeaSourceProvider {
                     ));
                 }
                 let title = value_string(&review, &["title"]).ok_or_else(|| {
-                    InspectionError::new("source_provider_contract", "Tea pull request has no title")
+                    InspectionError::new(
+                        "source_provider_contract",
+                        "Tea pull request has no title",
+                    )
                 })?;
                 let source_branch = review_source_branch(&review);
                 Ok(SourceMetadata {
                     title,
                     source_branch,
+                    source_url: None,
+                    source_commit: None,
                 })
             }
             ArtifactKind::Wiki(_) => Err(InspectionError::new(
@@ -777,7 +790,10 @@ impl SourceProvider for TeaSourceProvider {
             source,
             title: issue.title,
             source_url: Some(request.artifact_url.clone()),
+            original_url: None,
             source_revision: issue.updated,
+            complete: true,
+            diagnostics: Vec::new(),
             body,
         }])
     }

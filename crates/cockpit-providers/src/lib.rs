@@ -8,8 +8,14 @@ use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 
 pub mod github;
+pub mod gitlab;
 pub mod tea;
 
+fn glab_executable(executable: &str) -> bool {
+    Path::new(executable)
+        .file_name()
+        .is_some_and(|name| name == "glab")
+}
 pub fn configured_providers(
     configuration: &ProjectConfiguration,
 ) -> Result<Vec<Arc<dyn SourceProvider>>, InspectionError> {
@@ -29,6 +35,11 @@ pub fn configured_providers(
                         provider_id: provider.id.clone(),
                     }) as Arc<dyn SourceProvider>),
                 })
+            } else if glab_executable(&provider.executable) {
+                Some(
+                    gitlab::GitlabSourceProvider::configured(configuration, &provider.id)
+                        .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                )
             } else if github::executable(&provider.executable) {
                 Some(
                     github::GithubSourceProvider::configured(configuration, &provider.id)
@@ -79,7 +90,7 @@ impl SourceProvider for UnconfiguredTeaProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_providers, github, tea_executable};
+    use super::{configured_providers, github, glab_executable, tea_executable};
     use cockpit_core::sources::{SourceAuthority, SourceFetchRequest};
     use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
 
@@ -88,6 +99,13 @@ mod tests {
         assert!(tea_executable("tea"));
         assert!(tea_executable("/usr/local/bin/tea"));
         assert!(!tea_executable("gitea"));
+    }
+
+    #[test]
+    fn detects_gitlab_cli_by_executable_basename() {
+        assert!(glab_executable("glab"));
+        assert!(glab_executable("/usr/local/bin/glab"));
+        assert!(!glab_executable("gitlab"));
     }
 
     #[test]

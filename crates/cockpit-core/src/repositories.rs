@@ -8,6 +8,7 @@ use cockpit_protocol::projects::{
     ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectProvider, RepositoryCandidate,
     RepositoryListResponse,
 };
+use percent_encoding::percent_decode_str;
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use url::Url;
@@ -270,6 +271,57 @@ impl RepositoryCatalog {
         }
         Ok(commit)
     }
+    pub async fn local_branch_commit(
+        &self,
+        candidate: &RepositoryCandidate,
+        branch: &str,
+    ) -> Result<Option<String>, InspectionError> {
+        self.resolve_named_ref(candidate, branch, "refs/heads")
+            .await
+    }
+
+    pub async fn origin_tracking_commit(
+        &self,
+        candidate: &RepositoryCandidate,
+        branch: &str,
+    ) -> Result<Option<String>, InspectionError> {
+        self.resolve_named_ref(candidate, branch, "refs/remotes/origin")
+            .await
+    }
+
+    async fn resolve_named_ref(
+        &self,
+        candidate: &RepositoryCandidate,
+        branch: &str,
+        namespace: &str,
+    ) -> Result<Option<String>, InspectionError> {
+        let fresh = self.fresh_candidate(candidate).await?;
+        validate_input(branch, "branch")?;
+        if branch.starts_with('-') || branch.chars().any(char::is_whitespace) {
+            return Err(InspectionError::new(
+                "invalid_branch",
+                "branch must be a bounded Git branch name",
+            ));
+        }
+        let revision = format!("{namespace}/{branch}^{{commit}}");
+        let output = self
+            .git_output(
+                Path::new(&fresh.checkout_path),
+                &["rev-parse", "--verify", "--end-of-options", &revision],
+            )
+            .await?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let commit = stdout_text(&output)?;
+        if commit.is_empty() || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(InspectionError::new(
+                "source_ref_invalid",
+                "Git returned an invalid source commit identity",
+            ));
+        }
+        Ok(Some(commit))
+    }
 
     async fn fresh_candidate(
         &self,
@@ -512,6 +564,9 @@ pub fn resolve_artifact(
             "configured provider URL is invalid",
         )
     })?;
+    if is_gitlab_executable(&provider.executable) {
+        return resolve_gitlab_artifact(&provider.id, &base, original_url);
+    }
     if is_github_executable(&provider.executable) {
         return resolve_github_artifact(provider, &base, &parsed, original_url);
     }
@@ -558,13 +613,192 @@ pub fn resolve_artifact(
             ));
         }
     };
-    Ok(ProjectArtifact {
+    return Ok(ProjectArtifact {
         provider_id: provider.id.clone(),
         kind: kind.into(),
         canonical_id,
         original_url: original_url.into(),
         canonical_url: parsed.to_string(),
+    });
+}
+
+/// Resolve the raw GitLab issue/work-item URL before URL normalization can
+/// erase traversal or encoded-separator evidence. The returned URL is only a
+/// provisional provider URL; the adapter replaces it with API-verified
+/// canonical provenance.
+pub fn resolve_gitlab_artifact(
+    provider_id: &str,
+    base: &Url,
+    artifact_url: &str,
+) -> Result<ProjectArtifact, InspectionError> {
+    validate_input(provider_id, "provider_id")?;
+    if artifact_url.is_empty()
+        || artifact_url.len() > 8192
+        || artifact_url.chars().any(char::is_control)
+    {
+        return Err(InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be a bounded absolute HTTP(S) URL",
+        ));
+    }
+    let raw_path = raw_url_path(artifact_url).ok_or_else(|| {
+        InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be an absolute HTTP(S) URL",
+        )
+    })?;
+    let raw_lower = raw_path.to_ascii_lowercase();
+    if raw_path.contains('\\')
+        || raw_lower.contains("%2f")
+        || raw_lower.contains("%5c")
+        || raw_lower.contains("%2e")
+    {
+        return Err(InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL contains an ambiguous encoded separator or traversal component",
+        ));
+    }
+    let parsed = Url::parse(artifact_url).map_err(|_| {
+        InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be an absolute HTTP(S) URL",
+        )
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != raw_path
+    {
+        return Err(InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact URL must be credential-free and preserve a safe raw path",
+        ));
+    }
+    if !matches!(base.scheme(), "http" | "https")
+        || base.host_str().is_none()
+        || !base.username().is_empty()
+        || base.password().is_some()
+        || base.query().is_some()
+        || base.fragment().is_some()
+    {
+        return Err(InspectionError::new(
+            "invalid_provider_base_url",
+            "GitLab provider base URL must be credential-free HTTP(S)",
+        ));
+    }
+    if parsed.scheme() != base.scheme()
+        || parsed.host_str().map(str::to_ascii_lowercase)
+            != base.host_str().map(str::to_ascii_lowercase)
+        || parsed.port_or_known_default() != base.port_or_known_default()
+    {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitLab artifact authority does not match the configured provider",
+        ));
+    }
+    let base_path = base.path().trim_end_matches('/');
+    if !raw_path.starts_with(base_path)
+        || (!base_path.is_empty()
+            && raw_path
+                .as_bytes()
+                .get(base_path.len())
+                .is_some_and(|byte| *byte != b'/'))
+    {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitLab artifact path does not match the configured provider base path",
+        ));
+    }
+    let relative = raw_path[base_path.len()..]
+        .strip_prefix('/')
+        .ok_or_else(|| {
+            InspectionError::new(
+                "unsupported_artifact",
+                "GitLab artifact path must include a project and issue",
+            )
+        })?;
+    let relative = percent_decode_str(relative).decode_utf8().map_err(|_| {
+        InspectionError::new(
+            "invalid_artifact_url",
+            "GitLab artifact path contains invalid percent-encoding",
+        )
+    })?;
+    let parts: Vec<&str> = relative.split('/').collect();
+    if parts.len() < 4
+        || parts[..parts.len() - 3]
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == "..")
+        || !matches!(
+            parts[parts.len() - 2],
+            "issues" | "work_items" | "merge_requests"
+        )
+        || parts[parts.len() - 1].is_empty()
+        || !parts[parts.len() - 1]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitLab artifact path must identify a nested project and numeric issue or merge-request ID",
+        ));
+    }
+    let iid = parts[parts.len() - 1].parse::<u64>().map_err(|_| {
+        InspectionError::new(
+            "unsupported_artifact",
+            "GitLab issue ID is outside the supported numeric range",
+        )
+    })?;
+    if iid == 0 {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitLab issue ID must be greater than zero",
+        ));
+    }
+    let project = parts[..parts.len() - 3].join("/");
+    if project.is_empty() {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "GitLab artifact path must include a nonempty project path",
+        ));
+    }
+    let kind = if parts[parts.len() - 2] == "merge_requests" {
+        "review"
+    } else {
+        "issue"
+    };
+    let separator = if kind == "review" { '!' } else { '#' };
+    Ok(ProjectArtifact {
+        provider_id: provider_id.into(),
+        kind: kind.into(),
+        canonical_id: format!("{project}{separator}{iid}"),
+        original_url: artifact_url.into(),
+        canonical_url: parsed.to_string(),
     })
+}
+
+fn raw_url_path(value: &str) -> Option<&str> {
+    let scheme_end = value.find("://")?;
+    let authority_start = scheme_end + 3;
+    let path_start = value[authority_start..]
+        .find(|character| matches!(character, '/' | '?' | '#'))
+        .map(|offset| authority_start + offset)?;
+    if value.as_bytes()[path_start] != b'/' {
+        return None;
+    }
+    let path_end = value[path_start..]
+        .find(|character| matches!(character, '?' | '#'))
+        .map(|offset| path_start + offset)
+        .unwrap_or(value.len());
+    Some(&value[path_start..path_end])
+}
+
+fn is_gitlab_executable(executable: &str) -> bool {
+    Path::new(executable)
+        .file_name()
+        .is_some_and(|name| name == "glab")
 }
 
 fn is_github_executable(executable: &str) -> bool {

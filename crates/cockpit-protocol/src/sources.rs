@@ -74,6 +74,7 @@ pub struct SourceEntry {
     pub canonical_id: String,
     pub title: String,
     pub source_url: Option<String>,
+    pub original_url: Option<String>,
     pub source_revision: Option<String>,
     pub content_hash: String,
     pub freshness: SourceFreshness,

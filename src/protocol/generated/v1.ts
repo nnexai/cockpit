@@ -500,7 +500,7 @@ export type SourceListRequest = { binding_id: string, root_id: string, };
 
 export type SourceRefreshRequest = { binding_id: string, root_id: string, source_id: string, hydrate_references: boolean, };
 
-export type SourceEntry = { source_id: string, provider_id: string, provider_instance: string, resource_type: string, canonical_id: string, title: string, source_url: string | null, source_revision: string | null, content_hash: string, freshness: SourceFreshness, status: SourceMaterializationStatus, relative_path: string | null, };
+export type SourceEntry = { source_id: string, provider_id: string, provider_instance: string, resource_type: string, canonical_id: string, title: string, source_url: string | null, original_url: string | null, source_revision: string | null, content_hash: string, freshness: SourceFreshness, status: SourceMaterializationStatus, relative_path: string | null, };
 
 export type SourceImportResponse = { binding_id: string, root_id: string, entries: Array<SourceEntry>, diagnostics: Array<ProjectDiagnostic>, };
 

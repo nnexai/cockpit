@@ -1,0 +1,47 @@
+{
+  "run_id": "run-20260920-a3e9b950",
+  "authorization": "OBS-012: user authorized disposable GitLab issue and MR fixtures for testing on 2026-09-21",
+  "host": "gitlab.com",
+  "project_id": 86672117,
+  "project_path": "nnex.ai/integration",
+  "marker": "cockpit-csg-a3e9b950-20260921",
+  "cleanup_owner": "Main",
+  "retained_for": ["GLAB-01", "GLAB-02", "GLAB-03", "GLAB-04"],
+  "allowed_changes": ["create marked issue", "create dedicated non-main branch and fixture commit", "create draft standalone MR", "controlled title/body/comment updates on these fixtures"],
+  "prohibited_changes": ["main/protected branch writes", "merge", "approval", "project protection changes", "remote deletion", "unrelated resources"],
+  "issue": {
+    "id": 203864810,
+    "iid": 2,
+    "url": "https://gitlab.com/nnex.ai/integration/-/work_items/2",
+    "issue_type": "issue",
+    "baseline_title": "Cockpit disposable issue fixture — csg-a3e9b950",
+    "baseline_description": "Marker: cockpit-csg-a3e9b950-20260921\n\nDisposable issue for Cockpit authenticated setup/import/refresh/conflict acceptance.\nOwner: run-20260920-a3e9b950 / Main. Created with explicit user authorization.\n\nBaseline body version: 1. Controlled changes are restricted to this fixture. Do not treat this as production work.",
+    "baseline_note_count_before_owned_comment": 0,
+    "owned_note_id": 3879528328,
+    "owned_note_body": "Baseline issue comment version 1. Marker: cockpit-csg-a3e9b950-20260921. Disposable Cockpit acceptance data."
+  },
+  "merge_request": {
+    "id": 536323704,
+    "iid": 1,
+    "url": "https://gitlab.com/nnex.ai/integration/-/merge_requests/1",
+    "draft": true,
+    "baseline_title": "Draft: Cockpit standalone MR fixture — csg-a3e9b950",
+    "baseline_description": "Marker: cockpit-csg-a3e9b950-20260921\n\nDisposable standalone MR for Cockpit source/setup/refresh acceptance. No issue or Jira dependency.\nOwner: run-20260920-a3e9b950 / Main. Created with explicit user authorization.\n\nBaseline body version: 1. Controlled title/body/discussion changes must keep the source SHA stable. Do not merge this fixture.",
+    "source_branch": "cockpit-fixture/csg-a3e9b950-20260921",
+    "target_branch": "main",
+    "sha": "8493e6e72e56df62006b084eb211f2f5156390e0",
+    "discussion_id": "dcf48e3ac047e64630679c0be47aa1219e06ead5",
+    "owned_note_id": 3879528318,
+    "owned_note_body": "Baseline MR discussion version 1. Marker: cockpit-csg-a3e9b950-20260921. Keep source SHA unchanged during metadata refresh checks."
+  },
+  "branch": {
+    "name": "cockpit-fixture/csg-a3e9b950-20260921",
+    "commit": "8493e6e72e56df62006b084eb211f2f5156390e0",
+    "parent": "a06239cf46b0b8262bcc2257b3883e45812a0b68",
+    "file": ".cockpit-fixtures/csg-a3e9b950-20260921.txt",
+    "commit_message": "test: add disposable Cockpit source fixture [skip ci]"
+  },
+  "main_after_creation": {"protected": true, "commit": "a06239cf46b0b8262bcc2257b3883e45812a0b68"},
+  "creation_notes": ["Initial issue POST without explicit JSON content type was rejected HTTP 415; corrected request succeeded once.", "All commands used installed glab authentication without token extraction or export."],
+  "state": "created_and_retained_for_acceptance"
+}
