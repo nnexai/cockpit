@@ -1,0 +1,24 @@
+{
+  "prefix": "/tmp/csg-a3e9b950/native-cli-smoke-final-20260921",
+  "scope": "Linux installer CLI only; no GUI/native/macOS acceptance",
+  "commands": [
+    "HOME=/tmp/csg-a3e9b950/home-final XDG_DATA_HOME=/tmp/csg-a3e9b950/xdg-data-final XDG_BIN_HOME=/tmp/csg-a3e9b950/xdg-bin-final python3 scripts/install-native.py --reuse --debug --prefix /tmp/csg-a3e9b950/native-cli-smoke-final-20260921",
+    "/tmp/csg-a3e9b950/native-cli-smoke-final-20260921/bin/cockpit-cli --help",
+    "HOME=/tmp/csg-a3e9b950/home-final XDG_DATA_HOME=/tmp/csg-a3e9b950/xdg-data-final XDG_BIN_HOME=/tmp/csg-a3e9b950/xdg-bin-final python3 scripts/install-native.py --reuse --debug --prefix /tmp/csg-a3e9b950/native-cli-smoke-final-20260921",
+    "HOME=/tmp/csg-a3e9b950/home-final XDG_DATA_HOME=/tmp/csg-a3e9b950/xdg-data-final XDG_BIN_HOME=/tmp/csg-a3e9b950/xdg-bin-final python3 scripts/install-native.py --prefix /tmp/csg-a3e9b950/native-cli-smoke-final-20260921 --uninstall"
+  ],
+  "outcome": "fresh install, cockpit-cli --help, repeat update, and uninstall succeeded",
+  "receipt_before_uninstall": {
+    "schema": 3,
+    "status": "installed",
+    "application_id": "dev.cockpit.app",
+    "artifact_sha256": {
+      "binary": "6e4feeef7e851b32eaf773c6b6778f95da3f7c411895da42dd74536270aded9c",
+      "cli_binary": "31e53f4eb5d63c79432a21eab819dc7f6bac76d11259f7041decdcd5ad3cf025",
+      "desktop": "e5c4e2d2768abe9e9fc15111c7a2939cb34006931834b07b5bf6f66fd44ea6ea",
+      "icon": "cd5b7c5b39d5260e2d23209e8f7faaa845237e704bf7e68bf60d12aa0a3a83a8"
+    },
+    "owned_paths": "all receipt paths were under the explicit prefix"
+  },
+  "cleanup": "uninstall completed and uniquely created prefix removed; no default/user paths touched"
+}

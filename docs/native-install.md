@@ -8,9 +8,11 @@ Run this from the repository root:
 python3 scripts/install-native.py
 ```
 
-The default build invokes the local Tauri CLI as `bunx tauri build --no-bundle`, then builds the CLI with Cargo. It creates `target/release/cockpit-tauri` and `target/release/cockpit`. The installer copies the graphical binary to `$XDG_DATA_HOME/cockpit/bin/cockpit`, or `~/.local/share/cockpit/bin/cockpit` on Linux and `~/Library/Application Support/cockpit/bin/cockpit` on macOS. The CLI is installed beside it as `cockpit-cli`.
+On Linux, the default build invokes `bunx tauri build --no-bundle`, then builds the CLI with Cargo. It installs `target/release/cockpit-tauri` as `$XDG_DATA_HOME/cockpit/bin/cockpit` (default `~/.local/share/cockpit/bin/cockpit`) and `target/release/cockpit` beside it as `cockpit-cli`.
 
-`$XDG_BIN_HOME/cockpit` and `$XDG_BIN_HOME/cockpit-cli`, or `~/.local/bin/cockpit` and `~/.local/bin/cockpit-cli` by default, are stable symlinks to the installed binaries. Existing Cockpit processes retain their old executable image. The installer writes new temporary binaries beside the installed binaries, syncs them, then atomically replaces the old files. New launches use the update without killing or restarting anything.
+On macOS, the build uses `bunx tauri build --bundles app` and installs the complete `target/release/bundle/macos/Cockpit.app` bundle at `~/Applications/Cockpit.app`. The CLI is installed under `$XDG_DATA_HOME/cockpit/bin`, defaulting to `~/Library/Application Support/cockpit/bin`. The graphical launcher points into the installed bundle; no second raw graphical binary is installed.
+
+Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. Existing processes are not stopped or restarted.
 
 After changing browser paths or installing an update, fully restart any
 existing `cockpit` or `cockpit serve` process before testing. Browser
@@ -18,7 +20,7 @@ configuration is loaded at startup; if another process already owns the
 browser state root, the new process observes it and forwards browser
 operations to that owner.
 
-The desktop entry is written under the selected data directory at `applications/dev.cockpit.app.desktop`, and the icon at `icons/hicolor/256x256/apps/dev.cockpit.app.png`. Linux desktop environments consume these files. On macOS, the user-local binaries work from a shell; add the selected `bin` directory to `PATH` if it is not already present.
+Linux desktop entries and icons are installed under the selected data directory at `applications/dev.cockpit.app.desktop` and `icons/hicolor/256x256/apps/dev.cockpit.app.png`. On macOS, launch the installed app bundle or use the `cockpit` shell launcher. Add the selected `bin` directory to `PATH` if needed.
 
 ## Native window settings
 
@@ -45,22 +47,24 @@ For a quicker repeat build, use the Tauri debug profile:
 python3 scripts/install-native.py --debug
 ```
 
-To install an already built binary, skip the build step:
+To install an existing build, skip the build step:
 
 ```sh
 python3 scripts/install-native.py --reuse
 python3 scripts/install-native.py --reuse --debug
 ```
 
-`--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`, or their `target/debug` counterparts with `--debug`.
+On Linux, `--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`. On macOS it requires the complete `target/release/bundle/macos/Cockpit.app` and the CLI binary. `--debug` selects the corresponding `target/debug` paths.
 
-Use a disposable prefix for an isolated verification. It contains both launchers in `PREFIX/bin` and its data, desktop entry, and icon under `PREFIX/share`:
+A disposable prefix contains both launchers in `PREFIX/bin` and installer data under `PREFIX/share`. On macOS its bundle is installed at `PREFIX/Applications/Cockpit.app`:
 
 ```sh
 python3 scripts/install-native.py --prefix /tmp/cockpit-native-check
 ```
 
-The default mode also supports disposable XDG paths:
+On macOS, `--application-path /absolute/path/Cockpit.app` selects a different bundle destination, including with `--prefix`. Use the same selection for update and uninstall. Existing unowned or modified bundles are refused, not adopted or removed.
+
+On Linux, the default mode also supports disposable XDG paths. On macOS, use `--prefix` or an explicit `--application-path` as well to keep the bundle out of `~/Applications`:
 
 ```sh
 XDG_DATA_HOME=/tmp/cockpit-data XDG_BIN_HOME=/tmp/cockpit-bin \
@@ -83,7 +87,7 @@ python3 scripts/install-native.py --uninstall
 python3 scripts/install-native.py --prefix /tmp/cockpit-native-check --uninstall
 ```
 
-Uninstall reads the install receipt and removes only the launchers, desktop entry, icon, installed application and CLI binaries, and receipt that it owns. It leaves configuration and changed replacement paths in place. An update also stops before replacing a changed installed file, so resolve that change or uninstall it before continuing.
+Uninstall uses the receipt to remove only owned launchers, desktop files, application artifacts and CLI. macOS receipts include the bundle's files, modes and symlink identities. Updates and uninstall refuse modified artifacts or path substitutions; configuration and unrelated files remain untouched. Verified legacy raw-binary macOS installations migrate through the same journaled transaction rather than an untracked deletion.
 
 ## Inline Space browser
 
