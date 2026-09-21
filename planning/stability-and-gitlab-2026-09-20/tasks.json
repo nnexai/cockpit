@@ -20,9 +20,17 @@
       "started_at": "2026-09-20T09:49:03.861224Z",
       "completed_at": "2026-09-20T09:56:00Z",
       "blockers": [],
-      "evidence": ["runs/run-20260920-a3e9b950/RUN-01.md", "runs/run-20260920-a3e9b950/RUN-01-safety.json"],
-      "commits": ["1412c7cbef1315c9ab2474a87d7c34531b7f2dfc", "baa4a16b2c1e6ea9363183341671f57b4413ceba"],
-      "notes": ["Original inventory committed; OBS-008 exposed unintended protected integration writes. Guarded HOME containment is now repaired and verified at baa4a16 (32 tests, red control, actual server HOME, six unchanged protected hashes across restart). Earlier writes still require explicit ACCEPT-01 reconciliation; no speculative rollback."]
+      "evidence": [
+        "runs/run-20260920-a3e9b950/RUN-01.md",
+        "runs/run-20260920-a3e9b950/RUN-01-safety.json"
+      ],
+      "commits": [
+        "1412c7cbef1315c9ab2474a87d7c34531b7f2dfc",
+        "baa4a16b2c1e6ea9363183341671f57b4413ceba"
+      ],
+      "notes": [
+        "Original inventory committed; OBS-008 exposed unintended protected integration writes. Guarded HOME containment was repaired and verified at baa4a16 (32 tests, red control, actual server HOME, six unchanged protected hashes across restart). On 2026-09-21 the user explicitly authorized retaining the six current files unchanged; no speculative rollback or further HOME writes."
+      ]
     },
     {
       "id": "TERM-01",
@@ -44,9 +52,15 @@
       "started_at": "2026-09-20T09:58:14.579549Z",
       "completed_at": "2026-09-20T10:15:38Z",
       "blockers": [],
-      "evidence": ["runs/run-20260920-a3e9b950/TERM-01.md"],
-      "commits": ["4faf2030361411480571fb3cc7a05cea0f41afa9"],
-      "notes": ["All six criteria passed on real browser/Linux-native surfaces plus guarded Herdr oracle; five negative payloads match across hosts. Owned proof services stopped."]
+      "evidence": [
+        "runs/run-20260920-a3e9b950/TERM-01.md"
+      ],
+      "commits": [
+        "4faf2030361411480571fb3cc7a05cea0f41afa9"
+      ],
+      "notes": [
+        "All six criteria passed on real browser/Linux-native surfaces plus guarded Herdr oracle; five negative payloads match across hosts. Owned proof services stopped."
+      ]
     },
     {
       "id": "TERM-02",
@@ -75,7 +89,9 @@
         "runs/run-20260920-a3e9b950/TERM-02-evidence.json",
         "runs/run-20260920-a3e9b950/TERM-02-artifacts.json"
       ],
-      "commits": ["3ad68c5d547085719af7ab3cd101e57002a56284"],
+      "commits": [
+        "3ad68c5d547085719af7ab3cd101e57002a56284"
+      ],
       "notes": [
         "All seven original criteria passed on browser/Linux-native/TUI. Browser-first per OBS-009. Extended zoom/output finding OBS-010 remains required under TERM-03; protected-home incident OBS-008 remains unresolved for ACCEPT-01."
       ]
@@ -89,10 +105,7 @@
         "TERM-02"
       ],
       "locks": [
-        "app-shell",
-        "terminal",
         "client-transports",
-        "browser-ui",
         "host-streams"
       ],
       "issues": [
@@ -100,14 +113,22 @@
         12
       ],
       "brief": "tasks/SYNC-01.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T15:18:42.346Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/SYNC-01.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "Cancellation implementation and focused static reviews returned. Main repaired native live-abort listener retention and prompt snapshot cancellation. Settled terminal/app-shell/browser-ui interfaces handed to TERM-03/WEB-01; client-transports/host-streams remain reserved. OBS-011 defers required runtime acceptance; no criterion waived.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "TERM-03",
@@ -118,7 +139,6 @@
         "SYNC-01"
       ],
       "locks": [
-        "app-shell",
         "terminal",
         "herdr-adapter"
       ],
@@ -129,15 +149,21 @@
         12
       ],
       "brief": "tasks/TERM-03.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T16:13:32Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/TERM-03.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
       "notes": [
-        "OBS-010: reproduce and repair browser split zoom/restore output loss; local xterm visible buffer became blank while Herdr history/process remained live. Capture frame grid versus fitted grid and HTTP resize chronology. Browser-first per OBS-009; this remains a required unresolved campaign finding."
+        "OBS-010 remains required: confirmed frame-grid mismatch hazard and observed split zoom/restore blanking, not yet complete root-cause proof. Accepted terminal-only writing slice consumes settled SYNC-01 interfaces. App belongs to WEB-01; Main serializes any necessary later integration. Full browser/native/TUI criteria remain pending.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
       ]
     },
     {
@@ -149,18 +175,25 @@
         "TERM-01"
       ],
       "locks": [
-        "context-review"
+        "context-review-viewers"
       ],
       "issues": [],
       "brief": "tasks/VIEW-01.md",
-      "status": "in_progress",
-      "owner": "Main",
+      "status": "blocked",
+      "owner": null,
       "started_at": "2026-09-20T10:19:11.269695Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": ["runs/run-20260920-a3e9b950/VIEW-01.md"],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/VIEW-01.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "FLOW-01",
@@ -183,14 +216,21 @@
         7
       ],
       "brief": "tasks/FLOW-01.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Successful same-tab paste and comment/reopen/changed-refresh journey not exercised; dirty refusal and authenticated setup passed."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 consolidated batch accepted in AUTORUN.md. BatchWorkflows owns non-browser workflow implementation, preserving returned Context/Review/terminal fixes and delivered setup/source contracts. No validation during writing; delegated integrated verification follows all writers.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "SETUP-01",
@@ -200,23 +240,26 @@
       "depends_on": [
         "TERM-01"
       ],
-      "locks": [
-        "app-shell",
-        "setup-ui",
-        "core-projects"
-      ],
+      "locks": [],
       "issues": [
         7
       ],
       "brief": "tasks/SETUP-01.md",
-      "status": "pending",
-      "owner": null,
-      "started_at": null,
-      "completed_at": null,
+      "status": "done",
+      "owner": "Main",
+      "started_at": "2026-09-21T15:38:07.163Z",
+      "completed_at": "2026-09-21T18:57:29Z",
       "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "evidence": [
+        "runs/run-20260920-a3e9b950/SETUP-01.md",
+        "runs/run-20260920-a3e9b950/SETUP-browser-evidence.json"
+      ],
+      "commits": [
+        "163ee85fba8c883f80b5b24871de84bd210a7823"
+      ],
+      "notes": [
+        "Delivered under OBS-014: explicit reviewed Start, stale approval protection and preflight. Focused setup/terminal regression run, static gates and one actual owned gateway review-to-ready-Workspace smoke passed. Main inspected screenshots and persisted completed receipt; deeper fault/reconnect matrix is unexecuted follow-up, not a claimed pass. Fixture retained for immediate source UI verification and Main cleanup."
+      ]
     },
     {
       "id": "SETUP-02",
@@ -226,22 +269,27 @@
       "depends_on": [
         "SETUP-01"
       ],
-      "locks": [
-        "core-projects",
-        "filesystem-publication"
-      ],
+      "locks": [],
       "issues": [
         7
       ],
       "brief": "tasks/SETUP-02.md",
-      "status": "pending",
-      "owner": null,
-      "started_at": null,
-      "completed_at": null,
+      "status": "done",
+      "owner": "Main",
+      "started_at": "2026-09-21T17:06:54Z",
+      "completed_at": "2026-09-21T18:57:29Z",
       "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "evidence": [
+        "runs/run-20260920-a3e9b950/SETUP-02.md",
+        "runs/run-20260920-a3e9b950/SETUP-browser-evidence.json",
+        "runs/run-20260920-a3e9b950/MACOS-HANDOFF.md"
+      ],
+      "commits": [
+        "163ee85fba8c883f80b5b24871de84bd210a7823"
+      ],
+      "notes": [
+        "Delivered under OBS-013/014: descriptor-bound no-replace publication, preflight and exact-manifest durability recovery integrated. Five companion tests and actual Linux gateway setup passed. Actual macOS filesystem/native checks remain user verification\u2014not executed\u2014in the committed handoff; no Darwin runtime pass is claimed."
+      ]
     },
     {
       "id": "GLAB-01",
@@ -251,24 +299,31 @@
       "depends_on": [
         "SETUP-01"
       ],
-      "locks": [
-        "source-identity",
-        "providers",
-        "core-projects",
-        "protocol"
-      ],
+      "locks": [],
       "issues": [
         6
       ],
       "brief": "tasks/GLAB-01.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T16:04:41Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/GLAB-01.md",
+        "runs/run-20260920-a3e9b950/GLAB-adapter-evidence.json",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
+      "commits": [
+        "7d06e6e4225cec48fe5847f9bc4e95e1c04bc1e0",
+        "163ee85fba8c883f80b5b24871de84bd210a7823"
+      ],
+      "notes": [
+        "GitLab issue adapter delivered and real authenticated fetch/metadata smoke passed on owned issue 2. Source protocol writing reservation released. Compact resource-panel import/render check remains before closing the user flow under OBS-014; exhaustive original matrix is not claimed.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "GLAB-02",
@@ -278,24 +333,32 @@
       "depends_on": [
         "GLAB-01"
       ],
-      "locks": [
-        "source-identity",
-        "providers",
-        "core-projects",
-        "protocol"
-      ],
+      "locks": [],
       "issues": [
         6
       ],
       "brief": "tasks/GLAB-02.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T17:06:54Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/GLAB-02.md",
+        "runs/run-20260920-a3e9b950/GLAB-adapter-evidence.json",
+        "runs/run-20260920-a3e9b950/gitlab-fixtures.json",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
+      "commits": [
+        "7d06e6e4225cec48fe5847f9bc4e95e1c04bc1e0",
+        "163ee85fba8c883f80b5b24871de84bd210a7823"
+      ],
+      "notes": [
+        "Standalone MR adapter and exact source branch/head defaults delivered. Real authenticated fetch/metadata smoke passed on owned standalone MR 1, including discussion and head identity. Actual fixture prerequisite is satisfied. Compact resource-panel check remains; broad negative/staleness matrix is unexecuted follow-up under OBS-014.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "GLAB-03",
@@ -307,22 +370,30 @@
       ],
       "locks": [
         "source-identity",
-        "providers",
-        "context-review",
-        "protocol"
+        "context-resources"
       ],
       "issues": [
         6
       ],
       "brief": "tasks/GLAB-03.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T17:47:39Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/GLAB-03.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
+      "commits": [
+        "7d06e6e4225cec48fe5847f9bc4e95e1c04bc1e0"
+      ],
+      "notes": [
+        "Bounded refresh/materialization diagnostics backend committed; focused failure-preserves-cache regression passed. Retained-resource UI and review repairs are implemented and typecheck/build passed. One compact real import/list/refresh UI check is next under OBS-014; do not expand it into the original exhaustive matrix. Existing write lease remains unchanged.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "GLAB-04",
@@ -341,14 +412,20 @@
         6
       ],
       "brief": "tasks/GLAB-04.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-01",
@@ -361,7 +438,6 @@
       "locks": [
         "app-shell",
         "browser-ui",
-        "browser-helper",
         "browser-store"
       ],
       "issues": [
@@ -369,14 +445,22 @@
         11
       ],
       "brief": "tasks/WEB-01.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T16:13:32Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/WEB-01.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015: BatchBrowserUI exclusively owns App/BrowserPane interaction/recovery, preserving returned repairs and unique intent identities. BatchBrowserHost owns durable browser store/transport work. Stable feedback operation identity and remaining capture/input gaps are completed in this batch; verification follows integration.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-02",
@@ -387,22 +471,29 @@
         "TERM-01"
       ],
       "locks": [
-        "browser-ui",
-        "browser-helper"
+        "browser-protocol"
       ],
       "issues": [
         9,
         10
       ],
       "brief": "tasks/WEB-02.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T17:37:53Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/WEB-02.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "Existing first-gesture nullable inspection/protocol changes are preserved. OBS-015 assigns UI completion to BatchBrowserUI and helper completion to BatchBrowserRuntime; Main owns protocol. No mid-batch validation.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-03",
@@ -413,7 +504,6 @@
         "TERM-01"
       ],
       "locks": [
-        "browser-ui",
         "browser-helper",
         "frame-presenter"
       ],
@@ -421,14 +511,22 @@
         8
       ],
       "brief": "tasks/WEB-03.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/WEB-03.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 activates geometry implementation. BatchBrowserRuntime owns helper/framePresenter/transform; BatchBrowserUI owns pending resize and matching-frame admission. Existing wire fields are fixed; Main integrates indispensable shared seams. No tests/runtime during writing.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-04",
@@ -451,14 +549,21 @@
         10
       ],
       "brief": "tasks/WEB-04.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Post-scroll input remained behind Showing last confirmed frame; nested scroll did not execute."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch: UI input/navigation/ownership belongs to BatchBrowserUI, helper input/leases to BatchBrowserRuntime, adapters to BatchBrowserHost. File-disjoint contracts in AUTORUN.md govern shared-lock groups; wire interfaces remain fixed. Verification follows integration.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-05",
@@ -482,14 +587,21 @@
         11
       ],
       "brief": "tasks/WEB-05.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Linux-native annotation persisted but was not acknowledged by the UI; native note/capture could not finish."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch: BrowserUI owns capture/draft/feedback interaction and stable send operation identity; BrowserRuntime owns frame-bound geometry; BrowserHost owns durable browser delivery. BatchWorkflows alone owns generic comment-paste implementation; its API is unchanged.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-06",
@@ -511,14 +623,21 @@
         9
       ],
       "brief": "tasks/WEB-06.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Slow-observer boundaries passed, but post-scroll stale-frame recovery remains unresolved with WEB-04."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-07",
@@ -537,14 +656,22 @@
         9
       ],
       "brief": "tasks/WEB-07.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T15:19:27.331Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Consolidated implementation and targeted proof delivered; completion accounting awaits its verified commit and required dependencies."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/WEB-07.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "Returned configuration/helper launch implementation is preserved. BatchBrowserHost owns remaining dependency/lifecycle repairs under OBS-015; no installer rewrite or intermediate validation. Actual Mac runtime remains user verification.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "WEB-08",
@@ -568,14 +695,21 @@
         9
       ],
       "brief": "tasks/WEB-08.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Security boundary checks passed; completion dependency WEB-06 remains unresolved."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch repairs concrete helper/host/transport security gaps within existing boundaries, without a new security layer. Separate security review and bounded hostile/positive verification follow integration; no runtime security pass is claimed.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "NATIVE-01",
@@ -592,14 +726,22 @@
         5
       ],
       "brief": "tasks/NATIVE-01.md",
-      "status": "pending",
-      "owner": null,
-      "started_at": null,
-      "completed_at": null,
+      "status": "done",
+      "owner": "Main",
+      "started_at": "2026-09-21T15:39:05.801Z",
+      "completed_at": "2026-09-21T18:06:59Z",
       "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "evidence": [
+        "runs/run-20260920-a3e9b950/NATIVE-01.md",
+        "runs/run-20260920-a3e9b950/NATIVE-01-linux-evidence.json",
+        "runs/run-20260920-a3e9b950/MACOS-HANDOFF.md"
+      ],
+      "commits": [
+        "8fe09231093ac2ce017017d3a254f321c211b502"
+      ],
+      "notes": [
+        "Adjusted delivery complete under explicit user OBS-013: owned macOS bundle implementation, reviewed publication/refusal behavior, 15 final Python tests and real owned Linux install/help/update/uninstall passed. Actual macOS launch/update/filesystem checks are user verification\u2014not executed; no Darwin or GUI pass is claimed. Installer docs exclude the unrelated WEB-07 hunk."
+      ]
     },
     {
       "id": "NATIVE-02",
@@ -627,14 +769,22 @@
         7
       ],
       "brief": "tasks/NATIVE-02.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "macOS handoff delivered; Linux-native annotation acknowledgement remains unresolved under WEB-05."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/MACOS-HANDOFF.md",
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-013 assigns actual macOS execution to the user, not an external-runner blocker. The committed handoff preserves original native checks. Reachable campaign integration and dependency verification remain pending; macOS results must stay explicitly not executed.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "PERF-01",
@@ -658,14 +808,20 @@
         12
       ],
       "brief": "tasks/PERF-01.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "100-sample latency measurement passed targeted bound; sustained resource/whole-app protocol not executed."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": []
+      "notes": [
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "ACCEPT-01",
@@ -692,14 +848,21 @@
         13
       ],
       "brief": "tasks/ACCEPT-01.md",
-      "status": "pending",
+      "status": "blocked",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
-      "blockers": [],
-      "evidence": [],
+      "blockers": [
+        "Known WEB-04/WEB-05 failures and remaining integrated proof prevent full campaign acceptance."
+      ],
+      "evidence": [
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+      ],
       "commits": [],
-      "notes": ["OBS-008: campaign completion requires verified restoration or user-authorized retention of unintended RUN-01 integration/settings writes. No pre-probe copies found; see RUN-01 safety correction."]
+      "notes": [
+        "OBS-008 disposition resolved on 2026-09-21: after disclosure that no pre-run copies were found, the user explicitly selected Retain current files. Leave all six integration/settings files unchanged; no further HOME writes or speculative reconstruction. Final gate still requires delivered behavior, evidence, owned commits and resource accounting.",
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+      ]
     },
     {
       "id": "LATER-GHPR",

@@ -196,6 +196,19 @@
   cursor: default;
   opacity: 0.55;
 }
+.browser-capture-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warning);
+  font-size: 11px;
+}
+
+.browser-capture-pending label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .browser-annotation-icon {
   display: block;

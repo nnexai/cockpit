@@ -301,18 +301,29 @@ impl BrowserService {
             .as_ref()
             .map(|path| resolve_playwright_core(path))
             .transpose()?;
+        let playwright_core = match configured_core {
+            Some(path) => Some(path),
+            None => locate_playwright_core(&cli)
+                .map(|path| resolve_playwright_core(&path))
+                .transpose()?,
+        }
+        .ok_or_else(|| {
+            InspectionError::new(
+                "browser_core_missing",
+                "Paired Playwright-core is not installed beside the selected CLI; \
+                 set COCKPIT_PLAYWRIGHT_CORE or [browser].playwright_core to its package directory",
+            )
+        })?;
         let helper_module = self
             .configuration
             .browser_helper
             .as_ref()
             .map(|path| resolve_regular_file(path, "Browser helper"))
             .transpose()?;
-        let node_executable = self
-            .configuration
-            .node_executable
-            .as_ref()
-            .map(|path| resolve_executable(path, "Node runtime"))
-            .transpose()?;
+        let node_executable = match self.configuration.node_executable.as_ref() {
+            Some(path) => resolve_executable(path, "Node runtime")?,
+            None => resolve_executable(Path::new("node"), "Node runtime")?,
+        };
         Ok(BrowserRuntimeAttachment {
             association_key: receipt.association_key,
             browser_incarnation: incarnation,
@@ -321,8 +332,8 @@ impl BrowserService {
             profile_path: PathBuf::from(receipt.profile_path),
             cdp_endpoint,
             target_id,
-            playwright_core: configured_core.or_else(|| locate_playwright_core(&cli)),
-            node_executable,
+            playwright_core: Some(playwright_core),
+            node_executable: Some(node_executable),
             helper_module,
         })
     }
@@ -1720,16 +1731,16 @@ async fn cdp_page_target(
 fn locate_playwright_core(cli: &Path) -> Option<PathBuf> {
     let mut directory = cli.parent()?;
     for _ in 0..8 {
-        let candidate = if directory
-            .file_name()
-            .is_some_and(|name| name == "node_modules")
-        {
-            directory.join("playwright-core")
-        } else {
-            directory.join("node_modules/playwright-core")
-        };
-        if candidate.join("package.json").is_file() {
-            return candidate.canonicalize().ok();
+        let candidates = [
+            directory.join("playwright-core"),
+            directory.join("node_modules/playwright-core"),
+            directory.join("lib/node_modules/playwright-core"),
+            directory.join("../lib/node_modules/playwright-core"),
+        ];
+        for candidate in candidates {
+            if candidate.join("package.json").is_file() {
+                return candidate.canonicalize().ok();
+            }
         }
         directory = directory.parent()?;
     }
@@ -1751,63 +1762,158 @@ fn compatible_playwright_cli_version(version: &str) -> bool {
 }
 
 fn resolve_regular_file(path: &Path, label: &str) -> Result<PathBuf, InspectionError> {
+    let setting = match label {
+        "Browser helper" => "COCKPIT_BROWSER_HELPER or [browser].browser_helper",
+        _ => "the browser configuration",
+    };
+    if !path.is_absolute() {
+        return Err(InspectionError::new(
+            "browser_helper_invalid",
+            format!("{label} must be an absolute path; set {setting} to browser-helper.mjs"),
+        ));
+    }
     let resolved = path.canonicalize().map_err(|_| {
         InspectionError::new(
-            "browser_tool_missing",
-            format!("cannot resolve {label}: {}", path.display()),
+            "browser_helper_missing",
+            format!("{label} is missing; set {setting} to an installed helper module"),
         )
     })?;
     if !fs::metadata(&resolved).is_ok_and(|metadata| metadata.is_file()) {
         return Err(InspectionError::new(
-            "browser_tool_missing",
-            format!("{label} is not a regular file: {}", resolved.display()),
+            "browser_helper_invalid",
+            format!("{label} must be a regular file; set {setting} to browser-helper.mjs"),
         ));
     }
     Ok(resolved)
 }
 
 fn resolve_playwright_core(path: &Path) -> Result<PathBuf, InspectionError> {
+    if !path.is_absolute() {
+        return Err(InspectionError::new(
+            "browser_core_invalid",
+            "Configured Playwright-core path must be absolute; set COCKPIT_PLAYWRIGHT_CORE or \
+             [browser].playwright_core to its installed package directory",
+        ));
+    }
     let resolved = path.canonicalize().map_err(|_| {
         InspectionError::new(
-            "browser_tool_missing",
-            format!("cannot resolve Playwright-core: {}", path.display()),
+            "browser_core_missing",
+            "Playwright-core package is missing; set COCKPIT_PLAYWRIGHT_CORE or \
+             [browser].playwright_core to its installed package directory",
         )
     })?;
-    if !resolved.join("package.json").is_file() {
+    if !resolved.is_dir() {
         return Err(InspectionError::new(
-            "browser_tool_missing",
-            "Configured Playwright-core path does not contain package.json",
+            "browser_core_invalid",
+            "Configured Playwright-core path is not a package directory; set \
+             COCKPIT_PLAYWRIGHT_CORE or [browser].playwright_core to playwright-core",
+        ));
+    }
+    let package_path = resolved.join("package.json");
+    let bytes = fs::read(&package_path).map_err(|_| {
+        InspectionError::new(
+            "browser_core_missing",
+            "Configured Playwright-core package.json is missing; point \
+             COCKPIT_PLAYWRIGHT_CORE or [browser].playwright_core at the package directory",
+        )
+    })?;
+    if bytes.len() > 64 * 1024 {
+        return Err(InspectionError::new(
+            "browser_core_invalid",
+            "Playwright-core package metadata exceeds the bounded limit",
+        ));
+    }
+    let package: Value = serde_json::from_slice(&bytes).map_err(|_| {
+        InspectionError::new(
+            "browser_core_invalid",
+            "Playwright-core package metadata is invalid JSON; reinstall the paired package",
+        )
+    })?;
+    if package.get("name").and_then(Value::as_str) != Some("playwright-core") {
+        return Err(InspectionError::new(
+            "browser_core_invalid",
+            "Configured package is not playwright-core; select the package paired with the CLI",
+        ));
+    }
+    let entry = package
+        .get("module")
+        .or_else(|| package.get("main"))
+        .and_then(Value::as_str)
+        .unwrap_or("index.js");
+    let entry_path = resolved.join(entry);
+    if !entry_path.starts_with(&resolved)
+        || !entry_path.is_file()
+        || !resolved.join("lib").join("utilsBundle.js").is_file()
+    {
+        return Err(InspectionError::new(
+            "browser_core_invalid",
+            "Playwright-core package entry points are incomplete; reinstall the paired package",
         ));
     }
     Ok(resolved)
 }
+
 fn resolve_executable(path: &Path, label: &str) -> Result<PathBuf, InspectionError> {
+    let setting = match label {
+        "Playwright CLI" => "COCKPIT_PLAYWRIGHT_CLI or [browser].playwright_cli",
+        "Node runtime" => "COCKPIT_NODE_EXECUTABLE or [browser].node_executable",
+        "Chromium executable" => {
+            "COCKPIT_CHROMIUM_EXECUTABLE or [browser].chromium_executable"
+        }
+        _ => "the browser configuration",
+    };
+    let code = match label {
+        "Playwright CLI" => "browser_cli_missing",
+        "Node runtime" => "browser_node_missing",
+        "Chromium executable" => "browser_executable_missing",
+        _ => "browser_tool_missing",
+    };
     let candidate = if path.components().count() == 1 {
         env::var_os("PATH")
             .and_then(|paths| {
-                env::split_paths(&paths)
-                    .map(|directory| directory.join(path))
-                    .find(|candidate| is_executable(candidate))
+                let mut unusable = None;
+                for directory in env::split_paths(&paths) {
+                    let candidate = directory.join(path);
+                    if is_executable(&candidate) {
+                        return Some(candidate);
+                    }
+                    if unusable.is_none() && fs::metadata(&candidate).is_ok() {
+                        unusable = Some(candidate);
+                    }
+                }
+                unusable
             })
             .ok_or_else(|| {
                 InspectionError::new(
-                    "browser_tool_missing",
-                    format!("{label} is not installed; configure its absolute path"),
+                    code,
+                    format!("{label} is not installed; set {setting} to its absolute path"),
                 )
             })?
     } else {
         path.to_owned()
     };
+    let metadata = fs::metadata(&candidate).map_err(|_| {
+        InspectionError::new(
+            code,
+            format!("{label} is missing; set {setting} to its absolute path"),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(InspectionError::new(
+            "browser_tool_invalid",
+            format!("{label} must be a regular file; set {setting} to an executable"),
+        ));
+    }
     if !is_executable(&candidate) {
         return Err(InspectionError::new(
-            "browser_tool_missing",
-            format!("{label} is not an executable file: {}", candidate.display()),
+            "browser_tool_permission",
+            format!("{label} is not executable; grant execute permission or set {setting}"),
         ));
     }
     candidate.canonicalize().map_err(|_| {
         InspectionError::new(
-            "browser_tool_missing",
-            format!("cannot resolve {label}: {}", candidate.display()),
+            "browser_tool_unavailable",
+            format!("Cannot resolve {label}; verify permissions and set {setting}"),
         )
     })
 }

@@ -153,19 +153,22 @@ function nativeBrowserViewSubscription(
 ): Promise<BrowserViewStream> {
   let request: BrowserViewOpenRequest;
   try { request = parseBrowserViewOpenRequest(value); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-  return invokeAndParse(invoke, "cockpit_browser_view_open", { request }, "browser view open", parseNativeBrowserViewOpen).then((opened) => new Promise((resolve, reject) => {
+  const opened = invokeAndParse(invoke, "cockpit_browser_view_open", { request }, "browser view open", parseNativeBrowserViewOpen);
+  const start = (opened: NativeBrowserViewOpenResponse) => new Promise<BrowserViewStream>((resolve, reject) => {
     const identity = opened.snapshot.identity;
     let closed = false; let settled = false; let streamId: string | undefined;
     let pendingFrame: { descriptor: BrowserViewFrameDescriptor; sequence: number } | undefined;
     let lastFrameSequence = 0;
-    // Tauri can deliver a frame before the subscribe invoke resolves. Keep its
-    // release until the stream id exists; otherwise host `outstanding` remains
-    // occupied forever. The queue preserves frame/channel order.
+    // A stream can retire before the subscribe invoke returns. Keep this
+    // idempotent so a failure/abort race cannot release the same host stream twice.
+    let cancellationRequested = false;
     let deferredAcknowledgements: number[] = [];
     let acknowledgementQueue: Promise<unknown> = Promise.resolve();
     const sendAcknowledgement = (id: string, sequence: number) => {
       acknowledgementQueue = acknowledgementQueue.then(() => invoke("cockpit_browser_view_frame_ack", { streamId: id, frameSequence: sequence })).catch((cause) => {
-        try { onError(streamFailure("Native browser frame acknowledgement failed", cause)); } catch { /* Preserve cancellation after a consumer callback failure. */ }
+        if (!closed) {
+          try { onError(streamFailure("Native browser frame acknowledgement failed", cause)); } catch { /* Preserve transport cleanup after a consumer callback failure. */ }
+        }
       });
     };
     const releaseFrame = (sequence: number) => {
@@ -179,12 +182,16 @@ function nativeBrowserViewSubscription(
       releaseFrame(pending.sequence);
     };
     const cancel = (id: string) => {
+      if (cancellationRequested) return;
+      cancellationRequested = true;
       void acknowledgementQueue.then(() => invoke("cockpit_stream_cancel", { streamId: id })).catch(() => undefined);
     };
+    let abort: () => void = () => undefined;
     const fail = (error: CockpitClientError) => {
       if (closed) return;
       releasePendingFrame();
       closed = true;
+      signal?.removeEventListener("abort", abort);
       if (streamId) cancel(streamId);
       if (!settled) { settled = true; reject(error); } else onError(error);
     };
@@ -246,10 +253,12 @@ function nativeBrowserViewSubscription(
           return;
         }
         throw new CockpitClientError("malformed_response", "Native browser view message kind is unknown");
-      } catch (error) { fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Native browser view message is malformed", { cause: error })); }
+      } catch (error) {
+        fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Native browser view message is malformed", { cause: error }));
+      }
     });
-    const abort = () => fail(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
-    if (signal?.aborted) { abort(); return; } signal?.addEventListener("abort", abort, { once: true });
+    abort = () => fail(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
+    if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
     void invokeAndParse(invoke, "cockpit_browser_view_subscribe", { viewId: identity.view_id, streamEpoch: identity.stream_epoch, channel }, "browser view subscription", streamIdValue).then((id) => {
       streamId = id;
       const deferred = deferredAcknowledgements;
@@ -258,7 +267,7 @@ function nativeBrowserViewSubscription(
       if (closed) {
         // Cancellation must follow any release queued during the id-less
         // window, so the host cannot observe a cancelled outstanding frame.
-        void acknowledgementQueue.then(() => invoke("cockpit_stream_cancel", { streamId: id })).catch(() => undefined);
+        cancel(id);
         return;
       }
       settled = true;
@@ -273,7 +282,32 @@ function nativeBrowserViewSubscription(
         },
       });
     }, (error) => { if (!closed) fail(error); });
-  }));
+  });
+  if (!signal) return opened.then(start);
+  return new Promise((resolve, reject) => {
+    let retired = false;
+    const abort = () => {
+      if (retired) return;
+      retired = true;
+      reject(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
+    };
+    if (signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+    }
+    void opened.then((value) => {
+      signal.removeEventListener("abort", abort);
+      if (retired) {
+        void start(value).catch(() => undefined);
+        return;
+      }
+      void start(value).then(resolve, reject);
+    }, (error) => {
+      signal.removeEventListener("abort", abort);
+      if (!retired) reject(error);
+    });
+  });
 }
 function streamIdValue(value: unknown): string {
   if (typeof value === "string" && value.length > 0) return value;
@@ -289,48 +323,108 @@ function streamId(value: unknown): string {
   throw new CockpitClientError("malformed_response", "Native stream command returned no stream id");
 }
 
-function sessionSubscription(channelFactory: NativeChannelFactory, invoke: NativeInvoke, sessionId: string, onMessage: (message: SessionStreamMessage) => void, onError: (error: CockpitClientError) => void): Promise<ClosableStream> {
-  try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-  let closed = false;
-  let cancelled = false;
-  let activeStreamId: string | undefined;
-  let cursor: StreamOrderCursor | null = null;
-  const cancel = (id: string) => {
-    if (cancelled) return;
-    cancelled = true;
-    void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined);
-  };
-  const channel = channelFactory<unknown>((raw) => {
-    if (closed) return;
-    let message: SessionStreamMessage;
-    try { message = parseSessionStreamMessage(raw); }
-    catch (error) {
-      closed = true;
-      onError(error instanceof CockpitClientError ? error : streamFailure("Session stream message is malformed", error));
-      if (activeStreamId !== undefined) cancel(activeStreamId);
-      return;
-    }
-    const result = transitionSessionStream(sessionId, cursor, message);
-    if (result.kind === "ignore") return;
-    if (result.kind === "error") {
-      closed = true;
-      onError(streamFailure(result.message, result.classification, result.code));
-      if (activeStreamId !== undefined) cancel(activeStreamId);
-      return;
-    }
-    cursor = result.cursor;
-    onMessage(message);
-  });
-  return invokeAndParse(invoke, "cockpit_session_subscribe", { sessionId, channel }, "session subscription", streamId).then((id) => {
-    activeStreamId = id;
-    if (closed) cancel(id);
-    return {
-      close() {
-        if (closed) return;
-        closed = true;
-        cancel(id);
-      },
+function sessionSubscription(
+  channelFactory: NativeChannelFactory,
+  invoke: NativeInvoke,
+  sessionId: string,
+  onMessage: (message: SessionStreamMessage) => void,
+  onError: (error: CockpitClientError) => void,
+  signal?: AbortSignal,
+): Promise<ClosableStream> {
+  try {
+    validateSessionId(sessionId);
+    signal?.throwIfAborted();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return new Promise<ClosableStream>((resolve, reject) => {
+    let closed = false;
+    let settled = false;
+    let cancelled = false;
+    let activeStreamId: string | undefined;
+    let cursor: StreamOrderCursor | null = null;
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const cancel = (id: string) => {
+      if (cancelled) return;
+      cancelled = true;
+      void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined);
     };
+    const fail = (error: CockpitClientError) => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      if (activeStreamId !== undefined) cancel(activeStreamId);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      } else {
+        onError(error);
+      }
+    };
+    const abort = () => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      if (activeStreamId !== undefined) cancel(activeStreamId);
+      if (!settled) {
+        settled = true;
+        reject(streamFailure("Session subscription was cancelled"));
+      }
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    let channel: NativeChannel<unknown>;
+    try {
+      channel = channelFactory<unknown>((raw) => {
+        if (closed) return;
+        let message: SessionStreamMessage;
+        try {
+          message = parseSessionStreamMessage(raw);
+        } catch (error) {
+          fail(error instanceof CockpitClientError ? error : streamFailure("Session stream message is malformed", error));
+          return;
+        }
+        const result = transitionSessionStream(sessionId, cursor, message);
+        if (result.kind === "ignore") return;
+        if (result.kind === "error") {
+          fail(streamFailure(result.message, result.classification, result.code));
+          return;
+        }
+        cursor = result.cursor;
+        onMessage(message);
+      });
+    } catch (error) {
+      closed = true;
+      cleanup();
+      settled = true;
+      reject(error);
+      return;
+    }
+    void invokeAndParse(invoke, "cockpit_session_subscribe", { sessionId, channel }, "session subscription", streamId).then((id) => {
+      activeStreamId = id;
+      if (closed) {
+        cancel(id);
+        return;
+      }
+      settled = true;
+      resolve({
+        close() {
+          if (closed) return;
+          closed = true;
+          cleanup();
+          cancel(id);
+        },
+      });
+    }, (error: unknown) => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -347,6 +441,8 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
     cancelled = true;
     void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined);
   };
+  let abort: () => void = () => undefined;
+  const removeAbortListener = () => signal?.removeEventListener("abort", abort);
   let ready = false;
   const channel = channelFactory<unknown>((raw) => {
     if (closed) return;
@@ -354,12 +450,14 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
     try { message = parseTerminalStreamMessage(raw); }
     catch (error) {
       closed = true;
+      removeAbortListener();
       onError(error instanceof CockpitClientError ? error : streamFailure("Terminal stream message is malformed", error));
       if (activeStreamId !== undefined) cancel(activeStreamId);
       return;
     }
     if (message.session_id !== validated.session_id || message.pane_id !== validated.pane_id) {
       closed = true;
+      removeAbortListener();
       onError(streamFailure("Terminal stream message belongs to another session or pane"));
       if (activeStreamId !== undefined) cancel(activeStreamId);
       return;
@@ -367,6 +465,7 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
     if (activeStreamId === undefined) activeStreamId = message.stream_id;
     else if (message.stream_id !== activeStreamId) {
       closed = true;
+      removeAbortListener();
       onError(streamFailure("Terminal stream message belongs to another stream"));
       cancel(activeStreamId);
       return;
@@ -375,12 +474,14 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
       const current = BigInt(message.seq);
       if (!receivedFrame && !message.full) {
         closed = true;
+        removeAbortListener();
         onError(streamFailure("Terminal stream must begin with a full frame"));
         if (activeStreamId !== undefined) cancel(activeStreamId);
         return;
       }
       if (receivedFrame && current !== lastFrameSequence! + 1n) {
         closed = true;
+        removeAbortListener();
         onError(streamFailure("Terminal frame sequence is not consecutive"));
         if (activeStreamId !== undefined) cancel(activeStreamId);
         return;
@@ -392,7 +493,7 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
   });
   return new Promise<TerminalStream>((resolve, reject) => {
     let settled = false;
-    const abort = () => {
+    abort = () => {
       if (closed) return;
       closed = true;
       ready = false;
@@ -694,11 +795,25 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },
-    sessionSnapshot(sessionId: string): Promise<SessionSnapshotResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      return invokeAndParse(invoke, "cockpit_session_snapshot", { sessionId }, "session snapshot", parseSessionSnapshotResponse).then((value) => {
+    sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
+      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+      const pending = invokeAndParse(invoke, "cockpit_session_snapshot", { sessionId }, "session snapshot", parseSessionSnapshotResponse).then((value) => {
+        signal?.throwIfAborted();
         if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Session snapshot belongs to another session");
         return value;
+      });
+      if (!signal) return pending;
+      return new Promise<SessionSnapshotResponse>((resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        void pending.then((value) => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        }, (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        });
+        if (signal.aborted) abort();
       });
     },
     focus(sessionId: string, request: FocusRequest): Promise<FocusResponse> {
@@ -727,7 +842,7 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
         return value;
       });
     },
-    subscribeSession(sessionId, onMessage, onError) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError); },
+    subscribeSession(sessionId, onMessage, onError, signal) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError, signal); },
     openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },
     openBrowserView(request, onEvent, onFrame, onError, signal) {
       return nativeBrowserViewSubscription(invoke, channelFactory, request, onEvent, onFrame, onError, signal);

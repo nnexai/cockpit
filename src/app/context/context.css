@@ -239,3 +239,137 @@
 .context-mermaid-caption { display: block; font-size: 11px; color: var(--text-muted); }
 
 .context-sources input[type="checkbox"] { width: auto; }
+.context-resources {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+}
+.context-resources:focus-visible,
+.context-resources button:focus-visible,
+.context-resources input:focus-visible,
+.context-resources select:focus-visible,
+.context-resources summary:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: 1px;
+}
+.context-resources > header {
+  display: flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.context-resources > header button,
+.context-resources button {
+  min-height: 28px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.context-resources button:hover:not(:disabled) { background: var(--surface-hover); }
+.context-resources button:disabled { cursor: default; opacity: .6; }
+.context-resources-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+.context-resources-body > .context-sources {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+.context-resources-body > .context-snapshot:not(.context-sources) {
+  min-height: 0;
+  max-height: min(40%, 280px);
+  flex: 0 1 auto;
+  overflow: auto;
+}
+.context-sources > summary { flex: 0 0 auto; }
+.context-sources > p,
+.context-sources > label,
+.context-sources > button,
+.context-sources > .context-resource-error,
+.context-sources > .context-resource-loading,
+.context-sources > .context-resource-empty,
+.context-sources > .context-resource-feedback { flex: 0 0 auto; }
+.context-sources > label { overflow-wrap: anywhere; }
+.context-resource-list {
+  min-height: 72px;
+  flex: 1 1 auto;
+  margin-top: 6px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--border);
+}
+.context-resource-loading,
+.context-resource-empty,
+.context-resource-error,
+.context-resource-feedback {
+  display: flex;
+  max-height: 84px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 6px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.context-resource-loading { color: var(--text-secondary); }
+.context-resource-empty { color: var(--text-muted); }
+.context-resource-error,
+.context-resource-feedback-error { color: var(--blocked); }
+.context-resource-error span { min-width: 12ch; flex: 1 1 20ch; }
+.context-resource-error button { margin-top: 0; }
+.context-resource-feedback { color: var(--text-secondary); }
+.context-source-entry {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 3px 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.context-source-entry.is-selected { border-left: 2px solid var(--accent); padding-left: 6px; }
+.context-source-entry strong,
+.context-source-entry > span,
+.context-source-entry > code,
+.context-source-entry > p,
+.context-source-identity { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.context-source-entry strong { grid-column: 1; line-height: 1.25; }
+.context-source-entry > span,
+.context-source-entry > code,
+.context-source-entry > p,
+.context-source-identity { grid-column: 1 / -1; }
+.context-source-entry > span { color: var(--text-secondary); line-height: 1.25; }
+.context-source-entry > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-source-entry button { grid-column: 2; grid-row: 1; align-self: start; margin: 0; }
+.context-source-identity { display: flex; gap: 4px 8px; overflow: hidden; }
+.context-source-identity code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-source-unavailable { color: var(--working) !important; }
+.context-source-diagnostic { grid-column: 1 / -1; margin: 2px 0; color: var(--working) !important; overflow-wrap: anywhere; }

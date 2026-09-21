@@ -263,6 +263,19 @@ describe("browser CockpitClient", () => {
     expect(errors.at(-1)?.message).toMatch(/begin at sequence 1/);
     expect(socket.readyState).toBe(3);
   });
+  it("cancels a browser session handshake without reporting a stale error", async () => {
+    const socket = new FakeSocket();
+    const controller = new AbortController();
+    const errors = vi.fn();
+    const open = createBrowserClient(vi.fn(async () => jsonResponse(snapshot)), () => socket)
+      .subscribeSession("session-1", vi.fn(), errors, controller.signal);
+    controller.abort();
+    await expect(open).rejects.toMatchObject({ code: "stream_error", message: "Session subscription was cancelled" });
+    expect(socket.readyState).toBe(3);
+    socket.open();
+    socket.message(JSON.stringify(streamSnapshot(1)));
+    expect(errors).not.toHaveBeenCalled();
+  });
 
 
   it("opens a per-pane terminal with fitted dimensions and forwards text and bytes", async () => {
@@ -432,6 +445,56 @@ describe("native CockpitClient", () => {
     await expect(open).rejects.toMatchObject({ code: "stream_error", message: "Terminal attach was cancelled" });
     resolveOpen!("late-stream");
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "late-stream" }));
+  });
+  it("cancels a native session handshake and retires its late stream id once", async () => {
+    let resolveSubscribe: ((value: unknown) => void) | undefined;
+    const controller = new AbortController();
+    const errors = vi.fn();
+    const invoke = vi.fn((command: string) => command === "cockpit_session_subscribe"
+      ? new Promise<unknown>((resolve) => { resolveSubscribe = resolve; })
+      : Promise.resolve(undefined));
+    const open = createNativeClient(invoke, <T,>(onmessage: (message: T) => void) => ({ onmessage }))
+      .subscribeSession("session-1", vi.fn(), errors, controller.signal);
+    controller.abort();
+    await expect(open).rejects.toMatchObject({ code: "stream_error" });
+    resolveSubscribe!("late-session-stream");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "late-session-stream" }));
+    expect(invoke.mock.calls.filter(([command]) => command === "cockpit_stream_cancel")).toHaveLength(1);
+    expect(errors).not.toHaveBeenCalled();
+  });
+  it("settles native snapshot cancellation before the host response", async () => {
+    let rejectInvoke!: (reason: unknown) => void;
+    const hostResponse = new Promise<unknown>((_resolve, reject) => { rejectInvoke = reject; });
+    const client = createNativeClient(async () => hostResponse);
+    const controller = new AbortController();
+    const read = client.sessionSnapshot("session-1", controller.signal);
+    controller.abort();
+    await expect(read).rejects.toMatchObject({ name: "AbortError" });
+    rejectInvoke(new Error("late native failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it("aborts a live native session and ignores subsequent channel events", async () => {
+    let channel: NativeChannel<unknown> | undefined;
+    const invoke = vi.fn(async (command: string) => command === "cockpit_session_subscribe" ? "live-session" : undefined);
+    const channelFactory = <T,>(onmessage: (message: T) => void): NativeChannel<T> => {
+      channel = { onmessage } as NativeChannel<unknown>;
+      return channel as NativeChannel<T>;
+    };
+    const messages = vi.fn();
+    const errors = vi.fn();
+    const controller = new AbortController();
+    const stream = await createNativeClient(invoke, channelFactory).subscribeSession("session-1", messages, errors, controller.signal);
+    channel!.onmessage(streamSnapshot(1));
+    expect(messages).toHaveBeenCalledOnce();
+    controller.abort();
+    channel!.onmessage(streamSnapshot(2));
+    expect(messages).toHaveBeenCalledOnce();
+    expect(errors).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "live-session" });
+    stream.close();
+    expect(invoke.mock.calls.filter(([command]) => command === "cockpit_stream_cancel")).toHaveLength(1);
   });
   it("closes native session streams on invalid generation transitions", async () => {
     let channel: NativeChannel<unknown> | undefined;

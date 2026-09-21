@@ -36,6 +36,23 @@ All 25 required task identities remain. A macOS-dependent task may close for thi
 
 OBS-014 supersedes the exhaustive-matrix requirement as a gate for each delivery increment. Deliver working fixes after lightweight, targeted proof of the affected path; do not delay near-ready deliverables for another broad audit or low-severity follow-up. Preserve the required product outcomes, protected-resource rules and task identities. A task may close for this adjusted delivery when its behavior is implemented, its relevant quick checks pass, its changes are committed and remaining minor findings/deeper unexecuted scenarios are recorded. Do not describe those scenarios as passed or claim full original matrix acceptance. A known data-loss/ownership hazard or broken primary action still blocks its affected path, not unrelated increments.
 
+OBS-015 supersedes the remaining serial increment-delivery cadence: finish the remaining implementation as one coordinated batch, then have subagents test and verify the integrated changes in parallel, consolidate repairs and deliver. Do not continue per-task commit/review/smoke loops.
+
+### Accepted consolidated implementation batch — Main, 2026-09-21
+
+Baseline is commit `163ee85fba8c883f80b5b24871de84bd210a7823` plus the existing campaign-owned working changes. Preserve those changes. The issue/MR import/render/unchanged-refresh smoke has passed; the resource UI remains uncommitted. Cancellation and Review focused tests passed (46 total), terminal/setup focused tests passed (35 total), and the latest frontend typecheck passed. Do not repeat these during writing.
+
+All remaining task outcomes stay assigned, using existing contracts rather than another architecture. Four disjoint writing boundaries:
+
+1. Browser interaction: App browser/focus/recovery wiring and BrowserPane/UI-local helpers/styles; complete first-gesture/input/resize-barrier/draft/capture/feedback behavior. Preserve operation identity across uncertain feedback delivery; no automatic replay.
+2. Browser runtime and geometry: browser-helper.mjs, framePresenter and transform; capture-bound geometry, viewport/control transitions, held input, helper security and bounded frame/decode release. Keep existing wire shapes; do not guess DPR or label current geometry as capture-time evidence.
+3. Browser host and transports: Rust browser/config/helper/feedback/delivery modules and TypeScript client adapters; finish dependency, ownership, cancellation, bounded identity validation and durable feedback behavior. Do not edit helper JavaScript, UI or generic comment-paste implementation.
+4. Local/source workflows: Context/Review/resources/project dialogs, TerminalPane, project/source/comment workflow backend; finish demonstrated retention/ownership defects and resource-panel density. Preserve the delivered setup, installer and read-only GitLab contracts.
+
+Main exclusively owns protocol/generated integration, campaign records and runtime. No other writer touches App.tsx, the shared protocol or another boundary. Existing wire/API shapes remain the cross-slice contract; report indispensable interface changes to Main rather than creating parallel abstractions. Generic comment paste belongs to the workflow boundary; browser delivery consumes its existing API.
+
+Writing workers read their affected original briefs and existing authorities, investigate and repair in one pass, and skip builds/tests/formatters/runtime/commits. They return exact changed paths and unresolved contract seams. Once writers settle, Main integrates once and dispatches independent bounded browser/native/workflow/provider/security/resource verification using distinct owned sessions or serialized shared-runtime access. Actual macOS execution remains the user's handoff. One consolidated repair pass follows observed failures; no new audit loop for incidental polish.
+
 ## Bootstrap after the trigger
 
 Perform this bootstrap once for the campaign (and again only when a recovery checkpoint says the authority set changed):

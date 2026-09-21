@@ -1,0 +1,58 @@
+{
+  "authority": {
+    "session": "csg-a3e9b950-nativefinal",
+    "herdr_pid": 1670329,
+    "socket": "/tmp/csg-a3e9b950/native-final-config/herdr/sessions/csg-a3e9b950-nativefinal/herdr.sock",
+    "display": "csg-native",
+    "compositor_pid": 329216,
+    "webdriver": "http://127.0.0.1:34585",
+    "webdriver_session": "77e3e3c5-e73a-4266-88a7-a245b3b2d055",
+    "fixture": "http://127.0.0.1:37629/?case=native-final"
+  },
+  "startup": {
+    "passed": true,
+    "evidence": "W3C POST /session with webkitgtk:browserOptions.binary=/tmp/csg-a3e9b950/native-final-launch (browserName omitted) returned wry 0.55.1; cockpit-tauri PID 1784044 and WebKit processes started under private authority.",
+    "initial_issue": "debug Tauri binary loaded http://localhost:5173/ before a frontend server existed and returned connection refused; owned Vite service csg-native-vite was started on 127.0.0.1:5173, then refresh loaded the rebuilt source UI. No user display, HOME, credentials, or active Herdr session was touched."
+  },
+  "passed": [
+    "Existing-directory setup reviewed and completed for /tmp/csg-a3e9b950/repositories/gitlab as borrowed native-existing Space; Herdr session.json shows workspace w1 and two tabs/panes.",
+    "Native terminal channel evidence: pane w1:p2 started fish in /tmp/csg-a3e9b950/repositories/gitlab; herdr pane run printf NATIVE_TERM_OK and pane read returned NATIVE_TERM_OK.",
+    "Native zoom/restore: owned pane split w1:p3; pane zoom --on returned zoomed=true and pane zoom --off returned zoomed=false with split retained.",
+    "Native inline browser opened and navigated to fixture; live browser canvas frame was 509x603 and exported as native-fixture-frame.png/native-fixture-frame-fixed.png.",
+    "Fixture geometry observed at viewport 509x603, dpr 1, visualScale 1; canvas frame visibly showed controls, editor, sticky sentinel, and scroll area.",
+    "Native browser hide/show retention passed: after Hide sidebar, canvas and fixture URL remained present; after Show sidebar, canvas and URL remained present.",
+    "DOM pointer sequence reached fixture pointerdown/pointerup at hit coordinates x=121.07,y=115.90 in the inline 509x603 frame; observations saved in native-final-events.json.",
+    "After Main's rebuilt helper notice, restarted only the owned native WebDriver/app session (no setup/terminal rerun), correctly navigated a fresh inline target to ?case=native-final, and confirmed a fresh visible fixture canvas screenshot."
+  ],
+  "failed": [
+    "Physical private OS click at screen coordinate (1052,333), derived from canvas origin (930.28,217) plus fixture hit center (121,116), produced no fixture event. Physical helper reported PROBE_READY, but no pointer event was observed; this is recorded as physical-input failure, not a DOM pass.",
+    "After rebuilt helper replay, fresh native target still received no physical pointer event at (1052,333); synthetic pointerdown was not observed while stale pointerup observations remained. W3C /actions is unsupported by this WebDriver. No fabricated click pass is claimed.",
+    "DOM-only region replay (page instrumentation replaced setPointerCapture/releasePointerCapture with no-ops; not an OS-input pass) reached the annotation handler, but native annotation save was not acknowledged. UI reported 'Annotation save was not acknowledged; retry it before closing' and 'Retained annotation changes need review'; retry/recovery was attempted.",
+    "Fixture dialog resolution (alert/confirm/prompt) could not be exercised because physical click was not delivered and low-level DOM pointer dispatch did not synthesize onclick."
+  ],
+  "unexecuted": [
+    "Fixture editor typing and note/capture delivery were not claimed after physical input failure and unacknowledged annotation save.",
+    "macOS execution is explicitly user-owned and unexecuted.",
+    "WebDriver screenshot endpoint hung; native fixture canvas export was used for screenshots instead."
+  ],
+  "targeted_replay": {
+    "session": "049d3851-a6c9-4e19-9934-a20caad55b33",
+    "helper_rebuilt": true,
+    "fresh_fixture_frame": "/tmp/csg-a3e9b950/native-replay-fresh-frame.png",
+    "result": "visible frame and URL passed; native physical and synthetic click activation remained unproven/failed",
+    "event_delta": "native-rebuilt-before.json to native-rebuilt-after.json: no new pointerdown and clicks remained 0"
+  },
+  "dom_annotation_replay": {
+    "session": "c2456e47-22a0-43c1-b95b-b1885d41b4e7",
+    "method": "DOM UI activation plus synthetic region gesture with page-only setPointerCapture no-op instrumentation",
+    "result": "region handler reached; annotation save was not acknowledged; Notes remained 0 and Send annotations had no enabled capture",
+    "visible_error": "Annotation save was not acknowledged; retry it before closing."
+  },
+  "screenshots": [
+    "/tmp/csg-a3e9b950/native-fixture-frame.png",
+    "/tmp/csg-a3e9b950/native-fixture-frame-fixed.png",
+    "/tmp/csg-a3e9b950/native-replay-fresh-frame.png"
+  ],
+  "observations": "/tmp/csg-a3e9b950/native-final-events.json",
+  "cleanup": "Browser pane close and W3C session deletion performed after evidence; shared csg-display, WebDriver service, and native Herdr were preserved for diagnosis."
+}

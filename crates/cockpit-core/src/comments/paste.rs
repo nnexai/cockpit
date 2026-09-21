@@ -757,6 +757,10 @@ impl CommentsService {
         request: &CommentPasteSendRequest,
     ) -> Result<CommentPasteReceipt, InspectionError> {
         valid_id(&request.request_id, "request identity")?;
+        // Validate the operation identity before any target lease or adapter
+        // call. Otherwise an invalid ID could reach Herdr and only fail while
+        // persisting the receipt, leaving a dispatched paste unreconcilable.
+        receipt_name(&request.operation_id)?;
         validate_target(&request.target)?;
         let adapter = self
             .paste_adapter

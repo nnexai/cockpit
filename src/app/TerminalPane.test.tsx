@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => {
   const fits: MockFitAddon[] = [];
   const observers: MockResizeObserver[] = [];
   const fitDimensions: Array<[number, number]> = [];
-
+  const fitProposals: Array<[number, number]> = [];
   class MockTerminal {
     cols = 80;
     rows = 24;
@@ -63,6 +63,11 @@ const mocks = vi.hoisted(() => {
       addon.terminal = this;
     }
 
+    readonly resize = vi.fn((cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+      this.emitResize();
+    });
     emitResize() {
       this.resizeListeners.forEach((listener) => listener({ cols: this.cols, rows: this.rows }));
     }
@@ -76,6 +81,10 @@ const mocks = vi.hoisted(() => {
       this.terminal.cols = cols;
       this.terminal.rows = rows;
       this.terminal.emitResize();
+    });
+    readonly proposeDimensions = vi.fn(() => {
+      const proposal = fitProposals.shift();
+      return proposal ? { cols: proposal[0], rows: proposal[1] } : this.terminal ? { cols: this.terminal.cols, rows: this.terminal.rows } : undefined;
     });
 
     constructor() {
@@ -94,7 +103,7 @@ const mocks = vi.hoisted(() => {
     }
   }
 
-  return { terminals, fits, observers, fitDimensions, MockTerminal, MockFitAddon, MockResizeObserver };
+  return { terminals, fits, observers, fitDimensions, fitProposals, MockTerminal, MockFitAddon, MockResizeObserver };
 });
 
 vi.mock("@xterm/xterm", () => ({ Terminal: mocks.MockTerminal }));
@@ -178,6 +187,7 @@ afterEach(() => {
   mocks.fits.length = 0;
   mocks.observers.length = 0;
   mocks.fitDimensions.length = 0;
+  mocks.fitProposals.length = 0;
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {
@@ -296,6 +306,138 @@ describe("TerminalPane fitting and pointer ownership", () => {
       expect(ready).not.toHaveBeenCalled();
       act(() => mocks.terminals.at(-1)!.emitRender());
       expect(ready).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("applies each authoritative frame grid before its ANSI without echoing a resize", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      const terminal = mocks.terminals.at(-1)!;
+      const writes: Array<() => void> = [];
+      terminal.write.mockImplementation((_data, done) => { if (done) writes.push(done); });
+      act(() => messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 60, height: 12, full: true, bytes: btoa("frame") }));
+      await act(async () => { await settle(); });
+      expect(terminal.resize).toHaveBeenCalledWith(60, 12);
+      expect(terminal.cols).toBe(60);
+      expect(terminal.rows).toBe(12);
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
+      writes[0]!();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("serializes frame grid changes so queued ANSI never runs against a newer grid", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      const terminal = mocks.terminals.at(-1)!;
+      const writes: Array<() => void> = [];
+      terminal.write.mockImplementation((_data, done) => { if (done) writes.push(done); });
+      act(() => {
+        messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 60, height: 12, full: true, bytes: btoa("old grid") });
+        messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "2", encoding: "ansi", width: 100, height: 20, full: false, bytes: btoa("new grid") });
+      });
+      await act(async () => { await settle(); });
+      expect(writes).toHaveLength(1);
+      expect(terminal.cols).toBe(60);
+      expect(terminal.rows).toBe(12);
+      writes[0]!();
+      await act(async () => { await settle(); });
+      expect(writes).toHaveLength(2);
+      expect(terminal.resize).toHaveBeenLastCalledWith(100, 20);
+      expect(terminal.cols).toBe(100);
+      expect(terminal.rows).toBe(20);
+      writes[1]!();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("measures viewport changes after a frame without locally reflowing the rendered grid", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    mocks.fitDimensions.push([80, 24]);
+    mocks.fitProposals.push([80, 24], [120, 40]);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      const terminal = mocks.terminals.at(-1)!;
+      act(() => messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 60, height: 12, full: true, bytes: btoa("frame") }));
+      await act(async () => { await settle(); });
+      const fit = mocks.fits.at(-1)!;
+      const fitCount = fit.fit.mock.calls.length;
+      mocks.observers[0]!.callback([], mocks.observers[0] as unknown as ResizeObserver);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(fit.fit).toHaveBeenCalledTimes(fitCount);
+      expect(terminal.cols).toBe(60);
+      expect(terminal.rows).toBe(12);
+      expect(sent.filter((command): command is Extract<TerminalCommand, { type: "terminal.resize" }> => command.type === "terminal.resize")).toContainEqual({
+        type: "terminal.resize",
+        cols: 120,
+        rows: 40,
+        cell_width_px: 13,
+        cell_height_px: 33,
+      });
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("resyncs and releases queued frames when the bounded backlog is exceeded", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const onResync = vi.fn();
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { onResync })} />); await settle(); });
+      const terminal = mocks.terminals.at(-1)!;
+      const writes: Array<() => void> = [];
+      terminal.write.mockImplementation((_data, done) => { if (done) writes.push(done); });
+      act(() => {
+        for (let index = 1; index <= 65; index += 1) {
+          messages[0]!({
+            type: "frame",
+            session_id: "session",
+            pane_id: "pane",
+            stream_id: "stream",
+            seq: String(index),
+            encoding: "ansi",
+            width: 80,
+            height: 24,
+            full: index === 1,
+            bytes: btoa(`frame-${index}`),
+          });
+        }
+      });
+      expect(onResync).toHaveBeenCalledOnce();
+      expect(writes).toHaveLength(1);
+      writes[0]!();
     } finally {
       await act(async () => root.unmount());
       host.remove();

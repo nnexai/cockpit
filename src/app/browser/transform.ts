@@ -34,12 +34,24 @@ function pointInRect(rect: PaintedRect, x: number, y: number): boolean {
  */
 export function createBrowserTransform(frame: BrowserViewFrameDescriptor, paintedRect: PaintedRect): BrowserTransform | null {
   if (!validRect(paintedRect)
+    || !Number.isSafeInteger(frame.stream_epoch) || frame.stream_epoch < 0
+    || !Number.isSafeInteger(frame.frame_sequence) || frame.frame_sequence < 0
+    || !Number.isSafeInteger(frame.document_generation) || frame.document_generation < 0
+    || !Number.isSafeInteger(frame.viewport_revision) || frame.viewport_revision < 0
     || !Number.isInteger(frame.image_width) || !Number.isInteger(frame.image_height)
     || frame.image_width <= 0 || frame.image_height <= 0
     || !Number.isFinite(frame.viewport_css_width) || !Number.isFinite(frame.viewport_css_height)
     || frame.viewport_css_width <= 0 || frame.viewport_css_height <= 0
     || !Number.isFinite(frame.viewport_offset_x) || !Number.isFinite(frame.viewport_offset_y)
-    || !Number.isFinite(frame.scroll_x) || !Number.isFinite(frame.scroll_y)) return null;
+    || !Number.isFinite(frame.scroll_x) || !Number.isFinite(frame.scroll_y)
+    || !Number.isSafeInteger(frame.capture_timestamp_micros) || frame.capture_timestamp_micros < 0) return null;
+  // A delivered image can have a different pixel density than the CSS
+  // viewport, but it must preserve the viewport aspect ratio. Otherwise no
+  // single affine mapping can keep input and exported marks aligned.
+  const imageAspect = frame.image_width / frame.image_height;
+  const viewportAspect = frame.viewport_css_width / frame.viewport_css_height;
+  if (!Number.isFinite(imageAspect) || !Number.isFinite(viewportAspect)
+    || Math.abs(imageAspect - viewportAspect) > 0.01) return null;
   const clientToNormalized = (clientX: number, clientY: number): BrowserCoordinate | null => {
     if (!pointInRect(paintedRect, clientX, clientY)) return null;
     return { x: (clientX - paintedRect.left) / paintedRect.width, y: (clientY - paintedRect.top) / paintedRect.height };

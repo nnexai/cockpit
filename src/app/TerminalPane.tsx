@@ -7,6 +7,8 @@ import { createClipboardAccess, type ClipboardAccess } from "../client/clipboard
 
 
 export const MAX_PENDING_CONTROL_COMMANDS = 64;
+const MAX_QUEUED_FRAME_COUNT = 64;
+const MAX_QUEUED_FRAME_BYTES = 8 * 1024 * 1024;
 export function appendPendingControlCommand(queue: TerminalCommand[], command: TerminalCommand): TerminalCommand[] {
   return queue.length >= MAX_PENDING_CONTROL_COMMANDS
     ? [...queue.slice(queue.length - MAX_PENDING_CONTROL_COMMANDS + 1), command]
@@ -144,16 +146,29 @@ export function forwardTerminalMouse(
   send(terminalMouseCommand(kind, button, event, bounds, cols, rows));
   return true;
 }
-
-
-function terminalCellGeometry(terminal: Terminal): { cell_width_px: number; cell_height_px: number } {
+function terminalCellGeometry(terminal: Terminal, grid?: { cols: number; rows: number }): { cell_width_px: number; cell_height_px: number } {
   const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
+  const cols = grid?.cols ?? terminal.cols;
+  const rows = grid?.rows ?? terminal.rows;
   return {
-    cell_width_px: bounds && terminal.cols > 0 ? Math.max(1, Math.round(bounds.width / terminal.cols)) : 0,
-    cell_height_px: bounds && terminal.rows > 0 ? Math.max(1, Math.round(bounds.height / terminal.rows)) : 0,
+    cell_width_px: bounds && cols > 0 ? Math.max(1, Math.round(bounds.width / cols)) : 0,
+    cell_height_px: bounds && rows > 0 ? Math.max(1, Math.round(bounds.height / rows)) : 0,
   };
 }
 type TerminalResize = Extract<TerminalCommand, { type: "terminal.resize" }>;
+type TerminalGrid = { cols: number; rows: number };
+type QueuedFrame = {
+  text: Uint8Array | null;
+  firstFrame: boolean;
+  retainedFocus: boolean;
+  width: number;
+  height: number;
+};
+
+function validTerminalGrid(cols: number, rows: number): boolean {
+  return Number.isInteger(cols) && Number.isInteger(rows)
+    && cols > 0 && rows > 0 && cols <= 65535 && rows <= 65535;
+}
 
 export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -186,6 +201,44 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const controlAllowedRef = useRef(controlAllowed);
   const pendingPasteRef = useRef<{ text: string; intent: { epoch: number; paneId: string; token: number } } | null>(null);
   const attachRetryTimerRef = useRef<number | null>(null);
+  const desiredViewportGridRef = useRef<TerminalGrid | null>(null);
+  const renderedGridRef = useRef<TerminalGrid | null>(null);
+  const authoritativeFrameRef = useRef(false);
+  const suppressFrameResizeRef = useRef(false);
+  const requestViewportSizing = () => {
+    const fit = fitRef.current;
+    const terminal = terminalRef.current;
+    if (!fit || !terminal) return;
+    const proposed = fit.proposeDimensions();
+    if (!proposed || !validTerminalGrid(proposed.cols, proposed.rows)) return;
+    desiredViewportGridRef.current = { cols: proposed.cols, rows: proposed.rows };
+    if (!authoritativeFrameRef.current) {
+      fit.fit();
+      desiredViewportGridRef.current = { cols: terminal.cols, rows: terminal.rows };
+      renderedGridRef.current = { cols: terminal.cols, rows: terminal.rows };
+      return;
+    }
+    const stream = streamRef.current;
+    if (!stream) return;
+    const geometry = terminalCellGeometry(terminal, renderedGridRef.current ?? { cols: terminal.cols, rows: terminal.rows });
+    const resizeCommand: TerminalResize = {
+      type: "terminal.resize",
+      cols: proposed.cols,
+      rows: proposed.rows,
+      cell_width_px: geometry.cell_width_px,
+      cell_height_px: geometry.cell_height_px,
+    };
+    const previous = lastResizeRef.current;
+    if (
+      previous
+      && previous.cols === resizeCommand.cols
+      && previous.rows === resizeCommand.rows
+      && previous.cell_width_px === resizeCommand.cell_width_px
+      && previous.cell_height_px === resizeCommand.cell_height_px
+    ) return;
+    lastResizeRef.current = resizeCommand;
+    stream.send(resizeCommand);
+  };
   controlAllowedRef.current = controlAllowed;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -205,6 +258,17 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const mouseModeRef = useRef(false);
   const lastMouseMotionAt = useRef(0);
   const currentIntent = () => ({ epoch: focusEpochRef.current, paneId: request.pane_id, token: focusTokenRef.current });
+  const sendStreamCommand = (stream: TerminalStream, command: TerminalCommand): boolean => {
+    try {
+      stream.send(command);
+      return true;
+    } catch (cause) {
+      if (streamRef.current !== stream) return false;
+      const typed = cause instanceof Error ? cause as Error & { code?: string; operationCode?: string } : null;
+      setError({ code: typed?.operationCode ?? typed?.code ?? "terminal_input_failed", message: typed?.message ?? "Terminal input failed" });
+      return false;
+    }
+  };
   const clearPendingCommands = () => {
     pendingCommands.current = [];
     pendingIntentRef.current = null;
@@ -212,7 +276,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const sendInput = (command: TerminalCommand) => {
     const hasSelectedFocusIntent = selectedRef.current && focusTokenRef.current > 0;
     if (!controlAllowedRef.current && !controlRequestPendingRef.current && !controlPendingRef.current && !hasSelectedFocusIntent) return;
-    if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) streamRef.current.send(command);
+    if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) sendStreamCommand(streamRef.current, command);
     else {
       const intent = currentIntent();
       if (pendingIntentRef.current
@@ -244,7 +308,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     const current = currentIntent();
     if (!controlAllowedRef.current || !controlRequestedRef.current || ownershipRef.current !== "owned" || !stream || pendingCommands.current.length === 0
       || !intent || intent.epoch !== current.epoch || intent.paneId !== current.paneId || intent.token !== current.token) return;
-    pendingCommands.current.forEach((command) => stream.send(command));
+    for (const command of pendingCommands.current) sendStreamCommand(stream, command);
     clearPendingCommands();
   };
   const requestControl = () => {
@@ -355,14 +419,17 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     terminal.open(host);
     terminal.loadAddon(fit);
     fitRef.current = fit;
-    fit.fit();
-    setTerminalReady(true);
     terminalRef.current = terminal;
+    fit.fit();
+    const initialGrid = { cols: terminal.cols, rows: terminal.rows };
+    desiredViewportGridRef.current = initialGrid;
+    renderedGridRef.current = initialGrid;
+    setTerminalReady(true);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null;
-        if (!disposed && terminalRef.current === terminal) fit.fit();
+        if (!disposed && terminalRef.current === terminal) requestViewportSizing();
       }, 100);
     });
     observer?.observe(host);
@@ -414,6 +481,9 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       return false;
     });
     const resize = terminal.onResize(({ cols, rows }) => {
+      if (suppressFrameResizeRef.current) return;
+      desiredViewportGridRef.current = { cols, rows };
+      renderedGridRef.current = { cols, rows };
       const stream = streamRef.current;
       if (!stream) return;
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
@@ -504,14 +574,18 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     if (!terminal || !terminalReady || deferAttachment) return;
     // The control effect queues its intent-state update before this effect runs.
     if (wantsControl !== controlRequestedRef.current) return;
+    const viewportGrid = desiredViewportGridRef.current ?? {
+      cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
+      rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
+    };
     const restoreFocus = selectedRef.current && controlAllowedRef.current;
-    const geometry = terminalCellGeometry(terminal);
+    const geometry = terminalCellGeometry(terminal, renderedGridRef.current ?? { cols: terminal.cols, rows: terminal.rows });
     const openRequest: TerminalOpenRequest = {
       ...request,
       mode: wantsControl ? "control" : "observe",
       takeover: wantsControl && takeoverRequestedRef.current,
-      cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
-      rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
+      cols: viewportGrid.cols,
+      rows: viewportGrid.rows,
       cell_width_px: geometry.cell_width_px,
       cell_height_px: geometry.cell_height_px,
     };
@@ -551,9 +625,24 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     let stream: TerminalStream | null = null;
     let observedStreamId: string | null = null;
     let readinessRender: { dispose(): void } | null = null;
+    let frameQueue: QueuedFrame[] = [];
+    let frameQueueBytes = 0;
+    let frameApplying = false;
+    let drainFrameQueue: () => void = () => undefined;
+    let frameQueueCount = 0;
+    let activeFrame: QueuedFrame | null = null;
+    const releaseFrame = (frame: QueuedFrame) => {
+      if (frame.text === null) return;
+      frameQueueBytes = Math.max(0, frameQueueBytes - frame.text.byteLength);
+      frameQueueCount = Math.max(0, frameQueueCount - 1);
+      frame.text = null;
+    };
+    const clearFrameQueue = () => {
+      for (const frame of frameQueue) releaseFrame(frame);
+      frameQueue = [];
+    };
     const controller = new AbortController();
     const generation = ++attachmentGeneration.current;
-    clearMouseMode();
     lastSequence.current = null;
     setError(null);
     setClosed(false);
@@ -563,6 +652,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       clearPendingCommands();
       clearMouseMode();
       cancelled = true;
+      clearFrameQueue();
       controller.abort();
       readinessRender?.dispose();
       onReadyRef.current?.();
@@ -572,6 +662,58 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       streamRef.current = null;
       if (stream) registerStream?.(stream, false);
       stream?.close();
+    };
+    drainFrameQueue = () => {
+      if (frameApplying || cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) return;
+      const frame = frameQueue.shift();
+      if (!frame) return;
+      frameApplying = true;
+      activeFrame = frame;
+      let completed = false;
+      const finishFrame = () => {
+        if (completed) return;
+        completed = true;
+        try {
+          if (cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) return;
+          if (frame.firstFrame) {
+            readinessRender = terminal.onRender(() => {
+              readinessRender?.dispose();
+              readinessRender = null;
+              if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) onReadyRef.current?.();
+            });
+            terminal.refresh(0, terminal.rows - 1);
+          }
+          if (frame.retainedFocus && selectedRef.current && controlAllowedRef.current && document.activeElement === document.body) terminal.focus();
+        } catch {
+          if (!cancelled && generation === attachmentGeneration.current) fail("terminal_frame", "Terminal could not render a frame");
+        } finally {
+          releaseFrame(frame);
+          activeFrame = null;
+          frameApplying = false;
+          if (cancelled) clearFrameQueue();
+          else drainFrameQueue();
+        }
+      };
+      const text = frame.text;
+      if (!text || cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) {
+        finishFrame();
+        return;
+      }
+      try {
+        authoritativeFrameRef.current = true;
+        const frameGrid = { cols: frame.width, rows: frame.height };
+        suppressFrameResizeRef.current = true;
+        try {
+          if (terminal.cols !== frameGrid.cols || terminal.rows !== frameGrid.rows) terminal.resize(frameGrid.cols, frameGrid.rows);
+        } finally {
+          suppressFrameResizeRef.current = false;
+        }
+        renderedGridRef.current = frameGrid;
+        terminal.write(text, finishFrame);
+      } catch {
+        if (!cancelled && generation === attachmentGeneration.current) fail("terminal_frame", "Terminal could not render a frame");
+        finishFrame();
+      }
     };
     const onMessage = (message: TerminalStreamMessage) => {
       if (cancelled || generation !== attachmentGeneration.current) return;
@@ -621,28 +763,36 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
           fail("terminal_sequence", "Terminal output sequence is not consecutive");
           return;
         }
+        if (!validTerminalGrid(message.width, message.height)) {
+          fail("terminal_frame", "Terminal sent invalid frame dimensions");
+          return;
+        }
         lastSequence.current = sequence;
+        let text: Uint8Array;
         try {
-          const text = decodeFrame(message.bytes);
-          // xterm can briefly detach its hidden textarea while applying a full
-          // screen frame. Restore only that lost terminal focus, never override
-          // an explicit focus change to another control.
-          const retainedFocus = terminal.element?.contains(document.activeElement) ?? false;
-          terminal.write(text, () => {
-            if (cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) return;
-            if (firstFrame) {
-              readinessRender = terminal.onRender(() => {
-                readinessRender?.dispose();
-                readinessRender = null;
-                if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) onReadyRef.current?.();
-              });
-              terminal.refresh(0, terminal.rows - 1);
-            }
-            if (retainedFocus && selectedRef.current && controlAllowedRef.current && document.activeElement === document.body) terminal.focus();
-          });
+          text = decodeFrame(message.bytes);
         } catch {
           fail("terminal_frame", "Terminal sent an invalid frame");
+          return;
         }
+        if (
+          frameQueueCount >= MAX_QUEUED_FRAME_COUNT
+          || frameQueueBytes + text.byteLength > MAX_QUEUED_FRAME_BYTES
+        ) {
+          onResync?.();
+          fail("terminal_frame_backlog", "Terminal frame backlog exceeded memory bounds");
+          return;
+        }
+        frameQueue.push({
+          text,
+          firstFrame,
+          retainedFocus: terminal.element?.contains(document.activeElement) ?? false,
+          width: message.width,
+          height: message.height,
+        });
+        frameQueueCount += 1;
+        frameQueueBytes += text.byteLength;
+        drainFrameQueue();
         return;
       }
       if (message.type === "error" || message.type === "disconnected") {
@@ -650,6 +800,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         fail(message.code, message.message);
       } else if (message.type === "closed") {
         cancelled = true;
+        clearFrameQueue();
         clearMouseMode();
         readinessRender?.dispose();
         setClosed(true);
@@ -674,9 +825,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       }
       stream = opened;
       streamRef.current = opened;
-      if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal && fitRef.current) {
-        fitRef.current.fit();
-      }
+      if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) requestViewportSizing();
       if (restoreFocus) terminal.focus();
       flushPending();
       registerStream?.(opened, true);
@@ -688,6 +837,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     });
     return () => {
       cancelled = true;
+      clearFrameQueue();
       clearMouseMode();
       controller.abort();
       readinessRender?.dispose();

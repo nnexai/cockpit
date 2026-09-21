@@ -364,20 +364,33 @@ impl BrowserFeedbackStore {
                 "delivery receipt exceeds its bounded size",
             ));
         }
-        let usage = self.storage_usage()?;
+        let feedback = self.feedback_dir()?;
+        let record = delivery_record_name(&receipt.operation_id);
+        let previous_size = match feedback.symlink_metadata(&record) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "delivery receipt is not a regular file",
+                ));
+            }
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => {
+                return Err(InspectionError::new(
+                    "browser_feedback_read",
+                    error.to_string(),
+                ));
+            }
+        };
+        let usage = self.storage_usage()?.saturating_sub(previous_size);
         if usage.saturating_add(serialized.len() as u64) > self.options.max_store_bytes {
             return Err(InspectionError::new(
                 "browser_feedback_store_limit",
                 "saving this delivery receipt would exceed the configured store limit",
             ));
         }
-        let feedback = self.feedback_dir()?;
-        atomic_write_json(
-            &feedback,
-            &delivery_record_name(&receipt.operation_id),
-            &receipt,
-        )
-        .map_err(|error| InspectionError::new("browser_feedback_write", error.to_string()))?;
+        atomic_write_json(&feedback, &record, &receipt)
+            .map_err(|error| InspectionError::new("browser_feedback_write", error.to_string()))?;
         Ok(receipt)
     }
 

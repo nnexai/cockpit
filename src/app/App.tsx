@@ -32,7 +32,7 @@ import { TeardownDialog } from "./projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
 import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
-import { BrowserPane } from "./browser/BrowserPane";
+import { BrowserPane, type BrowserPaneRecoveryRegistration } from "./browser/BrowserPane";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
@@ -737,6 +737,13 @@ function RecoveryPanel({ state, mutations, onReconnect, onRetryMutation }: { sta
   </aside>;
 }
 type BrowserPresentationState = { associationOpen: boolean; visible: boolean; presentation: BrowserViewPresentation };
+type BrowserGuardEntry = { key: string; recovery: BrowserPaneRecoveryRegistration; settling?: Promise<void> };
+type BrowserGuardHandoff = {
+  current: BrowserGuardEntry | null;
+  outgoing: BrowserGuardEntry | null;
+  incoming: BrowserGuardEntry | null;
+  notify?: () => void;
+};
 const BROWSER_FALLBACK_VIEWPORT: BrowserViewViewportRequest = { css_width: 800, css_height: 600, device_pixel_ratio: 1 };
 const BROWSER_SPLIT_MIN_RATIO = 0.25;
 const BROWSER_SPLIT_MAX_RATIO = 0.65;
@@ -818,9 +825,8 @@ function SidebarHeader({ session, sync, narrow, onSession, onClose, closeRef }: 
   </header>;
 }
 
-
-function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, onSession, onFocus, onRequestControl, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
-  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
+function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, browserHandoff, onSession, onFocus, onRequestControl, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
+  client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; controlPaneId: string | null; terminalMouseInput: boolean; mutations: MutationCoordinatorState; browserHandoff: BrowserGuardHandoff;
   onSession: (id: string) => void; onFocus: (request: FocusRequest, location: Selection) => void; onRequestControl: (paneId: string) => void; onReconnect: () => void; onRetry: () => void; onRefreshSessions: () => Promise<void>; onOpenSession: () => void; onMutate: Mutate; onRetryMutation: (operation: MutationOperation) => void;
 }) {
   const snapshot = state.snapshot;
@@ -995,11 +1001,91 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     browserClientIdRef.current = `cockpit-browser-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
   }
   const browserClientId = browserClientIdRef.current;
+  const browserCloseGuardRef = browserHandoff;
+  const settleBrowserOutgoing = useCallback((outgoing: BrowserGuardEntry): void => {
+    const settle = () => {
+      if (browserCloseGuardRef.outgoing !== outgoing) return;
+      browserCloseGuardRef.outgoing = null;
+      const incoming = browserCloseGuardRef.incoming;
+      browserCloseGuardRef.incoming = null;
+      if (incoming) browserCloseGuardRef.current = incoming;
+      browserCloseGuardRef.notify?.();
+    };
+    const settling = outgoing.recovery.guard().then(settle);
+    outgoing.settling = settling;
+    void settling.catch(() => {
+      if (browserCloseGuardRef.outgoing === outgoing) {
+        outgoing.settling = undefined;
+        browserCloseGuardRef.notify?.();
+      }
+    });
+  }, [browserCloseGuardRef]);
+  const registerBrowserCloseGuard = useCallback((recovery: BrowserPaneRecoveryRegistration | null) => {
+    if (!browserKey) return;
+    if (recovery) {
+      if (browserCloseGuardRef.outgoing) {
+        browserCloseGuardRef.incoming = { key: browserKey, recovery };
+        browserCloseGuardRef.notify?.();
+        return;
+      }
+      browserCloseGuardRef.current = { key: browserKey, recovery };
+    } else if (browserCloseGuardRef.current?.key === browserKey) {
+      const outgoing = browserCloseGuardRef.current;
+      browserCloseGuardRef.outgoing = outgoing;
+      browserCloseGuardRef.current = null;
+      settleBrowserOutgoing(outgoing);
+    } else if (browserCloseGuardRef.incoming?.key === browserKey) {
+      browserCloseGuardRef.incoming = null;
+      browserCloseGuardRef.notify?.();
+    }
+  }, [browserCloseGuardRef, browserKey, settleBrowserOutgoing]);
+  const browserBlockedByOutgoing = Boolean(browserHandoff.outgoing);
+  const retryBrowserHandoff = useCallback(() => {
+    const outgoing = browserHandoff.outgoing;
+    if (!outgoing || outgoing.settling) return;
+    const settling = outgoing.recovery.retry().then(() => outgoing.recovery.guard()).then(() => {
+      if (browserHandoff.outgoing === outgoing) {
+        browserHandoff.outgoing = null;
+        const incoming = browserHandoff.incoming;
+        browserHandoff.incoming = null;
+        if (incoming) browserHandoff.current = incoming;
+        browserHandoff.notify?.();
+      }
+    });
+    outgoing.settling = settling;
+    void settling.catch(() => {
+      if (browserHandoff.outgoing === outgoing) {
+        outgoing.settling = undefined;
+        browserHandoff.notify?.();
+      }
+    });
+  }, [browserHandoff]);
+  const discardBrowserHandoff = useCallback(() => {
+    const outgoing = browserHandoff.outgoing;
+    if (!outgoing || outgoing.settling) return;
+    const settling = outgoing.recovery.discard().then(() => outgoing.recovery.guard()).then(() => {
+      if (browserHandoff.outgoing === outgoing) {
+        browserHandoff.outgoing = null;
+        const incoming = browserHandoff.incoming;
+        browserHandoff.incoming = null;
+        if (incoming) browserHandoff.current = incoming;
+        browserHandoff.notify?.();
+      }
+    });
+    outgoing.settling = settling;
+    void settling.catch(() => {
+      if (browserHandoff.outgoing === outgoing) {
+        outgoing.settling = undefined;
+        browserHandoff.notify?.();
+      }
+    });
+  }, [browserHandoff]);
   // Presentation state is intentionally independent from Herdr sync. A stale
   // session can still safely display the last browser frame for this exact
   // session/Space, while browser actions remain live-state guarded below.
   const browserOnly = !browserKeyChanged && selectedBrowserPresentation?.presentation === "browser_only";
-  const browserVisible = Boolean(browserTarget && selectedBrowserPresentation?.associationOpen && selectedBrowserPresentation.visible);
+  const browserAssociationOpen = Boolean(browserTarget && selectedBrowserPresentation?.associationOpen) && !browserBlockedByOutgoing;
+  const browserVisible = Boolean(browserAssociationOpen && selectedBrowserPresentation?.visible);
   const browserSyncUnavailable = state.sync !== "live";
   const browserSyncMessage = state.sync === "disconnected"
     ? "Herdr session disconnected; showing the last confirmed browser frame."
@@ -1158,7 +1244,23 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       setCommandsOpen(false);
       return;
     }
+    const token = ++browserRequest.current;
+    browserBusyRef.current = true;
+    setBrowserBusy(true);
     if (action === "close") {
+      const registered = browserCloseGuardRef.current?.key === key ? browserCloseGuardRef.current : browserCloseGuardRef.outgoing;
+      if (registered) {
+        try { await (registered.settling ?? registered.recovery.guard()); 
+        } catch (error) {
+          browserBusyRef.current = false;
+          setBrowserBusy(false);
+          const described = describeError(error, "Browser close was refused because draft work is not durable yet");
+          setBrowserError({ ...described, action });
+          setCommandsOpen(true);
+          return;
+        }
+      }
+      if (browserRequest.current !== token || browserTargetRef.current?.sessionId !== sessionId || browserTargetRef.current.spaceId !== spaceId) { browserBusyRef.current = false; setBrowserBusy(false); return; }
       // A browser-only view hides the pane canvas. Restore it before awaiting
       // the remote close so closing the browser never leaves an empty workarea.
       setBrowserInputActive(false);
@@ -1169,9 +1271,6 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
           : currentState;
       });
     }
-    const token = ++browserRequest.current;
-    browserBusyRef.current = true;
-    setBrowserBusy(true);
     setBrowserError(null);
     const target: BrowserTarget = { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null };
     const current = () => browserRequest.current === token && browserTargetRef.current?.sessionId === sessionId && browserTargetRef.current.spaceId === spaceId;
@@ -1207,7 +1306,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   }, [browserAction, selection.spaceId, state.sessionId, state.sync]);
   const feedbackBusyRef = useRef(false);
   const feedbackRequest = useRef(0);
-  const sendFeedback = useCallback(async (ids: string[], acknowledgeDuplicateRisk: boolean) => {
+  const sendFeedback = useCallback(async (ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => {
     const sessionId = state.sessionId; const spaceId = selection.spaceId;
     if (!sessionId || !spaceId || ids.length === 0 || state.sync !== "live") throw new Error("Annotation delivery is unavailable for this Space.");
     if (feedbackBusyRef.current) throw new Error("Annotation delivery is already in progress.");
@@ -1216,16 +1315,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     try {
       const response = await client.sendBrowserFeedback({
         target: { session_id: sessionId, space_id: spaceId, pane_id: null, endpoint_path: null },
-        ids, operation_id: globalThis.crypto?.randomUUID?.() ?? `browser-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        ids, operation_id: operationId,
         acknowledge_duplicate_risk: acknowledgeDuplicateRisk,
       });
       if (feedbackRequest.current !== token) throw new Error("Annotation delivery was superseded.");
+      if (response.operation_id !== operationId) throw new Error("Annotation delivery response did not match the retained operation.");
       return response;
     } finally {
       if (feedbackRequest.current === token) feedbackBusyRef.current = false;
     }
   }, [client, selection.spaceId, state.sessionId, state.sync]);
-  const sendCapturedFeedback = useCallback((ids: string[]) => sendFeedback(ids, false), [sendFeedback]);
+  const sendCapturedFeedback = useCallback((ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => sendFeedback(ids, operationId, acknowledgeDuplicateRisk), [sendFeedback]);
   useEffect(() => {
     feedbackRequest.current += 1; feedbackBusyRef.current = false;
   }, [selection.spaceId, state.sessionId, state.sync]);
@@ -1403,9 +1503,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
           {outgoingProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
         </div>
         {browserVisible && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}
-        {browserVisible && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
-          {browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
-          <BrowserPane client={client} target={browserTarget} viewport={browserViewport} visible presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserVisible && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => { if (selection.spaceId) void browserAction(selection.spaceId, "reconnect"); }} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} />
+        {browserBlockedByOutgoing && browserHandoff.outgoing ? <div className="browser-recovery-strip" role="status"><details><summary>Review retained browser work</summary><p>{browserHandoff.outgoing.recovery.describe()}</p><p>Discard only clears the local retry intent; an in-flight or unknown remote write is not undone.</p></details><button type="button" onClick={retryBrowserHandoff}>Retry retained work</button><button type="button" onClick={discardBrowserHandoff}>Discard retry intent</button></div> : null}
+        {browserAssociationOpen && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={!browserVisible ? { display: "none" } : browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
+          {browserVisible && browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
+          <BrowserPane key={browserKey ?? "browser-none"} client={client} target={browserTarget} viewport={browserViewport} visible={browserVisible} presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserVisible && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => selection.spaceId ? browserAction(selection.spaceId, "reconnect") : undefined} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} registerCloseGuard={registerBrowserCloseGuard} />
         </div> : null}
       </div>
     </main>
@@ -1421,6 +1522,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   </div>;
 }
 export function App({ client }: { client: CockpitClient }) {
+  const browserHandoffRef = useRef<BrowserGuardHandoff>({ current: null, outgoing: null, incoming: null });
+  const [, setBrowserHandoffRevision] = useState(0);
+  browserHandoffRef.current.notify = () => setBrowserHandoffRevision((revision) => revision + 1);
   const [status, setStatus] = useState<CockpitStatus | null>(null);
   const [statusError, setStatusError] = useState<StatusError | null>(null);
   const [statusAttempt, setStatusAttempt] = useState(0);
@@ -1431,6 +1535,26 @@ export function App({ client }: { client: CockpitClient }) {
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
   const [selection, setSelection] = useState<Selection>({ spaceId: null, tabId: null, paneId: null });
   const [controlPaneId, setControlPaneId] = useState<string | null>(null);
+  useEffect(() => {
+    const outgoing = browserHandoffRef.current.outgoing;
+    if (!outgoing) return;
+    const settling = outgoing.settling ?? outgoing.recovery.guard().then(() => {
+      if (browserHandoffRef.current.outgoing === outgoing) {
+        browserHandoffRef.current.outgoing = null;
+        const incoming = browserHandoffRef.current.incoming;
+        browserHandoffRef.current.incoming = null;
+        if (incoming) browserHandoffRef.current.current = incoming;
+        browserHandoffRef.current.notify?.();
+      }
+    });
+    outgoing.settling = settling;
+    void settling.catch(() => {
+      if (browserHandoffRef.current.outgoing === outgoing) {
+        outgoing.settling = undefined;
+        browserHandoffRef.current.notify?.();
+      }
+    });
+  }, [selection.spaceId, state.epoch, state.sessionId]);
   const sessionStream = useRef<{ close(): void } | null>(null);
   const controlInitializedEpoch = useRef<number | null>(null);
   const [resyncAttempt, setResyncAttempt] = useState(0);
@@ -1536,17 +1660,18 @@ export function App({ client }: { client: CockpitClient }) {
     const recovering = recoveryResyncRef.current;
     const recoveryFocusToken = focusTokenRef.current;
     const recoveryMutationToken = mutationTokenRef.current;
+    const controller = new AbortController();
     let active = true;
     sessionStream.current?.close();
     sessionStream.current = null;
     dispatch({ type: "snapshot/request", epoch, sessionId });
     void (async () => {
       try {
-        const snapshot = await client.sessionSnapshot(sessionId);
-        if (!active || sessionObservation.current !== observation) return;
+        const snapshot = await client.sessionSnapshot(sessionId, controller.signal);
+        if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
         dispatch({ type: "snapshot/received", epoch, sessionId, snapshot });
         const stream = await client.subscribeSession(sessionId, (message: SessionStreamMessage) => {
-          if (!active || sessionObservation.current !== observation) return;
+          if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
           if (recovering && message.type === "snapshot" && message.sequence === 1 && recoveryFocusToken === focusTokenRef.current && stateRef.current.focusError) {
             // Reissue the coordinator's retained intent. The bootstrap snapshot
             // is a stale observation and must not become a new user request.
@@ -1564,18 +1689,23 @@ export function App({ client }: { client: CockpitClient }) {
             recoveryResyncRef.current = false;
           }
         }, (error: unknown) => {
-          if (!active || sessionObservation.current !== observation) return;
+          if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
           const described = describeError(error, "Session stream disconnected");
           dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "stream_disconnected", message: described.message });
-        });
-        if (active && sessionObservation.current === observation) sessionStream.current = stream; else stream.close();
+        }, controller.signal);
+        if (active && !controller.signal.aborted && sessionObservation.current === observation) sessionStream.current = stream; else stream.close();
       } catch (error: unknown) {
-        if (!active || sessionObservation.current !== observation) return;
+        if (!active || controller.signal.aborted || sessionObservation.current !== observation) return;
         const described = describeError(error, "Could not read the session snapshot");
         dispatch({ type: "stream/error", epoch, sessionId, code: described.code ?? "snapshot_error", message: described.message });
       }
     })();
-    return () => { active = false; sessionStream.current?.close(); sessionStream.current = null; };
+    return () => {
+      active = false;
+      controller.abort();
+      sessionStream.current?.close();
+      sessionStream.current = null;
+    };
   }, [client, compatible, sessionAvailable, state.sessionId, state.epoch, resyncAttempt]);
   useEffect(() => {
     if (state.sync !== "live") {
@@ -1640,5 +1770,5 @@ export function App({ client }: { client: CockpitClient }) {
   if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
   if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
   if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
-  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} onSession={switchSession} onFocus={focusAndSelect} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
+  return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} browserHandoff={browserHandoffRef.current} onSession={switchSession} onFocus={focusAndSelect} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
 }

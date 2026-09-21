@@ -94,6 +94,12 @@ Uninstall uses the receipt to remove only owned launchers, desktop files, applic
 Open the selected Space's browser from Commands or its context menu. The browser appears beside the Herdr layout. Browser tabs stay inside that split. **Expand browser** switches to a browser-only view and **Restore split** returns to the Herdr layout. **Close browser pane** hides the local browser presentation; **Close browser** closes the owned browser session and keeps its profile and saved feedback.
 
 Cockpit attaches to the same named Playwright CLI browser that agents use. The packaged Node helper streams binary JPEG frames from Chromium. Install Node and Playwright CLI before opening a browser. The helper is embedded in the host binary. Configuration can override `[browser]` keys `playwright_cli`, `chromium_executable`, `node_executable`, `browser_helper`, and `playwright_core`. The last value identifies the Playwright-core package paired with the CLI. No second browser is launched for the inline view.
+Browser prerequisites are checked lazily when the browser view is attached, not during
+ordinary terminal startup. Missing or invalid settings name the corresponding
+`COCKPIT_*` variable and `[browser]` key. The diagnostics distinguish a missing
+paired package from an import failure, packaged-helper materialization from a
+helper runtime failure, and unsupported facilities from transient browser state;
+repair the named prerequisite and retry the browser view without restarting Herdr.
 
 On initial attachment, an empty `about:blank` is replaced with a loopback-only
 start page before screencast capture begins, guaranteeing a paintable first

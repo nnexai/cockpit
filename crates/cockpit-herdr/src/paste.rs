@@ -270,6 +270,24 @@ fn confirm_focused_target(
     Ok(())
 }
 
+fn validate_paste_ack(value: Value) -> Result<(), InspectionError> {
+    let result = value.as_object().ok_or_else(|| {
+        InspectionError::new(
+            "comments_paste_malformed_ack",
+            "Herdr paste acknowledgment must be an object; dispatch outcome is unknown",
+        )
+    })?;
+    if result.get("type").and_then(Value::as_str) != Some("ok") {
+        // pane.send_text has already been dispatched. An unexpected success
+        // payload is not evidence that Herdr rejected the write.
+        return Err(InspectionError::new(
+            "comments_paste_malformed_ack",
+            "Herdr paste acknowledgment was unexpected; dispatch outcome is unknown",
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl CommentPasteAdapter for HerdrCliAdapter {
     async fn comment_paste_targets(
@@ -356,25 +374,13 @@ impl CommentPasteAdapter for HerdrCliAdapter {
                 "Herdr endpoint changed during paste dispatch",
             ));
         }
-        let result = result.as_object().ok_or_else(|| {
-            InspectionError::new(
-                "comments_paste_malformed_ack",
-                "Herdr paste acknowledgment must be an object",
-            )
-        })?;
-        if result.get("type").and_then(Value::as_str) != Some("ok") {
-            return Err(InspectionError::new(
-                "comments_paste_rejected",
-                "Herdr did not acknowledge the raw paste queue write",
-            ));
-        }
-        Ok(())
+        validate_paste_ack(result)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{confirm_focused_target, targets_from_snapshot};
+    use super::{confirm_focused_target, targets_from_snapshot, validate_paste_ack};
     use serde_json::json;
 
     fn snapshot(agent_session: serde_json::Value) -> serde_json::Value {
@@ -402,7 +408,18 @@ mod tests {
     }
 
     #[test]
+    fn unexpected_paste_ack_is_unknown_after_dispatch() {
+        assert!(validate_paste_ack(json!({"type": "ok"})).is_ok());
+        for value in [json!({"type": "rejected"}), json!({"type": "error"}), json!("ok")] {
+            let error = validate_paste_ack(value).expect_err("unexpected ack must be unknown");
+            assert_eq!(error.code, "comments_paste_malformed_ack");
+            assert!(error.message.contains("unknown"));
+        }
+    }
+
+    #[test]
     fn changed_native_agent_session_changes_the_target_fingerprint() {
+
         let first = targets_from_snapshot(
             snapshot(json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"first"})),
             "endpoint".to_owned(),

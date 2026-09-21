@@ -163,27 +163,35 @@ export type BrowserViewPermissionCommand = { decision: BrowserViewPermissionDeci
 
 export type BrowserViewInspectionFreshness = "fresh" | "review_required" | "stale" | "unavailable";
 
-export type BrowserViewInspectResult = { location: BrowserViewLocation, frame_id: string, frame_generation: number, pointer_sample_sequence: number, bounds: BrowserRect | null, evidence: BrowserElementEvidence | null, inspectable: boolean, freshness: BrowserViewInspectionFreshness, limitation: string | null, };
+export type BrowserViewInspectResult = { location: BrowserViewLocation, frame_id: string, frame_generation: number,
+/**
+ * None identifies an explicit frame-bound local inspection sample.
+ */
+pointer_sample_sequence: number | null, bounds: BrowserRect | null, evidence: BrowserElementEvidence | null, inspectable: boolean, freshness: BrowserViewInspectionFreshness, limitation: string | null, };
 
-export type BrowserViewInspectCommand = { location: BrowserViewLocation, pointer_sample_sequence: number, x: number, y: number, };
+export type BrowserViewInspectCommand = { location: BrowserViewLocation,
+/**
+ * None supplies a new read-only local point, without moving the remote pointer.
+ */
+pointer_sample_sequence: number | null, x: number, y: number, };
 
 export type BrowserViewCaptureCommand = { location: BrowserViewLocation, draft_id: string, draft_revision: number, annotation_ids: Array<string>, capture_as_shown: boolean, };
 
 export type BrowserViewDraftAnnotation = { id: string, kind: BrowserAnnotationKind, color: string, points: Array<BrowserPoint>, bounds: BrowserRect | null, evidence: BrowserElementEvidence | null, comment: string | null, };
 
-export type BrowserViewDraftEditorState = { selected_annotation_id: string | null, notes_open: boolean, };
+export type BrowserViewDraftEditorState = { selected_annotation_id: string | null, notes_open: boolean, note_annotation_id: string | null, note_text: string, };
 
 export type BrowserViewDraftState = { draft_id: string, target_id: string, document_generation: number, revision: number, annotations: Array<BrowserViewDraftAnnotation>, freshness: BrowserViewInspectionFreshness, stale: boolean, editor: BrowserViewDraftEditorState, };
 
 export type BrowserViewDraftInventory = { drafts: Array<BrowserViewDraftState>, active_draft_limit: number, pending_capture: BrowserViewPendingCapture | null, };
 
-export type BrowserViewPendingCapture = { capture_id: string, draft_id: string, draft_revision: number, annotation_ids: Array<string>, last_error: string | null, };
+export type BrowserViewPendingCapture = { association_key: string, browser_incarnation: string, capture_id: string, draft_id: string, draft_revision: number, annotation_ids: Array<string>, last_error: string | null, };
 
 export type BrowserViewCaptureOutcome = { "state": "absent" } | { "state": "pending", pending: BrowserViewPendingCapture, } | { "state": "saved", saved: BrowserCaptureSaved, };
 
-export type BrowserViewDraftCommand = { "type": "list" } | { "type": "open", draft_id: string | null, } | { "type": "upsert_annotation", annotation: BrowserViewDraftAnnotation, } | { "type": "remove_annotation", annotation_id: string, } | { "type": "clear" } | { "type": "discard" } | { "type": "set_editor", editor: BrowserViewDraftEditorState, } | { "type": "save_capture", submission: BrowserCaptureSubmission, annotation_ids: Array<string>, provenance: BrowserInlineCaptureProvenance, } | { "type": "retry_pending" } | { "type": "discard_pending" };
+export type BrowserViewDraftCommand = { "type": "list" } | { "type": "open", draft_id: string | null, } | { "type": "upsert_annotation", annotation: BrowserViewDraftAnnotation, } | { "type": "remove_annotation", annotation_id: string, } | { "type": "clear" } | { "type": "discard" } | { "type": "save_capture", submission: BrowserCaptureSubmission, annotation_ids: Array<string>, provenance: BrowserInlineCaptureProvenance, } | { "type": "retry_pending" } | { "type": "discard_pending" };
 
-export type BrowserDraftRecoveryAction = { "type": "list" } | { "type": "retry_pending" } | { "type": "discard_pending" } | { "type": "discard_draft", draft_id: string, expected_revision: number, };
+export type BrowserDraftRecoveryAction = { "type": "list" } | { "type": "retry_pending" } | { "type": "discard_pending" } | { "type": "set_editor", draft_id: string, expected_revision: number, editor: BrowserViewDraftEditorState, } | { "type": "upsert_annotation", draft_id: string, expected_revision: number, annotation: BrowserViewDraftAnnotation, } | { "type": "remove_annotation", draft_id: string, expected_revision: number, annotation_id: string, } | { "type": "discard_draft", draft_id: string, expected_revision: number, };
 
 export type BrowserDraftRecoveryRequest = { target: BrowserTarget, action: BrowserDraftRecoveryAction, };
 

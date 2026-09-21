@@ -139,6 +139,11 @@ async function getJson<T>(
       headers: { Accept: "application/json", ...(init?.headers ?? {}) },
     });
   } catch (cause) {
+    const abortError = typeof cause === "object" && cause !== null
+      && "name" in cause && cause.name === "AbortError";
+    if (init?.signal?.aborted || abortError) {
+      throw cause;
+    }
     throw new CockpitClientError("transport_error", `Could not reach the ${endpoint} endpoint`, { cause });
   }
   if (!response.ok) {
@@ -257,12 +262,31 @@ function openBrowserViewStream(
 ): Promise<BrowserViewStream> {
   let parsed: BrowserViewOpenRequest;
   try { parsed = parseBrowserViewOpenRequest(value); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
-  return getJson(request, "/api/v1/browser/view/open", "browser view open", parseBrowserViewOpenResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal }).then((opened) => new Promise((resolve, reject) => {
+  const opened = getJson(request, "/api/v1/browser/view/open", "browser view open", parseBrowserViewOpenResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
+  const detachOpened = (opened: BrowserViewOpenResponse) => {
     const identity = opened.snapshot.identity;
+    const command: BrowserViewCommandRequest = {
+      view_id: identity.view_id,
+      stream_epoch: identity.stream_epoch,
+      request_id: `browser-abort-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+      command: { type: "detach" },
+    };
+    void getJson(
+      request,
+      "/api/v1/browser/view/command",
+      "browser view detach",
+      (response) => matchBrowserViewCommandResponse(response, command),
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(command) },
+    ).catch(() => undefined);
+  };
+  const start = (opened: BrowserViewOpenResponse) => new Promise<BrowserViewStream>((resolve, reject) => {
+    const identity = opened.snapshot.identity;
+    const detach = () => detachOpened(opened);
     const grant = opened.snapshot.frame_grant;
     if (grant === null) { reject(new CockpitClientError("malformed_response", "Browser view frame grant is missing")); return; }
     let eventSocket: BrowserWebSocket; let frameSocket: BrowserWebSocket;
     let closed = false; let closing = false; let settled = false; let openCount = 0;
+    let abort: () => void = () => undefined;
     let targetId = opened.snapshot.displayed_target_id ?? "";
     let metadataAttached = false;
     // Keep one raw frame until the attached snapshot establishes its target identity.
@@ -277,6 +301,7 @@ function openBrowserViewStream(
       closing = true;
       settlePending();
       closed = true;
+      signal?.removeEventListener("abort", abort);
       eventSocket?.close();
       frameSocket?.close();
       if (!settled) { settled = true; reject(error); }
@@ -352,8 +377,9 @@ function openBrowserViewStream(
         return getJson(request, "/api/v1/browser/view/command", "browser view command", (response) => matchBrowserViewCommandResponse(response, command), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(command), signal });
       },
     };
-    const abort = () => fail(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
-    if (signal?.aborted) { abort(); return; } signal?.addEventListener("abort", abort, { once: true });
+    abort = () => { detach(); fail(new CockpitClientError("stream_error", "Browser view attach was cancelled")); };
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener("abort", abort, { once: true });
     eventSocket.onopen = maybeReady;
     frameSocket.onopen = () => { frameSocket.send(JSON.stringify({ grant })); maybeReady(); };
     eventSocket.onmessage = (event) => {
@@ -383,7 +409,32 @@ function openBrowserViewStream(
     frameSocket.onerror = (cause) => fail(new CockpitClientError("transport_error", "Browser view frame WebSocket failed", { cause }));
     eventSocket.onclose = (event) => { if (!closed) fail(streamError(`Browser view metadata WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event)); };
     frameSocket.onclose = (event) => { if (!closed) fail(streamError(`Browser view frame WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event)); };
-  }));
+  });
+  if (!signal) return opened.then(start);
+  return new Promise((resolve, reject) => {
+    let retired = false;
+    const abort = () => {
+      if (retired) return;
+      retired = true;
+      reject(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
+    };
+    if (signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+    }
+    void opened.then((value) => {
+      signal.removeEventListener("abort", abort);
+      if (retired) {
+        detachOpened(value);
+        return;
+      }
+      void start(value).then(resolve, reject);
+    }, (error) => {
+      signal.removeEventListener("abort", abort);
+      if (!retired) reject(error);
+    });
+  });
 }
 
 function streamError(message: string, cause?: unknown, operationCode?: string): CockpitClientError {
@@ -394,21 +445,51 @@ function openSessionStream(
   sessionId: string,
   onMessage: (message: SessionStreamMessage) => void,
   onError: (error: CockpitClientError) => void,
+  signal?: AbortSignal,
 ): Promise<ClosableStream> {
-  try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
+  try {
+    validateSessionId(sessionId);
+    signal?.throwIfAborted();
+  } catch (error) {
+    return Promise.reject(error);
+  }
   return new Promise((resolve, reject) => {
-    let socket: BrowserWebSocket;
+    let socket: BrowserWebSocket | undefined;
     let settled = false;
     let closed = false;
     let cursor: StreamOrderCursor | null = null;
-    const fail = (error: CockpitClientError, beforeOpen = false) => {
-      if (beforeOpen && !settled) { settled = true; reject(error); }
-      else onError(error);
-      if (!closed) { closed = true; socket.close(); }
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const abort = () => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      socket?.close();
+      if (!settled) {
+        settled = true;
+        reject(streamError("Session subscription was cancelled"));
+      }
     };
+    const fail = (error: CockpitClientError, beforeOpen = false) => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      socket?.close();
+      if (beforeOpen && !settled) {
+        settled = true;
+        reject(error);
+      } else {
+        onError(error);
+      }
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
     try {
       socket = webSocketFactory(websocketUrl(`/api/v1/sessions/${encodeURIComponent(sessionId)}/events`));
     } catch (cause) {
+      cleanup();
       reject(new CockpitClientError("transport_error", "Could not open session stream", { cause }));
       return;
     }
@@ -416,7 +497,8 @@ function openSessionStream(
       close() {
         if (closed) return;
         closed = true;
-        socket.close();
+        cleanup();
+        socket?.close();
       },
     };
     socket.onopen = () => {
@@ -426,11 +508,24 @@ function openSessionStream(
     };
     socket.onmessage = (event) => {
       if (closed) return;
-      if (typeof event.data !== "string") { fail(new CockpitClientError("malformed_response", "Session stream message is not JSON text"), !settled); return; }
+      if (typeof event.data !== "string") {
+        fail(new CockpitClientError("malformed_response", "Session stream message is not JSON text"), !settled);
+        return;
+      }
       let raw: unknown;
-      try { raw = JSON.parse(event.data); } catch (cause) { fail(new CockpitClientError("malformed_response", "Session stream message is invalid JSON", { cause }), !settled); return; }
+      try {
+        raw = JSON.parse(event.data);
+      } catch (cause) {
+        fail(new CockpitClientError("malformed_response", "Session stream message is invalid JSON", { cause }), !settled);
+        return;
+      }
       let message: SessionStreamMessage;
-      try { message = parseSessionStreamMessage(raw); } catch (error) { fail(error instanceof CockpitClientError ? error : streamError("Session stream message is malformed", error), !settled); return; }
+      try {
+        message = parseSessionStreamMessage(raw);
+      } catch (error) {
+        fail(error instanceof CockpitClientError ? error : streamError("Session stream message is malformed", error), !settled);
+        return;
+      }
       const result = transitionSessionStream(sessionId, cursor, message);
       if (result.kind === "ignore") return;
       if (result.kind === "error") {
@@ -444,8 +539,14 @@ function openSessionStream(
     socket.onclose = (event) => {
       if (closed) return;
       closed = true;
+      cleanup();
       const error = streamError(`Session WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event);
-      if (!settled) { settled = true; reject(error); } else onError(error);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      } else {
+        onError(error);
+      }
     };
   });
 }
@@ -468,9 +569,12 @@ function openTerminalStream(
     let lastFrameSequence: bigint | undefined;
     let receivedFrame = false;
     const fail = (error: CockpitClientError, beforeOpen = false) => {
+      if (closed) return;
+      closed = true;
+      signal?.removeEventListener("abort", abort);
+      socket?.close();
       if (beforeOpen && !settled) { settled = true; reject(error); }
       else onError(error);
-      if (!closed) { closed = true; socket?.close(); }
     };
     const abort = () => {
       if (closed) return;
@@ -523,6 +627,7 @@ function openTerminalStream(
     socket.onclose = (event) => {
       if (closed) return;
       closed = true;
+      signal?.removeEventListener("abort", abort);
       const error = streamError(`Terminal WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event);
       if (!settled) { settled = true; reject(error); } else onError(error);
     };
@@ -839,9 +944,10 @@ export function createBrowserClient(
     },
     status(): Promise<StatusResponse> { return getJson(request, "/api/v1/status", "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return getJson(request, "/api/v1/sessions", "sessions", parseSessionListResponse); },
-    sessionSnapshot(sessionId: string): Promise<SessionSnapshotResponse> {
-      try { validateSessionId(sessionId); } catch (error) { return Promise.reject(error); }
-      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot`, "session snapshot", parseSessionSnapshotResponse).then((value) => {
+    sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
+      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+      return getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot`, "session snapshot", parseSessionSnapshotResponse, { signal }).then((value) => {
+        signal?.throwIfAborted();
         if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Session snapshot belongs to another session");
         return value;
       });
@@ -880,7 +986,7 @@ export function createBrowserClient(
         return value;
       });
     },
-    subscribeSession(sessionId, onMessage, onError) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError); },
+    subscribeSession(sessionId, onMessage, onError, signal) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError, signal); },
     openTerminal(requestValue, onMessage, onError, signal) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError, signal); },
     openBrowserView(requestValue, onEvent, onFrame, onError, signal) {
       return openBrowserViewStream(request, webSocketFactory, requestValue, onEvent, onFrame, onError, signal);

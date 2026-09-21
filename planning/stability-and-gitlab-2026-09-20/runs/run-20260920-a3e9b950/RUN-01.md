@@ -79,3 +79,7 @@ Removed the owned throwaway guard-red code directory after proof. Retain the cor
 ## Delivery checkpoint
 
 Original inventory evidence remains available, with its containment error explicitly superseded by the correction above. Current guarded runtime is ready for TERM-02/VIEW-01 verification. macOS/MR prerequisites and OBS-008 reconciliation remain unresolved; the umbrella campaign cannot complete until their required criteria pass.
+
+## Final incident disposition
+
+On 2026-09-21, the user explicitly selected **Retain current files** after disclosure that no pre-run copies were found and reconstruction could overwrite prior configuration. All six integration/settings files listed above are to remain unchanged. No restoration, deletion or additional HOME write was performed. This resolves the ACCEPT-01 disposition prerequisite through explicit authorization; it does not erase the earlier containment failure or claim restoration. The isolated-HOME correction and its prior verification remain in force.

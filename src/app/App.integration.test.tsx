@@ -574,7 +574,7 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
 
     expect(selectedTab()).toBe("Tab 2: Second tab");
-    expect(fixture.snapshotCalls).toHaveBeenCalledWith("session-1");
+    expect(fixture.snapshotCalls).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
   });
 
   it("lets an ordered event after the mutation response win over the old response snapshot", async () => {

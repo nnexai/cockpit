@@ -1,0 +1,13 @@
+{
+  "scenario":"final-protocol-boundaries",
+  "status":"PASS",
+  "ownership":{"root":"/tmp/csg-a3e9b950/protocol-final","fixture":"shared-existing-37629?case=protocol-final","shared_resources_touched":false},
+  "frame_transport":{"controller_sequences":[1,2,3,5,6,7],"credits":["ack","ack","discard","ack","discard","ack"],"observer_received_binary_frames":1,"observer_credit_sent":false,"controller_progress_while_observer_unacked":true,"verified_pixel_mutation":{"before":{"status_text":"Clicks: 0 · Animation: 0","body_background":"rgb(238, 242, 246)"},"after":{"status_text":"verified changing pixel sentinel","body_background":"rgb(204, 255, 221)"},"request_animation_frame":true},"controller_advanced_after_mutation":true,"evidence":"/tmp/csg-a3e9b950/protocol-final/slow-observer-replay2.json"},
+  "auth":{"invalid_origin":{"close_code":1008,"reason":"unexpected frame peer"},"invalid_host":{"close_code":1008,"reason":"unexpected frame peer"},"unauthenticated_socket":{"server_reason":"frame authorization timeout","bounded_client_probe":"timeout raced close handshake"}},
+  "control_refusals":{"observer_tab_create":{"status":"rejected","code":"browser_control_required"},"observer_dialog_dismiss":{"status":"rejected","code":"browser_control_required"}},
+  "dialog":{"blocker_kind":"dialog","blocker_message":"alert: Owned alert sentinel","controller_resolution":"accepted","sync_type_prefix_present":true,"evidence":"/tmp/csg-a3e9b950/protocol-final/control-dialog-cases.json"},
+  "retirement":{"controller_view_retired_count":1,"expiring_view_retired_count":1,"exactly_once_observed":true,"held_input_release":{"pointerup_events_added":1,"hit_count_added":0,"status":"PASS"}},
+  "cleanup":{"helper_processes":"stopped after evidence capture","owned_profiles":["/tmp/csg-a3e9b950/protocol-final/profile","/tmp/csg-a3e9b950/protocol-final/profile-replay","/tmp/csg-a3e9b950/protocol-final/profile-candidate","/tmp/csg-a3e9b950/protocol-final/profile-mainpatched","/tmp/csg-a3e9b950/protocol-final/profile-dialog-repair"],"shared_fixture_or_display":"left running"},
+  "superseded":{"invalid_replays":["initial listener-gap replay","pre-credit continuous queue replay"],"reason":"Harness defects corrected; final replay ACKed every controller frame and is the authoritative result"},
+  "failures":[],"unexecuted":[]
+}

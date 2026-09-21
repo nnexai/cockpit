@@ -173,8 +173,7 @@ impl BrowserRuntime {
         service: Arc<BrowserService>,
     ) -> Result<Self, InspectionError> {
         let state_root = state_root.join("browser");
-        fs::create_dir_all(&state_root)
-            .map_err(|error| io_error("browser_state_unavailable", error))?;
+        ensure_private_state_root(&state_root)?;
         fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700))
             .map_err(|error| io_error("browser_state_unavailable", error))?;
         let lock_path = state_root.join("owner.lock");
@@ -221,6 +220,7 @@ impl BrowserRuntime {
                 let cleanup_socket = socket.clone();
                 let mut reconcile = tokio::time::interval(Duration::from_secs(15));
                 let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
+                let mut retired = helper.take_retired_receiver().await.expect("retirement receiver available");
                 let task_helper = Arc::clone(&helper);
                 let task = tokio::spawn(async move {
                     loop {
@@ -229,6 +229,9 @@ impl BrowserRuntime {
                             _ = reconcile.tick() => {
                                 let _ = owner_service.reconcile().await;
                                 let _ = owner_service.prune_feedback();
+                            }
+                            Some(retired_view) = retired.recv() => {
+                                task_helper.retire_view(retired_view).await;
                             }
                             accepted = listener.accept() => {
                                 let Ok((stream, _)) = accepted else { continue };
@@ -505,6 +508,47 @@ impl BrowserRuntime {
         matches!(*self.role.lock().await, RuntimeRole::Owner(_))
     }
 }
+fn ensure_private_state_root(path: &Path) -> Result<(), InspectionError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(InspectionError::new(
+                "unsafe_path",
+                "Browser state root must be an owned regular directory",
+            ))
+        }
+        Ok(_) => verify_private_state_owner(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(|error| io_error("browser_state_unavailable", error))?;
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                    Err(InspectionError::new(
+                        "unsafe_path",
+                        "Browser state root changed to a non-directory",
+                    ))
+                }
+                Ok(_) => verify_private_state_owner(path),
+                Err(error) => Err(io_error("browser_state_unavailable", error)),
+            }
+        }
+        Err(error) => Err(io_error("browser_state_unavailable", error)),
+    }
+}
+
+fn verify_private_state_owner(path: &Path) -> Result<(), InspectionError> {
+    #[cfg(unix)]
+    {
+        let metadata = fs::metadata(path)
+            .map_err(|error| io_error("browser_state_unavailable", error))?;
+        if metadata.uid() != Uid::current().as_raw() {
+            return Err(InspectionError::new(
+                "unsafe_path",
+                "Browser state belongs to another user",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn invalid_response() -> InspectionError {
     InspectionError::new(
         "invalid_browser_response",
@@ -593,6 +637,27 @@ async fn owner_view_command(
     helper: &BrowserHelperSupervisor,
     request: BrowserViewCommandRequest,
 ) -> Result<BrowserViewCommandResponse, InspectionError> {
+    if matches!(&request.command, &BrowserViewCommand::Detach) {
+        let snapshot = helper.events(&request.view_id).await?.snapshot;
+        if snapshot.identity.stream_epoch != request.stream_epoch {
+            return Ok(BrowserViewCommandResponse::Stale {
+                view_id: request.view_id,
+                stream_epoch: request.stream_epoch,
+                request_id: request.request_id,
+                current_stream_epoch: snapshot.identity.stream_epoch,
+                current_metadata_sequence: snapshot.metadata_sequence,
+                code: "stale_stream".into(),
+                message: "Browser view stream identity changed".into(),
+            });
+        }
+        helper.detach(&request.view_id).await;
+        return Ok(BrowserViewCommandResponse::Accepted {
+            view_id: request.view_id,
+            stream_epoch: request.stream_epoch,
+            request_id: request.request_id,
+            outcome: BrowserViewCommandOutcome::None,
+        });
+    }
     if let BrowserViewCommand::Draft { context, draft_id, expected_revision, command } = &request.command {
         let view = helper.events(&request.view_id).await?;
         let snapshot = view.snapshot;

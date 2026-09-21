@@ -1,0 +1,60 @@
+{
+  "smoke": "GLAB-03 real GitLab resource UI",
+  "gateway": "http://127.0.0.1:37619",
+  "browser_session": "glab03-resource-ui-20260921",
+  "herdr_session": "csg-a3e9b950",
+  "workspace": "w3",
+  "operation": "74b12ce7-c098-4138-b969-c7465f35f196",
+  "context_pane": "w3:p4",
+  "companion": "/tmp/csg-a3e9b950/companions/74b12ce7-c098-4138-b969-c7465f35f196",
+  "inputs": [
+    "https://gitlab.com/nnex.ai/integration/-/issues/2",
+    "https://gitlab.com/nnex.ai/integration/-/merge_requests/1"
+  ],
+  "rows_after_import": [
+    {
+      "canonical_id": "nnex.ai/integration#2",
+      "resource_kind": "issue",
+      "title": "Cockpit disposable issue fixture \u2014 csg-a3e9b950",
+      "freshness": "fresh",
+      "materialization": "materialized",
+      "visible_file": "sources/provider-e7be96a51bd0192a72840d2e5909f72ba82a2fe93faa624f03396b30e494c804/issue/asset-8094c123006ce1b75ebb12a42349629cb324bdd341d1d5651099386fb519fff6.md",
+      "visible_content_markers": [
+        "GitLab issue metadata",
+        "GitLab comment 3879528328",
+        "Disposable issue for Cockpit authenticated setup/import/refresh/conflict acceptance"
+      ]
+    },
+    {
+      "canonical_id": "nnex.ai/integration!1",
+      "resource_kind": "review",
+      "title": "Draft: Cockpit standalone MR fixture \u2014 csg-a3e9b950",
+      "freshness": "fresh",
+      "materialization": "materialized",
+      "visible_file": "sources/provider-e7be96a51bd0192a72840d2e5909f72ba82a2fe93faa624f03396b30e494c804/review/asset-a4924dc9a1c684df8da3afb5ebb6ea41cb904fa1b55a78c7d3a64637f1ebe0af.md",
+      "visible_content_markers": [
+        "GitLab merge request metadata",
+        "GitLab discussion dcf48e3ac047e64630679c0be47aa1219e06ead5 note 3879528318",
+        "GitLab approvals",
+        "Baseline body version: 1"
+      ]
+    }
+  ],
+  "refresh_check": {
+    "source": "nnex.ai/integration#2",
+    "outcome": "fresh, unchanged; materialized",
+    "other_row_retained": "nnex.ai/integration!1 remained visible as fresh, unchanged; materialized",
+    "visible_status": "Cockpit disposable issue fixture \u2014 csg-a3e9b950: fresh, unchanged; materialized"
+  },
+  "screenshots": [
+    "GLAB-resource-ui.png"
+  ],
+  "unexecuted": [
+    "No source mutation, conflict, changed-content, or remote fixture update was attempted."
+  ],
+  "identity_correction": "Main read the authoritative session snapshot: Files is w3:p4 in w3:t2; the worker originally reported w3:p3, which is the pre-existing setup terminal.",
+  "retained_for": "Main-owned campaign integration and cleanup; only the tool-owned browser was closed.",
+  "minor_followups": [
+    "Resource rows show excessive vertical spacing in the compact split-pane screenshot; density refinement is not a primary import/refresh blocker."
+  ]
+}

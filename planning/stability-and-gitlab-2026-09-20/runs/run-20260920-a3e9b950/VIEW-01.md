@@ -19,3 +19,10 @@ Coverage: (1) browser/native hold a truncated Review source page, switch file/co
 Resource/authorization: Main creates fixture nested dirs/documents/diffs within /tmp/csg-a3e9b950; no personal repo/active session. Use existing guarded csg-a3e9b950 only after TERM-02 releases runtime, or a separately named/rooted guard entry if concurrent runtime becomes necessary. Current headless GNOME/private D-Bus/WebKitWebDriver recipe supplies actual native proof; no product instrumentation. Recorded fixture metadata/markers and owned captures survive service teardown. No provider/remote mutation, no installation. Main owns cleanup/commit and evidence rows for all seven criteria.
 
 Escalate to Main if proposed data identity does not match generated DTOs/current core behavior, if cancellation requires a shared transport edit, if a required callsite is outside owned files, or measurements exceed frozen budgets. Do not widen scope or decide a different state architecture as worker. Accepted plan is implementation authorization only, not verification evidence.
+
+## Integration repair and validation scheduling
+
+- Main addressed the review findings: unified diff scroll identity uses both revisions and no selected-line side; local scroll values are paired with their identity so a newly rendered file cannot inherit the previous scalar. Leaving source mode re-enables diff restoration, and source-mode outer scroll clamping is not saved as diff scroll.
+- SourceLines is keyed by the complete existing review source identity, while CommentDrafts remains mounted under its durable comment-batch identity. ReviewPane receives the actual rendered mode immediately; duplicate mode publication was removed.
+- Added targeted behavioral coverage for line selection/source-mode round trip and same-content new-generation scroll reset. Existing late-page/error cases remain.
+- Per user OBS-011, the current wave uses minimal focused checks and one brief browser smoke after integration. Original exhaustive native/media/long-document/TUI criteria remain queued for final integration, not waived. No VIEW-01 completion claim.

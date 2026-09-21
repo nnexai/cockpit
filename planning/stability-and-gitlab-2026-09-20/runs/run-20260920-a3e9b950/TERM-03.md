@@ -1,0 +1,15 @@
+# TERM-03 — terminal interaction continuity
+
+## Accepted plan
+
+Accepted by Main, 2026-09-21. Baseline `6593cf4ecba87687c809ee9f3d2a295c757db787` plus returned SYNC-01 cancellation changes. OBS-011 permits this settled implementation handoff; SYNC-01 acceptance is still pending and completion dependencies are unchanged.
+
+Observable first outcome: applying a Herdr frame cannot reinterpret its ANSI against an unrelated locally fitted grid, including split zoom/restore. OBS-010 is established evidence, not a request to rerun the old long probe: real frames and fitted grids differed; replaying a 60-column frame into 30 columns lost a visible row and created scrollback, while the correct grid did not. That proves the grid hazard, not the complete original blanking cause. Preserve that distinction until final runtime proof.
+
+Source evidence: TerminalPane currently ignores message.width/height while fit.fit mutates its grid on observer/attachment events; terminal_wire forwards authoritative frame.width/frame.height unchanged. Trace existing resize/input flow and the Herdr frame contract before editing. Keep authoritative grid changes ordered with application of the corresponding ANSI, not asynchronous fit events or later frame callbacks. Separate desired viewport measurement/request from the acknowledged render grid; applying an authoritative grid must not echo a synthetic resize request back to Herdr. Preserve valid sequence checks, full-frame attachment, stream generation cancellation, readiness, actual failures, input ownership and frame memory bounds. No CSS hiding, local scroll authority, speculative retries or protocol redesign.
+
+Ownership: terminal worker owns TerminalPane.tsx, its focused terminal tests and narrowly necessary cockpit-herdr terminal adapter changes. It does not edit App.tsx, session/focus modules, client transports, protocol/generated files, or browser UI. Existing component interface remains unchanged; report any genuinely necessary App integration to Main. SYNC-01 relinquishes terminal/app-shell/browser-ui writing reservations after its returned source handoff. WEB-01 independently owns App/browser lifecycle; no concurrent App edits.
+
+Read cockpit-ui-parity and existing UI authorities. Use existing captured oracle/observations and upstream/adapter source when semantics are ambiguous; do not claim source inspection replaces final TUI comparison. Repair only established divergences. Original full TERM-03 scroll, mouse, modifiers, clipboard/IME, prefix, two-client ownership, hierarchy/agent ordering, native/browser continuity and TUI comparison criteria remain required. Record unchanged-correct versus repaired versus unverified behavior separately.
+
+During concurrent writing: no validation/builds/tests/formatters/runtime/services/commits. Keep only meaningful grid/order/cancellation regressions. Final bounded delegated proof must revisit OBS-010, followed by the original browser/native/TUI acceptance round; no completion or commit is claimed by this plan.

@@ -1226,6 +1226,7 @@ pub(crate) fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) 
         .follow(cap_fs_ext::FollowSymlinks::No);
     let mut file = dir.open_with(&tmp, &options)?;
     file.write_all(&bytes)?;
+    file.sync_all()?;
     match dir.symlink_metadata(name) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             return Err(io::Error::new(
@@ -1238,7 +1239,7 @@ pub(crate) fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) 
         Err(error) => return Err(error),
     }
     dir.rename(&tmp, dir, name)?;
-    Ok(())
+    dir.open(".")?.sync_all()
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(dir: &Dir, name: &str) -> Result<T, InspectionError> {

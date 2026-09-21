@@ -16,6 +16,8 @@ const MAX_WS_PAYLOAD = 64 * 1024;
 const MAX_WS_BUFFER = MAX_WS_PAYLOAD + 14;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const FRAME_INTERVAL_MS = 1000 / 30;
+const MAX_FRAME_PEERS = 32;
+const PREAUTH_TIMEOUT_MS = 5000;
 
 const START_PAGE_PATH = '/__cockpit_browser_start__';
 const START_PAGE_HTML = `<!doctype html>
@@ -95,6 +97,10 @@ let port;
 let sockets = new Set();
 let grants = new Map();
 let viewGrants = new Map();
+let grantViews = new Map();
+let grantTimers = new Map();
+let attachedViewIds = new Set();
+let retiredViewKeys = new Set();
 let latestFrame = null;
 let pendingBlocker = null;
 const MAX_FRAME_HISTORY = 8;
@@ -115,6 +121,70 @@ const metadata = () => ({
   metadata_sequence: ++state.metadataSequence,
 });
 const grantExpiry = (value) => Number.isFinite(Number(value)) ? Number(value) : Date.parse(value);
+function clearGrantTimer(viewId) {
+  clearTimeout(grantTimers.get(viewId));
+  grantTimers.delete(viewId);
+}
+function emitViewRetired(viewId) {
+  const key = `${state?.streamEpoch}:${viewId}`;
+  if (retiredViewKeys.has(key)) return;
+  retiredViewKeys.add(key);
+  emit({ type: 'view_retired', view_id: viewId, stream_epoch: state.streamEpoch });
+}
+function retireView(viewId, notify = true) {
+  if (!state || !state.viewIds.has(viewId)) return;
+  for (const socket of sockets) {
+    if (socket.viewId !== viewId) continue;
+    socket.authorized = false;
+    socket.terminate();
+  }
+  const grant = viewGrants.get(viewId);
+  if (grant) {
+    grants.delete(grant);
+    grantViews.delete(grant);
+  }
+  clearGrantTimer(viewId);
+  viewGrants.delete(viewId);
+  attachedViewIds.delete(viewId);
+  state.viewIds.delete(viewId);
+  if (state.controllerViewId === viewId) {
+    void releaseHeldInput();
+    state.controlled = false;
+    state.controllerViewId = null;
+    state.leaseGeneration++;
+    state.nextInputSequence = 1;
+    emitControl();
+  }
+  if (notify) emitViewRetired(viewId);
+  if (state.viewIds.size === 0) {
+    resetFrameTransport();
+    void pageCdp?.send('Page.stopScreencast').catch(() => {});
+  }
+}
+function retireUnattachedView(viewId, grant) {
+  if (!state || viewGrants.get(viewId) !== grant || attachedViewIds.has(viewId)) return;
+  retireView(viewId, true);
+}
+function registerViewGrant(viewId, grant, expiresAt) {
+  const expiry = grantExpiry(expiresAt);
+  if (!viewId || !grant || !Number.isFinite(expiry)) throw new Error('browser frame grant is malformed');
+  retiredViewKeys.delete(`${state?.streamEpoch}:${viewId}`);
+  const previous = viewGrants.get(viewId);
+  if (previous) {
+    grants.delete(previous);
+    grantViews.delete(previous);
+  }
+  clearGrantTimer(viewId);
+  viewGrants.set(viewId, grant);
+  grantViews.set(grant, viewId);
+  grants.set(grant, expiry);
+  const delay = expiry - Date.now();
+  if (delay <= 0) {
+    retireUnattachedView(viewId, grant);
+    return;
+  }
+  grantTimers.set(viewId, setTimeout(() => retireUnattachedView(viewId, grant), Math.min(delay, 2 ** 31 - 1)));
+}
 
 function capabilities() {
   return {
@@ -136,16 +206,19 @@ function documentState() {
 function viewportState() {
   return {
     viewport_revision: state.viewportRevision,
-    css_width: state.cssWidth,
-    css_height: state.cssHeight,
-    visual_offset_x: 0,
-    visual_offset_y: 0,
+    // Requested CSS dimensions and measured visual-viewport geometry are
+    // intentionally tracked separately. Until metrics are confirmed, expose
+    // the request but mark the geometry stale so consumers cannot act on it.
+    css_width: state.geometryFresh ? state.viewportCssWidth : state.requestedCssWidth,
+    css_height: state.geometryFresh ? state.viewportCssHeight : state.requestedCssHeight,
+    visual_offset_x: state.visualOffsetX,
+    visual_offset_y: state.visualOffsetY,
     scroll_x: state.scrollX,
     scroll_y: state.scrollY,
-    visual_scale: 1,
-    page_scale: 1,
+    visual_scale: state.visualScale,
+    page_scale: state.pageScale,
     device_pixel_ratio: state.devicePixelRatio,
-    geometry_fresh: true,
+    geometry_fresh: state.geometryFresh,
   };
 }
 function navigationState() {
@@ -176,17 +249,77 @@ function snapshot() {
     frame_grant: state.frameGrant,
   };
 }
+function startupError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
 async function importPlaywright(corePath) {
-  const pkg = JSON.parse(await readFile(join(corePath, 'package.json'), 'utf8'));
-  const module = await import(pathToFileURL(join(corePath, pkg.module || pkg.main || 'index.js')).href);
-  return module.default || module;
+  if (typeof corePath !== 'string' || !corePath) {
+    throw startupError(
+      'browser_core_missing',
+      'Playwright-core package path was not supplied; configure the paired package',
+    );
+  }
+  let pkg;
+  try {
+    pkg = JSON.parse(await readFile(join(corePath, 'package.json'), 'utf8'));
+  } catch {
+    throw startupError(
+      'browser_core_missing',
+      'Playwright-core package metadata is unavailable; repair the paired package',
+    );
+  }
+  if (pkg.name !== 'playwright-core') {
+    throw startupError(
+      'browser_core_invalid',
+      'Configured package is not playwright-core; select the package paired with the CLI',
+    );
+  }
+  const entry = pkg.module || pkg.main || 'index.js';
+  if (typeof entry !== 'string' || entry.startsWith('/') || entry.split(/[\\/]/).includes('..')) {
+    throw startupError(
+      'browser_core_invalid',
+      'Playwright-core package entry point is unsafe or invalid',
+    );
+  }
+  let module;
+  try {
+    module = await import(pathToFileURL(join(corePath, entry)).href);
+  } catch {
+    throw startupError(
+      'browser_core_import_failed',
+      'Playwright-core exists but could not be imported; repair its package files and Node compatibility',
+    );
+  }
+  const value = module.default || module;
+  if (!value?.chromium || typeof value.chromium.connectOverCDP !== 'function') {
+    throw startupError(
+      'browser_capability_unsupported',
+      'Playwright-core does not provide the chromium CDP attachment facility',
+    );
+  }
+  return value;
 }
 async function importWebSocket(corePath) {
-  const require = createRequire(pathToFileURL(join(corePath, 'package.json')));
-  const bundle = require(join(corePath, 'lib', 'utilsBundle'));
+  let bundle;
+  try {
+    const require = createRequire(pathToFileURL(join(corePath, 'package.json')));
+    bundle = require(join(corePath, 'lib', 'utilsBundle'));
+  } catch {
+    throw startupError(
+      'browser_core_import_failed',
+      'Playwright-core websocket support could not be imported; repair the paired package',
+    );
+  }
   WebSocketServer = bundle.wsServer;
   WebSocket = bundle.ws;
-  if (!WebSocketServer || !WebSocket) throw new Error('playwright-core dependency does not provide ws');
+  if (!WebSocketServer || !WebSocket) {
+    throw startupError(
+      'browser_capability_unsupported',
+      'Playwright-core does not provide the websocket frame transport facility',
+    );
+  }
 }
 
 function boundedInteger(value, fallback, maximum) {
@@ -237,6 +370,43 @@ function requestedViewport(viewport) {
   if (!Number.isFinite(dpr) || dpr <= 0 || dpr > 16) throw new Error('device pixel ratio is not finite');
   return { width, height, dpr };
 }
+function geometrySnapshot() {
+  return {
+    targetId: state.targetId,
+    documentGeneration: state.documentGeneration,
+    viewportRevision: state.viewportRevision,
+    cssWidth: state.viewportCssWidth,
+    cssHeight: state.viewportCssHeight,
+    offsetX: state.visualOffsetX,
+    offsetY: state.visualOffsetY,
+    scrollX: state.scrollX,
+    scrollY: state.scrollY,
+    visualScale: state.visualScale,
+    pageScale: state.pageScale,
+    captureToken: state.captureToken,
+  };
+}
+function geometryEqual(left, right) {
+  return Boolean(left && right
+    && left.targetId === right.targetId
+    && left.documentGeneration === right.documentGeneration
+    && left.viewportRevision === right.viewportRevision
+    && left.cssWidth === right.cssWidth
+    && left.cssHeight === right.cssHeight
+    && left.offsetX === right.offsetX
+    && left.offsetY === right.offsetY
+    && left.scrollX === right.scrollX
+    && left.scrollY === right.scrollY
+    && left.visualScale === right.visualScale
+    && left.pageScale === right.pageScale
+    && left.captureToken === right.captureToken);
+}
+function invalidateViewport() {
+  state.viewportRevision++;
+  state.geometryFresh = false;
+  state.viewportTransition = true;
+  resetFrameTransport();
+}
 async function applyRequestedViewport(viewport) {
   const requested = requestedViewport(viewport);
   await pageCdp.send('Emulation.setDeviceMetricsOverride', {
@@ -247,16 +417,34 @@ async function applyRequestedViewport(viewport) {
     screenWidth: requested.width,
     screenHeight: requested.height,
   });
-  // The requested surface is the stable viewport contract shared with the
-  // presenter. Layout metrics may lag during a transition, so they must not
-  // replace these dimensions after the emulation call succeeds.
-  state.cssWidth = requested.width;
-  state.cssHeight = requested.height;
+  state.requestedCssWidth = requested.width;
+  state.requestedCssHeight = requested.height;
   state.devicePixelRatio = requested.dpr;
   return requested;
 }
 function pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding) {
   return Boolean(state && page === expectedPage && pageCdp === expectedCdp && pageBindingGeneration === expectedBinding);
+}
+function measuredGeometry(metrics, dpr) {
+  const visual = metrics?.cssVisualViewport || metrics?.visualViewport;
+  if (!visual || !Number.isFinite(Number(visual.clientWidth || visual.width))
+    || !Number.isFinite(Number(visual.clientHeight || visual.height))
+    || Number(visual.clientWidth || visual.width) <= 0 || Number(visual.clientHeight || visual.height) <= 0
+    || !Number.isFinite(Number(visual.offsetX)) || !Number.isFinite(Number(visual.offsetY))
+    || !Number.isFinite(Number(visual.pageX)) || !Number.isFinite(Number(visual.pageY))
+    || !Number.isFinite(Number(visual.scale)) || Number(visual.scale) <= 0
+    || !Number.isFinite(Number(dpr)) || Number(dpr) <= 0) return null;
+  return {
+    width: Number(visual.clientWidth || visual.width),
+    height: Number(visual.clientHeight || visual.height),
+    offsetX: Number(visual.offsetX),
+    offsetY: Number(visual.offsetY),
+    scrollX: Number(visual.pageX),
+    scrollY: Number(visual.pageY),
+    scale: Number(visual.scale),
+    pageScale: Number(visual.scale),
+    dpr: Number(dpr),
+  };
 }
 async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
   if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
@@ -267,24 +455,40 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
   state.title = title;
   try {
     const metrics = await expectedCdp.send('Page.getLayoutMetrics');
+    const measuredDpr = await expectedPage.evaluate(() => Number(window.devicePixelRatio)).catch(() => state.devicePixelRatio);
     if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
-    const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
-    // CSS dimensions are the requested Cockpit surface size. Chromium's
-    // measured client box can briefly report scrollbar/transition geometry
-    // during a reload or resize; adopting it would create alternating
-    // viewport revisions and reject otherwise current frames.
-    const scrollX = boundedNumber(viewport.pageX, state.scrollX);
-    const scrollY = boundedNumber(viewport.pageY, state.scrollY);
-    const changed = scrollX !== state.scrollX || scrollY !== state.scrollY;
-    state.scrollX = scrollX;
-    state.scrollY = scrollY;
-    if (changed) {
+    const geometry = measuredGeometry(metrics, measuredDpr);
+    if (!geometry) {
+      state.geometryFresh = false;
+      return false;
+    }
+    const changed = state.viewportCssWidth !== geometry.width
+      || state.viewportCssHeight !== geometry.height
+      || state.visualOffsetX !== geometry.offsetX
+      || state.visualOffsetY !== geometry.offsetY
+      || state.scrollX !== geometry.scrollX
+      || state.scrollY !== geometry.scrollY
+      || state.visualScale !== geometry.scale
+      || state.pageScale !== geometry.pageScale
+      || state.devicePixelRatio !== geometry.dpr;
+    state.viewportCssWidth = geometry.width;
+    state.viewportCssHeight = geometry.height;
+    state.visualOffsetX = geometry.offsetX;
+    state.visualOffsetY = geometry.offsetY;
+    state.scrollX = geometry.scrollX;
+    state.scrollY = geometry.scrollY;
+    state.visualScale = geometry.scale;
+    state.pageScale = geometry.pageScale;
+    state.devicePixelRatio = geometry.dpr;
+    state.geometryFresh = true;
+    if (changed && !state.viewportTransition) {
       state.viewportRevision++;
       resetFrameTransport();
     }
+    state.viewportTransition = false;
     return changed;
   } catch {
-    // Keep the last known finite geometry when Chromium is between documents.
+    state.geometryFresh = false;
     return false;
   }
 }
@@ -350,7 +554,7 @@ async function updateCursor() {
 }
 function setBlocker(kind, message, defaultPrompt, resolve) {
   if (pendingBlocker?.resolve) pendingBlocker.resolve('dismiss');
-  pendingBlocker = { blocker_id: randomUUID(), kind, message: String(message || '').slice(0, 4096), default_prompt: defaultPrompt ? String(defaultPrompt).slice(0, 4096) : null, target_id: state.targetId, document_generation: state.documentGeneration, cancellable: true, resolve };
+  pendingBlocker = { blocker_id: randomUUID(), kind, message: String(message || '').slice(0, 4096), default_prompt: defaultPrompt == null ? null : String(defaultPrompt).slice(0, 4096), target_id: state.targetId, document_generation: state.documentGeneration, cancellable: true, resolve };
   emitBlocker();
   return pendingBlocker;
 }
@@ -377,6 +581,11 @@ function requireControl(command) {
   if (sequence !== null && sequence !== state.nextInputSequence) throw Object.assign(new Error('Browser input sequence is stale'), { code: 'stale_input_sequence' });
   return sequence;
 }
+function requireInputControl(command) {
+  const sequence = requireControl(command);
+  if (sequence === null) throw Object.assign(new Error('Browser input sequence is required'), { code: 'stale_input_sequence' });
+  return sequence;
+}
 function virtualKeyCode(key, code) {
   const named = { Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18, Pause: 19, CapsLock: 20, Escape: 27, Space: 32, PageUp: 33, PageDown: 34, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46 };
   const punctuation = { Backquote: 192, Minus: 189, Equal: 187, BracketLeft: 219, Backslash: 220, BracketRight: 221, Semicolon: 186, Quote: 222, Comma: 188, Period: 190, Slash: 191, NumpadDecimal: 110 };
@@ -395,7 +604,7 @@ async function releaseHeldInput() {
         y: state.pointer?.y || 0,
         button,
         buttons: 0,
-        clickCount: 1,
+        clickCount: 0,
         modifiers: 0,
       });
     } catch {}
@@ -474,7 +683,7 @@ async function bindPage(targetId, restartScreencast = true) {
   if (!restartScreencast) await ensureInitialPage();
 
   await installPageObservers();
-  await applyRequestedViewport({ css_width: state.cssWidth, css_height: state.cssHeight, device_pixel_ratio: state.devicePixelRatio });
+  await applyRequestedViewport({ css_width: state.requestedCssWidth, css_height: state.requestedCssHeight, device_pixel_ratio: state.devicePixelRatio });
   await updatePageState();
   await updateFrameId();
   await updateHistory();
@@ -585,7 +794,7 @@ function ackSession(sessionId, cdp = pageCdp) {
   if (sessionId !== undefined) cdp?.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
 }
 function acknowledgeFrame(frame) {
-  if (!frame || frame.acknowledged || frame.references > 0) return;
+  if (!frame || frame.acknowledged) return;
   frame.acknowledged = true;
   ackSession(frame.sessionId, frame.cdp);
 }
@@ -601,13 +810,23 @@ function forgetSocketFrame(socket, slot) {
   const frame = socket[slot];
   if (!frame) return;
   socket[slot] = undefined;
-  if (slot === 'awaitingFrame') socket.frameSequence = undefined;
+  if (slot === 'awaitingFrame') {
+    socket.frameSequence = undefined;
+    clearTimeout(socket.frameTimer);
+    socket.frameTimer = undefined;
+  }
   releaseFrame(frame);
 }
 function writeFrame(socket, frame, retained = false) {
   if (!socket.authorized || socket.readyState !== WebSocket.OPEN) return false;
   socket.awaitingFrame = frame;
   socket.frameSequence = frame.descriptor.frame_sequence;
+  socket.frameTimer = setTimeout(() => {
+    if (socket.awaitingFrame === frame) {
+      forgetSocketFrame(socket, 'awaitingFrame');
+      socket.close(1011, 'frame credit timeout');
+    }
+  }, 3000);
   if (!retained) retainFrame(frame);
   try {
     socket.send(frame.payload, { binary: true });
@@ -619,7 +838,7 @@ function writeFrame(socket, frame, retained = false) {
   }
 }
 function queueFrame(socket, frame) {
-  if (!socket.authorized || socket.readyState !== WebSocket.OPEN) return false;
+  if (!socket.authorized || socket.readyState !== WebSocket.OPEN || !state?.viewIds?.has(socket.viewId)) return false;
   if (socket.awaitingFrame) {
     if (socket.pendingFrame) forgetSocketFrame(socket, 'pendingFrame');
     socket.pendingFrame = frame;
@@ -646,23 +865,44 @@ function releaseSocketFrame(socket, sequence) {
 }
 function cleanupSocket(socket) {
   socket.authorized = false;
+  clearTimeout(socket.preauthTimer);
+  socket.preauthTimer = undefined;
   forgetSocketFrame(socket, 'awaitingFrame');
   forgetSocketFrame(socket, 'pendingFrame');
   socket.frameSequence = undefined;
   sockets.delete(socket);
+  if (socket.viewId) retireView(socket.viewId, true);
 }
 function resetFrameTransport() {
+  const retired = latestFrame;
   latestFrame = null;
   frameHistory.clear();
+  if (state) {
+    state.captureToken++;
+    state.captureBaseline = null;
+  }
+  if (retired) acknowledgeFrame(retired);
   for (const socket of sockets) {
-    // The client may still be decoding the prior frame. Preserve that credit so
-    // its eventual acknowledgement advances the replacement instead of closing
-    // the frame socket as an invalid late acknowledgement.
+    // Pending replacements belong to the retired capture baseline. Release
+    // them through their original CDP session; an awaiting frame may still be
+    // decoded by the client and remains valid until its own credit arrives.
     forgetSocketFrame(socket, 'pendingFrame');
   }
 }
+function frameGeometry(frame) {
+  const metadata = frame?.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
+  const baseline = frame?._geometry || state.captureBaseline;
+  if (!baseline || !geometryEqual(baseline, state.captureBaseline) || !state.geometryFresh) return null;
+  for (const [key, expected] of [['scrollOffsetX', baseline.scrollX], ['scrollOffsetY', baseline.scrollY]]) {
+    if (metadata[key] !== undefined && (!Number.isFinite(Number(metadata[key])) || Math.abs(Number(metadata[key]) - expected) > 0.01)) return null;
+  }
+  if (metadata.pageScaleFactor !== undefined
+    && (!Number.isFinite(Number(metadata.pageScaleFactor)) || Math.abs(Number(metadata.pageScaleFactor) - baseline.pageScale) > 0.01)) return null;
+  return baseline;
+}
 function enqueueFrame(frame) {
-  if (!state || (frame?._cdp && frame._cdp !== pageCdp)) {
+  if (!state || (frame?._cdp && frame._cdp !== pageCdp)
+    || (frame?._captureToken !== undefined && frame._captureToken !== state.captureToken)) {
     ackSession(frame?.sessionId, frame?._cdp);
     return;
   }
@@ -670,39 +910,32 @@ function enqueueFrame(frame) {
   try {
     if (!frame || typeof frame.data !== 'string') throw new Error('screencast payload is not base64 text');
     const jpeg = Buffer.from(frame.data, 'base64');
-    const rawMetadata = frame.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
+    const geometry = frameGeometry(frame);
+    if (!geometry) throw new Error('screencast frame geometry is stale or inconclusive');
     const dimensions = encodedJpegDimensions(jpeg);
-    const width = boundedInteger(dimensions.width, state.cssWidth, MAX_WIDTH);
-    const height = boundedInteger(dimensions.height, state.cssHeight, MAX_HEIGHT);
+    const width = dimensions.width;
+    const height = dimensions.height;
     if (!jpeg.length || jpeg.length > MAX_JPEG || jpeg[0] !== 0xff || jpeg[1] !== 0xd8
       || jpeg[jpeg.length - 2] !== 0xff || jpeg[jpeg.length - 1] !== 0xd9
-      || width * height > MAX_PIXELS) {
+      || width > MAX_WIDTH || height > MAX_HEIGHT || width * height > MAX_PIXELS) {
       throw new Error('screencast frame exceeds frozen bounds');
     }
-    // Screencast metadata describes the instant at which Chromium captured the
-    // image. It can arrive after a newer frame (and its scroll offset can
-    // therefore move backwards). The viewport state is the single authoritative
-    // contract; validate metadata geometry, but never let a late packet advance
-    // or rewind the viewport revision.
-    boundedNumber(rawMetadata.scrollOffsetX, state.scrollX);
-    boundedNumber(rawMetadata.scrollOffsetY, state.scrollY);
-    const scrollX = state.scrollX;
-    const scrollY = state.scrollY;
+    const rawMetadata = frame.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
     const timestamp = boundedNumber(rawMetadata.timestamp, Date.now() / 1000, Number.MAX_SAFE_INTEGER / 1_000_000);
     const descriptor = {
-      target_id: state.targetId,
+      target_id: geometry.targetId,
       stream_epoch: state.streamEpoch,
       frame_sequence: ++state.frameSequence,
-      document_generation: state.documentGeneration,
-      viewport_revision: state.viewportRevision,
+      document_generation: geometry.documentGeneration,
+      viewport_revision: geometry.viewportRevision,
       image_width: width,
       image_height: height,
-      viewport_css_width: state.cssWidth,
-      viewport_css_height: state.cssHeight,
-      viewport_offset_x: 0,
-      viewport_offset_y: 0,
-      scroll_x: scrollX,
-      scroll_y: scrollY,
+      viewport_css_width: geometry.cssWidth,
+      viewport_css_height: geometry.cssHeight,
+      viewport_offset_x: geometry.offsetX,
+      viewport_offset_y: geometry.offsetY,
+      scroll_x: geometry.scrollX,
+      scroll_y: geometry.scrollY,
       capture_timestamp_micros: Math.floor(timestamp * 1_000_000),
       jpeg_length: jpeg.length,
     };
@@ -720,17 +953,17 @@ function enqueueFrame(frame) {
     }
     emit({ type: 'frame', descriptor });
   } catch (error) {
+    // Invalid or stale packets are deliberately discarded, but their CDP
+    // credit is released on the session that produced the packet.
     emit({ type: 'failed', code: 'browser_frame_invalid', message: String(error.message || error) });
-    ackSession(frame?.sessionId, frame?.cdp);
+    ackSession(frame?.sessionId, frame?._cdp);
     return;
   }
   latestFrame = next;
   for (const socket of sockets) queueFrame(socket, next);
-  // The JPEG is now helper-owned. Viewer acknowledgements only govern their
-  // replacement slot; they must not stall Chromium's screencast cadence.
   const delay = Math.max(0, FRAME_INTERVAL_MS - (performance.now() - lastScreencastAcknowledgement));
   setTimeout(() => {
-    ackSession(next.sessionId, next.cdp);
+    acknowledgeFrame(next);
     lastScreencastAcknowledgement = performance.now();
   }, delay);
 }
@@ -751,8 +984,16 @@ function startFrameServer() {
     server = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: MAX_WS_PAYLOAD, perMessageDeflate: false });
     server.once('listening', () => { port = server.address().port; resolve(); });
     server.on('connection', (socket, request) => {
-      if (!allowedFrameOrigin(request.headers.origin)) { socket.close(1008, 'unexpected origin'); return; }
+      const expectedHost = `127.0.0.1:${port}`;
+      const expectedOrigin = `http://${expectedHost}`;
+      if (sockets.size >= MAX_FRAME_PEERS
+        || request.headers.host !== expectedHost
+        || request.headers.origin !== expectedOrigin) {
+        socket.close(1008, 'unexpected frame peer');
+        return;
+      }
       socket.authorized = false;
+      socket.preauthTimer = setTimeout(() => socket.close(1008, 'frame authorization timeout'), PREAUTH_TIMEOUT_MS);
       sockets.add(socket);
       socket.on('close', () => cleanupSocket(socket));
       socket.on('error', () => cleanupSocket(socket));
@@ -762,24 +1003,61 @@ function startFrameServer() {
         if (!socket.authorized) {
           const grant = typeof value?.grant === 'string' ? value.grant : '';
           const expiry = grants.get(grant);
-          if (!grant || !Number.isFinite(expiry) || expiry < Date.now()) { socket.close(1008, 'invalid grant'); return; }
-          grants.delete(grant); socket.authorized = true; if (latestFrame) queueFrame(socket, latestFrame); return;
+          const viewId = grantViews.get(grant);
+          if (!grant || !viewId || !Number.isFinite(expiry) || expiry < Date.now() || !state.viewIds.has(viewId)) {
+            socket.close(1008, 'invalid grant');
+            return;
+          }
+          grants.delete(grant);
+          grantViews.delete(grant);
+          clearTimeout(socket.preauthTimer);
+          socket.preauthTimer = undefined;
+          clearGrantTimer(viewId);
+          attachedViewIds.add(viewId);
+          socket.viewId = viewId;
+          socket.authorized = true;
+          if (latestFrame) queueFrame(socket, latestFrame);
+          return;
         }
-        if (!value || !['ack', 'discard'].includes(value.type) || !Number.isSafeInteger(value.frame_sequence) || !releaseSocketFrame(socket, value.frame_sequence)) socket.close(1008, 'invalid credit');
+        if (!state.viewIds.has(socket.viewId)) {
+          socket.close(1008, 'view revoked');
+          return;
+        }
+        if (!value || !['ack', 'discard'].includes(value.type)
+          || !Number.isSafeInteger(value.frame_sequence)
+          || !releaseSocketFrame(socket, value.frame_sequence)) {
+          socket.close(1008, 'invalid credit');
+        }
       });
     });
   });
 }
 
+function commandProof(command) {
+  if (!command || typeof command !== 'object') return null;
+  // Inspection carries its frame proof one level deeper than mutations. Keep
+  // the shared gateway check aware of that nesting so an old Element request
+  // cannot pass merely because the outer command has no location field.
+  if (command.type === 'inspect') return command.command?.location || null;
+  return command.location || command.context || null;
+}
+
 function proofMatches(command) {
   if (!command || typeof command !== 'object') return false;
-  const proof = command.location || command.context;
-  if (proof !== undefined) {
+  const proof = commandProof(command);
+  if (proof !== null) {
     if (!proof || typeof proof !== 'object' || proof.target_id !== state.targetId
       || proof.document_generation !== state.documentGeneration) return false;
     if (proof.viewport_revision !== undefined && proof.viewport_revision !== state.viewportRevision) return false;
-    // A presented frame may lag the helper's latest frame when transport drops packets. Identity and viewport proofs remain authoritative; frame sequence is advisory for input.
     if (proof.lease_generation !== undefined && proof.lease_generation !== state.leaseGeneration) return false;
+    if (proof.presented_frame_sequence !== undefined) {
+      const presented = frameHistory.get(proof.presented_frame_sequence);
+      if (!presented
+        || presented.target_id !== state.targetId
+        || presented.stream_epoch !== state.streamEpoch
+        || presented.document_generation !== state.documentGeneration
+        || presented.viewport_revision !== state.viewportRevision) return false;
+    }
   }
   if (command.type === 'tab' && command.command?.target_id !== undefined) {
     if (command.command.type === 'close') return state.targets.some((target) => target.kind === 'page' && target.can_close && target.target_id === command.command.target_id);
@@ -787,6 +1065,59 @@ function proofMatches(command) {
     return false;
   }
   return true;
+}
+
+function inspectionFrame(location) {
+  if (!location || typeof location !== 'object') return null;
+  const presented = frameHistory.get(location.presented_frame_sequence);
+  if (!presented
+    || presented.target_id !== state.targetId
+    || presented.stream_epoch !== state.streamEpoch
+    || presented.document_generation !== state.documentGeneration
+    || presented.viewport_revision !== state.viewportRevision
+    || presented.viewport_css_width !== state.viewportCssWidth
+    || presented.viewport_css_height !== state.viewportCssHeight
+    || presented.viewport_offset_x !== state.visualOffsetX
+    || presented.viewport_offset_y !== state.visualOffsetY) return null;
+  return presented;
+}
+
+function inspectionGuard(command) {
+  const location = command?.location;
+  if (!location || typeof location !== 'object') {
+    return { status: 'rejected', code: 'invalid_inspection_location', message: 'Element inspection requires a frame-bound location proof' };
+  }
+  const presented = inspectionFrame(location);
+  if (!presented) {
+    return { status: 'stale', code: 'stale_location', message: 'The presented frame is no longer current' };
+  }
+  if (!Number.isFinite(command.x) || !Number.isFinite(command.y)
+    || command.x < 0 || command.y < 0
+    || command.x >= presented.viewport_css_width
+    || command.y >= presented.viewport_css_height) {
+    return { status: 'rejected', code: 'invalid_inspection_coordinates', message: 'Element inspection coordinates are outside the presented viewport' };
+  }
+  if (command.pointer_sample_sequence === null) return { status: 'ok', presented };
+  if (!Number.isSafeInteger(command.pointer_sample_sequence)) {
+    return { status: 'rejected', code: 'invalid_pointer_sample', message: 'Element inspection pointer sample is malformed' };
+  }
+  const cursor = state.cursor;
+  if (!cursor) {
+    return { status: 'unsupported', capability: 'inspection', code: 'inspection_pointer_sample_missing', message: 'Element inspection is waiting for a current cursor sample' };
+  }
+  if (cursor.pointer_sample_sequence !== command.pointer_sample_sequence
+    || cursor.target_id !== state.targetId
+    || cursor.document_generation !== state.documentGeneration
+    || cursor.viewport_revision !== state.viewportRevision) {
+    return { status: 'stale', code: 'stale_pointer_sample', message: 'The cursor sample no longer matches the presented page' };
+  }
+  return { status: 'ok', presented };
+}
+
+function inspectionStillCurrent(command, binding, expectedFrameGeneration) {
+  return pageBindingIsCurrent(page, pageCdp, binding)
+    && state.frameGeneration === expectedFrameGeneration
+    && inspectionGuard(command).status === 'ok';
 }
 
 function validateNavigationUrl(value) {
@@ -807,17 +1138,32 @@ function validateNavigationUrl(value) {
   return parsed.href;
 }
 async function startScreencast(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
-  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding)) return;
-  await expectedCdp.send('Page.startScreencast', {
-    format: 'jpeg', quality: 80, maxWidth: state.cssWidth, maxHeight: state.cssHeight, everyNthFrame: 1,
-  });
+  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !state.geometryFresh || state.viewIds.size === 0) return;
+  state.captureToken++;
+  state.captureBaseline = geometrySnapshot();
+  try {
+    await expectedCdp.send('Page.startScreencast', {
+      format: 'jpeg', quality: 80,
+      // These are requested CSS bounds. Delivered JPEG dimensions are measured
+      // from each encoded payload and are never inferred from DPR.
+      maxWidth: state.requestedCssWidth, maxHeight: state.requestedCssHeight, everyNthFrame: 1,
+    });
+  } catch (error) {
+    state.captureBaseline = null;
+    throw error;
+  }
 }
 async function captureCurrentFrame(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
-  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding)) return;
+  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !state.geometryFresh) return;
+  const baseline = state.captureBaseline;
   try {
     const capture = await expectedCdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 80, captureBeyondViewport: false });
-    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || typeof capture.data !== 'string') return;
-    enqueueFrame({ data: capture.data, metadata: { timestamp: Date.now() / 1000 }, _cdp: expectedCdp });
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !baseline
+      || baseline.captureToken !== state.captureToken || typeof capture.data !== 'string') return;
+    enqueueFrame({
+      data: capture.data, metadata: { timestamp: Date.now() / 1000 }, _cdp: expectedCdp,
+      _captureToken: baseline.captureToken, _geometry: baseline,
+    });
   } catch (error) {
     if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) emit({ type: 'failed', code: 'browser_frame_capture', message: String(error.message || error) });
   }
@@ -843,8 +1189,14 @@ async function installPageObservers() {
       try { loaderId = (await cdp.send('Page.getFrameTree')).frameTree.frame.loaderId || null; } catch {}
       if (!bindingCurrent()) return;
       if (loaderId === state.loaderId) {
-        await updatePageState(observed, cdp, bindingGeneration);
+        const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
         await updateHistory(cdp, bindingGeneration);
+        if (viewportChanged) {
+          try { await cdp.send('Page.stopScreencast'); } catch {}
+          await startScreencast(cdp, bindingGeneration);
+          await captureCurrentFrame(cdp, bindingGeneration);
+          emitEvent('viewport_changed', { viewport: viewportState() });
+        }
         if (bindingCurrent()) emitNavigation();
         return;
       }
@@ -864,6 +1216,8 @@ async function installPageObservers() {
         if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
         emitEvent('document_changed', { document: documentState() });
         emitNavigation();
+        try { await cdp.send('Page.stopScreencast'); } catch {}
+        await startScreencast(cdp, bindingGeneration);
         await captureCurrentFrame(cdp, bindingGeneration);
       }).catch(() => {});
     })();
@@ -876,16 +1230,24 @@ async function installPageObservers() {
         if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
         return updateHistory(cdp, bindingGeneration);
       })
-      .then(async () => { if (current()) { emitNavigation(); await captureCurrentFrame(cdp, bindingGeneration); } })
+      .then(async () => {
+        if (!current()) return;
+        emitNavigation();
+        if (!state.captureBaseline) {
+          try { await cdp.send('Page.stopScreencast'); } catch {}
+          await startScreencast(cdp, bindingGeneration);
+        }
+        await captureCurrentFrame(cdp, bindingGeneration);
+      })
       .catch(() => {});
   };
   const onDialog = (dialog) => {
     if (!current()) { void dialog.dismiss().catch(() => {}); return; }
-    const blocker = setBlocker('dialog', dialog.message(), dialog.defaultValue?.(), async (decision, text) => {
-      if (decision === 'accept') await dialog.accept(text);
+    const type = dialog.type();
+    setBlocker('dialog', `${type}: ${dialog.message()}`, type === 'prompt' ? dialog.defaultValue() : null, async (decision, text) => {
+      if (decision === 'accept') await dialog.accept(text ?? undefined);
       else await dialog.dismiss();
     });
-    void dialog.type().then((type) => { if (current() && pendingBlocker === blocker) blocker.message = `${type}: ${blocker.message}`; }).catch(() => {});
   };
   const onFileChooser = (chooser) => {
     if (!current()) { void chooser.setFiles([]).catch(() => {}); return; }
@@ -906,16 +1268,20 @@ async function installPageObservers() {
   observedPage = observed;
   screencastListener = (frame) => {
     frame._cdp = cdp;
+    frame._captureToken = state?.captureToken;
+    frame._geometry = state?.captureBaseline;
     const identity = {
       targetId,
       documentGeneration: state?.documentGeneration,
       viewportRevision: state?.viewportRevision,
+      captureToken: state?.captureToken,
     };
     const barrier = frameBarrier;
     void barrier.then(() => {
       if (!current()
         || identity.documentGeneration !== state.documentGeneration
-        || identity.viewportRevision !== state.viewportRevision) {
+        || identity.viewportRevision !== state.viewportRevision
+        || identity.captureToken !== state.captureToken) {
         ackSession(frame.sessionId, cdp);
         return;
       }
@@ -927,19 +1293,27 @@ async function installPageObservers() {
 async function attach(message) {
   const { chromium } = await importPlaywright(message.playwright_core);
   await importWebSocket(message.playwright_core);
-  browser = await chromium.connectOverCDP(message.cdp_endpoint);
-  context = browser.contexts()[0];
-  browserCdp = await browser.newBrowserCDPSession();
-  // Target events are opt-in on the browser-level CDP session. Without
-  // discovery, tabs opened by Playwright or another connected client remain
-  // absent until an unrelated manual tab command refreshes the snapshot.
-  await browserCdp.send('Target.setDiscoverTargets', { discover: true });
+  try {
+    browser = await chromium.connectOverCDP(message.cdp_endpoint);
+    context = browser.contexts()[0];
+    browserCdp = await browser.newBrowserCDPSession();
+    await browserCdp.send('Target.setDiscoverTargets', { discover: true });
+  } catch {
+    throw startupError(
+      'browser_helper_runtime_failed',
+      'The browser helper could not attach to the owned Chromium CDP endpoint; verify the browser is live and retry',
+    );
+  }
   const viewport = requestedViewport(message.viewport);
   state = {
     associationKey: message.association_key, browserIncarnation: message.browser_incarnation,
     viewId: message.view_id, streamEpoch: message.stream_epoch, metadataSequence: 0,
     documentGeneration: nextGeneration(), frameGeneration: nextGeneration(), viewportRevision: 1, frameSequence: 0,
-    leaseGeneration: 1, nextInputSequence: 1, cssWidth: viewport.width, cssHeight: viewport.height,
+    leaseGeneration: 1, nextInputSequence: 1,
+    requestedCssWidth: viewport.width, requestedCssHeight: viewport.height,
+    viewportCssWidth: viewport.width, viewportCssHeight: viewport.height,
+    visualOffsetX: 0, visualOffsetY: 0, visualScale: 1, pageScale: 1,
+    geometryFresh: false, viewportTransition: false, captureToken: 0, captureBaseline: null,
     devicePixelRatio: viewport.dpr, scrollX: 0, scrollY: 0, targets: [], targetId: message.target_id,
     frameId: 'main', loaderId: null, url: '', title: '', frameGrant: message.frame_grant, loading: false,
     canGoBack: false, canGoForward: false, requestedUrl: null, controlled: false,
@@ -947,9 +1321,10 @@ async function attach(message) {
     cursor: null, pointer: null, pointerSampleSequence: 0, viewIds: new Set([message.view_id]), controllerViewId: null,
     pressedButtons: 0, heldKeys: new Map(),
   };
-  if (typeof message.target_id !== 'string' || !message.target_id) throw new Error('stable CDP target identity is required');
-  viewGrants.set(message.view_id, message.frame_grant.grant);
-  grants.set(message.frame_grant.grant, grantExpiry(message.frame_grant.expires_at));
+  if (typeof message.target_id !== 'string' || !message.target_id) {
+    throw startupError('browser_helper_invalid_request', 'Stable CDP target identity is required');
+  }
+  registerViewGrant(message.view_id, message.frame_grant.grant, message.frame_grant.expires_at);
   await startFrameServer();
   await bindPage(message.target_id, false);
   await enumerateTargets();
@@ -972,7 +1347,7 @@ async function command(request) {
       message: 'target, document, viewport, frame, or lease proof changed',
     };
   }
-  if (['resize', 'navigation', 'pointer', 'wheel', 'keyboard', 'text', 'composition', 'clipboard'].includes(request.command.type) && state.controllerViewId !== request.view_id) {
+  if (['resize', 'navigation', 'pointer', 'wheel', 'keyboard', 'text', 'composition', 'clipboard', 'tab', 'dialog', 'file', 'download', 'permission'].includes(request.command.type) && state.controllerViewId !== request.view_id) {
     return { status: 'rejected', ...base, code: 'browser_control_required', message: 'Another browser view holds the input lease' };
   }
   try {
@@ -1000,14 +1375,22 @@ async function command(request) {
     }
     if (request.command.type === 'resize') {
       requireControl(request.command);
-      const requested = await applyRequestedViewport(request.command.viewport);
-      const changed = await updatePageState();
-      state.devicePixelRatio = requested.dpr;
-      if (!changed) {
-        state.viewportRevision++;
-        resetFrameTransport();
+      const expectedCdp = pageCdp;
+      try { await expectedCdp?.send('Page.stopScreencast'); } catch {}
+      invalidateViewport();
+      // Rebind the observer closure as well as CDP capture. This prevents a
+      // delayed callback from the retired screencast using the new baseline.
+      pageBindingGeneration++;
+      await installPageObservers();
+      await applyRequestedViewport(request.command.viewport);
+      const changed = await updatePageState(page, expectedCdp, pageBindingGeneration);
+      if (!state.geometryFresh) {
+        emitEvent('viewport_changed', { viewport: viewportState() });
+        return { status: 'accepted', ...base, outcome: { type: 'none' } };
       }
-      emitEvent('viewport_changed', { viewport: viewportState() });
+      await startScreencast(expectedCdp, pageBindingGeneration);
+      if (changed) emitEvent('viewport_changed', { viewport: viewportState() });
+      else emitEvent('viewport_changed', { viewport: viewportState() });
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
     if (request.command.type === 'navigation') {
@@ -1037,7 +1420,7 @@ async function command(request) {
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
     if (request.command.type === 'pointer') {
-      const sequence = requireControl(request.command);
+      const sequence = requireInputControl(request.command);
       const i = request.command.input;
       const cdpButton = i.kind === 'move'
         ? (i.buttons & 1 ? 'left' : i.buttons & 2 ? 'right' : i.buttons & 4 ? 'middle' : 'none')
@@ -1055,9 +1438,20 @@ async function command(request) {
       await updateCursor();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
-    if (request.command.type === 'wheel') { const sequence = requireControl(request.command); const i = request.command.input; await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: i.x, y: i.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers }); advanceInput(sequence); emitControl(); await updatePageState(); emitEvent('viewport_changed', { viewport: viewportState() }); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
+    if (request.command.type === 'wheel') {
+      const sequence = requireInputControl(request.command); const i = request.command.input;
+      await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: i.x, y: i.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers });
+      advanceInput(sequence); emitControl();
+      const changed = await updatePageState();
+      if (changed) {
+        try { await pageCdp.send('Page.stopScreencast'); } catch {}
+        await startScreencast();
+      }
+      emitEvent('viewport_changed', { viewport: viewportState() });
+      return { status: 'accepted', ...base, outcome: { type: 'none' } };
+    }
     if (request.command.type === 'keyboard') {
-      const sequence = requireControl(request.command);
+      const sequence = requireInputControl(request.command);
       const i = request.command.input;
       const text = i.kind === 'down' && i.key.length === 1 && (i.modifiers & 7) === 0 ? i.key : undefined;
       await pageCdp.send('Input.dispatchKeyEvent', {
@@ -1079,9 +1473,10 @@ async function command(request) {
       emitFocus();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
-    if (request.command.type === 'composition') { const sequence = requireControl(request.command); const i = request.command.input; if (i.kind === 'commit') await pageCdp.send('Input.insertText', { text: i.text }); else await pageCdp.send('Input.imeSetComposition', { text: i.kind === 'cancel' ? '' : i.text, selectionStart: i.text.length, selectionEnd: i.text.length, replacementStart: 0, replacementEnd: 0 }); state.focus.composition_active = i.kind === 'start' || i.kind === 'update'; advanceInput(sequence); emitControl(); emitFocus(); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
-    if (request.command.type === 'clipboard') { const sequence = requireControl(request.command); if (request.command.command.type === 'paste') { await pageCdp.send('Input.insertText', { text: request.command.command.text }); advanceInput(sequence); emitControl(); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text: null } }; } const text = await page.evaluate(() => window.getSelection()?.toString().slice(0, 16384) || ''); advanceInput(sequence); emitControl(); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text } }; }
+    if (request.command.type === 'composition') { const sequence = requireInputControl(request.command); const i = request.command.input; if (i.kind === 'commit') await pageCdp.send('Input.insertText', { text: i.text }); else await pageCdp.send('Input.imeSetComposition', { text: i.kind === 'cancel' ? '' : i.text, selectionStart: i.text.length, selectionEnd: i.text.length, replacementStart: 0, replacementEnd: 0 }); state.focus.composition_active = i.kind === 'start' || i.kind === 'update'; advanceInput(sequence); emitControl(); emitFocus(); return { status: 'accepted', ...base, outcome: { type: 'none' } }; }
+    if (request.command.type === 'clipboard') { const sequence = requireInputControl(request.command); if (request.command.command.type === 'paste') { await pageCdp.send('Input.insertText', { text: request.command.command.text }); advanceInput(sequence); emitControl(); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text: null } }; } const text = await page.evaluate(() => window.getSelection()?.toString().slice(0, 16384) || ''); advanceInput(sequence); emitControl(); return { status: 'accepted', ...base, outcome: { type: 'clipboard', text } }; }
     if (request.command.type === 'tab') {
+      requireControl(request.command);
       const action = request.command.command;
       if (action.type === 'select') {
         await queueTargetTransition(async () => {
@@ -1113,6 +1508,7 @@ async function command(request) {
       return { status: 'accepted', ...base, outcome: { type: 'snapshot', snapshot: snapshot() } };
     }
     if (request.command.type === 'dialog') {
+      requireControl(request.command);
       if (!pendingBlocker || pendingBlocker.blocker_id !== request.command.blocker_id || pendingBlocker.kind !== 'dialog') {
         throw Object.assign(new Error('stale dialog'), { code: 'stale_dialog' });
       }
@@ -1122,6 +1518,7 @@ async function command(request) {
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
     if (['file', 'download', 'permission'].includes(request.command.type)) {
+      requireControl(request.command);
       const blocker = pendingBlocker;
       if (blocker && blocker.blocker_id === request.command.blocker_id) {
         if (request.command.type === 'file' || request.command.type === 'download') await blocker.resolve('dismiss');
@@ -1131,22 +1528,103 @@ async function command(request) {
     }
     if (request.command.type === 'inspect') {
       const i = request.command.command;
-      const result = await page.evaluate(({ x, y }) => {
-        const e = document.elementFromPoint(x, y);
-        if (!e) return null;
-        const r = e.getBoundingClientRect();
+      const guard = inspectionGuard(i);
+      if (guard.status !== 'ok') {
+        return guard.status === 'stale'
+          ? { ...base, ...guard, current_stream_epoch: state.streamEpoch, current_metadata_sequence: state.metadataSequence }
+          : { ...base, ...guard };
+      }
+
+      // Inspection is deliberately read-only. DOM.getNodeForLocation is used
+      // only to identify an inaccessible shadow boundary; it never dispatches
+      // input, changes focus, or obtains the browser lease.
+      const inspectedPage = page;
+      const inspectedCdp = pageCdp;
+      const inspectedBinding = pageBindingGeneration;
+      const inspectedFrameGeneration = state.frameGeneration;
+      let boundary = null;
+      try {
+        const hit = await inspectedCdp.send('DOM.getNodeForLocation', {
+          x: i.x, y: i.y, includeUserAgentShadowDOM: false, ignorePointerEventsNone: false,
+        });
+        if (hit?.frameId && hit.frameId !== state.frameId) {
+          return { status: 'unsupported', ...base, capability: 'inspection', code: 'inspection_frame_inaccessible', message: 'Element inspection cannot cross into a nested browsing context' };
+        }
+        if (Number.isSafeInteger(hit?.backendNodeId)) {
+          const described = await inspectedCdp.send('DOM.describeNode', {
+            backendNodeId: hit.backendNodeId, depth: 1, pierce: false,
+          });
+          if (described?.node?.shadowRoots?.some((root) => root.shadowRootType === 'closed')) {
+            boundary = 'Element inspection cannot access a closed shadow root';
+          }
+        }
+      } catch {
+        // DOM inspection remains available through the narrow page probe when
+        // the optional CDP node description is unavailable.
+      }
+      if (!inspectionStillCurrent(i, inspectedBinding, inspectedFrameGeneration)) {
+        return { status: 'stale', ...base, current_stream_epoch: state.streamEpoch, current_metadata_sequence: state.metadataSequence, code: 'stale_location', message: 'The page or inspection geometry changed before DOM inspection' };
+      }
+      if (boundary) {
         return {
+          status: 'accepted', ...base,
+          outcome: { type: 'inspection', inspection: {
+            location: i.location, frame_id: state.frameId, frame_generation: state.frameGeneration,
+            pointer_sample_sequence: i.pointer_sample_sequence, bounds: null, evidence: null,
+            inspectable: false, freshness: 'unavailable', limitation: boundary,
+          } },
+        };
+      }
+      let result;
+      try {
+        result = await inspectedPage.evaluate(({ x, y }) => {
+        const e = document.elementFromPoint(x, y);
+        if (!e) return { kind: 'empty', limitation: 'No page element is present at this point' };
+        const tag = String(e.localName || '').toLowerCase();
+        if (tag === 'iframe' || tag === 'frame') {
+          return { kind: 'unsupported', limitation: 'Element inspection cannot cross into a nested browsing context' };
+        }
+        if (tag === 'canvas') {
+          return { kind: 'unsupported', limitation: 'Canvas content has no inspectable inner DOM element' };
+        }
+        const r = e.getBoundingClientRect();
+        const finiteRect = [r.x, r.y, r.width, r.height].every(Number.isFinite)
+          && r.width >= 0 && r.height >= 0
+          && r.width <= 2560 && r.height <= 1600
+          && r.x >= -2560 && r.y >= -1600
+          && r.x <= 5120 && r.y <= 3200;
+        if (!finiteRect) return { kind: 'unsupported', limitation: 'The element geometry is outside bounded inspection limits' };
+        const sensitive = (tag === 'input' && String(e.getAttribute('type') || '').toLowerCase() === 'password')
+          || !!e.querySelector?.('input[type="password"]');
+        const text = sensitive ? '' : (e.innerText || e.textContent || '').trim().slice(0, 1024);
+        const excerpt = sensitive
+          ? `<${tag}>`
+          : String(e.outerHTML || `<${tag}>`)
+            .replace(/\svalue\s*=\s*(['"]).*?\1/gi, ' value="[redacted]"')
+            .slice(0, 1024);
+        return {
+          kind: 'element',
           bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
           evidence: {
-            tag: e.localName,
-            text: (e.innerText || e.textContent || '').trim().slice(0, 1024),
-            role: e.getAttribute('role'),
-            name: e.getAttribute('aria-label') || e.getAttribute('name'),
-            locators: [e.id ? `#${e.id}` : e.localName],
-            excerpt: e.outerHTML.slice(0, 1024),
+            tag,
+            text,
+            role: e.getAttribute('role')?.slice(0, 256) || null,
+            name: (e.getAttribute('aria-label') || e.getAttribute('name'))?.slice(0, 256) || null,
+            locators: [e.id ? `#${String(e.id).slice(0, 256)}` : tag],
+            excerpt,
           },
         };
-      }, i);
+        }, { x: i.x, y: i.y });
+      } catch (error) {
+        if (!inspectionStillCurrent(i, inspectedBinding, inspectedFrameGeneration)) {
+          return { status: 'stale', ...base, current_stream_epoch: state.streamEpoch, current_metadata_sequence: state.metadataSequence, code: 'stale_location', message: 'The page or inspection geometry changed during DOM inspection' };
+        }
+        throw error;
+      }
+      if (!inspectionStillCurrent(i, inspectedBinding, inspectedFrameGeneration)) {
+        return { status: 'stale', ...base, current_stream_epoch: state.streamEpoch, current_metadata_sequence: state.metadataSequence, code: 'stale_location', message: 'The page or inspection geometry changed during DOM inspection' };
+      }
+      const inspectable = result?.kind === 'element';
       return {
         status: 'accepted',
         ...base,
@@ -1156,12 +1634,14 @@ async function command(request) {
             location: i.location,
             frame_id: state.frameId,
             frame_generation: state.frameGeneration,
-            pointer_sample_sequence: state.pointerSampleSequence,
-            bounds: result?.bounds || null,
-            evidence: result?.evidence || null,
-            inspectable: !!result,
-            freshness: result ? 'fresh' : 'unavailable',
-            limitation: result ? null : 'No page element is present at this point',
+            // Null is an explicit local sample. Never replace it with the
+            // helper's latest cursor token.
+            pointer_sample_sequence: i.pointer_sample_sequence,
+            bounds: inspectable ? result.bounds : null,
+            evidence: inspectable ? result.evidence : null,
+            inspectable,
+            freshness: inspectable ? 'fresh' : 'unavailable',
+            limitation: inspectable ? null : (result?.limitation || 'No page element is present at this point'),
           },
         },
       };
@@ -1197,7 +1677,11 @@ async function detach() {
   await releaseHeldInput();
   try { await pageCdp?.send('Page.stopScreencast'); } catch {}
   grants.clear();
+  for (const viewId of grantTimers.keys()) clearGrantTimer(viewId);
   viewGrants.clear();
+  grantViews.clear();
+  attachedViewIds.clear();
+  resetFrameTransport();
   for (const socket of sockets) socket.terminate();
   sockets.clear();
   server?.close();
@@ -1207,32 +1691,24 @@ async function detach() {
 }
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 let inputQueue = Promise.resolve();
+let inputQueueDepth = 0;
+let urgentInputQueue = Promise.resolve();
+let urgentInputQueueDepth = 0;
 async function processInputLine(line) {
+  let message;
   try {
-    const message = JSON.parse(line);
+    message = JSON.parse(line);
     if (message.type === 'attach') await attach(message);
     else if (message.type === 'command') emit({ type: 'command_response', response: await command(message.request) });
     else if (message.type === 'grant') {
-      grants.set(message.grant.grant, grantExpiry(message.grant.expires_at));
-      viewGrants.set(message.grant.view_id, message.grant.grant);
+      registerViewGrant(message.grant.view_id, message.grant.grant, message.grant.expires_at);
     } else if (message.type === 'attach_view') {
-      const previous = viewGrants.get(message.view_id);
-      if (previous) grants.delete(previous);
+      const hadViews = state.viewIds.size > 0;
       state.viewIds.add(message.view_id);
-      viewGrants.set(message.view_id, message.frame_grant.grant);
-      grants.set(message.frame_grant.grant, grantExpiry(message.frame_grant.expires_at));
+      registerViewGrant(message.view_id, message.frame_grant.grant, message.frame_grant.expires_at);
+      if (!hadViews && state.viewIds.size > 0) await startScreencast();
     } else if (message.type === 'detach_view') {
-      state.viewIds.delete(message.view_id);
-      const grant = viewGrants.get(message.view_id);
-      if (grant) grants.delete(grant);
-      viewGrants.delete(message.view_id);
-      if (state.controllerViewId === message.view_id) {
-        await releaseHeldInput();
-        state.controlled = false;
-        state.controllerViewId = null;
-        state.leaseGeneration++;
-        emitControl();
-      }
+      retireView(message.view_id, false);
     } else if (message.type === 'pause') {
       await releaseHeldInput();
       if (state.controlled) {
@@ -1242,24 +1718,74 @@ async function processInputLine(line) {
         state.nextInputSequence = 1;
         emitControl();
       }
+      for (const socket of sockets) {
+        socket.authorized = false;
+        socket.terminate();
+      }
       for (const grant of viewGrants.values()) grants.delete(grant);
+      for (const viewId of grantTimers.keys()) clearGrantTimer(viewId);
       viewGrants.clear();
+      grantViews.clear();
+      attachedViewIds.clear();
       state.viewIds.clear();
+      resetFrameTransport();
       await pageCdp?.send('Page.stopScreencast');
     }
     else if (message.type === 'resume') await startScreencast();
     else if (message.type === 'detach') await detach();
     else if (message.type === 'stop') await detach();
   } catch (error) {
-    const message = String(error.message || error);
-    emit({ type: 'failed', code: 'browser_helper_failed', message });
-    if (/Target page, context or browser has been closed|Target closed|Connection closed/i.test(message)) await detach();
+    const rawMessage = String(error?.message || error);
+    const code = typeof error?.code === 'string'
+      ? error.code
+      : (message?.type === 'attach' ? 'browser_helper_runtime_failed' : 'browser_helper_failed');
+    const safeMessage = typeof error?.code === 'string'
+      ? String(error.message || 'browser helper operation failed').slice(0, 256)
+      : 'Browser helper operation failed; retry the browser view';
+    emit({ type: 'failed', code, message: safeMessage });
+    if (/Target page, context or browser has been closed|Target closed|Connection closed/i.test(rawMessage)) await detach();
+  }
+}
+const MAX_COMMAND_QUEUE = 64;
+const MAX_URGENT_QUEUE = 16;
+function urgentInputLine(line) {
+  try {
+    const message = JSON.parse(line);
+    if (['detach', 'detach_view', 'stop', 'pause'].includes(message.type)) return true;
+    const command = message.type === 'command' ? message.request?.command : null;
+    return command?.type === 'release_control'
+      || command?.type === 'dialog'
+      || (command?.type === 'navigation' && command.command?.type === 'stop');
+  } catch {
+    return false;
   }
 }
 input.on('line', (line) => {
-  inputQueue = inputQueue.then(() => processInputLine(line), () => processInputLine(line));
+  if (urgentInputLine(line)) {
+    if (urgentInputQueueDepth >= MAX_URGENT_QUEUE) {
+      emit({ type: 'failed', code: 'browser_command_busy', message: 'Urgent browser command queue is full; retry after the current operation settles' });
+      return;
+    }
+    urgentInputQueueDepth++;
+    urgentInputQueue = urgentInputQueue
+      .then(() => processInputLine(line), () => processInputLine(line))
+      .finally(() => { urgentInputQueueDepth--; });
+    return;
+  }
+  if (inputQueueDepth >= MAX_COMMAND_QUEUE) {
+    emit({ type: 'failed', code: 'browser_command_busy', message: 'Browser command queue is full; retry after the current operation settles' });
+    return;
+  }
+  inputQueueDepth++;
+  inputQueue = inputQueue
+    .then(() => processInputLine(line), () => processInputLine(line))
+    .finally(() => { inputQueueDepth--; });
 });
-process.on('uncaughtException', (error) => {
-  emit({ type: 'failed', code: 'browser_helper_crashed', message: String(error.message || error) });
+process.on('uncaughtException', () => {
+  emit({
+    type: 'failed',
+    code: 'browser_helper_crashed',
+    message: 'Browser helper runtime crashed; retry the browser view',
+  });
   process.exit(1);
 });

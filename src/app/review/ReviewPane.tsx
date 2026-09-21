@@ -11,7 +11,7 @@ import type {
 } from "../../protocol/generated/v1";
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
-import type { ReviewViewState } from "../context/ContextViewer";
+import { retainReviewScrollPosition, type ReviewViewState } from "../context/ContextViewer";
 import "./review.css";
 
 export type ReviewLineSelection = { fileId: string; side: "old" | "new"; start: number; end: number } | null;
@@ -32,7 +32,7 @@ export type ReviewPaneProps = {
   canCreateLineComment?: boolean;
   canCreateFileComment?: boolean;
   onSelectLines?: (file: ReviewChangedFile, side: "old" | "new", start: number, end: number, lines: string[], shift: boolean) => void;
-  renderFile?: (snapshot: ReviewSnapshot, diff: ReviewFileDiff, content: (comments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode) => ReactNode, loadSourcePage: (side: "old" | "new", offset: number) => Promise<ReviewFileDiff>) => ReactNode;
+  renderFile?: (snapshot: ReviewSnapshot, diff: ReviewFileDiff, content: (comments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode) => ReactNode, loadSourcePage: (side: "old" | "new", offset: number) => Promise<ReviewFileDiff | null>) => ReactNode;
   presentationControls?: ReactNode;
   renderLineComments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode;
   viewState?: ReviewViewState;
@@ -125,6 +125,21 @@ function isEditingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
 }
+type SourcePageRequest = {
+  controller: AbortController;
+  token: number;
+  identity: string;
+  reviewId: string;
+  generation: number;
+  fileId: string;
+  side: "old" | "new";
+  revision: string | null;
+};
+
+export function reviewScrollIdentity(sessionId: string, paneId: string, bindingId: string, reviewId: string, generation: number, comparison: ReviewComparison, kind: "diff" | "source", fileId: string, side: "old" | "new" | null, revision: string | null): string {
+  return [sessionId, paneId, bindingId, reviewId, generation, comparison, kind, fileId, side ?? "", revision ?? ""].join("\u0000");
+}
+
 
 export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, onOpenSource, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, presentationControls, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
   const baseId = useId();
@@ -141,7 +156,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const previousSelectedRef = useRef(selected);
   const [pending, setPending] = useState(false);
   const [hunkIndex, setHunkIndex] = useState(viewState?.hunkIndex ?? -1);
-  const [scrollTop, setScrollTop] = useState(viewState?.scrollTop ?? 0);
+  const [scrollPosition, setScrollPosition] = useState(() => ({ identity: viewState?.scrollIdentity ?? null, top: viewState?.scrollTop ?? 0 }));
   const restoredDiff = useRef<string | null>(null);
   const diffRef = useRef<HTMLElement | null>(null);
   const filesRef = useRef<HTMLElement | null>(null);
@@ -153,8 +168,31 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   const abortRef = useRef<AbortController | null>(null);
   const identityRef = useRef(identity);
   identityRef.current = identity;
-
+  const comparisonRef = useRef(comparison);
+  comparisonRef.current = comparison;
+  const reviewRef = useRef(review);
+  reviewRef.current = review;
+  const diffStateRef = useRef(diff);
+  diffStateRef.current = diff;
+  const sourcePageRef = useRef<SourcePageRequest | null>(null);
+  const sourcePageSequence = useRef(0);
+  const invalidateSourcePage = useCallback(() => {
+    sourcePageRef.current?.controller.abort();
+    sourcePageRef.current = null;
+    sourcePageSequence.current += 1;
+  }, []);
   const selectedFile = useMemo(() => review?.files.find((item) => item.file_id === selected) ?? null, [review, selected]);
+  const reviewMode = viewStateRef.current?.mode ?? "diff";
+  const diffRevision = diff ? `${diff.file.old_revision ?? ""}\u0000${diff.file.new_revision ?? ""}` : null;
+  const activeScrollIdentity = reviewMode === "diff"
+    ? review && diff && diff.file.file_id === selected && diff.review_id === review.review_id && diff.generation === review.generation
+      ? reviewScrollIdentity(sessionId, paneId, bindingId, review.review_id, review.generation, review.comparison, "diff", diff.file.file_id, null, diffRevision)
+      : null
+    : viewStateRef.current?.scrollIdentity ?? null;
+  const scrollTop = reviewMode === "diff" && activeScrollIdentity
+    ? scrollPosition.identity === activeScrollIdentity ? scrollPosition.top
+      : viewStateRef.current?.scrollPositions?.[activeScrollIdentity] ?? (viewStateRef.current?.scrollIdentity === activeScrollIdentity ? viewStateRef.current.scrollTop : 0)
+    : viewStateRef.current?.scrollTop ?? 0;
   useEffect(() => {
     const selectionForFile = selectedLines?.fileId === selected ? selectedLines : null;
     onViewStateChange?.({
@@ -168,12 +206,17 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       selectionEnd: selectionForFile?.end ?? null,
       hunkIndex,
       scrollTop,
-      mode: viewStateRef.current?.mode ?? "diff",
+      scrollPositions: activeScrollIdentity && reviewMode === "diff"
+        ? retainReviewScrollPosition(viewStateRef.current?.scrollPositions ?? {}, activeScrollIdentity, scrollTop)
+        : viewStateRef.current?.scrollPositions ?? {},
+      scrollIdentity: activeScrollIdentity ?? viewStateRef.current?.scrollIdentity ?? null,
+      mode: reviewMode,
       commentCount: viewStateRef.current?.commentCount ?? null,
     });
-  }, [baseRef, comparison, draftBaseRef, hunkIndex, onViewStateChange, scrollTop, selected, selectedFile, selectedLines]);
+  }, [activeScrollIdentity, baseRef, bindingId, comparison, draftBaseRef, hunkIndex, onViewStateChange, paneId, reviewMode, scrollTop, selected, selectedFile, selectedLines, sessionId]);
 
   const refresh = useCallback(async () => {
+    invalidateSourcePage();
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -203,9 +246,9 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     } finally {
       if (!controller.signal.aborted && generation === generationRef.current) setPending(false);
     }
-  }, [baseRef, bindingId, comparison, identity, paneId, repositoryId, sessionId, snapshot]);
-
+  }, [baseRef, bindingId, comparison, identity, invalidateSourcePage, paneId, repositoryId, sessionId, snapshot]);
   const editBaseRef = (value: string) => {
+    invalidateSourcePage();
     abortRef.current?.abort();
     generationRef.current += 1;
     setDraftBaseRef(value);
@@ -223,7 +266,10 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
   };
 
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    invalidateSourcePage();
+  }, [invalidateSourcePage]);
   useEffect(() => {
     if (!review || !selected) { setDiff(null); return; }
     const controller = new AbortController();
@@ -239,13 +285,60 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     return () => controller.abort();
   }, [bindingId, file, identity, review, selected]);
   useEffect(() => {
-    if (!diff || !diffRef.current) return;
-    const key = `${diff.file.comparison}\0${diff.file.new_path ?? diff.file.old_path}`;
-    if (restoredDiff.current === key) return;
-    const initial = restoredDiff.current === null;
-    restoredDiff.current = key;
-    diffRef.current.scrollTop = initial ? (viewStateRef.current?.scrollTop ?? 0) : 0;
-  }, [diff]);
+    if (reviewMode !== "diff" || !activeScrollIdentity) { restoredDiff.current = null; return; }
+    if (!diffRef.current || restoredDiff.current === activeScrollIdentity) return;
+    restoredDiff.current = activeScrollIdentity;
+    diffRef.current.scrollTop = scrollTop;
+    setScrollPosition({ identity: activeScrollIdentity, top: scrollTop });
+  }, [activeScrollIdentity, reviewMode, scrollTop]);
+  useEffect(() => {
+    return () => invalidateSourcePage();
+  }, [bindingId, comparison, diff?.file.file_id, diff?.file.new_revision, diff?.file.old_revision, identity, invalidateSourcePage, review?.generation, review?.review_id, selected, selectedLines?.side]);
+  const loadSourcePage = useCallback(async (side: "old" | "new", offset: number): Promise<ReviewFileDiff | null> => {
+    if (!review || !diff) return null;
+    invalidateSourcePage();
+    const revision = side === "old" ? diff.file.old_revision ?? null : diff.file.new_revision ?? null;
+    const sourceIdentity = reviewScrollIdentity(sessionId, paneId, bindingId, review.review_id, review.generation, review.comparison, "source", diff.file.file_id, side, revision);
+    const token = sourcePageSequence.current + 1;
+    sourcePageSequence.current = token;
+    const controller = new AbortController();
+    sourcePageRef.current = { controller, token, identity: sourceIdentity, reviewId: review.review_id, generation: review.generation, fileId: diff.file.file_id, side, revision };
+    try {
+      const next = await file({
+        binding_id: bindingId,
+        review_id: review.review_id,
+        generation: review.generation,
+        file_id: diff.file.file_id,
+        source_side: side,
+        source_offset: offset,
+        source_revision: revision,
+      }, controller.signal);
+      const active = sourcePageRef.current;
+      const currentReview = reviewRef.current;
+      const currentDiff = diffStateRef.current;
+      if (controller.signal.aborted || !active || active.token !== token || identityRef.current !== identity
+        || comparisonRef.current !== comparison || selectedRef.current !== selected
+        || currentReview?.review_id !== review.review_id || currentReview.generation !== review.generation
+        || currentDiff?.file.file_id !== diff.file.file_id
+        || next.binding_id !== bindingId || next.session_id !== sessionId || next.pane_id !== paneId
+        || next.review_id !== review.review_id || next.generation !== review.generation
+        || next.file.file_id !== diff.file.file_id
+        || (revision !== null && (side === "old" ? next.file.old_revision : next.file.new_revision) !== revision)) return null;
+      return next;
+    } catch (reason) {
+      const active = sourcePageRef.current;
+      const currentReview = reviewRef.current;
+      const currentDiff = diffStateRef.current;
+      if (controller.signal.aborted || !active || active.token !== token || identityRef.current !== identity
+        || comparisonRef.current !== comparison || selectedRef.current !== selected
+        || currentReview?.review_id !== review.review_id || currentReview.generation !== review.generation
+        || currentDiff?.file.file_id !== diff.file.file_id) return null;
+      setError(errorText(reason));
+      return null;
+    } finally {
+      if (sourcePageRef.current?.token === token) sourcePageRef.current = null;
+    }
+  }, [bindingId, comparison, diff, file, identity, invalidateSourcePage, paneId, review, selected, sessionId]);
 
   const fileNavigationOrder = () => {
     if (!review?.files.length) return [];
@@ -426,10 +519,11 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       <nav id={`${baseId}-file-overview`} className={`review-files${overview.open ? " is-overview-open" : ""}`} aria-label="Changed files" ref={filesRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); diffRef.current?.focus({ preventScroll: true }); } else onFilesKeyDown(event); }}>
         <header><span>Changed files</span><small>{review?.files.length ?? 0}</small></header>
         {review ? <ReviewFileTree files={review.files} selected={selected} onSelect={(id) => { setSelected(id); overview.select(); }} /> : null}
-        {review && review.files.length === 0 ? <p>No changes in this scope.</p> : null}
       </nav>
-      <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus({ preventScroll: true }); }} onKeyDown={onDiffKeyDown}>
-        {renderFile && review && diff ? renderFile(review, diff, diffContent, (side, offset) => file({ binding_id: bindingId, review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, source_side: side, source_offset: offset, source_revision: side === "old" ? diff.file.old_revision : diff.file.new_revision }, new AbortController().signal)) : diffContent()}
+      <main className="review-diff" aria-label="Unified diff" tabIndex={0} ref={diffRef} onScroll={(event) => {
+        if (reviewMode === "diff" && activeScrollIdentity) setScrollPosition({ identity: activeScrollIdentity, top: event.currentTarget.scrollTop });
+      }} onPointerDown={(event) => { if (event.target === event.currentTarget) event.currentTarget.focus({ preventScroll: true }); }} onKeyDown={onDiffKeyDown}>
+        {renderFile && review && diff ? renderFile(review, diff, diffContent, loadSourcePage) : diffContent()}
       </main>
     </div>
     <footer className="review-status" aria-label="Review shortcuts"><span>{displayedSelection ? `${displayedSelection.side} · lines ${Math.min(displayedSelection.start, displayedSelection.end)}–${Math.max(displayedSelection.start, displayedSelection.end)}` : "Select a line"}</span><span className="review-status-actions"><button type="button" onClick={onCreateLineComment} disabled={!canCreateLineComment} title={canCreateLineComment ? "Comment on selected lines (C)" : "Select review lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={onCreateFileComment} disabled={!canCreateFileComment} title={canCreateFileComment ? "Comment on whole file (Shift+C)" : "Review source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={onOpenCommentOverview} title="Open comments overview">{commentCount === null ? "Loading comments…" : `${commentCount} comments`}</button><span><kbd>Alt+↑↓</kbd> hunk</span></span></footer>

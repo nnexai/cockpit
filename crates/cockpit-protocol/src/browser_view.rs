@@ -16,8 +16,10 @@ pub const BROWSER_VIEW_MAX_URL_BYTES: usize = 8 * 1024;
 pub const BROWSER_VIEW_MAX_FILE_SELECTIONS: usize = 64;
 /// Maximum number of annotations named by one capture operation.
 pub const BROWSER_VIEW_MAX_CAPTURE_ANNOTATIONS: usize = 64;
-/// Maximum number of annotation points accepted by one draft mutation.
+/// Maximum number of points accepted for one freehand annotation.
 pub const BROWSER_VIEW_MAX_ANNOTATION_POINTS: usize = 8_192;
+/// Maximum UTF-16 code units retained for one annotation note editor.
+pub const BROWSER_VIEW_MAX_NOTE_TEXT_CODE_UNITS: usize = 4_000;
 /// Maximum dimensions accepted from the frame transport.
 pub const BROWSER_VIEW_FRAME_MAX_WIDTH: u32 = 2_560;
 pub const BROWSER_VIEW_FRAME_MAX_HEIGHT: u32 = 1_600;
@@ -670,8 +672,9 @@ pub struct BrowserViewInspectResult {
     pub frame_id: String,
     #[ts(type = "number")]
     pub frame_generation: u64,
-    #[ts(type = "number")]
-    pub pointer_sample_sequence: u64,
+    /// None identifies an explicit frame-bound local inspection sample.
+    #[ts(type = "number | null")]
+    pub pointer_sample_sequence: Option<u64>,
     pub bounds: Option<BrowserRect>,
     pub evidence: Option<BrowserElementEvidence>,
     pub inspectable: bool,
@@ -693,8 +696,9 @@ pub enum BrowserViewInspectionFreshness {
 #[serde(deny_unknown_fields)]
 pub struct BrowserViewInspectCommand {
     pub location: BrowserViewLocation,
-    #[ts(type = "number")]
-    pub pointer_sample_sequence: u64,
+    /// None supplies a new read-only local point, without moving the remote pointer.
+    #[ts(type = "number | null")]
+    pub pointer_sample_sequence: Option<u64>,
     pub x: f64,
     pub y: f64,
 }
@@ -729,6 +733,10 @@ pub struct BrowserViewDraftAnnotation {
 pub struct BrowserViewDraftEditorState {
     pub selected_annotation_id: Option<String>,
     pub notes_open: bool,
+    #[serde(default)]
+    pub note_annotation_id: Option<String>,
+    #[serde(default)]
+    pub note_text: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
@@ -756,11 +764,13 @@ pub struct BrowserViewDraftInventory {
     pub pending_capture: Option<BrowserViewPendingCapture>,
 }
 
-/// The payload itself stays owner-persisted. Recovery callers only receive its
-/// stable identity and selected annotation IDs, never a duplicate PNG blob.
+/// The payload itself stays owner-persisted. Recovery callers receive the
+/// original association/incarnation and selected annotation IDs, never a duplicate PNG blob.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserViewPendingCapture {
+    pub association_key: String,
+    pub browser_incarnation: String,
     pub capture_id: String,
     pub draft_id: String,
     #[ts(type = "number")]
@@ -796,9 +806,6 @@ pub enum BrowserViewDraftCommand {
     },
     Clear,
     Discard,
-    SetEditor {
-        editor: BrowserViewDraftEditorState,
-    },
     /// Persists the exact composed PNG before the store attempt. A later retry
     /// always submits the same capture ID and bytes.
     SaveCapture {
@@ -813,12 +820,30 @@ pub enum BrowserViewDraftCommand {
 /// Recovery is available without an attached inline view. The target still
 /// resolves through fresh Herdr authority before Cockpit reads or changes the
 /// association-owned records.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserDraftRecoveryAction {
     List,
     RetryPending,
     DiscardPending,
+    SetEditor {
+        draft_id: String,
+        #[ts(type = "number")]
+        expected_revision: u64,
+        editor: BrowserViewDraftEditorState,
+    },
+    UpsertAnnotation {
+        draft_id: String,
+        #[ts(type = "number")]
+        expected_revision: u64,
+        annotation: BrowserViewDraftAnnotation,
+    },
+    RemoveAnnotation {
+        draft_id: String,
+        #[ts(type = "number")]
+        expected_revision: u64,
+        annotation_id: String,
+    },
     DiscardDraft {
         draft_id: String,
         #[ts(type = "number")]
@@ -826,11 +851,37 @@ pub enum BrowserDraftRecoveryAction {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserDraftRecoveryRequest {
     pub target: BrowserTarget,
     pub action: BrowserDraftRecoveryAction,
+}
+
+impl BrowserDraftRecoveryRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match &self.action {
+            BrowserDraftRecoveryAction::SetEditor { draft_id, editor, .. } => {
+                validate_id(draft_id)?;
+                validate_draft_editor(editor)
+            }
+            BrowserDraftRecoveryAction::UpsertAnnotation { draft_id, annotation, .. } => {
+                validate_id(draft_id)?;
+                if annotation.points.len() > BROWSER_VIEW_MAX_ANNOTATION_POINTS {
+                    return Err("browser draft annotation points exceed bounds");
+                }
+                validate_id(&annotation.id)
+            }
+            BrowserDraftRecoveryAction::RemoveAnnotation { draft_id, annotation_id, .. } => {
+                validate_id(draft_id)?;
+                validate_id(annotation_id)
+            }
+            BrowserDraftRecoveryAction::DiscardDraft { draft_id, .. } => validate_id(draft_id),
+            BrowserDraftRecoveryAction::List
+            | BrowserDraftRecoveryAction::RetryPending
+            | BrowserDraftRecoveryAction::DiscardPending => Ok(()),
+        }
+    }
 }
 
 /// Typed browser-view commands. This is deliberately not a general page automation API.
@@ -1058,6 +1109,17 @@ fn validate_id(value: &str) -> Result<(), &'static str> {
 fn validate_text(value: &str) -> Result<(), &'static str> {
     if value.len() > BROWSER_VIEW_MAX_TEXT_BYTES {
         return Err("browser view text exceeds bounds");
+    }
+    Ok(())
+}
+fn validate_draft_editor(editor: &BrowserViewDraftEditorState) -> Result<(), &'static str> {
+    if let Some(annotation_id) = &editor.note_annotation_id {
+        validate_id(annotation_id)?;
+    } else if !editor.note_text.is_empty() {
+        return Err("browser draft note text requires an active annotation");
+    }
+    if editor.note_text.encode_utf16().count() > BROWSER_VIEW_MAX_NOTE_TEXT_CODE_UNITS {
+        return Err("browser draft note text exceeds bounds");
     }
     Ok(())
 }

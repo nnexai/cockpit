@@ -296,7 +296,7 @@ export interface CockpitClient {
   commentPasteSend(sessionId: string, paneId: string, request: CommentPasteSendRequest): Promise<CommentPasteReceipt>;
   commentPreview(sessionId: string, paneId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
   sessions(): Promise<SessionListResponse>;
-  sessionSnapshot(sessionId: string): Promise<CockpitSessionSnapshot>;
+  sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<CockpitSessionSnapshot>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;
   mutate(
     sessionId: string,
@@ -306,6 +306,7 @@ export interface CockpitClient {
     sessionId: string,
     onMessage: (message: SessionStreamMessage) => void,
     onError: (error: CockpitClientError) => void,
+    signal?: AbortSignal,
   ): Promise<ClosableStream>;
   openTerminal(
     request: TerminalOpenRequest,
@@ -578,6 +579,7 @@ const browserViewMaxText = 64 * 1024;
 const browserViewMaxFileSelections = 64;
 const browserViewMaxCaptureAnnotations = 64;
 const browserViewMaxAnnotationPoints = 8192;
+const browserViewMaxNoteTextCodeUnits = 4_000;
 const browserViewMaxWidth = 2560;
 const browserViewMaxHeight = 1600;
 const browserViewMaxPixels = browserViewMaxWidth * browserViewMaxHeight;
@@ -965,7 +967,7 @@ function parseBrowserViewPermissionCommand(value: unknown): BrowserViewPermissio
 }
 function parseBrowserViewInspectResult(value: unknown): BrowserViewInspectResult {
   if (!isRecord(value) || !isBoundedId(value.frame_id) || !isU64(value.frame_generation)
-    || !isU64(value.pointer_sample_sequence) || !isBoolean(value.inspectable)
+    || !(value.pointer_sample_sequence === null || isU64(value.pointer_sample_sequence)) || !isBoolean(value.inspectable)
     || !isOneOf(value.freshness, ["fresh", "review_required", "stale", "unavailable"] as const)
     || !(value.limitation === null || isString(value.limitation))) return malformed("Browser view inspection result is malformed");
   return {
@@ -977,7 +979,7 @@ function parseBrowserViewInspectResult(value: unknown): BrowserViewInspectResult
   };
 }
 function parseBrowserViewInspectCommand(value: unknown): BrowserViewInspectCommand {
-  if (!isRecord(value) || !isU64(value.pointer_sample_sequence) || !isFiniteNumber(value.x) || !isFiniteNumber(value.y)) {
+  if (!isRecord(value) || !(value.pointer_sample_sequence === null || isU64(value.pointer_sample_sequence)) || !isFiniteNumber(value.x) || !isFiniteNumber(value.y)) {
     return malformed("Browser view inspection command is malformed");
   }
   return { location: parseBrowserViewLocation(value.location), pointer_sample_sequence: value.pointer_sample_sequence, x: value.x, y: value.y };
@@ -1005,16 +1007,44 @@ function parseBrowserViewDraftState(value: unknown): BrowserViewDraftState {
     || !isU64(value.document_generation) || !isU64(value.revision) || !Array.isArray(value.annotations)
     || !value.annotations.every((item) => { try { parseBrowserViewDraftAnnotation(item); return true; } catch { return false; } })
     || !isOneOf(value.freshness, ["fresh", "review_required", "stale", "unavailable"] as const)
-    || !isBoolean(value.stale) || !isRecord(value.editor) || !isNullableString(value.editor.selected_annotation_id) || !isBoolean(value.editor.notes_open)) return malformed("Browser view draft state is malformed");
-  return { draft_id: value.draft_id, target_id: value.target_id, document_generation: value.document_generation, revision: value.revision, annotations: value.annotations.map(parseBrowserViewDraftAnnotation), freshness: value.freshness, stale: value.stale, editor: { selected_annotation_id: value.editor.selected_annotation_id, notes_open: value.editor.notes_open } };
+    || !isBoolean(value.stale) || !isRecord(value.editor)
+    || !isNullableString(value.editor.selected_annotation_id) || !isBoolean(value.editor.notes_open)
+    || !(value.editor.note_annotation_id === undefined || isNullableString(value.editor.note_annotation_id))
+    || !(value.editor.note_text === undefined || (isString(value.editor.note_text) && value.editor.note_text.length <= browserViewMaxNoteTextCodeUnits))) {
+    return malformed("Browser view draft state is malformed");
+  }
+  return {
+    draft_id: value.draft_id,
+    target_id: value.target_id,
+    document_generation: value.document_generation,
+    revision: value.revision,
+    annotations: value.annotations.map(parseBrowserViewDraftAnnotation),
+    freshness: value.freshness,
+    stale: value.stale,
+    editor: {
+      selected_annotation_id: value.editor.selected_annotation_id,
+      notes_open: value.editor.notes_open,
+      note_annotation_id: value.editor.note_annotation_id === undefined ? null : value.editor.note_annotation_id,
+      note_text: value.editor.note_text === undefined ? "" : value.editor.note_text,
+    },
+  };
 }
 function parseBrowserViewPendingCapture(value: unknown) {
-  if (!isRecord(value) || !isBoundedId(value.capture_id) || !isBoundedId(value.draft_id) || !isU64(value.draft_revision)
+  if (!isRecord(value) || !isBoundedId(value.association_key) || !isBoundedId(value.browser_incarnation)
+    || !isBoundedId(value.capture_id) || !isBoundedId(value.draft_id) || !isU64(value.draft_revision)
     || !Array.isArray(value.annotation_ids) || !value.annotation_ids.every(isBoundedId)
     || !(value.last_error === undefined || value.last_error === null || isBoundedText(value.last_error))) {
     return malformed("Browser pending capture is malformed");
   }
-  return { capture_id: value.capture_id, draft_id: value.draft_id, draft_revision: value.draft_revision, annotation_ids: value.annotation_ids, last_error: value.last_error === undefined ? null : value.last_error };
+  return {
+    association_key: value.association_key,
+    browser_incarnation: value.browser_incarnation,
+    capture_id: value.capture_id,
+    draft_id: value.draft_id,
+    draft_revision: value.draft_revision,
+    annotation_ids: value.annotation_ids,
+    last_error: value.last_error === undefined ? null : value.last_error,
+  };
 }
 function parseBrowserViewDraftInventory(value: unknown): BrowserViewDraftInventory {
   if (!isRecord(value) || !Array.isArray(value.drafts) || value.drafts.length > 8
@@ -1046,7 +1076,6 @@ function parseBrowserViewDraftCommand(value: unknown): BrowserViewDraftCommand {
   if (value.type === "upsert_annotation") return { type: "upsert_annotation", annotation: parseBrowserViewDraftAnnotation(value.annotation) };
   if (value.type === "remove_annotation" && isBoundedId(value.annotation_id)) return { type: "remove_annotation", annotation_id: value.annotation_id };
   if (value.type === "list" || value.type === "clear" || value.type === "discard" || value.type === "retry_pending" || value.type === "discard_pending") return { type: value.type };
-  if (value.type === "set_editor" && isRecord(value.editor) && isNullableString(value.editor.selected_annotation_id) && isBoolean(value.editor.notes_open)) return { type: "set_editor", editor: { selected_annotation_id: value.editor.selected_annotation_id, notes_open: value.editor.notes_open } };
   if (value.type === "save_capture" && isRecord(value.submission) && Array.isArray(value.annotation_ids) && value.annotation_ids.every(isBoundedId) && isRecord(value.provenance)) {
     const submission = value.submission;
     const provenance = value.provenance;
@@ -1076,9 +1105,48 @@ export function parseBrowserDraftRecoveryRequest(value: unknown): BrowserDraftRe
   if (!isRecord(value) || !isRecord(value.action) || !isString(value.action.type)) return malformed("Browser draft recovery request is malformed");
   const action: BrowserDraftRecoveryAction = value.action.type === "list" || value.action.type === "retry_pending" || value.action.type === "discard_pending"
     ? { type: value.action.type }
-    : value.action.type === "discard_draft" && isBoundedId(value.action.draft_id) && isU64(value.action.expected_revision)
-      ? { type: "discard_draft", draft_id: value.action.draft_id, expected_revision: value.action.expected_revision }
-      : malformed("Browser draft recovery action is malformed");
+    : value.action.type === "set_editor"
+      && isBoundedId(value.action.draft_id)
+      && isU64(value.action.expected_revision)
+      && isRecord(value.action.editor)
+      && isNullableString(value.action.editor.selected_annotation_id)
+      && isBoolean(value.action.editor.notes_open)
+      && (value.action.editor.note_annotation_id === undefined || isNullableString(value.action.editor.note_annotation_id))
+      && (value.action.editor.note_text === undefined || (isString(value.action.editor.note_text) && value.action.editor.note_text.length <= browserViewMaxNoteTextCodeUnits))
+      ? {
+        type: "set_editor",
+        draft_id: value.action.draft_id,
+        expected_revision: value.action.expected_revision,
+        editor: {
+          selected_annotation_id: value.action.editor.selected_annotation_id,
+          notes_open: value.action.editor.notes_open,
+          note_annotation_id: value.action.editor.note_annotation_id === undefined ? null : value.action.editor.note_annotation_id,
+          note_text: value.action.editor.note_text === undefined ? "" : value.action.editor.note_text,
+        },
+      }
+      : value.action.type === "upsert_annotation"
+        && isBoundedId(value.action.draft_id)
+        && isU64(value.action.expected_revision)
+        && isRecord(value.action.annotation)
+        ? {
+          type: "upsert_annotation",
+          draft_id: value.action.draft_id,
+          expected_revision: value.action.expected_revision,
+          annotation: parseBrowserViewDraftAnnotation(value.action.annotation),
+        }
+        : value.action.type === "remove_annotation"
+          && isBoundedId(value.action.draft_id)
+          && isU64(value.action.expected_revision)
+          && isBoundedId(value.action.annotation_id)
+          ? {
+            type: "remove_annotation",
+            draft_id: value.action.draft_id,
+            expected_revision: value.action.expected_revision,
+            annotation_id: value.action.annotation_id,
+          }
+          : value.action.type === "discard_draft" && isBoundedId(value.action.draft_id) && isU64(value.action.expected_revision)
+            ? { type: "discard_draft", draft_id: value.action.draft_id, expected_revision: value.action.expected_revision }
+            : malformed("Browser draft recovery action is malformed");
   return { target: parseBrowserTarget(value.target), action };
 }
 

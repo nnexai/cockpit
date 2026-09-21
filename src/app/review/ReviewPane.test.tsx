@@ -363,3 +363,64 @@ it("records user scrolling without writing it back or moving focus", async () =>
     host.remove();
   }
 });
+it("does not surface a deferred source error after switching review files", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const second = { ...changedFile, file_id: "second", old_path: "src/second.ts", new_path: "src/second.ts" };
+  let rejectPage!: (reason?: unknown) => void;
+  const deferredPage = new Promise<ReviewFileDiff>((_resolve, reject) => { rejectPage = reject; });
+  const loadSnapshot = vi.fn(async () => ({ ...snapshot, files: [changedFile, second] }));
+  const loadFile = vi.fn(async (request: ReviewFileRequest) => {
+    if (request.source_side !== null) return deferredPage;
+    return { ...diff, file: request.file_id === "second" ? second : changedFile };
+  });
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="deferred-error" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={{ ...createReviewViewState(), fileId: changedFile.file_id }} renderFile={(_review, _diff, _content, loadSourcePage) => <button type="button" onClick={() => { void loadSourcePage("new", 0); }}>Load deferred page</button>} />));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Load deferred page")?.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-file-id="second"]')?.click());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    rejectPage(new Error("late old source failure"));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.textContent).not.toContain("late old source failure");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps unified diff scroll through line selection and a source-mode round trip", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  let saved = createReviewViewState();
+  const publish = (next: typeof saved) => { saved = next; };
+  const readSnapshot = async () => snapshot;
+  const readFile = async () => diff;
+  const selected = { fileId: "file", side: "new" as const, start: 2, end: 2 };
+  const show = (mode: "diff" | "source", selectLine: boolean) => act(async () => {
+    mounted.render(<ReviewPane identity="scroll-roundtrip" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo"
+      snapshot={readSnapshot} file={readFile} selectedLines={selectLine ? selected : null}
+      viewState={{ ...saved, mode }} onViewStateChange={publish}
+      renderFile={(_review, _diff, content) => mode === "diff" ? content() : <div>Source surface</div>} />);
+  });
+  try {
+    await show("diff", false);
+    const surface = host.querySelector<HTMLElement>(".review-diff")!;
+    surface.scrollTop = 480;
+    await act(async () => surface.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await show("diff", true);
+    expect(surface.scrollTop).toBe(480);
+    expect(host.querySelector(".review-line.is-selected")?.getAttribute("data-new-line")).toBe("2");
+    await show("source", true);
+    surface.scrollTop = 0;
+    await act(async () => surface.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await show("diff", true);
+    expect(surface.scrollTop).toBe(480);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});

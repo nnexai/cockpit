@@ -1,0 +1,51 @@
+{
+  "run_id": "run-20260920-a3e9b950",
+  "protected_session": "default",
+  "resource_root": "/tmp/csg-a3e9b950",
+  "protected_config_path": "/home/nnex/.config/herdr/config.toml",
+  "protected_socket_path": "/home/nnex/.config/herdr/herdr.sock",
+  "resources": [
+    {
+      "path": "/tmp/csg-a3e9b950",
+      "owner": "run-20260920-a3e9b950"
+    }
+  ],
+  "executables": {
+    "selected": {
+      "path": "/home/linuxbrew/.linuxbrew/Cellar/herdr/0.9.1/bin/herdr",
+      "sha256": "bc142adab5eabcc53fd0471a664f87e784ef80280cdf4962e81239e632915957",
+      "version": "0.9.1",
+      "protocol": 22,
+      "schema_version": 1
+    }
+  },
+  "allowed_sessions": [
+    {
+      "name": "csg-a3e9b950",
+      "owner": "run-20260920-a3e9b950",
+      "xdg_config_home": "/tmp/csg-a3e9b950/config",
+      "xdg_state_home": "/tmp/csg-a3e9b950/state",
+      "config_path": "/tmp/csg-a3e9b950/config/herdr/config.toml",
+      "socket_path": "/tmp/csg-a3e9b950/config/herdr/sessions/csg-a3e9b950/herdr.sock",
+      "status": "stopped"
+    },
+    {
+      "name": "csg-a3e9b950-nativefinal",
+      "owner": "run-20260920-a3e9b950",
+      "xdg_config_home": "/tmp/csg-a3e9b950/native-final-config",
+      "xdg_state_home": "/tmp/csg-a3e9b950/native-final-herdr-state",
+      "config_path": "/tmp/csg-a3e9b950/native-final-config/herdr/config.toml",
+      "socket_path": "/tmp/csg-a3e9b950/native-final-config/herdr/sessions/csg-a3e9b950-nativefinal/herdr.sock",
+      "status": "stopped"
+    },
+    {
+      "name": "csg-a3e9b950-flowfinal",
+      "owner": "run-20260920-a3e9b950",
+      "xdg_config_home": "/tmp/csg-a3e9b950/flow-final-config",
+      "xdg_state_home": "/tmp/csg-a3e9b950/flow-final-herdr-state",
+      "config_path": "/tmp/csg-a3e9b950/flow-final-config/herdr/config.toml",
+      "socket_path": "/tmp/csg-a3e9b950/flow-final-config/herdr/sessions/csg-a3e9b950-flowfinal/herdr.sock",
+      "status": "stopped"
+    }
+  ]
+}

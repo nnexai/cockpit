@@ -1,0 +1,81 @@
+{
+  "run_id": "run-20260920-a3e9b950",
+  "authority": {
+    "gateway": "http://127.0.0.1:37639",
+    "session": "csg-a3e9b950-flowfinal",
+    "socket": "/tmp/csg-a3e9b950/flow-final-config/herdr/sessions/csg-a3e9b950-flowfinal/herdr.sock",
+    "home": "/tmp/csg-a3e9b950/home",
+    "config": "/tmp/csg-a3e9b950/flow-final.toml",
+    "browser_tab": "csg-flow-proof-a3e9b950"
+  },
+  "status": "bounded_final_surface_proof",
+  "setup": {
+    "status": "passed",
+    "reviewed_before_start": true,
+    "source_url": "https://gitlab.com/nnex.ai/integration/-/merge_requests/1",
+    "source_identity": "nnex.ai/integration!1",
+    "provider": "glab",
+    "source_branch": "cockpit-fixture/csg-a3e9b950-20260921",
+    "source_sha": "8493e6e72e56df62006b084eb211f2f5156390e0",
+    "repository": "/tmp/csg-a3e9b950/repositories/gitlab",
+    "operation_id": "23316d57-9d6a-49ca-af63-ff8a5386d362",
+    "workspace_id": "w2",
+    "checkout": "/tmp/csg-a3e9b950/flow-final-worktrees/gitlab-23316d57-9d6a-49ca-af63-ff8a5386d362",
+    "companion": "/tmp/csg-a3e9b950/flow-final-companions/23316d57-9d6a-49ca-af63-ff8a5386d362",
+    "review_identity": "23316d57-9d6a-49ca-af63-ff8a5386d362 generation 1",
+    "manifest": "/tmp/csg-a3e9b950/flow-final-companions/23316d57-9d6a-49ca-af63-ff8a5386d362/manifest.json",
+    "context_manifest": "/tmp/csg-a3e9b950/flow-final-companions/23316d57-9d6a-49ca-af63-ff8a5386d362/context-manifest.json",
+    "imported_asset": "sources/provider-e7be96a51bd0192a72840d2e5909f72ba82a2fe93faa624f03396b30e494c804/review/asset-a4924dc9a1c684df8da3afb5ebb6ea41cb904fa1b55a78c7d3a64637f1ebe0af.md",
+    "asset_source_revision": "sha256:b77aa11a853d885e02d1999ab851ff18e7298af8a12cfe4786a7c4e89787a6e9",
+    "asset_content_hash_before": "sha256:a9cc2a7fb006dcfaf76afd252323a0232f3fc5f45ce4087a9d98909bbd2219fb",
+    "asset_content_hash_after": "sha256:fb09aff134c39f75bebf73d42b177c4e71444c3a535c65e59005410e653e610b",
+    "screenshots": ["final-workflow-reviewed-effects.webp", "final-workflow-mr-auth-failure.webp"]
+  },
+  "teardown": {
+    "dirty_refusal": {
+      "status": "passed",
+      "checkout": "/tmp/csg-a3e9b950/flow-final-worktrees/gitlab-23316d57-9d6a-49ca-af63-ff8a5386d362",
+      "ownership": "owned created",
+      "observed_git_status": "dirty",
+      "refusal": "Removal blocked: the worktree has tracked or untracked changes",
+      "marker": "/tmp/csg-a3e9b950/flow-final-worktrees/gitlab-23316d57-9d6a-49ca-af63-ff8a5386d362/.flow-final-dirty",
+      "marker_sha256": "f810fa90efc092d248fd7ce0f46b50638213dc4218963a8720c15c6e4647bde9",
+      "action": "Close Space retained checkout and companion; no removal"
+    },
+    "clean_owned_teardown": {
+      "status": "unexecuted_blocked",
+      "reason": "After dirty close, preview reported workspace_state=ambiguous and allowed_actions=[]; a second clean setup was refused because the requested fixture branch was already used by the retained dirty worktree.",
+      "second_operation_id": "d9e66740-8213-44a1-9ef5-ba94803596dc",
+      "retained_resources": [
+        "/tmp/csg-a3e9b950/flow-final-worktrees/gitlab-23316d57-9d6a-49ca-af63-ff8a5386d362",
+        "/tmp/csg-a3e9b950/flow-final-companions/23316d57-9d6a-49ca-af63-ff8a5386d362"
+      ]
+    }
+  },
+  "sentinel": {
+    "path": "/tmp/csg-a3e9b950/flow-final-sentinel.txt",
+    "sha256_before": "8acef208faf0669227379fd28efa29efe7438eaf05348a6daae19b55463e8dec",
+    "sha256_after": "8acef208faf0669227379fd28efa29efe7438eaf05348a6daae19b55463e8dec",
+    "status": "unchanged"
+  },
+  "remote_fixtures": {
+    "status": "unchanged_by_this_surface_run",
+    "project": "nnex.ai/integration",
+    "merge_request_iid": 1,
+    "merge_request_id": 536323704,
+    "source_sha": "8493e6e72e56df62006b084eb211f2f5156390e0",
+    "owned_note_id": 3879528318,
+    "remote_mutations": [],
+    "remote_cleanup": "not performed; Main owns fixture ledger cleanup"
+  },
+  "unexecuted": [
+    {"criterion": "durable comment save/reopen and changed-source refresh/conflict retention", "reason": "context/review view was not available in the created tab; deadline-bounded proof stopped after setup and teardown refusal"},
+    {"criterion": "same-tab no-submit paste", "reason": "no eligible controlled agent fixture was available in this flowfinal session; no paste was sent"},
+    {"criterion": "clean owned teardown", "reason": "retained dirty checkout occupied the fixture branch; second setup reported branch already used"}
+  ],
+  "screenshots": [
+    "/tmp/csg-a3e9b950/final-workflow-mr-auth-failure.webp",
+    "/tmp/csg-a3e9b950/final-workflow-reviewed-effects.webp",
+    "/tmp/csg-a3e9b950/final-workflow-dirty-refusal.webp"
+  ]
+}

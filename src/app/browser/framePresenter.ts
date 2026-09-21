@@ -74,6 +74,31 @@ function asBytes(data: ArrayBuffer | ArrayBufferView): Uint8Array {
 function hasJpegMarkers(bytes: Uint8Array): boolean {
   return bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9;
 }
+function jpegDimensions(bytes: Uint8Array): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 1 < bytes.length) {
+    if (bytes[offset] !== 0xff) throw new BrowserFrameError("invalid_jpeg", "Browser JPEG marker is malformed");
+    while (offset < bytes.length && bytes[offset] === 0xff) offset++;
+    if (offset >= bytes.length) break;
+    const marker = bytes[offset++];
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) throw new BrowserFrameError("invalid_jpeg", "Browser JPEG segment is truncated");
+    const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) throw new BrowserFrameError("invalid_jpeg", "Browser JPEG segment is malformed");
+    const sof = (marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf);
+    if (sof) {
+      if (segmentLength < 7) throw new BrowserFrameError("invalid_dimensions", "Browser JPEG dimensions are malformed");
+      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      if (!width || !height) throw new BrowserFrameError("invalid_dimensions", "Browser JPEG dimensions are empty");
+      return { width, height };
+    }
+    offset += segmentLength;
+  }
+  throw new BrowserFrameError("invalid_jpeg", "Browser JPEG dimensions are unavailable");
+}
 
 function uint64(view: DataView, offset: number): number {
   const value = view.getBigUint64(offset, false);
@@ -220,9 +245,19 @@ function packetJpeg(packet: BrowserViewFramePacket, limits: BrowserViewFrameEnve
   if (bytes.byteLength >= 4 && view.getUint32(0, false) === IBFV_V2_MAGIC) {
     const parsed = parseBrowserViewFrame(bytes, limits);
     if (!sameNumericDescriptor(parsed, packet.descriptor)) throw new BrowserFrameError("identity_mismatch", "Browser frame envelope does not match its descriptor");
+    const dimensions = jpegDimensions(new Uint8Array(parsed.jpeg));
+    if (dimensions.width !== packet.descriptor.image_width || dimensions.height !== packet.descriptor.image_height) {
+      throw new BrowserFrameError("invalid_dimensions", "Browser JPEG dimensions do not match descriptor");
+    }
     return parsed.jpeg;
   }
   if (bytes.byteLength !== packet.descriptor.jpeg_length || bytes.byteLength > limits.max_jpeg_bytes || !hasJpegMarkers(new Uint8Array(bytes))) throw new BrowserFrameError("invalid_jpeg", "Browser frame JPEG is invalid");
+  const dimensions = jpegDimensions(new Uint8Array(bytes));
+  if (dimensions.width !== packet.descriptor.image_width || dimensions.height !== packet.descriptor.image_height
+    || dimensions.width > limits.max_width || dimensions.height > limits.max_height
+    || dimensions.width * dimensions.height > limits.max_pixels) {
+    throw new BrowserFrameError("invalid_dimensions", "Browser JPEG dimensions do not match descriptor bounds");
+  }
   return bytes;
 }
 
@@ -304,37 +339,53 @@ export class FramePresenter {
   private async decodeActive(): Promise<void> {
     const current = this.active;
     if (!current || this.closed) return;
+    let image: ImageBitmap | HTMLImageElement | null = null;
+    let objectUrl: string | null = null;
     try {
+      // JPEG markers and intrinsic dimensions were checked before this point,
+      // so the decoder never receives an unbounded or descriptor-mismatched
+      // payload.
       const blob = new Blob([current.jpeg], { type: "image/jpeg" });
-      let image: ImageBitmap | HTMLImageElement;
       if (typeof globalThis.createImageBitmap === "function") {
         image = await globalThis.createImageBitmap(blob);
       } else {
-        const url = URL.createObjectURL(blob);
+        objectUrl = URL.createObjectURL(blob);
         const element = new Image();
-        element.src = url;
+        element.src = objectUrl;
         if (typeof element.decode === "function") await element.decode();
-        else await new Promise<void>((resolve, reject) => { element.onload = () => resolve(); element.onerror = () => reject(new Error("Browser JPEG decode failed")); });
+        else await new Promise<void>((resolve, reject) => {
+          element.onload = () => resolve();
+          element.onerror = () => reject(new Error("Browser JPEG decode failed"));
+        });
         image = element;
-        URL.revokeObjectURL(url);
       }
+      if (!image) throw new Error("Browser JPEG decode produced no image");
       if (this.closed || this.active !== current) {
-        if ("close" in image) image.close();
         this.discard(current.packet);
         return;
       }
       const decodedWidth = "naturalWidth" in image ? image.naturalWidth : image.width;
       const decodedHeight = "naturalHeight" in image ? image.naturalHeight : image.height;
-      if (decodedWidth !== current.descriptor.image_width || decodedHeight !== current.descriptor.image_height) throw new BrowserFrameError("invalid_dimensions", "Decoded browser frame dimensions do not match descriptor");
+      if (decodedWidth !== current.descriptor.image_width || decodedHeight !== current.descriptor.image_height) {
+        throw new BrowserFrameError("invalid_dimensions", "Decoded browser frame dimensions do not match descriptor");
+      }
+      // Identity may change while an asynchronous decode is in flight. Run
+      // the caller's authoritative check again immediately before painting.
+      this.validate?.(current.descriptor);
+      if (this.isExpectedStale?.(current.descriptor)) {
+        this.discard(current.packet);
+        return;
+      }
       this.present(image, current.descriptor);
       this.lastPresentedSequence = current.descriptor.frame_sequence;
       this.ack(current.packet);
-      if ("close" in image) image.close();
     } catch (error) {
       this.discard(current.packet);
       const expectedStale = error instanceof BrowserFrameError && error.reason === "identity_mismatch" && this.isExpectedStale?.(current.descriptor);
       if (!expectedStale) this.onError?.(error instanceof BrowserFrameError ? error : new Error(error instanceof Error ? error.message : String(error)));
     } finally {
+      if (image && "close" in image && typeof image.close === "function") image.close();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
       if (this.active === current) this.active = null;
       if (!this.closed && this.pending) {
         const next = this.pending;

@@ -63,7 +63,12 @@ export interface ReviewViewState {
   selectionStart: number | null;
   selectionEnd: number | null;
   hunkIndex: number;
+  /** Current view scroll, retained separately from the bounded cross-identity cache. */
   scrollTop: number;
+  /** At most 64 full review identities are retained for revisit restoration. */
+  scrollPositions: Record<string, number>;
+  /** Identity represented by scrollTop and the current rendered scroll surface. */
+  scrollIdentity: string | null;
   mode: "diff" | "source";
   commentCount: number | null;
 }
@@ -92,9 +97,23 @@ export function createReviewViewState(): ReviewViewState {
     selectionEnd: null,
     hunkIndex: -1,
     scrollTop: 0,
+    scrollPositions: {},
+    scrollIdentity: null,
     mode: "diff",
     commentCount: null,
   };
+}
+
+export function retainReviewScrollPosition(current: Record<string, number>, identity: string, scrollTop: number): Record<string, number> {
+  const next = { ...current };
+  delete next[identity];
+  next[identity] = scrollTop;
+  const keys = Object.keys(next);
+  while (keys.length > 64) {
+    const oldest = keys.shift();
+    if (oldest !== undefined) delete next[oldest];
+  }
+  return next;
 }
 
 
@@ -663,7 +682,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }, [onChange, root, selectedKey, selectedPath, value]);
   useEffect(() => {
     if (!selectedKey || !document || !selectedFileState || selectedFileState.revision === document.revision) return;
-    updateFile({ revision: document.revision, selectionStart: null, selectionEnd: null });
+    updateFile({ revision: document.revision, selectionStart: null, selectionEnd: null, scrollTop: 0 });
   }, [document?.revision, selectedFileState, selectedKey, updateFile]);
   useEffect(() => {
     const editor = value.commentEditor;

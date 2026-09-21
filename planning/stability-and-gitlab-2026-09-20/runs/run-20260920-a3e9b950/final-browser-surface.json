@@ -1,0 +1,104 @@
+{
+  "scenario": "Final browser surface smoke",
+  "gateway": "http://127.0.0.1:37619/",
+  "fixture": "http://127.0.0.1:37629/?case=web-final",
+  "herdr_session": "csg-a3e9b950",
+  "browser_automation_tab": "csg-web-proof-a3e9b950",
+  "browser_internal_targets": [
+    "http://127.0.0.1:36221/__cockpit_browser_start__http://127.0.0.1:37629/?case=web-final",
+    "http://127.0.0.1:37629/?case=web-final"
+  ],
+  "resources": {
+    "workspace": "w3",
+    "tab": "w3:t2",
+    "terminal": "w3:p3",
+    "files": "w3:p4",
+    "fixture_case": "web-final"
+  },
+  "screenshots": [
+    "/tmp/csg-a3e9b950/final-browser-surface-current.png"
+  ],
+  "checks": [
+    {
+      "id": "terminal-marker-zoom-restore",
+      "status": "passed",
+      "actions": ["Opened Campaign oracle", "Observed TERM02-LIVE-CONTENT visibly", "Expanded Pane 1", "Restored split"],
+      "evidence": {"marker_before": true, "marker_expanded": true, "marker_restored": true, "terminal": "w1:pA", "expanded_width": 1214, "restored_width": 606}
+    },
+    {
+      "id": "review-scroll-full-source-diff",
+      "status": "passed",
+      "actions": ["Selected sample.txt (+5000/-5000)", "Scrolled review diff to 800", "Selected visible line 35", "Toggled Full source then Diff", "Repeated at scroll 1600"],
+      "evidence": {"diff_scroll_height": 220103, "selection_scroll_before": 800, "selection_scroll_after": 800, "selection_preserved": true, "roundtrip_before": 1600, "roundtrip_after": 1600, "roundtrip_preserved": true, "alerts": []}
+    },
+    {
+      "id": "resources-gitlab-rows",
+      "status": "passed",
+      "actions": ["Opened w3:p4 Files/Context", "Expanded Resources"],
+      "evidence": {"issue": "nnex.ai/integration#2", "issue_title": "Cockpit disposable issue fixture — csg-a3e9b950", "issue_status": "fresh, unchanged; materialized", "merge_request": "nnex.ai/integration!1", "merge_request_title": "Draft: Cockpit standalone MR fixture — csg-a3e9b950", "merge_request_status": "fresh, unchanged; materialized", "screenshot": "/tmp/csg-a3e9b950/artifacts/final-browser-resources.png"}
+    },
+    {
+      "id": "browser-fixture-load",
+      "status": "passed",
+      "actions": ["Opened inline browser", "Created clean target", "Navigated to owned fixture URL"],
+      "evidence": {"target_title": "Cockpit owned verification fixture", "fixture_geometry": {"viewport": {"width": 509, "height": 782, "dpr": 1}, "hit": {"x": 32, "y": 80, "width": 180, "height": 72}, "editor": {"x": 32, "y": 292, "width": 386, "height": 106}}}
+    },
+    {
+      "id": "browser-first-click-hit",
+      "status": "failed",
+      "actions": ["Sent first click to telemetry-confirmed hit target (remote x=122.07,y=115.85)", "Sent one retry after no click activation"],
+      "evidence": {"pointer_target": "hit", "pointerdown": 2, "pointerup": 2, "fixture_clicks": 0, "failure": "Pointer target reached exactly, but fixture click handler never fired; no hit event and status remained Clicks: 0."}
+    },
+    {
+      "id": "browser-typing",
+      "status": "passed",
+      "actions": ["Focused editor", "Typed WEB-FINAL-SENTINEL"],
+      "evidence": {"input_events": 18, "keydown_events": 18, "keyup_events": 18, "final_value": "WEB-FINAL-SENTINEL", "bounded_input_duration_ms": 297.6, "timing_note": "One bounded sequence observation only; not a sustained p95 claim."}
+    },
+    {
+      "id": "browser-nested-wheel",
+      "status": "failed",
+      "actions": ["Moved into visible nested scroller", "Sent wheel delta 600"],
+      "evidence": {"fixture_events_before": 62, "fixture_events_after": 62, "failure": "No observable geometry/scroll change or nested target reveal; wheel input was not evidenced by fixture telemetry."}
+    },
+    {
+      "id": "browser-resize-mapping",
+      "status": "passed",
+      "actions": ["Resized gateway viewport 1440x1000 to 1280x900"],
+      "evidence": {"before": {"width": 509, "height": 782, "editor_y": 292}, "after": {"width": 442, "height": 682, "editor_y": 354}, "hit_stayed": {"x": 32, "y": 80, "width": 180, "height": 72}, "geometry_events": 8}
+    },
+    {
+      "id": "browser-animation",
+      "status": "failed",
+      "actions": ["Sent pointer activation to telemetry-confirmed animate target twice"],
+      "evidence": {"pointer_target": "animate", "animation_events": 0, "ticks": 0, "failure": "Animation did not start; no animation telemetry and screenshot remained Animation: 0, so 3 distinct frames were not observed."}
+    },
+    {
+      "id": "browser-dialogs",
+      "status": "unexecuted",
+      "actions": ["Attempted keyboard route toward Alert after pointer focus"],
+      "evidence": {"reason": "Mouse activation regression left no reliable focused fixture button; no alert/confirm/prompt blocker was safely opened or resolved."}
+    },
+    {
+      "id": "browser-element-region-note-capture",
+      "status": "failed",
+      "actions": ["Selected Element tool and attempted note", "Selected Region tool and dragged bounded region"],
+      "evidence": {"notes": 0, "send_annotations_disabled": true, "failure": "No saved annotation/capture was materialized; note editor save did not increase Notes and region gesture produced no capture."}
+    },
+    {
+      "id": "browser-hide-show-data",
+      "status": "passed",
+      "actions": ["Expanded browser pane", "Restored split"],
+      "evidence": {"screenshot_expanded": "/tmp/csg-a3e9b950/artifacts/final-browser-expanded.png", "screenshot_restored": "/tmp/csg-a3e9b950/artifacts/final-browser-restored.png", "editor_sentinel_visible_after_restore": true, "fixture_target_retained": true}
+    },
+    {
+      "id": "ineligible-agent-delivery",
+      "status": "unexecuted",
+      "actions": [],
+      "evidence": {"reason": "Owned csg-a3e9b950 reports AGENTS 0; no ineligible agent target was available without creating/mutating unrelated resources."}
+    }
+  ],
+  "fixture_telemetry_final": {"total": 78, "counts": {"geometry": 8, "pointerdown": 6, "pointerup": 6, "keydown": 20, "input": 18, "keyup": 20}, "clicks": 0, "ticks": 0},
+  "unexecuted": ["alert/confirm/prompt resolution", "saved Element/Region capture delivery", "ineligible agent delivery failure path"],
+  "notes": ["All gateway checks ran on 37619 only. Flow-final 37639 was not acted on.", "Initial shared automation handle was released; final proof used uniquely named csg-web-proof-a3e9b950 with prefixed finalWeb* Eval variables.", "After Main repair, targeted replay was attempted on 37619; browser pane remained in Retry/navigation-started state with no displayed target, so no replay claim is made. Current-state screenshot was persisted with page.screenshot and existence verified."]
+}

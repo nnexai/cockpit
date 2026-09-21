@@ -55,10 +55,11 @@ pub struct BrowserViewNativeSubscription {
 pub(crate) struct BrowserHelperSupervisor {
     state_root: PathBuf,
     /// Incarnation is part of the registry key so a restarted Chromium can
-    /// never inherit a helper or frame grant from its predecessor.
     associations: Mutex<HashMap<(String, String), Vec<String>>>,
     views: Mutex<HashMap<String, ManagedView>>,
     native_connections: Mutex<HashMap<String, usize>>,
+    retired_tx: mpsc::UnboundedSender<RetiredView>,
+    retired_rx: Mutex<Option<mpsc::UnboundedReceiver<RetiredView>>>,
 }
 
 struct ManagedView {
@@ -75,6 +76,10 @@ struct ManagedView {
     responses: Arc<Mutex<HashMap<String, oneshot::Sender<BrowserViewCommandResponse>>>>,
     task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     forward_task: Option<tokio::task::JoinHandle<()>>,
+}
+pub(crate) struct RetiredView {
+    view_id: String,
+    stream_epoch: u64,
 }
 
 #[derive(Serialize)]
@@ -131,6 +136,10 @@ enum HelperOutput {
     CommandResponse {
         response: BrowserViewCommandResponse,
     },
+    ViewRetired {
+        view_id: String,
+        stream_epoch: u64,
+    },
     Failed {
         code: String,
         message: String,
@@ -138,12 +147,21 @@ enum HelperOutput {
 }
 impl BrowserHelperSupervisor {
     pub(crate) fn new(state_root: PathBuf) -> Self {
+        let (retired_tx, retired_rx) = mpsc::unbounded_channel();
         Self {
             state_root,
             associations: Mutex::new(HashMap::new()),
             views: Mutex::new(HashMap::new()),
             native_connections: Mutex::new(HashMap::new()),
+            retired_tx,
+            retired_rx: Mutex::new(Some(retired_rx)),
         }
+    }
+
+    pub(crate) async fn take_retired_receiver(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<RetiredView>> {
+        self.retired_rx.lock().await.take()
     }
 
     pub(crate) async fn open(
@@ -153,14 +171,18 @@ impl BrowserHelperSupervisor {
     ) -> Result<BrowserViewOpen, InspectionError> {
         let playwright_core = attachment.playwright_core.clone().ok_or_else(|| {
             InspectionError::new(
-                "browser_helper_unavailable",
-                "Cannot locate the Playwright-core package paired with Playwright CLI",
+                "browser_core_missing",
+                "Paired Playwright-core is unavailable; repair COCKPIT_PLAYWRIGHT_CORE or \
+                 [browser].playwright_core before retrying the browser view",
             )
         })?;
-        let node = attachment
-            .node_executable
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("node"));
+        let node = attachment.node_executable.clone().ok_or_else(|| {
+            InspectionError::new(
+                "browser_node_missing",
+                "Node runtime is unavailable; repair COCKPIT_NODE_EXECUTABLE or \
+                 [browser].node_executable before retrying the browser view",
+            )
+        })?;
         let helper = match attachment.helper_module.clone() {
             Some(path) => path,
             None => self.materialize_helper()?,
@@ -198,10 +220,10 @@ impl BrowserHelperSupervisor {
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|error| {
+            .map_err(|_| {
                 InspectionError::new(
-                    "browser_helper_unavailable",
-                    format!("Cannot start private browser helper: {error}"),
+                    "browser_helper_spawn_failed",
+                    "Node could not start the private browser helper; verify the configured Node executable and helper permissions",
                 )
             })?;
         let stdin = child.stdin.take().ok_or_else(|| {
@@ -240,6 +262,7 @@ impl BrowserHelperSupervisor {
         let task_barrier = Arc::clone(&barrier);
         let task_responses = Arc::clone(&responses);
         let task_events = events.clone();
+        let task_retired = self.retired_tx.clone();
         let mut task = tokio::spawn(async move {
             run_helper(
                 child,
@@ -249,6 +272,7 @@ impl BrowserHelperSupervisor {
                 initial,
                 task_snapshot,
                 task_barrier,
+                task_retired,
                 task_responses,
                 task_events,
                 task_latest_frame,
@@ -258,14 +282,20 @@ impl BrowserHelperSupervisor {
             .await;
         });
         let (endpoint, _) = match timeout(Duration::from_secs(10), ready_rx).await {
-            Ok(Ok(value)) => value,
+            Ok(Ok(Ok(value))) => value,
+            Ok(Ok(Err(error))) => {
+                let _ = input.send(HelperInput::Stop).await;
+                let _ = timeout(HELPER_STOP_TIMEOUT, &mut task).await;
+                task.abort();
+                return Err(error);
+            }
             Ok(Err(_)) => {
                 let _ = input.send(HelperInput::Stop).await;
                 let _ = timeout(HELPER_STOP_TIMEOUT, &mut task).await;
                 task.abort();
                 return Err(InspectionError::new(
-                    "browser_helper_failed",
-                    "Private browser helper exited before attaching",
+                    "browser_helper_crashed",
+                    "Private browser helper exited before attaching; retry after repairing the helper runtime",
                 ));
             }
             Err(_) => {
@@ -274,19 +304,25 @@ impl BrowserHelperSupervisor {
                 task.abort();
                 return Err(InspectionError::new(
                     "browser_helper_timeout",
-                    "Private browser helper did not attach in time",
+                    "Private browser helper did not attach in time; retry the browser view",
                 ));
             }
         };
         let first_frame = match timeout(Duration::from_secs(10), first_frame_rx).await {
-            Ok(Ok(frame)) => frame,
+            Ok(Ok(Ok(frame))) => frame,
+            Ok(Ok(Err(error))) => {
+                let _ = input.send(HelperInput::Stop).await;
+                let _ = timeout(HELPER_STOP_TIMEOUT, &mut task).await;
+                task.abort();
+                return Err(error);
+            }
             Ok(Err(_)) => {
                 let _ = input.send(HelperInput::Stop).await;
                 let _ = timeout(HELPER_STOP_TIMEOUT, &mut task).await;
                 task.abort();
                 return Err(InspectionError::new(
-                    "browser_helper_failed",
-                    "Private browser helper stopped before producing an initial frame",
+                    "browser_helper_crashed",
+                    "Private browser helper stopped before producing an initial frame; retry the browser view",
                 ));
             }
             Err(_) => {
@@ -295,7 +331,7 @@ impl BrowserHelperSupervisor {
                 task.abort();
                 return Err(InspectionError::new(
                     "browser_helper_timeout",
-                    "Private browser helper did not produce an initial frame in time",
+                    "Private browser helper did not produce an initial frame in time; retry the browser view",
                 ));
             }
         };
@@ -673,6 +709,44 @@ impl BrowserHelperSupervisor {
             }
         }
     }
+    pub(crate) async fn retire_view(&self, retired: RetiredView) {
+        if self.native_connections.lock().await.contains_key(&retired.view_id) {
+            return;
+        }
+        let managed = {
+            let mut views = self.views.lock().await;
+            let Some(view) = views.get(&retired.view_id) else { return };
+            let epoch = view.snapshot.lock().await.identity.stream_epoch;
+            if epoch != retired.stream_epoch {
+                return;
+            }
+            views.remove(&retired.view_id)
+        };
+        let Some(managed) = managed else { return };
+        let mut associations = self.associations.lock().await;
+        for view_ids in associations.values_mut() {
+            view_ids.retain(|id| id != &retired.view_id);
+        }
+        let last_view = associations.values().all(|ids| ids.is_empty());
+        associations.retain(|_, ids| !ids.is_empty());
+        drop(associations);
+        if let Some(task) = managed.forward_task {
+            task.abort();
+        }
+        if last_view {
+            let _ = managed.input.send(HelperInput::Detach).await;
+            if let Some(task) = managed.task.lock().await.take() {
+                let _ = timeout(HELPER_STOP_TIMEOUT, task).await;
+            }
+        } else {
+            let _ = managed
+                .input
+                .send(HelperInput::DetachView {
+                    view_id: retired.view_id,
+                })
+                .await;
+        }
+    }
     pub(crate) async fn detach(&self, view_id: &str) {
         if self.native_connections.lock().await.contains_key(view_id) {
             return;
@@ -748,18 +822,96 @@ impl BrowserHelperSupervisor {
 
     fn materialize_helper(&self) -> Result<PathBuf, InspectionError> {
         let directory = self.state_root.join("helpers");
-        fs::create_dir_all(&directory).map_err(|error| {
-            InspectionError::new("browser_helper_unavailable", error.to_string())
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "Browser helper directory is not an owned regular directory",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&directory).map_err(|_| {
+                    InspectionError::new(
+                        "browser_helper_materialization_failed",
+                        "Cannot create the owned browser helper directory; repair the configured state root",
+                    )
+                })?;
+            }
+            Err(_) => {
+                return Err(InspectionError::new(
+                    "browser_helper_materialization_failed",
+                    "Cannot inspect the owned browser helper directory",
+                ));
+            }
+        }
+        let root = self.state_root.canonicalize().map_err(|_| {
+            InspectionError::new(
+                "browser_helper_materialization_failed",
+                "Cannot resolve the owned browser state root",
+            )
         })?;
+        let directory = directory.canonicalize().map_err(|_| {
+            InspectionError::new(
+                "browser_helper_materialization_failed",
+                "Cannot resolve the owned browser helper directory",
+            )
+        })?;
+        if !directory.starts_with(&root) {
+            return Err(InspectionError::new(
+                "unsafe_path",
+                "Browser helper directory escapes the owned state root",
+            ));
+        }
+        set_private_permissions(&directory, false)?;
         let path = directory.join("browser-helper.mjs");
-        fs::write(
-            &path,
+        let temporary = directory.join("browser-helper.mjs.tmp");
+        for candidate in [&path, &temporary] {
+            if let Ok(metadata) = fs::symlink_metadata(candidate)
+                && (metadata.file_type().is_symlink() || !metadata.is_file())
+            {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "Browser helper materialization path is not a regular file",
+                ));
+            }
+        }
+        if fs::write(
+            &temporary,
             include_str!("../../../browser-runtime/browser-helper.mjs"),
         )
-        .map_err(|error| InspectionError::new("browser_helper_unavailable", error.to_string()))?;
+        .is_err()
+            || set_private_permissions(&temporary, true).is_err()
+            || fs::rename(&temporary, &path).is_err()
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(InspectionError::new(
+                "browser_helper_materialization_failed",
+                "Cannot materialize the packaged browser helper in the owned state root; repair state-root permissions",
+            ));
+        }
         Ok(path)
     }
 }
+fn set_private_permissions(path: &Path, file: bool) -> Result<(), InspectionError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if file { 0o600 } else { 0o700 };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|_| {
+            InspectionError::new(
+                "browser_helper_materialization_failed",
+                "Cannot restrict permissions on the packaged browser helper",
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, file);
+    }
+    Ok(())
+}
+
 
 async fn run_helper(
     mut child: Child,
@@ -769,11 +921,12 @@ async fn run_helper(
     initial: HelperInput,
     snapshot: Arc<Mutex<BrowserViewSnapshot>>,
     barrier: Arc<Mutex<()>>,
+    retired: mpsc::UnboundedSender<RetiredView>,
     responses: Arc<Mutex<HashMap<String, oneshot::Sender<BrowserViewCommandResponse>>>>,
     events: broadcast::Sender<BrowserViewEvent>,
     latest_frame: Arc<Mutex<Option<BrowserViewFrameDescriptor>>>,
-    ready: oneshot::Sender<(String, BrowserViewSnapshot)>,
-    first_frame: oneshot::Sender<BrowserViewFrameDescriptor>,
+    ready: oneshot::Sender<Result<(String, BrowserViewSnapshot), InspectionError>>,
+    first_frame: oneshot::Sender<Result<BrowserViewFrameDescriptor, InspectionError>>,
 ) {
     let mut ready = Some(ready);
     let mut first_frame = Some(first_frame);
@@ -783,6 +936,12 @@ async fn run_helper(
     let mut ready_initialized = false;
     let mut last_frame_sequence = 0u64;
     if write_input(&mut stdin, &initial).await.is_err() {
+        if let Some(sender) = ready.take() {
+            let _ = sender.send(Err(InspectionError::new(
+                "browser_helper_runtime_failed",
+                "Private browser helper could not receive its attach request",
+            )));
+        }
         return;
     }
     let mut lines = BufReader::new(stdout).lines();
@@ -815,7 +974,7 @@ async fn run_helper(
                             value.clone()
                         };
                         if let Some(sender) = ready.take() {
-                            let _ = sender.send((frame_endpoint, current));
+                            let _ = sender.send(Ok((frame_endpoint, current)));
                         }
                     }
                     Ok(HelperOutput::Event { event }) => {
@@ -873,7 +1032,7 @@ async fn run_helper(
                         let _barrier = barrier.lock().await;
                         *latest_frame.lock().await = Some(descriptor.clone());
                         if let Some(sender) = first_frame.take() {
-                            let _ = sender.send(descriptor.clone());
+                            let _ = sender.send(Ok(descriptor.clone()));
                         }
                     }
                     Ok(HelperOutput::CommandResponse { response }) => {
@@ -888,7 +1047,22 @@ async fn run_helper(
                             let _ = sender.send(response);
                         }
                     }
+                    Ok(HelperOutput::ViewRetired { view_id, stream_epoch }) => {
+                        let _ = retired.send(RetiredView { view_id, stream_epoch });
+                    }
                     Ok(HelperOutput::Failed { code, message }) => {
+                        if let Some(sender) = ready.take() {
+                            let _ = sender.send(Err(InspectionError::new(
+                                code.clone(),
+                                message.clone(),
+                            )));
+                        }
+                        if let Some(sender) = first_frame.take() {
+                            let _ = sender.send(Err(InspectionError::new(
+                                code.clone(),
+                                message.clone(),
+                            )));
+                        }
                         send_failed(&snapshot, &barrier, &events, code, message).await;
                     }
                     Err(_) => {
@@ -900,11 +1074,36 @@ async fn run_helper(
                             "Private browser helper emitted invalid control data".into(),
                         )
                         .await;
+                        if let Some(sender) = first_frame.take() {
+                            let _ = sender.send(Err(InspectionError::new(
+                                "browser_helper_protocol",
+                                "Private browser helper emitted invalid startup data",
+                            )));
+                        }
+                        if let Some(sender) = ready.take() {
+                            let _ = sender.send(Err(InspectionError::new(
+                                "browser_helper_protocol",
+                                "Private browser helper emitted invalid startup data",
+                            )));
+                        }
+                        break;
                     }
                 },
                 _ => break,
             }
         }
+    }
+    if let Some(sender) = ready.take() {
+        let _ = sender.send(Err(InspectionError::new(
+            "browser_helper_crashed",
+            "Private browser helper stopped before startup completed; retry the browser view",
+        )));
+    }
+    if let Some(sender) = first_frame.take() {
+        let _ = sender.send(Err(InspectionError::new(
+            "browser_helper_crashed",
+            "Private browser helper stopped before the first frame; retry the browser view",
+        )));
     }
     fail_pending_responses(
         &responses,

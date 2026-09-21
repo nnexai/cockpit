@@ -2,11 +2,12 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ContextDocument, ContextRoot, PanePresentation, ReviewComparison, ReviewFileDiff, ReviewFileRequest, ReviewSnapshotRequest } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "../context/CommentDrafts";
-import { createReviewViewState, SourceLines, type ContextViewState, type ReviewViewState } from "../context/ContextViewer";
-import { ReviewPane } from "./ReviewPane";
+import { createReviewViewState, retainReviewScrollPosition, SourceLines, type ContextViewState, type ReviewViewState } from "../context/ContextViewer";
+import { ReviewPane, reviewScrollIdentity } from "./ReviewPane";
 
 type Selection = { fileId: string; side: "old" | "new"; start: number; end: number } | null;
 type CommentStatus = { count: number | null; canCreateLines: boolean; canCreateWholeFile: boolean };
+type SourcePageLoad = { key: string; token: number };
 
 /** CommentDrafts keys its batch by this source identity; comparison scopes its review load. */
 export function reviewCommentBatchIdentity(presentation: Pick<PanePresentation, "session_id" | "pane_id" | "binding_id">, sourceId: string, comparison: ReviewComparison): string {
@@ -31,6 +32,10 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
   const [commentStatus, setCommentStatus] = useState<CommentStatus>({ count: reviewView.commentCount, canCreateLines: false, canCreateWholeFile: false });
   const [sourcePages, setSourcePages] = useState<Record<string, { text: string; nextOffset: number; totalBytes: number }>>({});
   const [sourceLoading, setSourceLoading] = useState<string | null>(null);
+  const sourceLoadRef = useRef<SourcePageLoad | null>(null);
+  const sourceLoadSequence = useRef(0);
+  const activeSourceKeyRef = useRef<string | null>(null);
+  const activeSourceMetadataRef = useRef<{ reviewId: string; generation: number; fileId: string } | null>(null);
   const commentActionsRef = useRef<CommentDraftActions | null>(null);
   const activeCommentIdentityRef = useRef<string | null>(null);
   const activeComparisonRef = useRef<ReviewComparison>(reviewView.comparison);
@@ -45,22 +50,29 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     const current = valueRef.current.review ?? createReviewViewState();
     publishView({ ...valueRef.current, review: { ...current, ...patch } });
   }, [publishView]);
-  const appendSourcePage = useCallback((sourceKey: string, side: "old" | "new", requestedOffset: number, expectedRevision: string | null, next: ReviewFileDiff) => {
+  const appendSourcePage = useCallback((sourceKey: string, side: "old" | "new", requestedOffset: number, expectedRevision: string | null, token: number, next: ReviewFileDiff) => {
+    const metadata = activeSourceMetadataRef.current;
+    if (sourceLoadRef.current?.token !== token || activeSourceKeyRef.current !== sourceKey || !metadata
+      || next.session_id !== presentation.session_id || next.pane_id !== presentation.pane_id || next.binding_id !== presentation.binding_id
+      || next.review_id !== metadata.reviewId || next.generation !== metadata.generation || next.file.file_id !== metadata.fileId) return;
     const chunk = side === "old" ? next.old_source : next.new_source;
     const offset = side === "old" ? next.old_source_offset : next.new_source_offset;
     const total = side === "old" ? next.old_source_total_bytes : next.new_source_total_bytes;
     const revision = side === "old" ? next.file.old_revision : next.file.new_revision;
     if (chunk === null || offset !== requestedOffset || (expectedRevision !== null && revision !== expectedRevision)) return;
     const bytes = new TextEncoder().encode(chunk).byteLength;
-    setSourcePages((current) => ({
-      ...current,
-      [sourceKey]: {
-        text: requestedOffset === 0 ? chunk : `${current[sourceKey]?.text ?? ""}${chunk}`,
-        nextOffset: offset + bytes,
-        totalBytes: total ?? offset + bytes,
-      },
-    }));
-  }, []);
+    setSourcePages((current) => {
+      if (requestedOffset > 0 && current[sourceKey]?.nextOffset !== requestedOffset) return current;
+      return {
+        ...current,
+        [sourceKey]: {
+          text: requestedOffset === 0 ? chunk : `${current[sourceKey]?.text ?? ""}${chunk}`,
+          nextOffset: offset + bytes,
+          totalBytes: total ?? offset + bytes,
+        },
+      };
+    });
+  }, [presentation.binding_id, presentation.pane_id, presentation.session_id]);
   const handleReviewViewChange = useCallback((next: ReviewViewState) => {
     const comparisonChanged = activeComparisonRef.current !== next.comparison;
     activeComparisonRef.current = next.comparison;
@@ -73,10 +85,10 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
     publishView({ ...valueRef.current, review: next });
   }, [publishView]);
   useEffect(() => {
-    updateReviewView({ mode });
-  }, [mode, updateReviewView]);
-  useEffect(() => {
+    sourceLoadSequence.current += 1;
+    sourceLoadRef.current = null;
     setSourcePages({});
+    setSourceLoading(null);
   }, [invalidation]);
   useEffect(() => {
     updateReviewView({
@@ -113,7 +125,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
   if (!repositoryId) return <div className="review-empty">No Git checkout could be resolved for this Review pane.</div>;
   return <div className="review-viewer" ref={viewerRef} onPointerDown={onRequestControl}>
     <ReviewPane identity={`${session}\0${pane}\0${binding}`} sessionId={session} paneId={pane} bindingId={binding} repositoryId={repositoryId} snapshot={snapshot} file={file} selectedLines={selection}
-      viewState={reviewView} onViewStateChange={handleReviewViewChange}
+      viewState={reviewView.mode === mode ? reviewView : { ...reviewView, mode }} onViewStateChange={handleReviewViewChange}
       onOpenSource={() => setMode("source")}
       onCreateLineComment={() => commentActionsRef.current?.createLines()} onCreateFileComment={() => commentActionsRef.current?.createWholeFile()} onOpenCommentOverview={() => commentActionsRef.current?.openOverview()}
       commentCount={commentStatus.count} canCreateLineComment={commentStatus.canCreateLines} canCreateFileComment={commentStatus.canCreateWholeFile}
@@ -122,16 +134,19 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
       renderFile={(review, diff, content, loadSourcePage) => {
         const side = selection?.fileId === diff.file.file_id ? selection.side : diff.new_source === null && diff.old_source !== null ? "old" : "new";
         const path = (side === "old" ? diff.file.old_path : diff.file.new_path) ?? "";
-        const sourceKey = `${diff.file.file_id}\0${side}`;
+        const revision = side === "old" ? diff.file.old_revision ?? null : diff.file.new_revision ?? null;
+        const sourceKey = reviewScrollIdentity(session, pane, binding, review.review_id, review.generation, review.comparison, "source", diff.file.file_id, side, revision);
+        activeSourceKeyRef.current = sourceKey;
+        activeSourceMetadataRef.current = { reviewId: review.review_id, generation: review.generation, fileId: diff.file.file_id };
         const page = sourcePages[sourceKey];
         const source = side === "old" ? diff.old_source : diff.new_source;
         const text = page?.text ?? source;
         const totalBytes = page?.totalBytes ?? (side === "old" ? diff.old_source_total_bytes : diff.new_source_total_bytes);
         const sourceTruncated = page ? page.nextOffset < page.totalBytes : (side === "old" ? diff.old_source_truncated : diff.new_source_truncated);
-        const revision = (side === "old" ? diff.file.old_revision : diff.file.new_revision) ?? "unavailable";
+        const documentRevision = revision ?? "unavailable";
         const range = selection?.fileId === diff.file.file_id ? { start: selection.start, end: selection.end } : null;
         const root: ContextRoot = { root_id: review.source_id, kind: "repository", label: "Review", path: review.checkout_path, repository_id: repositoryId, checkout_path: review.checkout_path, companion_id: null };
-        const document: ContextDocument = { binding_id: binding, root_id: root.root_id, path, revision, content_hash: side === "old" ? diff.old_source_hash : diff.new_source_hash, bytes: new TextEncoder().encode(text ?? "").length, media_type: "text/plain", text, truncated: sourceTruncated, diagnostics: diff.diagnostics };
+        const document: ContextDocument = { binding_id: binding, root_id: root.root_id, path, revision: documentRevision, content_hash: side === "old" ? diff.old_source_hash : diff.new_source_hash, bytes: new TextEncoder().encode(text ?? "").length, media_type: "text/plain", text, truncated: sourceTruncated, diagnostics: diff.diagnostics };
         const reference = { review_id: review.review_id, generation: review.generation, file_id: diff.file.file_id, side };
         const commentIdentity = reviewCommentBatchIdentity(presentation, review.source_id, review.comparison);
         return <CommentDrafts key={commentIdentity} client={client} presentation={presentation} root={root} sourceIdentity={review.source_id} sourceKind="review" reviewCapture={reference} path={path} document={document} selection={range} mode="source" editorState={value.commentEditor} onEditorStateChange={editorChange} invalidationGeneration={invalidation} inlineEditor showToolbar={false} onCommentStatusChange={(next) => updateCommentStatus(commentIdentity, review.comparison, next)} onEditorDismissed={restoreDiffFocus}>
@@ -139,7 +154,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
             commentActionsRef.current = actions;
             return <>
             {mode === "source" ? <div className="review-source-controls"><span>{side} side{range ? ` · lines ${Math.min(range.start, range.end)}–${Math.max(range.start, range.end)}` : ""}</span><button type="button" disabled={diff.old_source === null && !diff.old_source_truncated} onClick={() => setSelection({ fileId: diff.file.file_id, side: "old", start: 1, end: 1 })}>Old source</button><button type="button" disabled={diff.new_source === null && !diff.new_source_truncated} onClick={() => setSelection({ fileId: diff.file.file_id, side: "new", start: 1, end: 1 })}>New source</button></div> : null}
-            {mode === "source" && text !== null ? <><SourceLines text={text} state={{ rootId: root.root_id, path, mode: "source", revision, selectionStart: range?.start ?? null, selectionEnd: range?.end ?? null, scrollTop: reviewView.scrollTop }} onSelect={(start, end) => setSelection({ fileId: diff.file.file_id, side, start, end })} onScroll={(scrollTop) => updateReviewView({ scrollTop })} commentDrafts={drafts.filter(draft => draft.file_ref.review?.file_id === diff.file.file_id && draft.file_ref.review.side === side)} commentActions={actions} inlineEditor={renderInlineEditor} />{sourceTruncated ? <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { setSourceLoading(sourceKey); void loadSourcePage(side, page?.nextOffset ?? 0).then((next) => appendSourcePage(sourceKey, side, page?.nextOffset ?? 0, side === "old" ? diff.file.old_revision : diff.file.new_revision, next)).finally(() => setSourceLoading(null)); }}>{sourceLoading === sourceKey ? "Loading source…" : `Load next source page${totalBytes ? ` (${Math.min((page?.nextOffset ?? 0) + 1, totalBytes)}–${totalBytes} bytes)` : ""}`}</button> : null}</> : mode === "source" ? <p className="review-notice">This source is larger than the initial preview. <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { setSourceLoading(sourceKey); void loadSourcePage(side, 0).then((next) => appendSourcePage(sourceKey, side, 0, side === "old" ? diff.file.old_revision : diff.file.new_revision, next)).finally(() => setSourceLoading(null)); }}>{sourceLoading === sourceKey ? "Loading…" : "Load source"}</button></p> : content((shown, oldLine, newLine) => <>{(["old", "new"] as const).map(anchorSide => {
+            {mode === "source" && text !== null ? <><SourceLines key={sourceKey} text={text} state={{ rootId: root.root_id, path, mode: "source", revision: documentRevision, selectionStart: range?.start ?? null, selectionEnd: range?.end ?? null, scrollTop: reviewView.scrollPositions?.[sourceKey] ?? (reviewView.scrollIdentity === sourceKey ? reviewView.scrollTop : 0) }} onSelect={(start, end) => setSelection({ fileId: diff.file.file_id, side, start, end })} onScroll={(scrollTop) => updateReviewView({ scrollTop, scrollIdentity: sourceKey, scrollPositions: retainReviewScrollPosition(reviewViewRef.current.scrollPositions ?? {}, sourceKey, scrollTop) })} commentDrafts={drafts.filter(draft => draft.file_ref.review?.file_id === diff.file.file_id && draft.file_ref.review.side === side)} commentActions={actions} inlineEditor={renderInlineEditor} />{sourceTruncated ? <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { const token = sourceLoadSequence.current + 1; sourceLoadSequence.current = token; sourceLoadRef.current = { key: sourceKey, token }; const offset = page?.nextOffset ?? 0; setSourceLoading(sourceKey); void loadSourcePage(side, offset).then((next) => { if (next) appendSourcePage(sourceKey, side, offset, revision, token, next); }).finally(() => { if (sourceLoadRef.current?.token === token) { sourceLoadRef.current = null; setSourceLoading((current) => current === sourceKey ? null : current); } }); }}>{sourceLoading === sourceKey ? "Loading source…" : `Load next source page${totalBytes ? ` (${Math.min((page?.nextOffset ?? 0) + 1, totalBytes)}–${totalBytes} bytes)` : ""}`}</button> : null}</> : mode === "source" ? <p className="review-notice">This source is larger than the initial preview. <button type="button" disabled={sourceLoading === sourceKey} onClick={() => { const token = sourceLoadSequence.current + 1; sourceLoadSequence.current = token; sourceLoadRef.current = { key: sourceKey, token }; setSourceLoading(sourceKey); void loadSourcePage(side, 0).then((next) => { if (next) appendSourcePage(sourceKey, side, 0, revision, token, next); }).finally(() => { if (sourceLoadRef.current?.token === token) { sourceLoadRef.current = null; setSourceLoading((current) => current === sourceKey ? null : current); } }); }}>{sourceLoading === sourceKey ? "Loading…" : "Load source"}</button></p> : content((shown, oldLine, newLine) => <>{(["old", "new"] as const).map(anchorSide => {
               const line = anchorSide === "old" ? oldLine : newLine;
               return line === null ? null : <Fragment key={anchorSide}><InlineCommentDrafts line={line} drafts={drafts.filter(draft => draft.file_ref.review?.file_id === shown.file.file_id && draft.file_ref.review.side === anchorSide)} actions={actions} />{anchorSide === side ? renderInlineEditor?.(line) : null}</Fragment>;
             })}</>)}

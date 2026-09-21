@@ -2,6 +2,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { CommentBatch, CommentPastePrepareResponse, CommentPasteReceipt, CommentRequestScope, CommentPreview } from "../../protocol/generated/v1";
 
+function operationCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("operationCode" in error)) return null;
+  const value = error.operationCode;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function errorText(error: unknown): string {
+  const message = error instanceof Error && error.message ? error.message : "The paste request failed.";
+  const code = operationCode(error);
+  return code ? `${code}: ${message}` : message;
+}
+
+const PROVEN_PRE_DISPATCH_ERRORS = new Set([
+  "request_not_dispatched",
+  "comments_paste_input_bounded",
+  "comments_paste_framing",
+]);
+
+function mayHaveDispatched(error: unknown): boolean {
+  // A host operation code is not, by itself, proof that no bytes were sent:
+  // receipt persistence and reconciliation can fail after Herdr accepted them.
+  const code = operationCode(error);
+  return code === null || !PROVEN_PRE_DISPATCH_ERRORS.has(code);
+}
+
 export function CommentPasteControls({ client, sessionId, paneId, scope, batch, retainStale, preview, onAccepted }: {
   client: CockpitClient; sessionId: string; paneId: string; scope: CommentRequestScope;
   batch: CommentBatch; retainStale: boolean; preview: CommentPreview | null; onAccepted: () => void;
@@ -53,8 +78,12 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
       if (result.state === "accepted") onAccepted();
     } catch (reason) {
       if (identityRef.current === identity) {
-        setError(`Paste outcome is unconfirmed. Your comments are retained. Refresh the receipt before any retry. ${reason instanceof Error ? reason.message : ""}`);
-        setPrepared(null); setTargetPane("");
+        if (mayHaveDispatched(reason)) {
+          setError(`Paste outcome is unconfirmed. Your comments are retained. Refresh the receipt before any retry. ${errorText(reason)}`);
+          setPrepared(null); setTargetPane("");
+        } else {
+          setError(`Paste failed before dispatch. Your comments are retained. ${errorText(reason)}`);
+        }
       }
     } finally { setPending(false); }
   };
