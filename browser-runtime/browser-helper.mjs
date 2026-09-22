@@ -431,18 +431,23 @@ async function applyRequestedViewport(viewport) {
 function pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding) {
   return Boolean(state && page === expectedPage && pageCdp === expectedCdp && pageBindingGeneration === expectedBinding);
 }
-function measuredGeometry(metrics, dpr) {
+function measuredGeometry(metrics, dpr, requestedCssWidth, requestedCssHeight) {
   const visual = metrics?.cssVisualViewport || metrics?.visualViewport;
-  if (!visual || !Number.isFinite(Number(visual.clientWidth || visual.width))
-    || !Number.isFinite(Number(visual.clientHeight || visual.height))
-    || Number(visual.clientWidth || visual.width) <= 0 || Number(visual.clientHeight || visual.height) <= 0
+  if (!visual || !Number.isFinite(Number(requestedCssWidth))
+    || !Number.isFinite(Number(requestedCssHeight))
+    || requestedCssWidth <= 0 || requestedCssHeight <= 0
     || !Number.isFinite(Number(visual.offsetX)) || !Number.isFinite(Number(visual.offsetY))
     || !Number.isFinite(Number(visual.pageX)) || !Number.isFinite(Number(visual.pageY))
     || !Number.isFinite(Number(visual.scale)) || Number(visual.scale) <= 0
     || !Number.isFinite(Number(dpr)) || Number(dpr) <= 0) return null;
   return {
-    width: Number(visual.clientWidth || visual.width),
-    height: Number(visual.clientHeight || visual.height),
+    // CDP's cssVisualViewport.clientWidth can shrink when a page gains a
+    // scrollbar, while screencast pixels and Input.dispatchMouseEvent still
+    // cover the full emulated layout viewport. Keep that coordinate space
+    // anchored to the accepted emulation size; otherwise navigation can
+    // oscillate frame geometry and shift pointer coordinates by scrollbar width.
+    width: requestedCssWidth,
+    height: requestedCssHeight,
     offsetX: Number(visual.offsetX),
     offsetY: Number(visual.offsetY),
     scrollX: Number(visual.pageX),
@@ -463,7 +468,7 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
     const metrics = await expectedCdp.send('Page.getLayoutMetrics');
     const measuredDpr = await expectedPage.evaluate(() => Number(window.devicePixelRatio)).catch(() => state.devicePixelRatio);
     if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
-    const geometry = measuredGeometry(metrics, measuredDpr);
+    const geometry = measuredGeometry(metrics, measuredDpr, state.requestedCssWidth, state.requestedCssHeight);
     if (!geometry) {
       state.geometryFresh = false;
       return false;
