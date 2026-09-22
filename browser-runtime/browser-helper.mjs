@@ -604,16 +604,21 @@ function virtualKeyCode(key, code) {
   return named[key] ?? punctuation[code] ?? (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
 }
 function advanceInput(sequence) { if (sequence !== null) state.nextInputSequence = sequence + 1; }
+function cdpInputPoint(x, y) {
+  const scale = state.cdpInputScale;
+  return { x: x * scale, y: y * scale };
+}
 async function releaseHeldInput() {
   const buttons = state?.pressedButtons || 0;
   const buttonNames = [[1, 'left'], [2, 'right'], [4, 'middle']];
   for (const [mask, button] of buttonNames) {
     if (!(buttons & mask)) continue;
+    const point = cdpInputPoint(state.pointer?.x || 0, state.pointer?.y || 0);
     try {
       await pageCdp?.send('Input.dispatchMouseEvent', {
         type: 'mouseReleased',
-        x: state.pointer?.x || 0,
-        y: state.pointer?.y || 0,
+        x: point.x,
+        y: point.y,
         button,
         buttons: 0,
         clickCount: 0,
@@ -690,10 +695,10 @@ async function bindPage(targetId, restartScreencast = true) {
     state.cursor = null;
     state.pointer = null;
     state.pointerSampleSequence++;
+    state.cdpInputScale = state.devicePixelRatio;
     resetFrameTransport();
   }
   if (!restartScreencast) await ensureInitialPage();
-
   await installPageObservers();
   await applyRequestedViewport({ css_width: state.requestedCssWidth, css_height: state.requestedCssHeight, device_pixel_ratio: state.devicePixelRatio });
   await updatePageState();
@@ -1291,6 +1296,9 @@ async function installPageObservers() {
         return;
       }
       state.loaderId = loaderId;
+      // A replacement document can restore Chromium's host-device input
+      // mapping even though its emulated viewport and frame geometry persist.
+      state.cdpInputScale = state.devicePixelRatio;
       state.documentGeneration = nextGeneration(state.documentGeneration);
       state.frameGeneration = nextGeneration(state.frameGeneration);
       resetFrameTransport();
@@ -1413,6 +1421,7 @@ async function attach(message) {
     canGoBack: false, canGoForward: false, requestedUrl: null, controlled: false,
     focus: { page_focused: false, editable: false, selection_available: false, composition_active: false },
     cursor: null, pointer: null, pointerSampleSequence: 0, viewIds: new Set([message.view_id]), controllerViewId: null,
+    cdpInputScale: viewport.dpr,
     pressedButtons: 0, heldKeys: new Map(),
   };
   if (typeof message.target_id !== 'string' || !message.target_id) {
@@ -1469,6 +1478,11 @@ async function command(request) {
     }
     if (request.command.type === 'resize') {
       requireControl(request.command);
+      const previousViewport = {
+        width: state.requestedCssWidth,
+        height: state.requestedCssHeight,
+        dpr: state.devicePixelRatio,
+      };
       const expectedCdp = pageCdp;
       await stopScreencast(expectedCdp);
       invalidateViewport();
@@ -1477,12 +1491,18 @@ async function command(request) {
       pageBindingGeneration++;
       await installPageObservers();
       await applyRequestedViewport(request.command.viewport);
+      if (state.requestedCssWidth !== previousViewport.width
+        || state.requestedCssHeight !== previousViewport.height
+        || state.devicePixelRatio !== previousViewport.dpr) {
+        state.cdpInputScale = 1;
+      }
       const changed = await updatePageState(page, expectedCdp, pageBindingGeneration);
       if (!state.geometryFresh) {
         emitEvent('viewport_changed', { viewport: viewportState() });
         return { status: 'accepted', ...base, outcome: { type: 'none' } };
       }
       await startScreencast(expectedCdp, pageBindingGeneration);
+      await captureCurrentFrame(expectedCdp, pageBindingGeneration);
       if (changed) emitEvent('viewport_changed', { viewport: viewportState() });
       else emitEvent('viewport_changed', { viewport: viewportState() });
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
@@ -1519,9 +1539,10 @@ async function command(request) {
       const cdpButton = i.kind === 'move'
         ? (i.buttons & 1 ? 'left' : i.buttons & 2 ? 'right' : i.buttons & 4 ? 'middle' : 'none')
         : i.button || 'none';
+      const point = cdpInputPoint(i.x, i.y);
       await pageCdp.send('Input.dispatchMouseEvent', {
         type: i.kind === 'down' ? 'mousePressed' : i.kind === 'up' || i.kind === 'cancel' ? 'mouseReleased' : 'mouseMoved',
-        x: i.x, y: i.y, button: cdpButton, buttons: i.buttons,
+        x: point.x, y: point.y, button: cdpButton, buttons: i.buttons,
         clickCount: i.kind === 'move' ? 0 : i.click_count, modifiers: i.modifiers,
       });
       advanceInput(sequence);
@@ -1538,7 +1559,8 @@ async function command(request) {
         || i.x >= state.viewportCssWidth || i.y >= state.viewportCssHeight) {
         return { status: 'rejected', ...base, code: 'invalid_wheel_coordinates', message: 'Wheel coordinates are outside the current browser viewport' };
       }
-      await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: i.x, y: i.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers });
+      const point = cdpInputPoint(i.x, i.y);
+      await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers });
       advanceInput(sequence); emitControl();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
