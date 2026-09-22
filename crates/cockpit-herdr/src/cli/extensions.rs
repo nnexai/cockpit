@@ -41,6 +41,8 @@ const REVIEWR_ID: &str = "persiyanov.reviewr";
 const REVIEWR_ENTRYPOINT: &str = "pane";
 const CONTEXT_GIT_OUTPUT_BYTES: usize = 64 * 1024;
 const CONTEXT_GIT_TIMEOUT: Duration = Duration::from_secs(1);
+const LAUNCH_PROCESS_TIMEOUT: Duration = Duration::from_secs(1);
+const LAUNCH_PROCESS_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone)]
 struct ManifestPane {
@@ -357,6 +359,50 @@ impl ExtensionHerdrAdapter {
         Ok(ProcessEvidence::Available(ProcessInfo {
             foreground_processes: processes,
         }))
+    }
+
+    async fn confirm_launch_process(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        endpoint_identity: &str,
+        methods: &BTreeSet<String>,
+        manifest: (&Manifest, &ManifestPane),
+        mut info: ProcessInfo,
+    ) -> Result<(ProcessRecord, String), InspectionError> {
+        let deadline = tokio::time::Instant::now() + LAUNCH_PROCESS_TIMEOUT;
+        let unverified = || {
+            InspectionError::new(
+                "launch_receipt_unverified",
+                "opened pane executable or process generation does not match the installed entrypoint",
+            )
+        };
+        loop {
+            if let Some(process) = Self::matching_process(&info, manifest.0, manifest.1)
+                && let Some(start) =
+                    HerdrCliAdapter::process_start_identity(i32::try_from(process.pid).ok())
+            {
+                return Ok((
+                    process.clone(),
+                    format!("pid={}:start={start}", process.pid),
+                ));
+            }
+            // A successful open can precede the launcher's exec or Herdr's
+            // foreground-process refresh. Reinspect only this pinned pane;
+            // never replay plugin.pane.open while waiting for its executable.
+            info = tokio::time::timeout_at(deadline, async {
+                tokio::time::sleep(LAUNCH_PROCESS_INTERVAL).await;
+                match self
+                    .process_info(session_id, pane_id, endpoint_identity, methods)
+                    .await?
+                {
+                    ProcessEvidence::Available(info) => Ok(info),
+                    _ => Err(unverified()),
+                }
+            })
+            .await
+            .map_err(|_| unverified())??;
+        }
     }
 
     async fn remember_receipt(&self, receipt: LaunchReceipt) {
@@ -879,15 +925,19 @@ impl ExtensionHerdrAdapter {
             .map_err(post_mutation_error)?;
         let (process_identity, confidence, reason, viewer_cwd) = match process_evidence {
             ProcessEvidence::Available(info) => {
-                let process = Self::matching_process(&info, manifest, pane).ok_or_else(|| {
-                    post_mutation_error(InspectionError::new(
-                        "launch_receipt_unverified",
-                        "opened pane executable or process generation does not match the installed entrypoint",
-                    ))
-                })?;
-                let (identity, _) = self.classify_process(&info, manifest, pane).expect("matched process is classifiable");
+                let (process, identity) = self
+                    .confirm_launch_process(
+                        session_id,
+                        &pane_id,
+                        &endpoint_identity,
+                        &methods,
+                        (manifest, pane),
+                        info,
+                    )
+                    .await
+                    .map_err(post_mutation_error)?;
                 let viewer_cwd = if kind == ExtensionKind::Context {
-                    let viewer_cwd = match viewer_context_from_process(process, &identity) {
+                    let viewer_cwd = match viewer_context_from_process(&process, &identity) {
                         Some(viewer_cwd) => viewer_cwd,
                         #[cfg(target_os = "macos")]
                         None => {
@@ -936,6 +986,24 @@ impl ExtensionHerdrAdapter {
                 None,
             ),
         };
+        // Confirmation may have waited for exec. Do not bind that process to a
+        // pane whose terminal or placement changed in the meantime.
+        let confirmed = self
+            .herdr
+            .read_structure_with_identity(session_id, Some(&endpoint_identity))
+            .await
+            .map_err(post_mutation_error)?;
+        if !confirmed.panes.iter().any(|candidate| {
+            candidate.id == pane_id
+                && candidate.terminal_id == terminal_id
+                && candidate.space_id == workspace_id
+                && candidate.tab_id == tab_id
+        }) {
+            return Err(post_mutation_error(InspectionError::new(
+                "launch_receipt_unverified",
+                "opened pane identity changed before confirmation",
+            )));
+        }
         let receipt = LaunchReceipt {
             endpoint_identity: endpoint_identity.clone(),
             pane_id: pane_id.clone(),
@@ -1095,6 +1163,119 @@ fn git_metadata_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    async fn launch_confirmation_fixture(
+        matches_after_refresh: bool,
+    ) -> Result<(ProcessRecord, String), InspectionError> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-launch-receipt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let socket = root.join("herdr.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::os::unix::fs::symlink(
+            std::env::current_exe().unwrap(),
+            root.join("herdr-file-viewer"),
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let mut refreshes = 0;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "ping" => json!({"type":"pong", "version":"0.9.1", "protocol":22}),
+                    "pane.process_info" => {
+                        assert_eq!(request["params"]["pane_id"], "w1:p2");
+                        refreshes += 1;
+                        let processes = if matches_after_refresh && refreshes >= 2 {
+                            vec![json!({"pid":std::process::id(), "name":"herdr-file-viewer"})]
+                        } else {
+                            Vec::new()
+                        };
+                        json!({"type":"pane_process_info", "process_info":{
+                            "pane_id":"w1:p2", "foreground_processes":processes
+                        }})
+                    }
+                    method => panic!("confirmation must not mutate panes: {method}"),
+                };
+                reader
+                    .into_inner()
+                    .write_all(
+                        format!("{}\n", json!({"id":request["id"], "result":result})).as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let config = crate::HerdrCliConfig::from_options(
+            None,
+            Some("receipt-fixture".to_owned()),
+            Some(socket),
+        )
+        .unwrap();
+        let adapter = ExtensionHerdrAdapter::new(HerdrCliAdapter::new(config));
+        let endpoint = adapter.endpoint_identity("receipt-fixture").await.unwrap();
+        let mut plugin = manifest(FILE_VIEWER_ID, FILE_VIEWER_ENTRYPOINT);
+        plugin.plugin_root = root.clone();
+        plugin.panes[0].command = vec!["herdr-file-viewer".to_owned()];
+        let result = adapter
+            .confirm_launch_process(
+                "receipt-fixture",
+                "w1:p2",
+                &endpoint,
+                &BTreeSet::from(["pane.process_info".to_owned()]),
+                (&plugin, &plugin.panes[0]),
+                ProcessInfo {
+                    foreground_processes: Vec::new(),
+                },
+            )
+            .await;
+        server.abort();
+        if let Err(error) = server.await {
+            assert!(error.is_cancelled(), "fixture failed: {error}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        result
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn launch_confirmation_waits_for_foreground_exec_without_reopening() {
+        let (process, identity) = launch_confirmation_fixture(true).await.unwrap();
+        assert_eq!(process.pid, std::process::id());
+        assert_eq!(
+            identity,
+            format!(
+                "pid={}:start={}",
+                std::process::id(),
+                HerdrCliAdapter::process_start_identity(Some(std::process::id() as i32)).unwrap(),
+            )
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn launch_confirmation_times_out_without_accepting_unmatched_processes() {
+        let error = launch_confirmation_fixture(false).await.unwrap_err();
+        assert_eq!(error.code, "launch_receipt_unverified");
+        assert_eq!(
+            post_mutation_error(error).code,
+            "mutation_applied_snapshot_failed"
+        );
+    }
 
     fn manifest(plugin_id: &str, pane: &str) -> Manifest {
         Manifest {

@@ -84,3 +84,12 @@ An in-scope unresolved finding prevents campaign completion. Assign it to an exi
 - 2026-09-21, user: “come to an end - i expect you to be done within the next 10 minutes”.
 - End further broad probes, collect current worker results, preserve evidence, stop owned runtimes and commit the consolidated batch. Do not relabel unresolved failures as passes to meet the deadline.
 - `BATCH-FINAL.md` records the delivered fixes, actual checks and remaining scroll-barrier/native annotation acknowledgement failures. Full campaign acceptance remains incomplete; macOS remains user-owned verification.
+
+### OBS-017 — plugin launch confirmation races foreground exec
+
+- 2026-09-22, user reported `mutation_applied_snapshot_failed` with `launch_receipt_unverified`: the opened pane executable or process generation did not match the installed entrypoint. The mutation must not be replayed.
+- The adapter checked foreground process evidence once immediately after `plugin.pane.open`. The installed Reviewr command uses a shell `exec`; a startup/foreground-discovery transition can therefore be rejected before the final executable is visible. Read-only inspection found the installed and running Reviewr executable paths equal; no user pane was changed.
+- Repair: bound confirmation to one second, re-read only the opened pane's process evidence on the pinned endpoint, retain executable/generation verification, and revalidate terminal/Space/tab identity after the wait. Timeout and real mismatches retain the existing resync-only error. Removed the race-prone classification `expect`; no automatic second open.
+- Verification: 94 Herdr adapter tests passed. The delayed-foreground regression fails with the exact reported error when the wait is disabled, then passes with confirmation restored; an unmatched-process timeout remains rejected. In disposable real Herdr session `receipt-td7b34fz`, Reviewr launch returned VerifiedLaunch for `w1:p2`, `pid=2358539:start=15663731`; pane count changed exactly 1 -> 2, and resync retained the same verified identity.
+- Cleanup: disposable Herdr stopped, its root and temporary Rust smoke entrypoint removed. Existing user panes and the protected/default session were untouched. Linux runtime proof only; macOS execution is not claimed.
+- `cargo build -p cockpit-host -p cockpit-tauri --bins` passed for the repaired adapter. These are rebuilt development binaries, not an automatic replacement or restart of the user's installed/running application.
