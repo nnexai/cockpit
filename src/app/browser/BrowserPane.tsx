@@ -739,8 +739,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "viewport_changed": {
           next = { ...previous, viewport: incoming.viewport };
           if (previous.viewport?.viewport_revision !== incoming.viewport?.viewport_revision) {
-            // Scrolling is a normal repaint, not a stream failure. Coordinate
-            // input waits for geometry matching the recovered frame.
+            // Keep annotation gestures tied to the geometry where they began.
             gestureRef.current = null;
             setGesture(null);
           }
@@ -826,6 +825,18 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   }, [liveInputEnabled, openDraft]);
   useEffect(() => {
     let timer = 0;
+    let resolutionQuery: MediaQueryList | null = null;
+    const onResolutionChange = () => {
+      watchResolution();
+      scheduleResize();
+    };
+    const watchResolution = () => {
+      resolutionQuery?.removeEventListener("change", onResolutionChange);
+      resolutionQuery = typeof window.matchMedia === "function"
+        ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+        : null;
+      resolutionQuery?.addEventListener("change", onResolutionChange, { once: true });
+    };
     const scheduleResize = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
@@ -849,19 +860,20 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       }, 120);
     };
     scheduleResize();
+    watchResolution();
     window.addEventListener("resize", scheduleResize);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("resize", scheduleResize);
+      resolutionQuery?.removeEventListener("change", onResolutionChange);
     };
   }, [command, enqueueInput, paneViewport, snapshot?.control.status, snapshot?.control.controller_view_id, snapshot?.viewport?.viewport_revision, viewport, visible]);
 
   const paintedRectFor = useCallback((allowScrollTransition = false) => {
     const current = frameRef.current; const surface = surfaceRef.current;
     if (!current || !surface || !(allowScrollTransition ? frameSupportsViewportInput(current) : frameMatchesCurrent(current))) return null;
-    const bounds = surface.getBoundingClientRect(); const aspect = current.descriptor.image_width / current.descriptor.image_height;
-    const width = Math.min(bounds.width, bounds.height * aspect); const height = width / aspect;
-    return { left: bounds.left + (bounds.width - width) / 2, top: bounds.top + (bounds.height - height) / 2, width, height };
+    const bounds = surface.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
   }, [frameMatchesCurrent, frameSupportsViewportInput]);
   const pointFor = useCallback((event: { clientX: number; clientY: number }, allowOutside = false): BrowserPoint | null => {
     const painted = paintedRectFor(); if (!painted || !frameRef.current) return null;
@@ -1737,7 +1749,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     </div>
       <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={(event) => sendKey(event, "down")} onKeyUp={(event) => sendKey(event, "up")} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
-      {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="xMidYMid meet" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
+      {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="none" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
       {frame && (status === "stale" || status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
       {(staleDraft || staleDrafts.length > 0) ? <div className="browser-recovery browser-recovery-actions" role="status"><span>{staleDraft ? "Draft marks belong to an earlier page; review before continuing." : "Retained drafts are available for review."}</span>{staleDraft ? <><button type="button" onClick={startCurrentDraft}>Start current draft</button><button type="button" onClick={() => void discardStaleDraft()}>Discard stale draft</button></> : null}{staleDrafts.length > 0 ? <ul>{staleDrafts.map((candidate) => <li key={candidate.draft_id}><button type="button" onClick={() => reviewInventoryDraft(candidate)}>Review draft revision {candidate.revision}</button><button type="button" onClick={() => void discardInventoryDraft(candidate)}>Discard</button></li>)}</ul> : null}</div> : null}
       {blocker ? <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => void command({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div> : null}

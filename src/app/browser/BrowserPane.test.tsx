@@ -67,7 +67,7 @@ describe("BrowserPane wheel recovery", () => {
       }),
     } as unknown as CockpitClient;
     originalDpr = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
-    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 1.25 });
     vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 4, height: 3, close: vi.fn() })));
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
     host = document.createElement("div");
@@ -77,7 +77,7 @@ describe("BrowserPane wheel recovery", () => {
       root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    expect(openedDpr).toBe(2);
+    expect(openedDpr).toBe(1.25);
     await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
     const surface = host.querySelector<HTMLDivElement>(".browser-surface")!;
     vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON: () => ({}) });

@@ -750,13 +750,13 @@ const BROWSER_SPLIT_MAX_RATIO = 0.65;
 const BROWSER_SPLIT_DEFAULT_RATIO = 0.42;
 const BROWSER_SPLIT_KEY = "cockpit.browser.split-ratio";
 
-function boundedBrowserViewport(width: number, height: number, _devicePixelRatio: number): BrowserViewViewportRequest {
-  // Inline frames are CSS-sized so canvas pixels and pane geometry stay 1:1;
-  // the host window's physical DPR must not scale annotation coordinates.
+function boundedBrowserViewport(width: number, height: number, devicePixelRatio: number): BrowserViewViewportRequest {
+  // CSS dimensions remain logical viewport coordinates; DPR controls capture
+  // density and is kept separate from annotation and input coordinates.
   return {
     css_width: Math.max(1, Math.min(2560, Math.round(Number.isFinite(width) && width > 0 ? width : BROWSER_FALLBACK_VIEWPORT.css_width))),
     css_height: Math.max(1, Math.min(1600, Math.round(Number.isFinite(height) && height > 0 ? height : BROWSER_FALLBACK_VIEWPORT.css_height))),
-    device_pixel_ratio: 1,
+    device_pixel_ratio: Math.max(0.1, Math.min(16, Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1)),
   };
 }
 
@@ -1145,15 +1145,18 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       if (!surface) return;
       const bounds = surface.getBoundingClientRect();
       if (!(bounds.width > 0 && bounds.height > 0)) return;
-      setBrowserViewport(boundedBrowserViewport(bounds.width, bounds.height, 1));
+      setBrowserViewport(boundedBrowserViewport(bounds.width, bounds.height, window.devicePixelRatio));
     };
     updateViewport();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateViewport);
-    observer.observe(region);
+    window.addEventListener("resize", updateViewport);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateViewport);
+    observer?.observe(region);
     const surface = region.querySelector<HTMLElement>(".browser-surface");
-    if (surface) observer.observe(surface);
-    return () => observer.disconnect();
+    if (surface) observer?.observe(surface);
+    return () => {
+      window.removeEventListener("resize", updateViewport);
+      observer?.disconnect();
+    };
   }, [browserVisible, browserKey, browserSplitRatio, narrowViewport, browserSyncUnavailable]);
   const browserSplitterKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Home") {

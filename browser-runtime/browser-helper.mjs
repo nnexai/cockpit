@@ -408,6 +408,7 @@ function geometryEqual(left, right) {
 }
 function invalidateViewport() {
   state.viewportRevision++;
+  state.inputViewportRevision = state.viewportRevision;
   state.geometryFresh = false;
   state.viewportTransition = true;
   resetFrameTransport();
@@ -488,6 +489,7 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
     state.geometryFresh = true;
     if (changed && !state.viewportTransition) {
       state.viewportRevision++;
+      state.inputViewportRevision = state.viewportRevision;
       resetFrameTransport();
     }
     state.viewportTransition = false;
@@ -922,6 +924,28 @@ function frameMetadataDiffers(frame, baseline) {
   }
   return false;
 }
+function rebaseScrollFrame(frame, baseline) {
+  const metadata = frame?.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
+  const pageScale = metadata.pageScaleFactor === undefined ? baseline?.pageScale : Number(metadata.pageScaleFactor);
+  const scrollX = metadata.scrollOffsetX === undefined ? baseline?.scrollX : Number(metadata.scrollOffsetX);
+  const scrollY = metadata.scrollOffsetY === undefined ? baseline?.scrollY : Number(metadata.scrollOffsetY);
+  if (!baseline || !geometryEqual(baseline, state.captureBaseline)
+    || !Number.isFinite(pageScale) || Math.abs(pageScale - baseline.pageScale) > 0.01
+    || !Number.isFinite(scrollX) || !Number.isFinite(scrollY)) return false;
+  if (Math.abs(scrollX - baseline.scrollX) <= 0.01 && Math.abs(scrollY - baseline.scrollY) <= 0.01) return true;
+
+  // Screencast metadata describes the scroll position of these exact pixels.
+  // Advance geometry in place instead of stopping and restarting capture.
+  state.scrollX = scrollX;
+  state.scrollY = scrollY;
+  state.viewportRevision++;
+  const nextBaseline = geometrySnapshot();
+  state.captureBaseline = nextBaseline;
+  frame._geometry = nextBaseline;
+  frame._captureToken = nextBaseline.captureToken;
+  emitEvent('viewport_changed', { viewport: viewportState() });
+  return true;
+}
 function queueFrameGeometryRepair(expectedPage, expectedCdp, expectedBinding, baseline) {
   frameGeometryRepair = frameGeometryRepair.then(async () => {
     if (!baseline || !pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)
@@ -1084,10 +1108,16 @@ function proofMatches(command) {
   if (proof !== null) {
     if (!proof || typeof proof !== 'object' || proof.target_id !== state.targetId
       || proof.document_generation !== state.documentGeneration) return false;
-    if (proof.viewport_revision !== undefined && proof.viewport_revision !== state.viewportRevision) return false;
+    if (proof.viewport_revision !== undefined) {
+      if (command.type === 'wheel') {
+        if (!Number.isSafeInteger(proof.viewport_revision)
+          || proof.viewport_revision < state.inputViewportRevision
+          || proof.viewport_revision > state.viewportRevision) return false;
+      } else if (proof.viewport_revision !== state.viewportRevision) return false;
+    }
     if (proof.lease_generation !== undefined && proof.lease_generation !== state.leaseGeneration) return false;
-    // Wheel coordinates are viewport-local, so a scroll-only repaint does not
-    // invalidate their same-document, current-viewport, current-lease proof.
+    // Wheel coordinates survive scroll-only revisions in the current CSS
+    // viewport and do not require the old displayed frame to remain retained.
     if (proof.presented_frame_sequence !== undefined && command.type !== 'wheel') {
       const presented = frameHistory.get(proof.presented_frame_sequence);
       if (!presented
@@ -1331,14 +1361,15 @@ async function installPageObservers() {
     frame._geometry = baseline;
     scheduleSessionAck(frame);
     if (!baseline) return;
-    if (frameMetadataDiffers(frame, baseline)) {
+    if (frameMetadataDiffers(frame, baseline) && !rebaseScrollFrame(frame, baseline)) {
       queueFrameGeometryRepair(observed, cdp, bindingGeneration, baseline);
       return;
     }
+    const geometry = frame._geometry;
     const identity = {
-      documentGeneration: baseline.documentGeneration,
-      viewportRevision: baseline.viewportRevision,
-      captureToken: baseline.captureToken,
+      documentGeneration: geometry.documentGeneration,
+      viewportRevision: geometry.viewportRevision,
+      captureToken: geometry.captureToken,
     };
     if (!current()
       || identity.documentGeneration !== state.documentGeneration
@@ -1372,7 +1403,7 @@ async function attach(message) {
     viewportCssWidth: viewport.width, viewportCssHeight: viewport.height,
     visualOffsetX: 0, visualOffsetY: 0, visualScale: 1, pageScale: 1,
     geometryFresh: false, viewportTransition: false, captureToken: 0, captureBaseline: null,
-    devicePixelRatio: viewport.dpr, scrollX: 0, scrollY: 0, targets: [], targetId: message.target_id,
+    devicePixelRatio: viewport.dpr, scrollX: 0, scrollY: 0, inputViewportRevision: 1, targets: [], targetId: message.target_id,
     frameId: 'main', loaderId: null, url: '', title: '', frameGrant: message.frame_grant, loading: false,
     canGoBack: false, canGoForward: false, requestedUrl: null, controlled: false,
     focus: { page_focused: false, editable: false, selection_available: false, composition_active: false },
@@ -1498,14 +1529,12 @@ async function command(request) {
     }
     if (request.command.type === 'wheel') {
       const sequence = requireInputControl(request.command); const i = request.command.input;
+      if (!Number.isFinite(i.x) || !Number.isFinite(i.y) || i.x < 0 || i.y < 0
+        || i.x >= state.viewportCssWidth || i.y >= state.viewportCssHeight) {
+        return { status: 'rejected', ...base, code: 'invalid_wheel_coordinates', message: 'Wheel coordinates are outside the current browser viewport' };
+      }
       await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: i.x, y: i.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers });
       advanceInput(sequence); emitControl();
-      const changed = await updatePageState();
-      if (changed) {
-        await stopScreencast();
-        await startScreencast();
-      }
-      emitEvent('viewport_changed', { viewport: viewportState() });
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
     if (request.command.type === 'keyboard') {

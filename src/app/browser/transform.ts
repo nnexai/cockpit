@@ -45,13 +45,9 @@ export function createBrowserTransform(frame: BrowserViewFrameDescriptor, painte
     || !Number.isFinite(frame.viewport_offset_x) || !Number.isFinite(frame.viewport_offset_y)
     || !Number.isFinite(frame.scroll_x) || !Number.isFinite(frame.scroll_y)
     || !Number.isSafeInteger(frame.capture_timestamp_micros) || frame.capture_timestamp_micros < 0) return null;
-  // A delivered image can have a different pixel density than the CSS
-  // viewport, but it must preserve the viewport aspect ratio. Otherwise no
-  // single affine mapping can keep input and exported marks aligned.
-  const imageAspect = frame.image_width / frame.image_height;
-  const viewportAspect = frame.viewport_css_width / frame.viewport_css_height;
-  if (!Number.isFinite(imageAspect) || !Number.isFinite(viewportAspect)
-    || Math.abs(imageAspect - viewportAspect) > 0.01) return null;
+  // The compositor image can include pixel gutters such as a scrollbar while
+  // viewport CSS geometry excludes them. Map each axis independently so input
+  // still reaches the corresponding CSS point when those aspect ratios differ.
   const clientToNormalized = (clientX: number, clientY: number): BrowserCoordinate | null => {
     if (!pointInRect(paintedRect, clientX, clientY)) return null;
     return { x: (clientX - paintedRect.left) / paintedRect.width, y: (clientY - paintedRect.top) / paintedRect.height };
