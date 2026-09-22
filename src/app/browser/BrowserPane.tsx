@@ -118,6 +118,8 @@ const statusText = (status: PaneStatus, message: string | null): string => {
   if (status === "hidden") return "Browser view hidden";
   return message ?? (status === "unsupported" ? "Browser view is unsupported by this runtime" : "Browser stream error");
 };
+const hasRecoverableDraft = (candidate: BrowserViewDraftState): boolean =>
+  candidate.annotations.length > 0 || candidate.editor.note_text.trim().length > 0;
 const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
 const isLocalBrowserChrome = (target: EventTarget | null): boolean =>
@@ -154,8 +156,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const surfaceRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<BrowserViewStream | null>(null);
   const identityRef = useRef<{ id: string; epoch: number } | null>(null);
-  const snapshotRef = useRef<BrowserViewSnapshot | null>(null);
   const frameRef = useRef<{ descriptor: BrowserViewFramePacket["descriptor"]; sequence: number } | null>(null);
+  const presenterRef = useRef<FramePresenter | null>(null);
+  const snapshotRef = useRef<BrowserViewSnapshot | null>(null);
   const pendingDeliveryIdsRef = useRef<string[] | null>(null);
   const pendingDeliveryIdentityRef = useRef<CaptureIdentity | null>(null);
   const pendingDeliveryOperationRef = useRef<string | null>(null);
@@ -269,6 +272,14 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const drawing = canvas?.getContext("2d");
     if (canvas && drawing) drawing.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
+  const invalidateInteractionFrame = useCallback((nextMessage: string) => {
+    gestureRef.current = null;
+    setGesture(null);
+    // Keep the displayed identity and queued key releases. Location-sensitive
+    // jobs revalidate against current metadata before dispatch.
+    setStatus("stale");
+    setMessage(nextMessage);
+  }, []);
   const runInputJobs = useCallback(async (): Promise<void> => {
     if (inputRunningRef.current) return;
     inputRunningRef.current = true;
@@ -358,16 +369,30 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       }
       if (response.outcome.type === "snapshot") {
         const current = snapshotRef.current;
-        if (!current || (response.outcome.snapshot.identity.association_key === current.identity.association_key
-          && response.outcome.snapshot.identity.browser_incarnation === current.identity.browser_incarnation
-          && response.outcome.snapshot.identity.stream_epoch === current.identity.stream_epoch
-          && response.outcome.snapshot.metadata_sequence >= current.metadata_sequence)) applySnapshot(response.outcome.snapshot);
+        const next = response.outcome.snapshot;
+        if (!current || (next.identity.association_key === current.identity.association_key
+          && next.identity.browser_incarnation === current.identity.browser_incarnation
+          && next.identity.stream_epoch === current.identity.stream_epoch
+          && next.metadata_sequence >= current.metadata_sequence)) {
+          const descriptor = frameRef.current?.descriptor;
+          if (descriptor && (descriptor.target_id !== next.displayed_target_id
+            || descriptor.document_generation !== next.document?.document_generation
+            || descriptor.viewport_revision !== next.viewport?.viewport_revision
+            || Math.abs(descriptor.viewport_css_width - (next.viewport?.css_width ?? descriptor.viewport_css_width)) > 0.01
+            || Math.abs(descriptor.viewport_css_height - (next.viewport?.css_height ?? descriptor.viewport_css_height)) > 0.01
+            || Math.abs(descriptor.scroll_x - (next.viewport?.scroll_x ?? descriptor.scroll_x)) > 0.01
+            || Math.abs(descriptor.scroll_y - (next.viewport?.scroll_y ?? descriptor.scroll_y)) > 0.01)) {
+            invalidateInteractionFrame("Showing last confirmed frame while the browser catches up.");
+          }
+          applySnapshot(next);
+          presenterRef.current?.revalidate();
+        }
       } else if (response.outcome.type === "control" && snapshotRef.current
         && response.outcome.control.lease_generation >= snapshotRef.current.control.lease_generation) { inputSequence.current = response.outcome.control.next_input_sequence; applySnapshot({ ...snapshotRef.current, control: response.outcome.control }); }
       else if (response.outcome.type === "draft") {
         const current = snapshotRef.current;
         if (current?.displayed_target_id === response.outcome.draft.target_id
-          && current.document?.document_generation === response.outcome.draft.document_generation) applyDraft(response.outcome.draft);
+          && current?.document?.document_generation === response.outcome.draft.document_generation) applyDraft(response.outcome.draft);
       } else if (response.outcome.type === "capture_prepared") setMessage(`Composing capture ${response.outcome.capture_id}…`);
       else if (response.outcome.type === "capture") {
         if (response.outcome.capture.state === "pending") {
@@ -386,7 +411,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setMessage(errorMessage(error));
       return null;
     }
-  }, [applyDraft, applySnapshot, setPendingCaptureState]);
+  }, [applyDraft, applySnapshot, invalidateInteractionFrame, setPendingCaptureState]);
   releaseOverloadedInputRef.current = () => {
     const current = snapshotRef.current;
     if (current?.control.status === "controlled") {
@@ -461,9 +486,18 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (!documentContext || !current?.document || current.document.target_id !== current.displayed_target_id) return;
     const retained = draftRef.current;
     if (retained && (retained.target_id !== documentContext.target_id || retained.document_generation !== documentContext.document_generation)) {
-      setStatus("stale");
-      setMessage("Draft marks belong to an earlier page; choose an explicit recovery action.");
-      return;
+      if (hasRecoverableDraft(retained) || editorDirtyRef.current) {
+        setStatus("stale");
+        setMessage("Draft marks belong to an earlier page; choose an explicit recovery action.");
+        return;
+      }
+      draftRef.current = null;
+      associationOwner.draft = null;
+      associationOwner.localDraftRevision = null;
+      setDraft(null);
+      setSelectedId(null);
+      setNoteId(null);
+      setNoteValue("");
     }
     const request = ++draftRequestRef.current;
     const listed = await command({ type: "draft", context: documentContext, draft_id: null, expected_revision: null, command: { type: "list" } });
@@ -471,14 +505,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const latest = snapshotRef.current;
     if (!latest || JSON.stringify(context(latest)) !== JSON.stringify(documentContext)) { setPendingCaptureState(null); return; }
     const currentDraft = listed.inventory.drafts.find((candidate) => candidate.target_id === documentContext.target_id && candidate.document_generation === documentContext.document_generation);
-    setStaleDrafts(listed.inventory.drafts.filter((candidate) => candidate.draft_id !== currentDraft?.draft_id));
-    // A pending capture belongs to the browser association, not necessarily the
-    // current document. It must be recovered before any new composition.
-    const pending = listed.inventory.pending_capture;
-    setPendingCaptureState(pending);
+    setStaleDrafts(listed.inventory.drafts.filter((candidate) => candidate.draft_id !== currentDraft?.draft_id && hasRecoverableDraft(candidate)));
+    // Pending captures belong to the association, including earlier documents.
+    setPendingCaptureState(listed.inventory.pending_capture);
     const draftId = currentDraft?.draft_id ?? null;
     await command({ type: "draft", context: documentContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
-  }, [command]);
+  }, [associationOwner, command, setPendingCaptureState]);
   const startCurrentDraft = useCallback((): void => {
     if (editorDirtyRef.current) {
       setMessage("The current draft editor still has unsaved text; close or save it before starting a new draft.");
@@ -614,6 +646,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       gestureRef.current = null;
       setGesture(null);
       presenter?.close();
+      if (presenterRef.current === presenter) presenterRef.current = null;
       presenter = null;
       if (streamRef.current === stream) streamRef.current = null;
       stream?.close();
@@ -674,7 +707,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       switch (incoming.type) {
         case "targets_changed": {
           next = { ...previous, targets: incoming.targets, displayed_target_id: incoming.displayed_target_id };
-          ++inputGenerationRef.current; clearPresentedFrame(); inputJobsRef.current = []; remotePointerRef.current = null; remotePointerIntentRef.current = null; remotePointRef.current = null; gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
+          if (previous.displayed_target_id !== incoming.displayed_target_id) {
+            ++inputGenerationRef.current; clearPresentedFrame(); inputJobsRef.current = []; remotePointerRef.current = null; remotePointerIntentRef.current = null; remotePointRef.current = null; gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
+          }
           break;
         }
         case "document_changed": {
@@ -683,8 +718,19 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           setStatus("stale"); setMessage("The page changed; earlier draft marks remain available for explicit recovery.");
           break;
         }
-        case "navigation_changed": next = { ...previous, navigation: incoming.navigation }; break;
-        case "viewport_changed": next = { ...previous, viewport: incoming.viewport }; setInspection(null); gestureRef.current = null; setGesture(null); break;
+        case "navigation_changed": {
+          next = { ...previous, navigation: incoming.navigation };
+          if (incoming.navigation?.loading) invalidateInteractionFrame("Showing last confirmed frame while navigation completes.");
+          break;
+        }
+        case "viewport_changed": {
+          next = { ...previous, viewport: incoming.viewport };
+          if (previous.viewport?.viewport_revision !== incoming.viewport?.viewport_revision) {
+            invalidateInteractionFrame("Showing last confirmed frame while the browser catches up.");
+          }
+          setInspection(null);
+          break;
+        }
         case "cursor_changed": next = { ...previous, cursor: incoming.cursor }; break;
         case "blocker_changed": next = { ...previous, blocker: incoming.blocker }; break;
         case "capabilities_changed": next = { ...previous, capabilities: incoming.capabilities }; break;
@@ -694,7 +740,13 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "failed": setStatus("error"); setMessage(incoming.message); return;
         case "closed": setStatus("error"); setMessage(incoming.reason); return;
       }
-      applySnapshot(next); const nextStatus = statusFor(next); if (nextStatus !== "loading" || !frameRef.current) setStatus(nextStatus);
+      applySnapshot(next);
+      presenter?.revalidate();
+      if (incoming.type === "document_changed") queueMicrotask(() => void openDraft());
+      if (incoming.type !== "viewport_changed" && incoming.type !== "document_changed" && incoming.type !== "navigation_changed") {
+        const nextStatus = statusFor(next);
+        if (nextStatus !== "loading" || !frameRef.current) setStatus(nextStatus);
+      }
     };
     presenter = new FramePresenter({
       isExpectedStale: (descriptor) => {
@@ -708,6 +760,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           || Math.abs(descriptor.viewport_css_height - current.viewport.css_height) > 0.01
           || Math.abs(descriptor.scroll_x - current.viewport.scroll_x) > 0.01
           || Math.abs(descriptor.scroll_y - current.viewport.scroll_y) > 0.01;
+      },
+      shouldDefer: (descriptor) => {
+        const current = snapshotRef.current; const identity = identityRef.current; const presented = frameRef.current;
+        if (!current?.document || !current.viewport || !identity || descriptor.stream_epoch !== identity.epoch) return false;
+        if (presented && descriptor.frame_sequence <= presented.sequence) return false;
+        const knownTarget = descriptor.target_id === current.displayed_target_id || current.targets.some((candidate) => candidate.target_id === descriptor.target_id);
+        return knownTarget && (descriptor.document_generation > current.document.document_generation
+          || (descriptor.document_generation === current.document.document_generation
+            && descriptor.viewport_revision > current.viewport.viewport_revision));
       },
       validate: (descriptor) => {
         const current = snapshotRef.current; const identity = identityRef.current;
@@ -723,6 +784,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       },
       onError: (error) => { if (!closed) { errorRef.current = true; setStatus("error"); setMessage(errorMessage(error)); } },
     });
+    presenterRef.current = presenter;
     const request: BrowserViewOpenRequest = { target, client_id: clientId ?? clientRef.current, presentation, viewport: paneViewport(), takeover: false };
     void client.openBrowserView(request, event, (packet) => presenter?.push(packet), (error) => { if (!closed) { setStatus("error"); setMessage(errorMessage(error)); } }, controller.signal).then((opened) => {
       stream = opened;
@@ -731,7 +793,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }).catch((error: unknown) => { if (!closed && !controller.signal.aborted) { setStatus("error"); setMessage(errorMessage(error)); } });
     return close;
   // Browser-only is local layout state; it must not revoke the live frame stream.
-  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, openDraft, paneViewport, persistEditor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
+  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
       inputJobsRef.current = [];
@@ -1263,14 +1325,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     });
   };
   const sendKey = (event: KeyboardEvent<HTMLElement>, kind: "down" | "up"): void => {
-    if (!liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse" || event.target !== event.currentTarget) return;
+    if (!inputActive || !liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse" || event.target !== event.currentTarget) return;
     if (!event.nativeEvent.isComposing && event.key !== "Dead") event.preventDefault();
+    const key = { key: event.key, code: event.code, location: event.location, modifiers: modifiers(event), repeat: event.repeat };
     onInteractionFocus?.();
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(false); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
       if (!documentContext || !frameSupportsViewportInput()) return;
       const input_sequence = nextInput();
-      await command({ type: "keyboard", context: documentContext, input: { kind, key: event.key, code: event.code, location: event.location, modifiers: modifiers(event), repeat: event.repeat, input_sequence } });
+      await command({ type: "keyboard", context: documentContext, input: { kind, ...key, input_sequence } });
     });
   };
   const sendComposition = (event: CompositionEvent<HTMLElement>, kind: "start" | "update" | "commit"): void => {
@@ -1596,7 +1659,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     return () => registerCloseGuard(null);
   }, [associationOwner, closeGuard, discardAnnotationMutations, registerCloseGuard, retryAnnotationMutations]);
   const draftMatchesSnapshot = Boolean(draft && snapshot?.displayed_target_id === draft.target_id && snapshot.document?.document_generation === draft.document_generation);
-  const staleDraft = Boolean(draft && !draftMatchesSnapshot);
+  const staleDraft = Boolean(draft && !draftMatchesSnapshot && (hasRecoverableDraft(draft) || editorDirtyRef.current));
   const annotations = draftMatchesSnapshot ? (draft?.annotations ?? []) : [];
   const descriptor = frame?.descriptor;
   const imagePoint = (point: BrowserPoint): BrowserPoint | null => {
@@ -1663,7 +1726,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
       {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="xMidYMid meet" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
       {frame && (status === "stale" || status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
-      {(staleDraft || staleDrafts.length > 0) ? <div className="browser-recovery" role="status"><span>{staleDraft ? "Draft marks belong to an earlier page; review before continuing." : "Retained drafts are available for review."}</span>{staleDraft ? <><button type="button" onClick={startCurrentDraft}>Start current draft</button><button type="button" onClick={() => void discardStaleDraft()}>Discard stale draft</button></> : null}{staleDrafts.length > 0 ? <ul>{staleDrafts.map((candidate) => <li key={candidate.draft_id}><button type="button" onClick={() => reviewInventoryDraft(candidate)}>Review draft revision {candidate.revision}</button><button type="button" onClick={() => void discardInventoryDraft(candidate)}>Discard</button></li>)}</ul> : null}</div> : null}
+      {(staleDraft || staleDrafts.length > 0) ? <div className="browser-recovery browser-recovery-actions" role="status"><span>{staleDraft ? "Draft marks belong to an earlier page; review before continuing." : "Retained drafts are available for review."}</span>{staleDraft ? <><button type="button" onClick={startCurrentDraft}>Start current draft</button><button type="button" onClick={() => void discardStaleDraft()}>Discard stale draft</button></> : null}{staleDrafts.length > 0 ? <ul>{staleDrafts.map((candidate) => <li key={candidate.draft_id}><button type="button" onClick={() => reviewInventoryDraft(candidate)}>Review draft revision {candidate.revision}</button><button type="button" onClick={() => void discardInventoryDraft(candidate)}>Discard</button></li>)}</ul> : null}</div> : null}
       {blocker ? <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => void command({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div> : null}
       {noteId ? <div className="browser-note-editor"><textarea autoFocus value={noteValue} onChange={(event) => { markEditorDirty(); setNoteValue(event.target.value.slice(0, 4000)); }} maxLength={4000} aria-label="Annotation note" onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); saveNote(); } if (event.key === "Escape") { setNoteId(null); setNoteValue(""); markEditorDirty(); } }} /><div><button type="button" onClick={saveNote}>Save</button><button type="button" onClick={() => { setNoteId(null); setNoteValue(""); markEditorDirty(); }}>Cancel</button></div></div> : null}
     </div>

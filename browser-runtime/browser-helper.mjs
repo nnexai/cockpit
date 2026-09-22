@@ -27,6 +27,9 @@ const START_PAGE_HTML = `<!doctype html>
 <body><main><strong>Browser ready</strong><p>Enter a URL in the address bar to begin browsing.</p><kbd>https://example.com</kbd></main></body></html>`;
 
 let frameBarrier = Promise.resolve();
+let frameGeometryRepair = Promise.resolve();
+let screencastTransition = Promise.resolve();
+let screencastActive = false;
 let context;
 let browser;
 let page;
@@ -158,7 +161,7 @@ function retireView(viewId, notify = true) {
   if (notify) emitViewRetired(viewId);
   if (state.viewIds.size === 0) {
     resetFrameTransport();
-    void pageCdp?.send('Page.stopScreencast').catch(() => {});
+    void stopScreencast();
   }
 }
 function retireUnattachedView(viewId, grant) {
@@ -658,7 +661,7 @@ async function bindPage(targetId, restartScreencast = true) {
   const previousTarget = state?.targetId;
   const targetChanged = previousTarget && previousTarget !== targetId;
   if (targetChanged) await dismissPendingBlocker();
-  if (restartScreencast) try { await pageCdp?.send('Page.stopScreencast'); } catch {}
+  if (restartScreencast) await stopScreencast();
   if (observedPage && observedPageHandlers) {
     for (const [event, handler] of observedPageHandlers) observedPage.off?.(event, handler);
   }
@@ -793,10 +796,19 @@ function envelope(descriptor, jpeg) {
 function ackSession(sessionId, cdp = pageCdp) {
   if (sessionId !== undefined) cdp?.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
 }
+function scheduleSessionAck(frame) {
+  if (!frame || frame.sessionId === undefined || frame._ackScheduled) return;
+  frame._ackScheduled = true;
+  const delay = Math.max(0, FRAME_INTERVAL_MS - (performance.now() - lastScreencastAcknowledgement));
+  setTimeout(() => {
+    ackSession(frame.sessionId, frame._cdp || pageCdp);
+    lastScreencastAcknowledgement = performance.now();
+  }, delay);
+}
 function acknowledgeFrame(frame) {
   if (!frame || frame.acknowledged) return;
   frame.acknowledged = true;
-  ackSession(frame.sessionId, frame.cdp);
+  if (!frame._ackScheduled) ackSession(frame.sessionId, frame.cdp);
 }
 function retainFrame(frame) {
   if (frame && !frame.acknowledged) frame.references++;
@@ -900,10 +912,31 @@ function frameGeometry(frame) {
     && (!Number.isFinite(Number(metadata.pageScaleFactor)) || Math.abs(Number(metadata.pageScaleFactor) - baseline.pageScale) > 0.01)) return null;
   return baseline;
 }
+function frameMetadataDiffers(frame, baseline) {
+  const metadata = frame?.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
+  for (const [key, expected] of [['scrollOffsetX', baseline?.scrollX], ['scrollOffsetY', baseline?.scrollY], ['pageScaleFactor', baseline?.pageScale]]) {
+    if (metadata[key] !== undefined && Number.isFinite(Number(metadata[key]))
+      && Math.abs(Number(metadata[key]) - expected) > 0.01) return true;
+  }
+  return false;
+}
+function queueFrameGeometryRepair(expectedPage, expectedCdp, expectedBinding, baseline) {
+  frameGeometryRepair = frameGeometryRepair.then(async () => {
+    if (!baseline || !pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)
+      || state.captureToken !== baseline.captureToken) return;
+    const changed = await updatePageState(expectedPage, expectedCdp, expectedBinding);
+    if (!changed || !pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return;
+    emitEvent('viewport_changed', { viewport: viewportState() });
+    await stopScreencast(expectedCdp);
+    await startScreencast(expectedCdp, expectedBinding);
+    // Only screencast metadata can bind pixels to compositor scroll geometry.
+    // A separate screenshot could already show a later scroll position.
+  }).catch(() => {});
+}
 function enqueueFrame(frame) {
   if (!state || (frame?._cdp && frame._cdp !== pageCdp)
     || (frame?._captureToken !== undefined && frame._captureToken !== state.captureToken)) {
-    ackSession(frame?.sessionId, frame?._cdp);
+    if (!frame?._ackScheduled) ackSession(frame?.sessionId, frame?._cdp);
     return;
   }
   let next;
@@ -943,6 +976,7 @@ function enqueueFrame(frame) {
       descriptor,
       sessionId: frame.sessionId,
       cdp: frame._cdp || pageCdp,
+      _ackScheduled: Boolean(frame._ackScheduled),
       payload: envelope(descriptor, jpeg),
       references: 0,
       acknowledged: false,
@@ -956,7 +990,7 @@ function enqueueFrame(frame) {
     // Invalid or stale packets are deliberately discarded, but their CDP
     // credit is released on the session that produced the packet.
     emit({ type: 'failed', code: 'browser_frame_invalid', message: String(error.message || error) });
-    ackSession(frame?.sessionId, frame?._cdp);
+    if (!frame?._ackScheduled) ackSession(frame?.sessionId, frame?._cdp);
     return;
   }
   latestFrame = next;
@@ -1137,21 +1171,38 @@ function validateNavigationUrl(value) {
   if (parsed.username || parsed.password) throw new Error('browser URL must not contain userinfo');
   return parsed.href;
 }
+function queueScreencastOperation(operation) {
+  const next = screencastTransition.then(operation, operation);
+  screencastTransition = next.catch(() => {});
+  return next;
+}
 async function startScreencast(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
-  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !state.geometryFresh || state.viewIds.size === 0) return;
-  state.captureToken++;
-  state.captureBaseline = geometrySnapshot();
-  try {
-    await expectedCdp.send('Page.startScreencast', {
-      format: 'jpeg', quality: 80,
-      // These are requested CSS bounds. Delivered JPEG dimensions are measured
-      // from each encoded payload and are never inferred from DPR.
-      maxWidth: state.requestedCssWidth, maxHeight: state.requestedCssHeight, everyNthFrame: 1,
-    });
-  } catch (error) {
-    state.captureBaseline = null;
-    throw error;
-  }
+  return queueScreencastOperation(async () => {
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !state.geometryFresh || state.viewIds.size === 0 || screencastActive) return;
+    state.captureToken++;
+    state.captureBaseline = geometrySnapshot();
+    try {
+      await expectedCdp.send('Page.startScreencast', {
+        format: 'jpeg', quality: 80,
+        // These are requested CSS bounds. Delivered JPEG dimensions are measured
+        // from each encoded payload and are never inferred from DPR.
+        maxWidth: state.requestedCssWidth, maxHeight: state.requestedCssHeight, everyNthFrame: 1,
+      });
+      if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) screencastActive = true;
+    } catch (error) {
+      if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) {
+        state.captureBaseline = null;
+        screencastActive = false;
+      }
+      throw error;
+    }
+  });
+}
+async function stopScreencast(expectedCdp = pageCdp) {
+  return queueScreencastOperation(async () => {
+    if (expectedCdp === pageCdp) screencastActive = false;
+    try { await expectedCdp?.send('Page.stopScreencast'); } catch {}
+  });
 }
 async function captureCurrentFrame(expectedCdp = pageCdp, expectedBinding = pageBindingGeneration) {
   if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !state.geometryFresh) return;
@@ -1192,7 +1243,7 @@ async function installPageObservers() {
         const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
         await updateHistory(cdp, bindingGeneration);
         if (viewportChanged) {
-          try { await cdp.send('Page.stopScreencast'); } catch {}
+          await stopScreencast(cdp);
           await startScreencast(cdp, bindingGeneration);
           await captureCurrentFrame(cdp, bindingGeneration);
           emitEvent('viewport_changed', { viewport: viewportState() });
@@ -1216,7 +1267,7 @@ async function installPageObservers() {
         if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
         emitEvent('document_changed', { document: documentState() });
         emitNavigation();
-        try { await cdp.send('Page.stopScreencast'); } catch {}
+        await stopScreencast(cdp);
         await startScreencast(cdp, bindingGeneration);
         await captureCurrentFrame(cdp, bindingGeneration);
       }).catch(() => {});
@@ -1234,7 +1285,7 @@ async function installPageObservers() {
         if (!current()) return;
         emitNavigation();
         if (!state.captureBaseline) {
-          try { await cdp.send('Page.stopScreencast'); } catch {}
+          await stopScreencast(cdp);
           await startScreencast(cdp, bindingGeneration);
         }
         await captureCurrentFrame(cdp, bindingGeneration);
@@ -1267,26 +1318,29 @@ async function installPageObservers() {
   for (const [event, handler] of observedPageHandlers) observed.on(event, handler);
   observedPage = observed;
   screencastListener = (frame) => {
+    // Capture geometry and identity at CDP delivery time. The page can scroll
+    // on the compositor after a command returns, so never read the mutable
+    // baseline after waiting on navigation or another frame.
+    const baseline = state?.captureBaseline ? { ...state.captureBaseline } : null;
     frame._cdp = cdp;
-    frame._captureToken = state?.captureToken;
-    frame._geometry = state?.captureBaseline;
+    frame._captureToken = baseline?.captureToken ?? state?.captureToken;
+    frame._geometry = baseline;
+    scheduleSessionAck(frame);
+    if (!baseline) return;
+    if (frameMetadataDiffers(frame, baseline)) {
+      queueFrameGeometryRepair(observed, cdp, bindingGeneration, baseline);
+      return;
+    }
     const identity = {
-      targetId,
-      documentGeneration: state?.documentGeneration,
-      viewportRevision: state?.viewportRevision,
-      captureToken: state?.captureToken,
+      documentGeneration: baseline.documentGeneration,
+      viewportRevision: baseline.viewportRevision,
+      captureToken: baseline.captureToken,
     };
-    const barrier = frameBarrier;
-    void barrier.then(() => {
-      if (!current()
-        || identity.documentGeneration !== state.documentGeneration
-        || identity.viewportRevision !== state.viewportRevision
-        || identity.captureToken !== state.captureToken) {
-        ackSession(frame.sessionId, cdp);
-        return;
-      }
-      enqueueFrame(frame);
-    }).catch(() => ackSession(frame.sessionId, cdp));
+    if (!current()
+      || identity.documentGeneration !== state.documentGeneration
+      || identity.viewportRevision !== state.viewportRevision
+      || identity.captureToken !== state.captureToken) return;
+    enqueueFrame(frame);
   };
   cdp.on('Page.screencastFrame', screencastListener);
 }
@@ -1376,7 +1430,7 @@ async function command(request) {
     if (request.command.type === 'resize') {
       requireControl(request.command);
       const expectedCdp = pageCdp;
-      try { await expectedCdp?.send('Page.stopScreencast'); } catch {}
+      await stopScreencast(expectedCdp);
       invalidateViewport();
       // Rebind the observer closure as well as CDP capture. This prevents a
       // delayed callback from the retired screencast using the new baseline.
@@ -1444,7 +1498,7 @@ async function command(request) {
       advanceInput(sequence); emitControl();
       const changed = await updatePageState();
       if (changed) {
-        try { await pageCdp.send('Page.stopScreencast'); } catch {}
+        await stopScreencast();
         await startScreencast();
       }
       emitEvent('viewport_changed', { viewport: viewportState() });
@@ -1453,7 +1507,9 @@ async function command(request) {
     if (request.command.type === 'keyboard') {
       const sequence = requireInputControl(request.command);
       const i = request.command.input;
-      const text = i.kind === 'down' && i.key.length === 1 && (i.modifiers & 7) === 0 ? i.key : undefined;
+      const text = i.kind === 'down' && (i.modifiers & 7) === 0
+        ? ((i.key === 'Enter' || i.key === 'NumpadEnter') ? '\r' : i.key.length === 1 ? i.key : undefined)
+        : undefined;
       await pageCdp.send('Input.dispatchKeyEvent', {
         type: i.kind === 'down' ? 'keyDown' : 'keyUp',
         key: i.key,
@@ -1675,7 +1731,7 @@ async function command(request) {
 }
 async function detach() {
   await releaseHeldInput();
-  try { await pageCdp?.send('Page.stopScreencast'); } catch {}
+  await stopScreencast();
   grants.clear();
   for (const viewId of grantTimers.keys()) clearGrantTimer(viewId);
   viewGrants.clear();
@@ -1729,7 +1785,7 @@ async function processInputLine(line) {
       attachedViewIds.clear();
       state.viewIds.clear();
       resetFrameTransport();
-      await pageCdp?.send('Page.stopScreencast');
+      await stopScreencast();
     }
     else if (message.type === 'resume') await startScreencast();
     else if (message.type === 'detach') await detach();

@@ -94,6 +94,7 @@
 .browser-tabs button,
 .browser-navigation button,
 .browser-annotation-toolbar button,
+.browser-recovery button,
 .browser-blocker button,
 .browser-notes button,
 .browser-note-editor button {
@@ -475,6 +476,22 @@
   color: var(--text-secondary);
   font-size: var(--font-size-2xs);
   pointer-events: none;
+}
+.browser-recovery-actions {
+  right: auto;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  pointer-events: auto;
+}
+
+.browser-recovery-actions ul {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .browser-pane-error .browser-recovery,

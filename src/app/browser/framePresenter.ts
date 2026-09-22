@@ -212,6 +212,11 @@ export interface FramePresenterOptions {
    * Envelope/descriptor corruption still reaches onError.
    */
   readonly isExpectedStale?: (descriptor: BrowserViewFrameDescriptor) => boolean;
+  /**
+   * A valid frame may arrive on the frame lane before its matching metadata.
+   * Hold at most one such frame until the owner calls revalidate().
+   */
+  readonly shouldDefer?: (descriptor: BrowserViewFrameDescriptor) => boolean;
   readonly present: (image: ImageBitmap | HTMLImageElement, descriptor: BrowserViewFrameDescriptor) => void;
   readonly onError?: (error: BrowserFrameError | Error) => void;
 }
@@ -261,19 +266,16 @@ function packetJpeg(packet: BrowserViewFramePacket, limits: BrowserViewFrameEnve
   return bytes;
 }
 
-/**
- * Decodes at most one packet at a time and keeps one latest replacement. A packet's
- * transport credit is released only after `present` returns, or on deliberate discard.
- * Frame sequence ordering is enforced independently of receive order.
- */
 export class FramePresenter {
   private readonly limits: BrowserViewFrameEnvelopeV2;
   private readonly validate?: FramePresenterOptions["validate"];
   private readonly isExpectedStale?: FramePresenterOptions["isExpectedStale"];
+  private readonly shouldDefer?: FramePresenterOptions["shouldDefer"];
   private readonly present: FramePresenterOptions["present"];
   private readonly onError?: FramePresenterOptions["onError"];
   private active: ActiveFrame | null = null;
   private pending: ActiveFrame | null = null;
+  private deferred: ActiveFrame | null = null;
   private lastPresentedSequence: number | null = null;
   private closed = false;
   private readonly released = new WeakSet<BrowserViewFramePacket>();
@@ -294,10 +296,34 @@ export class FramePresenter {
     this.limits = options.limits ?? IBFV_V2_DEFAULT_LIMITS;
     this.validate = options.validate;
     this.isExpectedStale = options.isExpectedStale;
+    this.shouldDefer = options.shouldDefer;
     this.present = options.present;
     this.onError = options.onError;
   }
-
+  revalidate(): void {
+    const deferred = this.deferred;
+    if (this.closed || !deferred || this.shouldDefer?.(deferred.descriptor)) return;
+    this.deferred = null;
+    if (this.lastPresentedSequence !== null && deferred.descriptor.frame_sequence <= this.lastPresentedSequence
+      || this.isExpectedStale?.(deferred.descriptor)) {
+      this.discard(deferred.packet);
+      return;
+    }
+    try {
+      this.validate?.(deferred.descriptor);
+    } catch (error) {
+      this.discard(deferred.packet);
+      this.onError?.(error instanceof BrowserFrameError ? error : new BrowserFrameError("identity_mismatch", String(error)));
+      return;
+    }
+    if (this.active) {
+      if (this.pending) this.discard(this.pending.packet);
+      this.pending = deferred;
+      return;
+    }
+    this.active = deferred;
+    void this.decodeActive();
+  }
   push(packet: BrowserViewFramePacket): void {
     if (this.closed) { this.discard(packet); return; }
     let jpeg: ArrayBuffer;
@@ -312,8 +338,6 @@ export class FramePresenter {
         viewportCssHeight: packet.descriptor.viewport_css_height,
       }, this.limits);
       jpeg = packetJpeg(packet, this.limits);
-      if (this.isExpectedStale?.(packet.descriptor)) { this.discard(packet); return; }
-      this.validate?.(packet.descriptor);
     } catch (error) {
       this.discard(packet);
       this.onError?.(error instanceof BrowserFrameError ? error : new BrowserFrameError("invalid_envelope", String(error)));
@@ -322,8 +346,22 @@ export class FramePresenter {
     const sequence = packet.descriptor.frame_sequence;
     if (this.lastPresentedSequence !== null && sequence <= this.lastPresentedSequence
       || this.active && sequence <= this.active.descriptor.frame_sequence
-      || this.pending && sequence <= this.pending.descriptor.frame_sequence) {
+      || this.pending && sequence <= this.pending.descriptor.frame_sequence
+      || this.deferred && sequence <= this.deferred.descriptor.frame_sequence) {
       this.discard(packet);
+      return;
+    }
+    if (this.shouldDefer?.(packet.descriptor)) {
+      if (this.deferred) this.discard(this.deferred.packet);
+      this.deferred = { packet, descriptor: packet.descriptor, jpeg };
+      return;
+    }
+    if (this.isExpectedStale?.(packet.descriptor)) { this.discard(packet); return; }
+    try {
+      this.validate?.(packet.descriptor);
+    } catch (error) {
+      this.discard(packet);
+      this.onError?.(error instanceof BrowserFrameError ? error : new BrowserFrameError("identity_mismatch", String(error)));
       return;
     }
     const frame = { packet, descriptor: packet.descriptor, jpeg };
@@ -399,6 +437,8 @@ export class FramePresenter {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.deferred) this.discard(this.deferred.packet);
+    this.deferred = null;
     if (this.pending) this.discard(this.pending.packet);
     this.pending = null;
     if (this.active) this.discard(this.active.packet);
