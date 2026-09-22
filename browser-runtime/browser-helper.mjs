@@ -369,8 +369,10 @@ function requestedViewport(viewport) {
   if (!viewport || typeof viewport !== 'object') throw new Error('viewport is missing');
   const width = boundedInteger(viewport.css_width, 1, MAX_WIDTH);
   const height = boundedInteger(viewport.css_height, 1, MAX_HEIGHT);
-  const dpr = Number(viewport.device_pixel_ratio ?? 1);
-  if (!Number.isFinite(dpr) || dpr <= 0 || dpr > 16) throw new Error('device pixel ratio is not finite');
+  const requestedDpr = Number(viewport.device_pixel_ratio ?? 1);
+  if (!Number.isFinite(requestedDpr) || requestedDpr <= 0 || requestedDpr > 16) throw new Error('device pixel ratio is not finite');
+  const maxDpr = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height, Math.sqrt(MAX_PIXELS / (width * height)));
+  const dpr = Math.min(requestedDpr, maxDpr);
   return { width, height, dpr };
 }
 function geometrySnapshot() {
@@ -417,8 +419,8 @@ async function applyRequestedViewport(viewport) {
     height: requested.height,
     deviceScaleFactor: requested.dpr,
     mobile: false,
-    screenWidth: requested.width,
-    screenHeight: requested.height,
+    screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
+    screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
   });
   state.requestedCssWidth = requested.width;
   state.requestedCssHeight = requested.height;
@@ -1084,7 +1086,9 @@ function proofMatches(command) {
       || proof.document_generation !== state.documentGeneration) return false;
     if (proof.viewport_revision !== undefined && proof.viewport_revision !== state.viewportRevision) return false;
     if (proof.lease_generation !== undefined && proof.lease_generation !== state.leaseGeneration) return false;
-    if (proof.presented_frame_sequence !== undefined) {
+    // Wheel coordinates are viewport-local, so a scroll-only repaint does not
+    // invalidate their same-document, current-viewport, current-lease proof.
+    if (proof.presented_frame_sequence !== undefined && command.type !== 'wheel') {
       const presented = frameHistory.get(proof.presented_frame_sequence);
       if (!presented
         || presented.target_id !== state.targetId
@@ -1184,9 +1188,9 @@ async function startScreencast(expectedCdp = pageCdp, expectedBinding = pageBind
     try {
       await expectedCdp.send('Page.startScreencast', {
         format: 'jpeg', quality: 80,
-        // These are requested CSS bounds. Delivered JPEG dimensions are measured
-        // from each encoded payload and are never inferred from DPR.
-        maxWidth: state.requestedCssWidth, maxHeight: state.requestedCssHeight, everyNthFrame: 1,
+        maxWidth: Math.max(1, Math.floor(state.requestedCssWidth * state.devicePixelRatio)),
+        maxHeight: Math.max(1, Math.floor(state.requestedCssHeight * state.devicePixelRatio)),
+        everyNthFrame: 1,
       });
       if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) screencastActive = true;
     } catch (error) {

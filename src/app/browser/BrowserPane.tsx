@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
 import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedbackSendResponse, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
-import { BrowserFrameError, FramePresenter, validateFrameDescriptor } from "./framePresenter";
+import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, validateFrameDescriptor } from "./framePresenter";
 import { createBrowserTransform } from "./transform";
 import "./browser.css";
 
@@ -170,7 +170,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const inputJobsRef = useRef<InputJob[]>([]);
   const inputGenerationRef = useRef(0);
   const inputDrainRef = useRef<Promise<void> | null>(null);
-  const wheelRecoveryDeadlineRef = useRef<number | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
   const controlPromiseRef = useRef<Promise<boolean> | null>(null);
   const remotePointerRef = useRef<number | null>(null);
@@ -262,7 +261,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   }, []);
   const clearPresentedFrame = useCallback((clearCanvas = true) => {
     frameRef.current = null;
-    wheelRecoveryDeadlineRef.current = null;
     setFrame(null);
     if (!clearCanvas) return;
     const canvas = canvasRef.current;
@@ -467,10 +465,18 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   }, [frameSupportsViewportInput]);
   const paneViewport = useCallback((): BrowserViewViewportRequest => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
+    const cssWidth = Math.max(1, Math.round(bounds?.width || viewportRef.current.css_width));
+    const cssHeight = Math.max(1, Math.round(bounds?.height || viewportRef.current.css_height));
+    const requestedDpr = typeof window === "undefined" ? viewportRef.current.device_pixel_ratio : window.devicePixelRatio;
+    const maxDpr = Math.min(
+      IBFV_V2_DEFAULT_LIMITS.max_width / cssWidth,
+      IBFV_V2_DEFAULT_LIMITS.max_height / cssHeight,
+      Math.sqrt(IBFV_V2_DEFAULT_LIMITS.max_pixels / (cssWidth * cssHeight)),
+    );
     return {
-      css_width: Math.max(1, Math.round(bounds?.width || viewportRef.current.css_width)),
-      css_height: Math.max(1, Math.round(bounds?.height || viewportRef.current.css_height)),
-      device_pixel_ratio: 1,
+      css_width: cssWidth,
+      css_height: cssHeight,
+      device_pixel_ratio: Math.min(Math.max(0.1, requestedDpr || 1), maxDpr),
     };
   }, []);
   const ensureControl = useCallback(async (): Promise<boolean> => {
@@ -790,7 +796,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         const targetCanvas = canvasRef.current; const drawing = targetCanvas?.getContext("2d");
         if (!targetCanvas || !drawing) throw new Error("Browser view canvas is unavailable");
         targetCanvas.width = descriptor.image_width; targetCanvas.height = descriptor.image_height; drawing.clearRect(0, 0, targetCanvas.width, targetCanvas.height); drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
-        const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; wheelRecoveryDeadlineRef.current = null; setFrame(accepted); if (!errorRef.current) setStatus("ready");
+        const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted); if (!errorRef.current) setStatus("ready");
       },
       onError: (error) => { if (!closed) { errorRef.current = true; setStatus("error"); setMessage(errorMessage(error)); } },
     });
@@ -819,31 +825,44 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     wasLiveInputRef.current = true;
   }, [liveInputEnabled, openDraft]);
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const current = snapshotRef.current;
-      const requested = paneViewport();
-      if (!visible || !current?.viewport || !ownsBrowserControl(current)
-        || (current.viewport.css_width === requested.css_width
-          && current.viewport.css_height === requested.css_height
-          && current.viewport.device_pixel_ratio === requested.device_pixel_ratio)) return;
-      void enqueueInput("boundary", async () => {
-        const latest = snapshotRef.current;
-        const documentContext = latest ? context(latest) : null;
-        if (!latest || !ownsBrowserControl(latest) || !documentContext) return;
-        await command({ type: "resize", context: documentContext, viewport: requested });
-        // Metadata invalidates old geometry; a response must not erase a newer frame.
-      });
-    }, 120);
-    return () => window.clearTimeout(timer);
-  }, [command, enqueueInput, paneViewport, snapshot?.control.status, snapshot?.control.controller_view_id, viewport, visible]);
+    let timer = 0;
+    const scheduleResize = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const current = snapshotRef.current;
+        const requested = paneViewport();
+        if (!visible || !current?.viewport || !ownsBrowserControl(current)
+          || (current.viewport.css_width === requested.css_width
+            && current.viewport.css_height === requested.css_height
+            && current.viewport.device_pixel_ratio === requested.device_pixel_ratio)) return;
+        void enqueueInput("boundary", async () => {
+          const latest = snapshotRef.current;
+          const latestRequested = paneViewport();
+          const documentContext = latest ? context(latest) : null;
+          if (!latest || !latest.viewport || !ownsBrowserControl(latest) || !documentContext
+            || (latest.viewport.css_width === latestRequested.css_width
+              && latest.viewport.css_height === latestRequested.css_height
+              && latest.viewport.device_pixel_ratio === latestRequested.device_pixel_ratio)) return;
+          await command({ type: "resize", context: documentContext, viewport: latestRequested });
+          // Metadata invalidates old geometry; a response must not erase a newer frame.
+        });
+      }, 120);
+    };
+    scheduleResize();
+    window.addEventListener("resize", scheduleResize);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", scheduleResize);
+    };
+  }, [command, enqueueInput, paneViewport, snapshot?.control.status, snapshot?.control.controller_view_id, snapshot?.viewport?.viewport_revision, viewport, visible]);
 
-  const paintedRectFor = useCallback(() => {
+  const paintedRectFor = useCallback((allowScrollTransition = false) => {
     const current = frameRef.current; const surface = surfaceRef.current;
-    if (!current || !surface || !frameMatchesCurrent(current)) return null;
+    if (!current || !surface || !(allowScrollTransition ? frameSupportsViewportInput(current) : frameMatchesCurrent(current))) return null;
     const bounds = surface.getBoundingClientRect(); const aspect = current.descriptor.image_width / current.descriptor.image_height;
     const width = Math.min(bounds.width, bounds.height * aspect); const height = width / aspect;
     return { left: bounds.left + (bounds.width - width) / 2, top: bounds.top + (bounds.height - height) / 2, width, height };
-  }, [frameMatchesCurrent]);
+  }, [frameMatchesCurrent, frameSupportsViewportInput]);
   const pointFor = useCallback((event: { clientX: number; clientY: number }, allowOutside = false): BrowserPoint | null => {
     const painted = paintedRectFor(); if (!painted || !frameRef.current) return null;
     let clientX = event.clientX; let clientY = event.clientY;
@@ -853,8 +872,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
     return createBrowserTransform(frameRef.current.descriptor, painted)?.clientToDocument(clientX, clientY) ?? null;
   }, [paintedRectFor]);
-  const viewportPointFor = useCallback((event: { clientX: number; clientY: number }, allowOutside = false): BrowserPoint | null => {
-    const painted = paintedRectFor(); if (!painted || !frameRef.current) return null;
+  const viewportPointFor = useCallback((event: { clientX: number; clientY: number }, allowOutside = false, allowScrollTransition = false): BrowserPoint | null => {
+    const painted = paintedRectFor(allowScrollTransition); if (!painted || !frameRef.current) return null;
     let clientX = event.clientX; let clientY = event.clientY;
     if (allowOutside) {
       clientX = Math.max(painted.left, Math.min(painted.left + painted.width - Number.EPSILON, clientX));
@@ -1302,29 +1321,16 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const generation = inputGenerationRef.current;
     void enqueueInput("wheel", async () => {
       const controlled = await ensureControl();
-      if (!controlled) return;
-      if (frameMatchesCurrent()) wheelRecoveryDeadlineRef.current = null;
-      const deadline = wheelRecoveryDeadlineRef.current ?? (Date.now() + 2_000);
-      wheelRecoveryDeadlineRef.current = deadline;
-      while (!frameMatchesCurrent()) {
-        if (generation !== inputGenerationRef.current || !liveInputEnabledRef.current) return;
-        if (Date.now() >= deadline) {
-          setStatus("stale");
-          setMessage("Scroll paused because the browser did not present a matching frame. Try the scroll again.");
-          return;
-        }
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-      }
-      wheelRecoveryDeadlineRef.current = null;
+      if (!controlled || generation !== inputGenerationRef.current || !liveInputEnabledRef.current) return;
       const latest = snapshotRef.current;
       const accepted = frameRef.current;
-      const point = viewportPointFor(intent);
+      const point = viewportPointFor(intent, false, true);
       const inputLocation = latest && accepted && ownsBrowserControl(latest) && point
         ? location(latest, accepted.descriptor)
         : null;
       if (!point || !inputLocation || generation !== inputGenerationRef.current) {
         setStatus("stale");
-        setMessage("Input stale: the browser geometry changed; retry the scroll.");
+        setMessage("Scroll is waiting for the resized browser frame. Retry once it is ready.");
         return;
       }
       const input_sequence = nextInput();

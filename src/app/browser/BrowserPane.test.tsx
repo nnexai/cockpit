@@ -37,6 +37,7 @@ const accepted = (request: BrowserViewCommandRequest): BrowserViewCommandRespons
 describe("BrowserPane wheel recovery", () => {
   let root: Root | null = null;
   let host: HTMLDivElement | null = null;
+  let originalDpr: PropertyDescriptor | undefined;
 
   afterEach(async () => {
     if (root) await act(async () => root?.unmount());
@@ -44,23 +45,29 @@ describe("BrowserPane wheel recovery", () => {
     host?.remove();
     host = null;
     vi.restoreAllMocks();
+    if (originalDpr) Object.defineProperty(window, "devicePixelRatio", originalDpr);
+    originalDpr = undefined;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
-  it("keeps wheel input received between viewport metadata and its matching frame", async () => {
+  it("keeps repeated wheel input flowing while scroll frames catch up", async () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     let emitEvent!: (event: BrowserViewEvent) => void;
     let emitFrame!: (frame: BrowserViewFramePacket) => void;
     const commands: BrowserViewCommandRequest[] = [];
+    let openedDpr = 0;
     const client = {
-      openBrowserView: vi.fn(async (_request, onEvent, onFrame) => {
+      openBrowserView: vi.fn(async (request, onEvent, onFrame) => {
+        openedDpr = request.viewport.device_pixel_ratio;
         emitEvent = onEvent;
         emitFrame = onFrame;
         onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
         return { command: async (request: BrowserViewCommandRequest) => { commands.push(request); return accepted(request); }, close: vi.fn() };
       }),
     } as unknown as CockpitClient;
+    originalDpr = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
     vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 4, height: 3, close: vi.fn() })));
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
     host = document.createElement("div");
@@ -70,9 +77,16 @@ describe("BrowserPane wheel recovery", () => {
       root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
+    expect(openedDpr).toBe(2);
     await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
     const surface = host.querySelector<HTMLDivElement>(".browser-surface")!;
     vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON: () => ({}) });
+    const firstFrame = packet(descriptor(1, 1, 0));
+    await act(async () => {
+      emitFrame(firstFrame);
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    expect(firstFrame.ack).toHaveBeenCalledOnce();
 
     await act(async () => {
       emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, viewport: viewport(2, 120) });
@@ -91,6 +105,9 @@ describe("BrowserPane wheel recovery", () => {
       surface.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
       surface.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
     });
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
+    const wheelsBeforeFreshFrame = commands.filter(({ command }) => command.type === "wheel");
+    expect(wheelsBeforeFreshFrame.map(({ command }) => command.type === "wheel" ? [command.location.viewport_revision, command.input.delta_y_css, command.input.input_sequence] : null)).toEqual([[2, 120, 1], [2, 80, 2], [2, 20, 3]]);
 
     await act(async () => {
       emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 3 }, viewport: viewport(3, 180) });
@@ -100,50 +117,12 @@ describe("BrowserPane wheel recovery", () => {
       expect(nextFrame.ack).toHaveBeenCalledOnce();
     });
     const wheels = commands.filter(({ command }) => command.type === "wheel");
-    expect(wheels.map(({ command }) => command.type === "wheel" ? [command.location.viewport_revision, command.input.delta_y_css, command.input.x, command.input.y, command.input.input_sequence] : null)).toEqual([[3, 120, 400, 300, 1], [3, 100, 400, 300, 2]]);
-    expect(commands.filter(({ command }) => command.type === "keyboard").map(({ command }) => command.type === "keyboard" ? [command.input.kind, command.input.key, command.input.input_sequence] : null)).toEqual([["down", "Enter", 3], ["up", "Enter", 4]]);
-    expect(commands.filter(({ command }) => command.type === "wheel" || command.type === "keyboard").map(({ command }) => command.type)).toEqual(["wheel", "wheel", "keyboard", "keyboard"]);
+    expect(wheels.map(({ command }) => command.type === "wheel" ? [command.location.viewport_revision, command.input.delta_y_css, command.input.x, command.input.y, command.input.input_sequence] : null)).toEqual([[2, 120, 400, 300, 1], [2, 80, 400, 300, 2], [2, 20, 400, 300, 3]]);
+    expect(commands.filter(({ command }) => command.type === "keyboard").map(({ command }) => command.type === "keyboard" ? [command.input.kind, command.input.key, command.input.input_sequence] : null)).toEqual([["down", "Enter", 4], ["up", "Enter", 5]]);
+    expect(commands.filter(({ command }) => command.type === "wheel" || command.type === "keyboard").map(({ command }) => command.type)).toEqual(["wheel", "wheel", "wheel", "keyboard", "keyboard"]);
   });
 
-  it("releases later browser commands when the matching frame never arrives", async () => {
-    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-    let emitEvent!: (event: BrowserViewEvent) => void;
-    const commands: BrowserViewCommandRequest[] = [];
-    const client = {
-      openBrowserView: vi.fn(async (_request, onEvent, _onFrame) => {
-        emitEvent = onEvent;
-        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
-        return { command: async (request: BrowserViewCommandRequest) => { commands.push(request); return accepted(request); }, close: vi.fn() };
-      }),
-    } as unknown as CockpitClient;
-    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 4, height: 3, close: vi.fn() })));
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
-    host = document.createElement("div");
-    document.body.append(host);
-    await act(async () => {
-      root = createRoot(host!);
-      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
-    const surface = host.querySelector<HTMLDivElement>(".browser-surface")!;
-    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON: () => ({}) });
-    vi.useFakeTimers();
-    await act(async () => {
-      emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, viewport: viewport(2, 120) });
-      surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true, clientX: 400, clientY: 300 }));
-      await Promise.resolve();
-      surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 80, bubbles: true, cancelable: true, clientX: 400, clientY: 300 }));
-      surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 20, bubbles: true, cancelable: true, clientX: 400, clientY: 300 }));
-    });
-    await act(async () => {
-      host!.querySelector<HTMLButtonElement>(".browser-new-tab")!.click();
-      await vi.advanceTimersByTimeAsync(2_100);
-    });
-    expect(commands.filter(({ command }) => command.type === "wheel")).toHaveLength(0);
-    expect(commands.filter(({ command }) => command.type === "tab").map(({ command }) => command.type === "tab" ? command.command.type : null)).toEqual(["create"]);
-  });
-
-  it("does not revive a waiting wheel after live input is disabled and re-enabled", async () => {
+  it("does not let a delayed scroll repaint block later input and navigation", async () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     let emitEvent!: (event: BrowserViewEvent) => void;
     let emitFrame!: (frame: BrowserViewFramePacket) => void;
@@ -160,26 +139,30 @@ describe("BrowserPane wheel recovery", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
     host = document.createElement("div");
     document.body.append(host);
-    const target = { session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null } as const;
-    const viewportRequest = { css_width: 800, css_height: 600, device_pixel_ratio: 1 } as const;
     await act(async () => {
       root = createRoot(host!);
-      root.render(<BrowserPane client={client} target={target} viewport={viewportRequest} />);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
     const surface = host.querySelector<HTMLDivElement>(".browser-surface")!;
     vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON: () => ({}) });
     await act(async () => {
+      emitFrame(packet(descriptor(1, 1, 0)));
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    await act(async () => {
       emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, viewport: viewport(2, 120) });
       surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true, clientX: 400, clientY: 300 }));
       await Promise.resolve();
+      surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 80, bubbles: true, cancelable: true, clientX: 400, clientY: 300 }));
+      surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 20, bubbles: true, cancelable: true, clientX: 400, clientY: 300 }));
     });
-    await act(async () => root!.render(<BrowserPane client={client} target={target} viewport={viewportRequest} liveInputEnabled={false} />));
-    await act(async () => root!.render(<BrowserPane client={client} target={target} viewport={viewportRequest} liveInputEnabled />));
     await act(async () => {
-      emitFrame(packet(descriptor(2, 2, 120)));
-      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      host!.querySelector<HTMLButtonElement>(".browser-new-tab")!.click();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    expect(commands.filter(({ command }) => command.type === "wheel")).toHaveLength(0);
+    const inputAndNavigation = commands.filter(({ command }) => command.type === "wheel" || command.type === "tab");
+    expect(inputAndNavigation.some(({ command }) => command.type === "wheel")).toBe(true);
+    expect(inputAndNavigation.at(-1)?.command).toMatchObject({ type: "tab", command: { type: "create" } });
   });
 });
