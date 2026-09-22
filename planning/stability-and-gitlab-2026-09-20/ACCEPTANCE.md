@@ -7,34 +7,34 @@ This is a requirements map, not a pass report. Results live in task evidence ref
 | Requirement | Primary task | Additional gate |
 | --- | --- | --- |
 | Protected user state, named disposable resources, exact runtime/config identity | RUN-01 | Every task; ACCEPT-01 cleanup |
-| Protocol/schema/capability compatibility without exact patch gate | TERM-01 | NATIVE-02 |
+| Protocol/schema/capability compatibility without exact patch gate | TERM-01 | — |
 | Only selected visible panes attach/render; revisit works without hidden errors | TERM-02 | TERM-03, PERF-01 |
 | Old requests/streams cancelled; old failures do not paint on new resources | SYNC-01 | WEB-04, FLOW-01 |
-| Terminal scrolling under output, deliberate tail-follow, no blanking | TERM-03 | PERF-01, NATIVE-02 |
-| Terminal prefix/modifiers/clipboard/application mouse/focus and TUI parity | TERM-03 | WEB-04, NATIVE-02 |
+| Terminal scrolling under output, deliberate tail-follow, no blanking | TERM-03 | PERF-01 |
+| Terminal prefix/modifiers/clipboard/application mouse/focus and TUI parity | TERM-03 | WEB-04 |
 | Herdr hierarchy/order/Agents/layout and local control intent remain authoritative | TERM-03 | FLOW-01, ACCEPT-01 |
 | Context/Review file/picker cancellation and revision-aware scroll continuity | VIEW-01 | FLOW-01, PERF-01 |
-| Files/Markdown/Mermaid/media/search/snapshots, full local Review scopes | FLOW-01 | NATIVE-02 |
+| Files/Markdown/Mermaid/media/search/snapshots, full local Review scopes | FLOW-01 | — |
 | Durable file/line comments, same-tab exact paste, no Enter/duplicate on unknown result | FLOW-01 | ACCEPT-01 |
 | Read-only source opening, visible exact effects before explicit mutation | SETUP-01 | GLAB-04, ACCEPT-01 |
-| Portable no-replace companion publication and recoverable partial setup | SETUP-02 | NATIVE-02 |
+| Portable no-replace companion publication and recoverable partial setup | SETUP-02 | — |
 | Borrowed-directory protection, dirty-worktree refusal, ownership-aware teardown | FLOW-01 | ACCEPT-01 |
 | GitLab issue and verified issue-type work-item URL support | GLAB-01 | GLAB-04 |
 | Nested namespaces, self-managed host/base-path authority, wrong-project rejection | GLAB-01 | GLAB-02, GLAB-04 |
 | Independent GitLab MR, source branch, metadata/comments/discussions freshness | GLAB-02 | GLAB-04 |
 | Refresh/conflicts/failures/capabilities and usable resource-list scrolling | GLAB-03 | GLAB-04 |
 | Existing GitHub issue/Tea behavior unchanged, no credential leakage | GLAB-03 | GLAB-04, ACCEPT-01 |
-| Real authenticated issue and MR setup/import/refresh/recovery | GLAB-04 | NATIVE-02 |
+| Real authenticated issue and MR setup/import/refresh/recovery | GLAB-04 | — |
 | Browser hide/show preserves page/drafts; close preserves saved and recoverable unsent work | WEB-01 | WEB-05 |
 | First click and initial Element pick do not require a prior Browse gesture | WEB-02 | WEB-04 |
-| Resize/zoom/DPR sharpness and geometry/matching-frame barrier | WEB-03 | WEB-05, NATIVE-02 |
-| Full browser input/navigation/ownership/facility behavior | WEB-04 | WEB-08, NATIVE-02 |
-| Annotation toolbar/gesture/capture/draft/feedback/paste reliability | WEB-05 | WEB-08, NATIVE-02 |
+| Resize/zoom/DPR sharpness and geometry/matching-frame barrier | WEB-03 | WEB-05 |
+| Full browser input/navigation/ownership/facility behavior | WEB-04 | WEB-08 |
+| Annotation toolbar/gesture/capture/draft/feedback/paste reliability | WEB-05 | WEB-08 |
 | Bounded frame/input/decode/process lifetimes, crash/reconnect/observer isolation | WEB-06 | PERF-01 |
-| Missing browser dependencies and incompatible CLI fail locally/actionably | WEB-07 | NATIVE-01, NATIVE-02 |
+| Missing browser dependencies and incompatible CLI fail locally/actionably | WEB-07 | NATIVE-01 |
 | Browser authentication/host/lease/frame/page-to-loopback negative boundaries | WEB-08 | ACCEPT-01 |
-| Actual fresh macOS bundle installation/update/uninstall ownership | NATIVE-01 | NATIVE-02 |
-| Actual macOS native daily-use regressions and input/decode proof | NATIVE-02 | ACCEPT-01 |
+| Owned bundle installer behavior and Linux-prefix installation/update proof; macOS execution is excluded from current scope | NATIVE-01 | — |
+| Actual macOS native daily-use regressions and input/decode proof | NATIVE-02 (deferred) | — |
 | Measured sustained performance/scroll/resource bounds | PERF-01 | ACCEPT-01 |
 | Integrated journey, issue reconciliation and owned cleanup | ACCEPT-01 | All required tasks |
 
@@ -51,7 +51,7 @@ The existing [A01–A25 matrix](../inline-space-browser-2026-09-13/03-delivery-a
 | A03 | Owner shutdown versus observer close; unrelated sentinel survives | WEB-06 | WEB-08 |
 | A04 | Pointer buttons/double-click/drag/release/cancel/letterboxing | WEB-04 | WEB-02 |
 | A05 | Wheel X/Y accumulation, nested scroll, selection, no host scroll | WEB-04 | PERF-01 |
-| A06 | Keyboard/modifiers/repeat/Unicode/IME/clipboard/local editors | WEB-04 | NATIVE-02 |
+| A06 | Keyboard/modifiers/repeat/Unicode/IME/clipboard/local editors | WEB-04 | Linux-native proof remains in WEB-04; macOS is deferred |
 | A07 | Terminal/browser focus and magic-prefix ownership handoff | WEB-04 | TERM-03 |
 | A08 | Two clients, one viewport/controller, lease loss and takeover | WEB-04 | WEB-03, WEB-06 |
 | A09 | Redirect/reload/hash/SPA/history/agent navigation and URL edit draft | WEB-04 | WEB-01 |
@@ -78,7 +78,7 @@ Security negative cases from that plan are WEB-08 requirements; performance prot
 
 - Shared UI: browser proof of user action -> authoritative response/event -> visible outcome and failure recovery, at desktop and minimum sizes.
 - Tauri commands/channels/startup/platform input or image decode: real Linux-native proof in the owning task. A process remaining alive does not prove interaction.
-- macOS bundle/publication/plugin/platform regressions: actual macOS proof in NATIVE-01/02 and SETUP-02 as specified. Missing runner is blocked, not skipped. Evidence may be shared across task records, never inferred from Linux.
+- macOS-specific execution and acceptance are outside the current campaign scope under the user's 2026-09-22 decision; this is not a pass. Historical criteria remain documented for reference. Linux-native proof remains required under WEB-05 and other owning tasks. Evidence may be shared across task records, never inferred from Linux.
 - Herdr-backed semantics: compare a disposable live TUI oracle or supported schema/source where observation is ambiguous. Browser annotation geometry itself does not need a fictional TUI counterpart.
 - Provider host/path/negative cases: deterministic fixtures plus real authenticated issue/MR reads on the designated project. Self-managed/nested cases not available remotely must have representative bounded fixtures and explicitly stated live-host limitations; do not claim live self-managed coverage from gitlab.com.
 - Performance: identical fixture/viewport/build conditions, defined sample counts, measured clocks and resource identities. The proposed 150ms click p95 / 250ms metadata targets are not existing measurements. Freeze the protocol before optimization and retain measurements that fail.

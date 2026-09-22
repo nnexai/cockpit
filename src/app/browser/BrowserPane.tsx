@@ -23,7 +23,8 @@ export interface BrowserPaneProps {
 type PaneStatus = "hidden" | "loading" | "ready" | "stale" | "error" | "unsupported" | "empty";
 type Tool = "browse" | "select" | "freehand" | "region" | "element";
 type Gesture = { pointerId: number; points: BrowserPoint[]; origin: BrowserPoint; frame: number; document: number; viewport: number };
-type InputJob = { generation: number; kind: "move" | "wheel" | "boundary"; run: () => Promise<void> };
+type WheelIntent = { clientX: number; clientY: number; deltaX: number; deltaY: number; modifiers: number };
+type InputJob = { generation: number; kind: "move" | "wheel" | "boundary"; run: () => Promise<void>; wheel?: WheelIntent };
 type PointerIntent = {
   pointerId: number;
   kind: "move" | "down" | "up" | "cancel";
@@ -45,14 +46,6 @@ type ElementInspectionIntent = {
   frameId: string;
   frameGeneration: number;
   pointerSampleSequence: number | null;
-};
-type WheelIntent = {
-  point: BrowserPoint;
-  deltaX: number;
-  deltaY: number;
-  modifiers: number;
-  location: BrowserViewLocation;
-  frame: BrowserViewFramePacket["descriptor"];
 };
 type DraftAssociationOwner = {
   key: string;
@@ -177,6 +170,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const inputJobsRef = useRef<InputJob[]>([]);
   const inputGenerationRef = useRef(0);
   const inputDrainRef = useRef<Promise<void> | null>(null);
+  const wheelRecoveryDeadlineRef = useRef<number | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
   const controlPromiseRef = useRef<Promise<boolean> | null>(null);
   const remotePointerRef = useRef<number | null>(null);
@@ -268,6 +262,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   }, []);
   const clearPresentedFrame = useCallback((clearCanvas = true) => {
     frameRef.current = null;
+    wheelRecoveryDeadlineRef.current = null;
     setFrame(null);
     if (!clearCanvas) return;
     const canvas = canvasRef.current;
@@ -298,12 +293,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     inputDrainRef.current = drain;
     return drain;
   }, []);
-  const enqueueInput = useCallback((kind: InputJob["kind"], run: () => Promise<void>): Promise<void> => {
+  const enqueueInput = useCallback((kind: InputJob["kind"], run: () => Promise<void>, wheel?: WheelIntent): Promise<void> => {
     const jobs = inputJobsRef.current;
     const generation = inputGenerationRef.current;
     const next = { generation, kind, run };
-    if (kind !== "boundary") {
-      const pending = jobs.findIndex((job) => job.kind === kind);
+    if (kind === "move") {
+      const pending = jobs.findIndex((job) => job.kind === "move");
       if (pending >= 0) jobs[pending] = next;
       else if (jobs.length < MAX_INPUT_JOBS) jobs.push(next);
       else {
@@ -311,6 +306,21 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         setMessage("Browser input queue is full; motion was refused. Release and retry the gesture.");
         return Promise.resolve();
       }
+    } else if (kind === "wheel") {
+      const last = jobs.at(-1);
+      if (wheel && last?.kind === "wheel" && last.generation === generation && last.wheel
+        && last.wheel.clientX === wheel.clientX && last.wheel.clientY === wheel.clientY
+        && last.wheel.modifiers === wheel.modifiers) {
+        last.wheel.deltaX += wheel.deltaX;
+        last.wheel.deltaY += wheel.deltaY;
+        return runInputJobs();
+      }
+      if (jobs.length >= MAX_INPUT_JOBS) {
+        setStatus("error");
+        setMessage("Browser input queue is full; wheel movement was refused. Retry the scroll.");
+        return Promise.resolve();
+      }
+      jobs.push({ ...next, wheel });
     } else if (jobs.length >= MAX_INPUT_JOBS) {
       inputOverloadedRef.current = true;
       inputGenerationRef.current += 1;
@@ -724,7 +734,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           next = { ...previous, viewport: incoming.viewport };
           if (previous.viewport?.viewport_revision !== incoming.viewport?.viewport_revision) {
             // Scrolling is a normal repaint, not a stream failure. Coordinate
-            // input still requires frameMatchesCurrent before dispatch.
+            // input waits for geometry matching the recovered frame.
             gestureRef.current = null;
             setGesture(null);
           }
@@ -780,7 +790,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         const targetCanvas = canvasRef.current; const drawing = targetCanvas?.getContext("2d");
         if (!targetCanvas || !drawing) throw new Error("Browser view canvas is unavailable");
         targetCanvas.width = descriptor.image_width; targetCanvas.height = descriptor.image_height; drawing.clearRect(0, 0, targetCanvas.width, targetCanvas.height); drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
-        const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted); if (!errorRef.current) setStatus("ready");
+        const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; wheelRecoveryDeadlineRef.current = null; setFrame(accepted); if (!errorRef.current) setStatus("ready");
       },
       onError: (error) => { if (!closed) { errorRef.current = true; setStatus("error"); setMessage(errorMessage(error)); } },
     });
@@ -796,6 +806,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
+      ++inputGenerationRef.current;
       inputJobsRef.current = [];
       remotePointerRef.current = null;
       remotePointRef.current = null;
@@ -1283,38 +1294,42 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const onWheel = (event: WheelEvent<HTMLDivElement>): void => {
     if (!liveInputEnabledRef.current || tool !== "browse" || isLocalBrowserChrome(event.target)) return;
     const current = snapshotRef.current;
-    const accepted = frameRef.current;
-    const point = viewportPointFor(event);
-    const where = current && accepted && frameMatchesCurrent(accepted) ? location(current, accepted.descriptor) : null;
-    if (!point || !accepted || !where) {
-      setStatus("stale");
-      setMessage("Input cancelled before dispatch; the browser frame is not ready for this gesture.");
-      return;
-    }
+    event.preventDefault(); onInteractionFocus?.();
     const line = 16;
     const page = current?.viewport;
     const scale = event.deltaMode === 1 ? line : event.deltaMode === 2 ? (page?.css_height ?? 800) : 1;
-    const intent: WheelIntent = {
-      point: { x: point.x, y: point.y },
-      deltaX: event.deltaX * scale,
-      deltaY: event.deltaY * scale,
-      modifiers: modifiers(event),
-      location: { ...where },
-      frame: { ...accepted.descriptor },
-    };
-    event.preventDefault(); onInteractionFocus?.();
+    const intent: WheelIntent = { clientX: event.clientX, clientY: event.clientY, deltaX: event.deltaX * scale, deltaY: event.deltaY * scale, modifiers: modifiers(event) };
+    const generation = inputGenerationRef.current;
     void enqueueInput("wheel", async () => {
       const controlled = await ensureControl();
       if (!controlled) return;
-      const inputLocation = locationForInputIntent(intent);
-      if (!inputLocation) {
+      if (frameMatchesCurrent()) wheelRecoveryDeadlineRef.current = null;
+      const deadline = wheelRecoveryDeadlineRef.current ?? (Date.now() + 2_000);
+      wheelRecoveryDeadlineRef.current = deadline;
+      while (!frameMatchesCurrent()) {
+        if (generation !== inputGenerationRef.current || !liveInputEnabledRef.current) return;
+        if (Date.now() >= deadline) {
+          setStatus("stale");
+          setMessage("Scroll paused because the browser did not present a matching frame. Try the scroll again.");
+          return;
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      }
+      wheelRecoveryDeadlineRef.current = null;
+      const latest = snapshotRef.current;
+      const accepted = frameRef.current;
+      const point = viewportPointFor(intent);
+      const inputLocation = latest && accepted && ownsBrowserControl(latest) && point
+        ? location(latest, accepted.descriptor)
+        : null;
+      if (!point || !inputLocation || generation !== inputGenerationRef.current) {
         setStatus("stale");
-        setMessage("Input stale: the original browser geometry changed; retry the gesture.");
+        setMessage("Input stale: the browser geometry changed; retry the scroll.");
         return;
       }
       const input_sequence = nextInput();
-      await command({ type: "wheel", location: inputLocation, input: { x: intent.point.x, y: intent.point.y, delta_x_css: intent.deltaX, delta_y_css: intent.deltaY, modifiers: intent.modifiers, input_sequence } });
-    });
+      await command({ type: "wheel", location: inputLocation, input: { x: point.x, y: point.y, delta_x_css: intent.deltaX, delta_y_css: intent.deltaY, modifiers: intent.modifiers, input_sequence } });
+    }, intent);
   };
   const sendKey = (event: KeyboardEvent<HTMLElement>, kind: "down" | "up"): void => {
     if (!inputActive || !liveInputEnabledRef.current || event.defaultPrevented || tool !== "browse" || event.target !== event.currentTarget) return;

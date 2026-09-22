@@ -562,20 +562,24 @@
       "brief": "tasks/WEB-04.md",
       "status": "blocked",
       "owner": null,
-      "started_at": "2026-09-21T19:08:05Z",
+      "started_at": null,
       "completed_at": null,
       "blockers": [
-        "Post-scroll input remained behind Showing last confirmed frame; nested scroll did not execute."
+        "Component recovery regressions pass, but repeated live gateway scrolling, nested scrolling, page-link navigation and recovery have not been exercised after the repair."
       ],
       "evidence": [
-        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
+        "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78"
       ],
       "notes": [
         "OBS-015 batch: UI input/navigation/ownership belongs to BatchBrowserUI, helper input/leases to BatchBrowserRuntime, adapters to BatchBrowserHost. File-disjoint contracts in AUTORUN.md govern shared-lock groups; wire interfaces remain fixed. Verification follows integration.",
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "OBS-019: Main implemented the confirmed Linux/browser scroll recovery repair; macOS-specific execution and acceptance are excluded by the user.",
+        "OBS-019: Main is handling the shared browser-ui lock; the scroll recovery repair is under focused verification.",
+        "OBS-019: wheel input is retained through matching-frame recovery; adjacent compatible deltas accumulate, a shared two-second deadline prevents queue starvation, and input-generation changes cancel stale work. Focused tests and production build pass. Actual browser gateway acceptance remains required."
       ]
     },
     {
@@ -602,20 +606,22 @@
       "brief": "tasks/WEB-05.md",
       "status": "blocked",
       "owner": null,
-      "started_at": "2026-09-21T19:08:05Z",
+      "started_at": null,
       "completed_at": null,
       "blockers": [
-        "Linux-native annotation persisted but was not acknowledged by the UI; native note/capture could not finish."
+        "Prior Linux-native save persisted without UI acknowledgement. Capture the actual Tauri command response/lifecycle before changing the path; broad capture/draft/paste acceptance also remains incomplete."
       ],
       "evidence": [
-        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
+        "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78"
       ],
       "notes": [
         "OBS-015 batch: BrowserUI owns capture/draft/feedback interaction and stable send operation identity; BrowserRuntime owns frame-bound geometry; BrowserHost owns durable browser delivery. BatchWorkflows alone owns generic comment-paste implementation; its API is unchanged.",
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "OBS-019: Linux-native annotation acknowledgement remains unresolved; capture the actual Tauri command response/lifecycle before making a code change. macOS-specific execution and acceptance are excluded by the user."
       ]
     },
     {
@@ -643,7 +649,7 @@
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
       "blockers": [
-        "Slow-observer boundaries passed, but post-scroll stale-frame recovery remains unresolved with WEB-04."
+        "Slow-observer protocol boundaries passed; the WEB-04 stale-frame recovery repair still lacks a repeated live browser scroll/reconnect run."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
@@ -766,7 +772,7 @@
     {
       "id": "NATIVE-02",
       "title": "Verify macOS native daily use and recovery",
-      "required": true,
+      "required": false,
       "priority": 1,
       "depends_on": [
         "NATIVE-01",
@@ -789,23 +795,18 @@
         7
       ],
       "brief": "tasks/NATIVE-02.md",
-      "status": "blocked",
+      "status": "deferred",
       "owner": null,
-      "started_at": "2026-09-21T21:01:14.085553Z",
+      "started_at": null,
       "completed_at": null,
-      "blockers": [
-        "macOS handoff delivered; Linux-native annotation acknowledgement remains unresolved under WEB-05."
-      ],
-      "evidence": [
-        "runs/run-20260920-a3e9b950/MACOS-HANDOFF.md",
-        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
-      ],
-      "commits": [
-        "23a6aaad08992807b276050c7cc24ed7ff6d8e78"
-      ],
+      "blockers": [],
+      "evidence": [],
+      "commits": [],
       "notes": [
         "OBS-013 assigns actual macOS execution to the user, not an external-runner blocker. The committed handoff preserves original native checks. Reachable campaign integration and dependency verification remain pending; macOS results must stay explicitly not executed.",
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "OBS-019: user explicitly removed macOS from this campaign scope on 2026-09-22. macOS native daily-use acceptance is deferred, not passed. Linux-native annotation acknowledgement remains required under WEB-05.",
+        "Historical implementation and macOS handoff remain in runs/run-20260920-a3e9b950/{BATCH-FINAL.md,MACOS-HANDOFF.md}; the deferred task ledger carries no active acceptance claim."
       ]
     },
     {
@@ -853,7 +854,6 @@
       "required": true,
       "priority": 2,
       "depends_on": [
-        "NATIVE-02",
         "PERF-01"
       ],
       "locks": [
@@ -877,7 +877,7 @@
       "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
       "blockers": [
-        "Known WEB-04/WEB-05 failures and remaining integrated proof prevent full campaign acceptance."
+        "WEB-04 live scroll recovery and WEB-05 Linux-native acknowledgement remain unresolved; integrated workflow, security and sustained performance evidence is incomplete."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
