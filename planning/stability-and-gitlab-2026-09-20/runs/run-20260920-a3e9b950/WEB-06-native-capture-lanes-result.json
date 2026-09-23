@@ -1,0 +1,823 @@
+{
+  "session": "native-a9c8176f2dcb",
+  "space": "Native browser e52beead",
+  "fixture_url": "http://127.0.0.1:35671/",
+  "root": "/tmp/cnative-okgjtx75",
+  "failure": "RuntimeError: Timed out waiting for first native browser canvas frame paint",
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Showing last confirmed frame",
+      "alerts": [],
+      "body": "           \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nShowing last confirmed frame\nRetry\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n0\n\nSend annotations\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\nPane\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                         ",
+      "painted": false,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 376,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      }
+    }
+  },
+  "paints": {},
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 944272,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 944236,
+      "returncode": 0
+    },
+    {
+      "name": "gateway",
+      "pid": 944213,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 944179,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "helper_trace_module": {
+    "path": "/tmp/cnative-okgjtx75/browser-helper-trace.mjs",
+    "source_sha256": "f1117a7add8aeef674393d16d7da0d56c6511239ec6300ff592f9d5b396a791d",
+    "instrumented_sha256": "c1948531ec8fc1edfb1d780ebcc26d7316d7d49900e8346822fad36398a0bde7"
+  },
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "socketWrapped": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:35671/"
+  },
+  "ok": false,
+  "failure_screenshot": "/tmp/cnative-okgjtx75/native-failure.png",
+  "navigation_diagnostics": {
+    "status": "Showing last confirmed frame",
+    "alerts": [],
+    "field": "http://127.0.0.1:35671/",
+    "javascriptErrors": [],
+    "tabs": [
+      {
+        "title": "Native scroll fixture",
+        "url": "http://127.0.0.1:35671/"
+      }
+    ],
+    "submits": [
+      {
+        "value": "http://127.0.0.1:35671/",
+        "defaultPrevented": true
+      }
+    ],
+    "fixture_report_count": 3,
+    "browser_trace": {
+      "frames": [
+        {
+          "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3399,
+          "image_width": 1348,
+          "frame_sequence": 1,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3457,
+          "image_width": 1348,
+          "frame_sequence": 2,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3523,
+          "image_width": 1348,
+          "frame_sequence": 3,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3608,
+          "image_width": 1348,
+          "frame_sequence": 4,
+          "viewport_revision": 1
+        }
+      ],
+      "started": 358,
+      "sockets": 1,
+      "events": [
+        {
+          "type": "attached",
+          "time": 3397.0000000000005,
+          "viewport": {
+            "viewport_revision": 1,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 188,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "document_changed",
+          "time": 3679.0000000000005,
+          "viewport": null
+        }
+      ]
+    }
+  },
+  "owner_processes": {
+    "gateway": [
+      {
+        "pid": 944213,
+        "comm": "cockpit",
+        "start_ticks": 27954719
+      }
+    ],
+    "webdriver": [
+      {
+        "pid": 944272,
+        "comm": "WebKitWebDriver",
+        "start_ticks": 27954749
+      },
+      {
+        "pid": 944279,
+        "comm": "cockpit-tauri",
+        "start_ticks": 27954759
+      },
+      {
+        "pid": 944340,
+        "comm": "WebKitWebProces",
+        "start_ticks": 27954773
+      },
+      {
+        "pid": 944314,
+        "comm": "WebKitNetworkPr",
+        "start_ticks": 27954768
+      }
+    ]
+  },
+  "owned_helper_pids_at_failure": [
+    {
+      "pid": 945088,
+      "start_ticks": 27955088,
+      "comm": "MainThread"
+    }
+  ],
+  "fixture_reports": {
+    "count": 3,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126167.946861608
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126168.02232997
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126168.02232997
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 1,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126196.873047466
+      }
+    ]
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 349
+  },
+  "cdp_override_trace": {
+    "path": "/tmp/cnative-okgjtx75/browser-cdp-overrides.jsonl",
+    "count": 8,
+    "first": [
+      {
+        "phase": "send",
+        "monotonic_ms": 126167192,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126167210,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126167568,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126167569,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126167588,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126167588,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126168011,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126168012,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      }
+    ],
+    "last": [
+      {
+        "phase": "send",
+        "monotonic_ms": 126167192,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126167210,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126167568,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126167569,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126167588,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126167588,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126168011,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126168012,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      }
+    ]
+  },
+  "capture_lane_trace": {
+    "path": "/tmp/cnative-okgjtx75/browser-cdp-overrides.jsonl",
+    "count": 24,
+    "last_counts": [
+      {
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "lane": "screencast",
+        "sampled_count": 16
+      },
+      {
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "lane": "screenshot_accepted",
+        "sampled_count": 8
+      },
+      {
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "lane": "screenshot_send",
+        "sampled_count": 8
+      },
+      {
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "lane": "screencast",
+        "sampled_count": 16
+      },
+      {
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "lane": "screenshot_accepted",
+        "sampled_count": 4
+      },
+      {
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "lane": "screenshot_send",
+        "sampled_count": 4
+      }
+    ],
+    "first": [
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 1,
+        "monotonic_ms": 126167225,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 1,
+        "monotonic_ms": 126167282,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 1,
+        "monotonic_ms": 126167297,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 2,
+        "monotonic_ms": 126167301,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 2,
+        "monotonic_ms": 126167332,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 2,
+        "monotonic_ms": 126167565,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 1,
+        "monotonic_ms": 126167583,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 1,
+        "monotonic_ms": 126167594,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      }
+    ],
+    "last": [
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 2,
+        "monotonic_ms": 126167739,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 8,
+        "monotonic_ms": 126167740,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 4,
+        "monotonic_ms": 126167828,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 16,
+        "monotonic_ms": 126167848,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 4,
+        "monotonic_ms": 126167888,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 16,
+        "monotonic_ms": 126167889,
+        "pid": 945088,
+        "start_ticks": 27955088,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 8,
+        "monotonic_ms": 126167966,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 4
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 8,
+        "monotonic_ms": 126168001,
+        "pid": 945047,
+        "start_ticks": 27955050,
+        "target_id": "2BD4ED3EA49692198C8E1F8F30139411",
+        "page_binding_generation": 1,
+        "capture_token": 4
+      }
+    ]
+  },
+  "logs": {
+    "webdriver": "/tmp/cnative-okgjtx75/webdriver.log",
+    "compositor": "/tmp/cnative-okgjtx75/compositor.log",
+    "gateway": "/tmp/cnative-okgjtx75/gateway.log",
+    "herdr": "/tmp/cnative-okgjtx75/herdr.log"
+  }
+}

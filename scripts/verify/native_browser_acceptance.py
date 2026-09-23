@@ -254,7 +254,7 @@ def owned_helper_processes(helper_path):
             continue
     return sorted(found, key=lambda item: item["pid"])
 
-def traced_helper_source(source):
+def traced_helper_source(source, capture_lanes=False):
     """Instrument only a disposable helper copy, leaving packaged source intact."""
     import_line = "import readline from 'node:readline';\n"
     original = """  await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
@@ -295,7 +295,36 @@ def traced_helper_source(source):
   }"""
     if source.count(import_line) != 1 or source.count(original) != 1:
         raise RuntimeError("packaged helper CDP override source changed; refusing unmatched diagnostic instrumentation")
-    return source.replace(import_line, import_line + "import { appendFileSync, readFileSync } from 'node:fs';\n").replace(original, replacement)
+    fs_import = "import { appendFileSync, readFileSync } from 'node:fs';\n"
+    instrumented = source.replace(import_line, import_line + fs_import).replace(original, replacement)
+    if not capture_lanes:
+        return instrumented
+    lane_trace = r"""
+const captureLaneCounts = { screencast: 0, screenshot_send: 0, screenshot_accepted: 0 };
+function traceCaptureLane(lane) {
+  const count = ++captureLaneCounts[lane];
+  if (count !== 1 && (count & (count - 1)) !== 0) return;
+  try {
+    const stat = readFileSync('/proc/self/stat', 'utf8').split(') ')[1].trim().split(/\s+/);
+    appendFileSync(process.env.COCKPIT_BROWSER_TRACE_PATH, JSON.stringify({
+      phase: 'capture_lane', lane, count,
+      monotonic_ms: Number(process.hrtime.bigint() / 1000000n),
+      pid: process.pid, start_ticks: Number(stat[19]),
+      target_id: state?.targetId ?? null, page_binding_generation: pageBindingGeneration,
+      capture_token: state?.captureToken ?? null,
+    }) + '\n', { mode: 0o600 });
+  } catch {}
+}
+"""
+    screencast_site = "  screencastListener = (frame) => {\n"
+    screenshot_site = "    const capture = await context.cdp.send('Page.captureScreenshot', captureOptions);\n"
+    if instrumented.count(fs_import) != 1 or instrumented.count(screencast_site) != 1 or instrumented.count(screenshot_site) != 1:
+        raise RuntimeError("packaged helper capture lanes changed; refusing unmatched diagnostic instrumentation")
+    return (instrumented.replace(fs_import, fs_import + lane_trace, 1)
+            .replace(screencast_site, screencast_site + "    traceCaptureLane('screencast');\n", 1)
+            .replace(screenshot_site,
+                     "    traceCaptureLane('screenshot_send');\n" + screenshot_site
+                     + "    traceCaptureLane('screenshot_accepted');\n", 1))
 
 
 
@@ -320,6 +349,7 @@ def main():
     parser.add_argument("--hidden-scroll-smoke", action="store_true", help="quick native hide/reopen check after the page scrolls while no view is visible")
     parser.add_argument("--native-only-open", action="store_true", help="skip gateway browser pre-open; open and navigate using only the actual native UI")
     parser.add_argument("--trace-cdp-overrides", action="store_true", help="log CDP device-metrics sends from only a run-owned helper copy")
+    parser.add_argument("--trace-capture-lanes", action="store_true", help="also count screencast and screenshot capture in the run-owned helper copy")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
@@ -333,6 +363,8 @@ def main():
         parser.error("--native-only-open cannot use gateway-owned draft recovery for --annotation")
     if args.trace_cdp_overrides and not args.native_only_open:
         parser.error("--trace-cdp-overrides requires --native-only-open")
+    if args.trace_capture_lanes and not args.trace_cdp_overrides:
+        parser.error("--trace-capture-lanes requires --trace-cdp-overrides and --native-only-open")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -392,7 +424,7 @@ def main():
     try:
         if args.trace_cdp_overrides:
             source = (REPO / "browser-runtime/browser-helper.mjs").read_text()
-            instrumented = traced_helper_source(source)
+            instrumented = traced_helper_source(source, capture_lanes=args.trace_capture_lanes)
             helper_path.write_text(instrumented)
             syntax = subprocess.run(["node", "--check", str(helper_path)],
                                     capture_output=True, text=True, timeout=10)
@@ -941,8 +973,20 @@ def main():
         if args.trace_cdp_overrides:
             lines = override_trace_path.read_text().splitlines() if override_trace_path.is_file() else []
             events = [json.loads(line) for line in lines]
-            result["cdp_override_trace"] = {"path": str(override_trace_path), "count": len(events),
-                                             "first": events[:8], "last": events[-8:]}
+            overrides = [event for event in events if event.get("phase") != "capture_lane"]
+            result["cdp_override_trace"] = {"path": str(override_trace_path), "count": len(overrides),
+                                             "first": overrides[:8], "last": overrides[-8:]}
+            if args.trace_capture_lanes:
+                lanes = [event for event in events if event.get("phase") == "capture_lane"]
+                last_counts = {}
+                for event in lanes:
+                    last_counts[(event["pid"], event["start_ticks"], event["lane"])] = event["count"]
+                result["capture_lane_trace"] = {
+                    "path": str(override_trace_path), "count": len(lanes),
+                    "last_counts": [{"pid": pid, "start_ticks": ticks, "lane": lane, "sampled_count": count}
+                                    for (pid, ticks, lane), count in sorted(last_counts.items())],
+                    "first": lanes[:8], "last": lanes[-8:],
+                }
         result["logs"] = {p.stem: str(p) for p in root.glob("*.log")}
         if args.trace_cdp_overrides:
             (root / "native-cdp-result.json").write_text(json.dumps(result, indent=2) + "\n")
