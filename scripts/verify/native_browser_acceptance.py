@@ -55,8 +55,9 @@ class StaticHandler(http.server.SimpleHTTPRequestHandler):
 FIXTURE_HTML = r"""<!doctype html><meta charset=utf-8><title>Native scroll fixture</title>
 <style>*{box-sizing:border-box}html,body{margin:0;width:100%;font:20px sans-serif}body{min-height:8000px;background:linear-gradient(#fff,#dceeff)}
 header{position:sticky;top:0;background:#fff;padding:12px;border-bottom:2px solid #567;z-index:2}#status{font-weight:bold}
+#nested{height:65px;overflow:auto;background:#e5f4ff;border:2px solid #578;margin-top:4px}#nested div{height:700px;padding:5px}
 section{padding:24px;height:900px;border-bottom:2px solid #678}h1{margin:0}</style>
-<header><h1>Native browser acceptance</h1><div id=status>waiting for routed native pointer</div></header>
+<header><h1>Native browser acceptance</h1><div id=status>waiting for routed native pointer</div><div id=nested><div>Nested scroll target</div></div></header>
 <section><p>This fixture must fill the entire browser viewport without doubled CSS width.</p></section>
 <section><p>Scroll target: 3900 CSS pixels in six seconds.</p></section>
 <section><p>Repeated responsive content.</p></section><section><p>Repeated responsive content.</p></section>
@@ -65,10 +66,13 @@ section{padding:24px;height:900px;border-bottom:2px solid #678}h1{margin:0}</sty
 <script>
 const status=()=>document.querySelector('#status').textContent;
 let scrollStart=null, scrollFinish=null;
-const report=()=>fetch('/report',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({innerWidth,innerHeight,dpr:devicePixelRatio,scrollY,ready:document.readyState,heading:document.querySelector('h1').textContent,headingWidth:document.querySelector('h1').getBoundingClientRect().width,contentText:document.querySelector('section p').textContent,status:status(),started:scrollStart!==null,scrollStart,scrollFinish})}).catch(()=>{});
+const report=()=>fetch('/report',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({innerWidth,innerHeight,dpr:devicePixelRatio,scrollY,nestedScrollTop:document.querySelector('#nested').scrollTop,nestedWheelY:window.nestedWheelY??null,ready:document.readyState,heading:document.querySelector('h1').textContent,headingWidth:document.querySelector('h1').getBoundingClientRect().width,contentText:document.querySelector('section p').textContent,status:status(),started:scrollStart!==null,scrollStart,scrollFinish})}).catch(()=>{});
 addEventListener('load',report); addEventListener('resize',report);
 let reportTimer;
 addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(report,100)},{passive:true});
+const nested=document.querySelector('#nested');
+nested.addEventListener('wheel',event=>{window.nestedWheelY=event.deltaY},{passive:true});
+nested.addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(report,100)},{passive:true});
 let started=false;
 addEventListener('pointerup',()=>{if(started)return;started=true;scrollStart=performance.now();document.querySelector('#status').textContent='scrolling';report();
  const begin=scrollStart, from=scrollY, duration=6000;
@@ -189,6 +193,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=20)
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
     parser.add_argument("--annotation", action="store_true", help="also exercise native region and note saves against the retained draft")
+    parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     args = parser.parse_args()
     if not args.skip_build:
         for label, command, seconds in (
@@ -480,6 +485,44 @@ def main():
                 webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame');return [...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3)})()")),
             "completed scroll marker painted on native canvas", 3, [("WebKitWebDriver", driver_process)])
         result["paints"]["visible_final_marker_rgb"] = final_marker
+        if args.nested_wheel:
+            # The WebKit driver cannot send OS wheel actions on this compositor.
+            # These are DOM-dispatched Cockpit surface events, then real helper/CDP page scrolls.
+            wheel_steps = (("nested forward", 180, 100, 180, 3900),
+                           ("nested reverse", -70, 100, 110, 3900),
+                           ("outer forward", 160, 166, 110, 4060),
+                           ("outer reverse", -90, 166, 110, 3970))
+            routed = []
+            previous_paints = len(paint_times)
+            for name, delta, y_offset, inner_expected, outer_expected in wheel_steps:
+                before = time.monotonic()
+                position = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect(),x=r.left+120,y=r.top+"
+                    + str(y_offset) + ";s.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:x,clientY:y,deltaX:0,deltaY:"
+                    + str(delta) + ",deltaMode:0}));return {x,y}})()")
+                report = wait_until(lambda: next((item for item in reversed(FixtureHandler.state["reports"])
+                    if item["received_at"] >= before
+                    and abs(item.get("nestedScrollTop", -1000) - inner_expected) <= 3
+                    and abs(item.get("scrollY", -1000) - outer_expected) <= 3), None),
+                    f"{name} authoritative nested/document scroll", 5, [("WebKitWebDriver", driver_process)])
+                def visible_paint():
+                    current = webdriver.execute("window.__nativePaintTimes.length")
+                    return current if current > previous_paints else None
+                previous_paints = wait_until(visible_paint, f"{name} painted native frame", 3,
+                                             [("WebKitWebDriver", driver_process)])
+                host_scroll = webdriver.execute("window.scrollY")
+                if host_scroll:
+                    raise RuntimeError(f"{name} scrolled the Cockpit host: {host_scroll}")
+                routed.append({"step": name, "delta_y_css": delta, "surface_position": position,
+                               "page_scroll_y": report["scrollY"], "nested_scroll_top": report["nestedScrollTop"],
+                               "nested_wheel_y": report.get("nestedWheelY"), "paint_count": previous_paints,
+                               "host_scroll_y": host_scroll})
+            result["nested_wheel"] = routed
+            # Chromium may report a DPR-scaled DOM delta while default scrolling
+            # still moves by the requested CSS pixels. Assert routing and sign,
+            # not equality of CDP's synthetic event delta with natural movement.
+            if any(step["nested_wheel_y"] is None or step["nested_wheel_y"] * step["delta_y_css"] <= 0
+                   for step in routed[:2]):
+                raise RuntimeError(f"nested wheel gesture did not reach the intended page container: {routed}")
         # Preserve visual evidence from the actual native WebKit window.
         screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
         (root / "native-window.png").write_bytes(base64.b64decode(screenshot))
