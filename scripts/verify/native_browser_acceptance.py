@@ -188,6 +188,7 @@ def main():
     parser.add_argument("--fps-min", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=20)
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
+    parser.add_argument("--annotation", action="store_true", help="also exercise native region and note saves against the retained draft")
     args = parser.parse_args()
     if not args.skip_build:
         for label, command, seconds in (
@@ -383,6 +384,71 @@ def main():
             raise RuntimeError(f"first-paint CSS text/width report is incomplete or distorted: {metrics}")
         if abs(density["bitmap_width_per_css"] - 2) > .05 or abs(density["bitmap_height_per_css"] - 2) > .05:
             raise RuntimeError(f"distorted first paint: canvas bitmap density is not DPR2: {density}")
+        if args.annotation:
+            webdriver.execute("(()=>{const s=document.querySelector('.browser-surface');if(!s)throw Error('browser surface unavailable');s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;s.releasePointerCapture=()=>{};return true})()")
+            def draft_opened():
+                listed = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                   {"target": action["target"], "action": {"type": "list"}})
+                return listed.get("type") == "draft_inventory" and any(
+                    draft.get("revision", 0) >= 1 for draft in listed.get("inventory", {}).get("drafts", []))
+            wait_until(draft_opened, "authoritative native draft open", 5)
+            # The store may acknowledge slightly before the native view consumes its open response.
+            time.sleep(0.2)
+            webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Region\"]');if(!b)throw Error('region tool unavailable');b.click();return b.getAttribute('aria-pressed')})()")
+            wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-region')"),
+                       "native region tool selection", 3)
+            gesture = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect(),x=r.left+100,y=r.top+35;for(const [type,dx,dy,buttons] of [['pointerdown',0,0,1],['pointerup',120,55,0]])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:19,pointerType:'mouse',clientX:x+dx,clientY:y+dy,button:0,buttons}));return {x,y}})()")
+            def annotation_state():
+                return webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),marks:document.querySelectorAll('.browser-annotation-region').length,status:document.querySelector('.browser-toolbar-status')?.textContent,retained:!!document.querySelector('[aria-label=\"Retry retained annotation changes\"]')}))()")
+            try:
+                wait_until(lambda: (state if state["marks"] == 1 and state["notes"] == "Notes 1" and not state["retained"] else None)
+                           if (state := annotation_state()) else None, "native region acknowledgement", 5)
+            except RuntimeError as error:
+                result["annotation_wait_error"] = str(error)
+            state = annotation_state()
+            inventory = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                  {"target": action["target"], "action": {"type": "list"}})
+            drafts = inventory.get("inventory", {}).get("drafts", []) if inventory.get("type") == "draft_inventory" else []
+            result["annotation"] = {"gesture": gesture, "ui": state,
+                                    "inventory": [{"draft_id": draft.get("draft_id"), "revision": draft.get("revision"),
+                                                   "annotations": [{"id": mark.get("id"), "kind": mark.get("kind"),
+                                                                    "bounds": mark.get("bounds")} for mark in draft.get("annotations", [])]}
+                                                  for draft in drafts]}
+            if state["marks"] != 1 or state["notes"] != "Notes 1" or state["retained"] or not any(
+                len(draft["annotations"]) == 1 and draft["annotations"][0]["kind"] == "region"
+                for draft in result["annotation"]["inventory"]
+            ):
+                raise RuntimeError(f"native annotation save was not acknowledged by UI and store: {result['annotation']}")
+            screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
+            (root / "native-annotation.png").write_bytes(base64.b64decode(screenshot))
+            result["screenshots"]["annotation_acknowledged"] = str(root / "native-annotation.png")
+            wait_until(lambda: webdriver.execute("!!document.querySelector('.browser-note-editor textarea[aria-label=\"Annotation note\"]')"),
+                       "native annotation note editor", 3)
+            note_text = f"Native note {session}"
+            entered = webdriver.execute("(()=>{const t=document.querySelector('.browser-note-editor textarea');const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(t,"
+                                        + json.dumps(note_text) + ");t.dispatchEvent(new Event('input',{bubbles:true}));return t.value})()")
+            if entered != note_text:
+                raise RuntimeError(f"native note editor returned the wrong text: {entered!r}")
+            webdriver.execute("(()=>{const b=[...document.querySelectorAll('.browser-note-editor button')].find(x=>x.textContent.trim()==='Save');if(!b)throw Error('annotation Save button unavailable');b.click();return true})()")
+            def note_saved():
+                listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                    {"target": action["target"], "action": {"type": "list"}})
+                return next((draft for draft in listing.get("inventory", {}).get("drafts", [])
+                    if draft.get("draft_id") == drafts[0]["draft_id"] and draft.get("revision", 0) >= 3
+                    and len(draft.get("annotations", [])) == 1
+                    and draft["annotations"][0].get("comment") == note_text), None)
+            saved_note = wait_until(note_saved, "durable native annotation note", 5)
+            wait_until(lambda: webdriver.execute("!document.querySelector('.browser-note-editor') && !document.querySelector('[aria-label=\"Retry retained annotation changes\"]')"),
+                       "native note acknowledgement and closed editor", 5)
+            result["annotation"]["saved_note"] = {"draft_id": saved_note["draft_id"],
+                "revision": saved_note["revision"], "annotation_id": saved_note["annotations"][0]["id"],
+                "comment": saved_note["annotations"][0]["comment"]}
+            screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
+            (root / "native-annotation-note.png").write_bytes(base64.b64decode(screenshot))
+            result["screenshots"]["note_acknowledged"] = str(root / "native-annotation-note.png")
+            webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Browse\"]');if(!b)throw Error('browse tool unavailable');b.click();return true})()")
+            wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-browse')"),
+                       "native browsing restored after region save", 3)
         result["activity"] = {"webdriver_commands_including_polling": webdriver.commands,
                               "excluded_from_fps": "WebDriver/CDP requests and helper activity",
                               "paint_rate_derived_from": "CanvasRenderingContext2D.drawImage timestamps only"}

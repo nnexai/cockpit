@@ -123,6 +123,28 @@ const navigationUrl = (value: string): string => {
 };
 const rectFrom = (first: BrowserPoint, last: BrowserPoint): BrowserRect => ({ x: Math.min(first.x, last.x), y: Math.min(first.y, last.y), width: Math.abs(last.x - first.x), height: Math.abs(last.y - first.y) });
 const kindFor = (annotation: BrowserViewDraftAnnotation): "freehand" | "region" | "element" => annotation.kind;
+// Native serialization can round a coordinate by one ULP (for example,
+// 99.99999999999999 to 100). A durable draft still acknowledges the same mark.
+const sameDraftNumber = (a: number, b: number): boolean =>
+  Number.isFinite(a) && Number.isFinite(b)
+  && Math.abs(a - b) <= 2 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b));
+const sameDraftPoint = (a: BrowserPoint, b: BrowserPoint): boolean => sameDraftNumber(a.x, b.x) && sameDraftNumber(a.y, b.y);
+function sameDraftAnnotation(actual: BrowserViewDraftAnnotation, requested: BrowserViewDraftAnnotation): boolean {
+  const a = actual.bounds; const b = requested.bounds;
+  const boundsMatch = a === null || b === null
+    ? a === b
+    : sameDraftNumber(a.x, b.x) && sameDraftNumber(a.y, b.y) && sameDraftNumber(a.width, b.width) && sameDraftNumber(a.height, b.height);
+  const x = actual.evidence; const y = requested.evidence;
+  const evidenceMatches = x === null || y === null
+    ? x === y
+    : x.tag === y.tag && x.text === y.text && x.role === y.role && x.name === y.name
+      && x.excerpt === y.excerpt && x.locators.length === y.locators.length
+      && x.locators.every((locator, index) => locator === y.locators[index]);
+  return actual.id === requested.id && actual.kind === requested.kind && actual.color === requested.color
+    && actual.comment === requested.comment && boundsMatch && evidenceMatches
+    && actual.points.length === requested.points.length
+    && actual.points.every((point, index) => sameDraftPoint(point, requested.points[index]));
+}
 function simplify(points: BrowserPoint[]): BrowserPoint[] {
   if (points.length < 3) return points;
   const kept = new Uint8Array(points.length); kept[0] = 1; kept[points.length - 1] = 1;
@@ -944,7 +966,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       let latest = snapshotRef.current; let sameContext = Boolean(latest && JSON.stringify(context(latest)) === JSON.stringify(documentContext));
       const mutation = owner.pendingAnnotationMutations.find((candidate) => candidate.key === mutationKey);
       if (mutation) mutation.expectedRevision = expectedRevision;
-      let accepted = sameContext && acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => candidate.id === annotation.id && JSON.stringify(candidate) === JSON.stringify(annotation));
+      let accepted = sameContext && acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => sameDraftAnnotation(candidate, annotation));
       if (!accepted) {
         const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ target: owner.target, action: { type: "upsert_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation } }));
         acknowledgedResult = recovery.type === "draft" ? recovery : null;
@@ -953,7 +975,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           owner.localDraftRevision = acknowledgedResult.draft.revision;
           if (associationOwnerRef.current === owner && !owner.sealed) applyDraft(acknowledgedResult.draft);
         }
-        accepted = Boolean(acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => candidate.id === annotation.id && JSON.stringify(candidate) === JSON.stringify(annotation)));
+        accepted = Boolean(acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => sameDraftAnnotation(candidate, annotation)));
       }
       latest = snapshotRef.current; sameContext = Boolean(latest && JSON.stringify(context(latest)) === JSON.stringify(documentContext));
       if (accepted) {
@@ -1036,7 +1058,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           const current = inventory.inventory.drafts.find((candidate) => candidate.draft_id === mutation.draftId);
           if (!current) throw new Error("The retained annotation draft no longer exists.");
           const alreadyApplied = mutation.kind === "upsert"
-            ? current.annotations.some((candidate) => candidate.id === mutation.annotationId && JSON.stringify(candidate) === JSON.stringify(mutation.annotation))
+            ? current.annotations.some((candidate) => sameDraftAnnotation(candidate, mutation.annotation!))
             : !current.annotations.some((candidate) => candidate.id === mutation.annotationId);
           let expectedRevision = mutation.expectedRevision;
           if (current.revision !== expectedRevision) {
@@ -1054,7 +1076,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           const response = await client.browserDraftRecovery({ target: owner.target, action });
           const nextDraft = response.type === "draft" ? response.draft : null;
           const acknowledged = Boolean(nextDraft && (mutation.kind === "upsert"
-            ? nextDraft.annotations.some((candidate) => candidate.id === mutation.annotationId && JSON.stringify(candidate) === JSON.stringify(mutation.annotation))
+            ? nextDraft.annotations.some((candidate) => sameDraftAnnotation(candidate, mutation.annotation!))
             : !nextDraft.annotations.some((candidate) => candidate.id === mutation.annotationId)));
           return { draft: nextDraft, acknowledged, local: true };
         });
