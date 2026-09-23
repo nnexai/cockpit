@@ -1,0 +1,8 @@
+{
+  "fixture": "run-owned flowcomment-27fd1a47bd6c with private gateway and Niri/WebKitDriver; rebuilt target/debug/cockpit-tauri and same built frontend",
+  "attempts": 2,
+  "real_native_loaded": "Tauri WebKit at http://localhost:5173/ rendered the Herdr shell and Review pane with the same private Review source identity as the browser. At last successful WebDriver DOM snapshot, Review was still displaying its source/detail header; saved drafts and changed labels were not yet populated.",
+  "failure": "WebKitWebDriver POST execute/sync HTTP 404 invalid session id before the Review line/file comments became visible; both runs timed out at 30 seconds. No native edit or state-pass claimed.",
+  "cleanup": "WebDriver session delete attempted; both private WebKitDriver and Niri supervisor children terminated in each run. Private Herdr/gateway remained for real browser validation and are cleaned separately.",
+  "followup": "FLOW-01 native Review parity and the higher-priority installed native startup/lifecycle acceptance remain open; do not extrapolate browser core correctness to actual native UI."
+}

@@ -1,0 +1,30 @@
+{
+  "fixture": "run-owned Herdr session flowcomment-27fd1a47bd6c, gateway http://127.0.0.1:41681, private Reviewr plugin link and source repository",
+  "browser_action": "actual Cockpit Commands Open Review right; saved staged line and whole-file comments; changed and staged the private overlap.txt marker; actual Review Refresh displayed both old comments changed; edited old line prose and reloaded Cockpit",
+  "saved_batch_generation": 2,
+  "saved_old_revision": "sha256:34de024415f1d496760913701e8449bc0633a8de62e696b059c54b5a5ebd1908",
+  "upsert_request_id": "request-117",
+  "upsert_http_status": 200,
+  "upsert_generation": 3,
+  "returned_drafts": [
+    {
+      "draft_id": "1f83a1da-37b2-46b7-ac62-2ea39389d1c9",
+      "revision": "sha256:34de024415f1d496760913701e8449bc0633a8de62e696b059c54b5a5ebd1908",
+      "anchor": {"kind": "lines", "start_line": 3, "end_line": 3, "selected_lines": ["INDEX_MARKER_1a47bd6c\n"]},
+      "saved_prose_after_edit": "FLOW01 green edited old INDEX_MARKER_1a47bd6c prose; old anchor stays changed.",
+      "source_state": "changed"
+    },
+    {
+      "draft_id": "e4128c63-d536-4187-964a-c35760dd8cee",
+      "revision": "sha256:34de024415f1d496760913701e8449bc0633a8de62e696b059c54b5a5ebd1908",
+      "anchor": {"kind": "whole_file"},
+      "saved_prose": "FLOW01 green file comment on old overlap.txt revision.",
+      "source_state": "changed"
+    }
+  ],
+  "painted_after_upsert_and_real_reload": "new INDEX_CHANGED_1a47bd6c appears in staged diff, both old-revision comments remain below FILE COMMENTS marked changed; line draft is not inline on the new line, edited prose retained and count 2",
+  "green_regression": "cargo test -p cockpit-core verified_viewer_reads_an_ordinary_folder_from_its_plugin_context: PASS; pre-fix failed Current versus Changed",
+  "source_build": "cargo build -p cockpit-host --bin cockpit -p cockpit-tauri: PASS; builds are not native behavior proof",
+  "browser_screenshot": "FLOW-01-review-stale-green.webp",
+  "native_attempt": "actual rebuilt Tauri WebKitDriver in private Niri accessed the same Review pane but its WebDriver session ended before the old comments populated; two attempts failed after 30 seconds with invalid session id, no Review native edit pass; private driver/Niri descendants stopped after each. See /tmp/cflow-review-comments-kb52u4hk/native-smoke/result.json. Native Review remains an explicit unverified FLOW-01 gate."
+}

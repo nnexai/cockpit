@@ -231,6 +231,7 @@ impl CommentsService {
         }
         self.revalidate_source_evidence(session_id, pane_id, &evidence)
             .await?;
+        self.refresh_states(&mut batch, &evidence).await;
         let committed = self
             .store
             .commit(batch, request.batch.expected_generation)

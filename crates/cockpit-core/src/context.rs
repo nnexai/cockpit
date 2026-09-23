@@ -2610,8 +2610,25 @@ mod review_checkout_tests {
             folder.join("notes.md").to_string_lossy()
         );
         assert_eq!(saved.owner.source_id, root_id);
+        std::fs::write(folder.join("notes.md"), "updated context\n").expect("change source");
+        let mut edit = request.clone();
+        edit.batch.expected_generation = saved.generation;
+        edit.draft_id = Some(saved.drafts[0].draft_id.clone());
+        edit.capture = None;
+        edit.comment_text = "Edited prose on old source".to_owned();
+        let edited = comments
+            .upsert("session", "pane", &edit)
+            .await
+            .expect("edit retained comment prose");
+        assert_eq!(
+            edited.drafts[0].source_state,
+            cockpit_protocol::comments::CommentSourceState::Changed,
+            "an edit response cannot relabel a retained old-source comment as current"
+        );
+        assert_eq!(edited.drafts[0].file_ref.revision, document.revision);
+        assert_eq!(edited.drafts[0].comment_text, edit.comment_text);
         let mut outside = request.clone();
-        outside.batch.expected_generation = saved.generation;
+        outside.batch.expected_generation = edited.generation;
         outside.capture.as_mut().unwrap().path = "../plugin-install/outside.md".to_owned();
         assert!(
             comments.upsert("session", "pane", &outside).await.is_err(),

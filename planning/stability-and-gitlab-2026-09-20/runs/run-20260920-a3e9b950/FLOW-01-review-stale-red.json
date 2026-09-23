@@ -1,0 +1,28 @@
+{
+  "fixture": "run-owned private Herdr session flowcomment-798567225439; private repository and linked Review plugin",
+  "browser_action": "saved a line comment and whole-file comment on staged overlap.txt; changed its staged INDEX_MARKER_67225439 to INDEX_CHANGED_67225439; Review Refresh showed both drafts changed; edited only the retained line draft's prose",
+  "upsert_http_status": 200,
+  "upsert_request_id": "request-762",
+  "upsert_generation": 4,
+  "batch_id": "4f7dc02e-25b1-4fd9-b69c-9c39ea1f0a2d",
+  "staged_source_after_change_sha256": "441e04109413d36db86c369633a1dbf822b6567a9b4ce0ffb00ed46e1d670e67",
+  "returned_drafts": [
+    {
+      "draft_id": "741af7c8-a809-4298-ada3-577693a30176",
+      "saved_revision": "sha256:54733e6c282cd66b70eb9b7e1439fbfb4b7539cee0c2e5db3e90f9dc11313db1",
+      "saved_anchor": {"kind": "lines", "start_line": 3, "end_line": 3, "selected_lines": ["INDEX_MARKER_67225439\n"]},
+      "saved_prose_after_edit": "FLOW01 red second stale edit keeps INDEX_MARKER_67225439 pinned.",
+      "incorrect_returned_source_state": "current"
+    },
+    {
+      "draft_id": "137fcb0c-b9e9-462a-8e2a-07ec1778cafc",
+      "saved_revision": "sha256:54733e6c282cd66b70eb9b7e1439fbfb4b7539cee0c2e5db3e90f9dc11313db1",
+      "saved_anchor": {"kind": "whole_file"},
+      "saved_prose": "FLOW01 file: review overlap.txt without moving the staged line anchor.",
+      "incorrect_returned_source_state": "current"
+    }
+  ],
+  "painted_result": "both drafts current; old line comment appeared inline on changed INDEX_CHANGED_67225439 line; explicit Review Refresh later recomputed both changed",
+  "red_regression": "cargo test -p cockpit-core verified_viewer_reads_an_ordinary_folder_from_its_plugin_context: FAIL; left Current, right Changed, crates/cockpit-core/src/context.rs:2623",
+  "screenshot": "FLOW-01-review-stale-red.webp"
+}
