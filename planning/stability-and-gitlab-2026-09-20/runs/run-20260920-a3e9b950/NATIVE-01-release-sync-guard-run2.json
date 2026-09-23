@@ -1,0 +1,528 @@
+{
+  "session": "native-8ca384e674c0",
+  "space": "Native browser 209925c5",
+  "fixture_url": "http://127.0.0.1:36961/",
+  "root": "/tmp/cnative-aatdhrcp",
+  "failure": null,
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Live browser view",
+      "alerts": [],
+      "body": "                            \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nLive browser view\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n0\n\nSend annotations\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\nPane\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                         ",
+      "painted": true,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 188.46875,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      },
+      "surfaceCss": {
+        "height": 188.46875,
+        "width": 674
+      }
+    },
+    "native_only_surface": {
+      "pane": {
+        "css": {
+          "height": "331.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 331.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 331,
+          "width": 674
+        }
+      },
+      "canvas": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      },
+      "surface": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "hidden"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      }
+    },
+    "first_canvas_viewport": {
+      "dpr": 2,
+      "height": 835,
+      "width": 676
+    },
+    "native_canvas": {
+      "width": 1348,
+      "left": 1,
+      "heightCss": 188.46875,
+      "widthCss": 674,
+      "top": 645.53125,
+      "height": 376
+    },
+    "fixture_first_paint": {
+      "innerWidth": 674,
+      "innerHeight": 188,
+      "dpr": 2,
+      "scrollY": 0,
+      "nestedScrollTop": 0,
+      "nestedWheelY": null,
+      "ready": "complete",
+      "heading": "Native browser acceptance",
+      "headingWidth": 650,
+      "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+      "status": "waiting for routed native pointer",
+      "started": false,
+      "scrollStart": null,
+      "scrollFinish": null,
+      "received_at": 145899.787366659
+    },
+    "bitmap_density": {
+      "bitmap_width_per_css": 2.0,
+      "bitmap_height_per_css": 1.995025700547173
+    },
+    "splitter_moved": false
+  },
+  "paints": {
+    "source": "canvas.browser-frame CanvasRenderingContext2D.drawImage",
+    "timestamps": 361,
+    "interval_seconds": 6.01092955499189,
+    "fixture_animation_ms": 6010.5,
+    "fps": 60.057266799974514,
+    "threshold_fps_exclusive": 15.0,
+    "final_scroll_y": 3900,
+    "visible_final_marker_rgb": [
+      0,
+      167,
+      75
+    ],
+    "full_width_marker": {
+      "right": [
+        0,
+        167,
+        75
+      ],
+      "left": [
+        0,
+        167,
+        75
+      ],
+      "bitmap": [
+        674,
+        188
+      ],
+      "surface": [
+        674,
+        188.46875
+      ]
+    }
+  },
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 1995934,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 1995898,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 1995864,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "invokeType": "function",
+    "invokeWrapped": false,
+    "tauriInternals": true,
+    "socketWrapped": true,
+    "invokeWritable": false
+  },
+  "open_browser_react_before": {
+    "sync": "live",
+    "refs": [
+      {
+        "index": 4,
+        "value": "native-8ca384e674c0"
+      },
+      {
+        "index": 5,
+        "value": false
+      },
+      {
+        "index": 6,
+        "value": []
+      },
+      {
+        "index": 12,
+        "value": [
+          "key",
+          "panes",
+          "layout",
+          "visiblePaneIds",
+          "selectedPaneId"
+        ]
+      },
+      {
+        "index": 32,
+        "value": []
+      },
+      {
+        "index": 33,
+        "value": [
+          "__reactFiber$bkdnp2je7er",
+          "__reactProps$bkdnp2je7er"
+        ]
+      },
+      {
+        "index": 34,
+        "value": [
+          "spaceId",
+          "paneId"
+        ]
+      },
+      {
+        "index": 49,
+        "value": []
+      },
+      {
+        "index": 50,
+        "value": "native-8ca384e674c0:w1"
+      },
+      {
+        "index": 51,
+        "value": []
+      },
+      {
+        "index": 52,
+        "value": "cockpit-browser-6a85abd8-6e80-429d-b8a5-ca37ca9f2545"
+      },
+      {
+        "index": 65,
+        "value": false
+      },
+      {
+        "index": 66,
+        "value": 3
+      },
+      {
+        "index": 67,
+        "value": [
+          "sessionId",
+          "spaceId"
+        ]
+      },
+      {
+        "index": 68,
+        "value": []
+      },
+      {
+        "index": 73,
+        "value": false
+      },
+      {
+        "index": 74,
+        "value": 3
+      }
+    ],
+    "selection": {
+      "spaceId": "w1",
+      "paneId": "w1:p1",
+      "tabId": "w1:t1"
+    },
+    "epoch": 1,
+    "mounted": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:36961/"
+  },
+  "frontend_identity": {
+    "scripts": [
+      "tauri://localhost/assets/index-Bx3kSYin.js"
+    ],
+    "styles": [
+      "tauri://localhost/assets/index-B65APf4W.css"
+    ],
+    "url": "tauri://localhost"
+  },
+  "screenshots": {
+    "first_paint_before_gesture": "/tmp/cnative-aatdhrcp/native-first.png"
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 72,
+    "excluded_from_fps": "WebDriver/CDP requests and helper activity",
+    "paint_rate_derived_from": "CanvasRenderingContext2D.drawImage timestamps only"
+  },
+  "nested_wheel": [
+    {
+      "step": "nested forward",
+      "delta_y_css": 180,
+      "surface_position": {
+        "x": 121,
+        "y": 745.53125
+      },
+      "page_scroll_y": 3900,
+      "nested_scroll_top": 180,
+      "nested_wheel_y": 90,
+      "paint_count": 362,
+      "host_scroll_y": 0
+    },
+    {
+      "step": "nested reverse",
+      "delta_y_css": -70,
+      "surface_position": {
+        "x": 121,
+        "y": 745.53125
+      },
+      "page_scroll_y": 3900,
+      "nested_scroll_top": 110,
+      "nested_wheel_y": -35,
+      "paint_count": 364,
+      "host_scroll_y": 0
+    },
+    {
+      "step": "outer forward",
+      "delta_y_css": 160,
+      "surface_position": {
+        "x": 121,
+        "y": 811.53125
+      },
+      "page_scroll_y": 4060,
+      "nested_scroll_top": 110,
+      "nested_wheel_y": -35,
+      "paint_count": 369,
+      "host_scroll_y": 0
+    },
+    {
+      "step": "outer reverse",
+      "delta_y_css": -90,
+      "surface_position": {
+        "x": 121,
+        "y": 811.53125
+      },
+      "page_scroll_y": 3970,
+      "nested_scroll_top": 110,
+      "nested_wheel_y": -35,
+      "paint_count": 371,
+      "host_scroll_y": 0
+    }
+  ],
+  "screenshot": "/tmp/cnative-aatdhrcp/native-window.png",
+  "installed_close_before": {
+    "binary": {
+      "installed_sha256": "b3791212bc14b834c3f226701d66baa7510461b74178ad3c8a4b341a9096e44e",
+      "installed_inode": 479300,
+      "running_inode": 479300
+    },
+    "native_descendants": [
+      {
+        "pid": 1995939,
+        "start_ticks": 31329186,
+        "comm": "cockpit"
+      },
+      {
+        "pid": 1996000,
+        "start_ticks": 31329200,
+        "comm": "WebKitWebProces"
+      },
+      {
+        "pid": 1995975,
+        "start_ticks": 31329195,
+        "comm": "WebKitNetworkPr"
+      }
+    ],
+    "owner_sockets": [
+      "/tmp/cnative-aatdhrcp/cockpit-state/browser/owner.sock"
+    ],
+    "socket_native_owned": true
+  },
+  "installed_close_action": {
+    "method": "private Niri close-window",
+    "window_id": 2,
+    "app_id": "cockpit"
+  },
+  "installed_close_progress": {
+    "live_native_descendants": [],
+    "owned_sockets_remaining": []
+  },
+  "installed_close": {
+    "binary": {
+      "installed_sha256": "b3791212bc14b834c3f226701d66baa7510461b74178ad3c8a4b341a9096e44e",
+      "installed_inode": 479300,
+      "running_inode": 479300
+    },
+    "native_descendants_before": [
+      {
+        "pid": 1995939,
+        "start_ticks": 31329186,
+        "comm": "cockpit"
+      },
+      {
+        "pid": 1996000,
+        "start_ticks": 31329200,
+        "comm": "WebKitWebProces"
+      },
+      {
+        "pid": 1995975,
+        "start_ticks": 31329195,
+        "comm": "WebKitNetworkPr"
+      }
+    ],
+    "owner_sockets_before": [
+      "/tmp/cnative-aatdhrcp/cockpit-state/browser/owner.sock"
+    ],
+    "socket_native_owned": true,
+    "after": {
+      "live_native_descendants": [],
+      "owned_sockets_remaining": []
+    },
+    "herdr_alive": true,
+    "gateway_started": false
+  },
+  "ok": true,
+  "fixture_reports": {
+    "count": 8,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 145899.787366659
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scrolling",
+        "started": true,
+        "scrollStart": 268.30000001192093,
+        "scrollFinish": null,
+        "received_at": 145900.038128112
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 3970,
+        "nestedScrollTop": 110,
+        "nestedWheelY": -35,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scroll complete",
+        "started": true,
+        "scrollStart": 268.30000001192093,
+        "scrollFinish": 6278.800000011921,
+        "received_at": 145906.899768772
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 1,
+        "scrollY": 3970,
+        "nestedScrollTop": 110,
+        "nestedWheelY": -35,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scroll complete",
+        "started": true,
+        "scrollStart": 268.30000001192093,
+        "scrollFinish": 6278.800000011921,
+        "received_at": 145907.129524381
+      }
+    ]
+  },
+  "native_exit_trace": [],
+  "logs": {
+    "webdriver": "/tmp/cnative-aatdhrcp/webdriver.log",
+    "compositor": "/tmp/cnative-aatdhrcp/compositor.log",
+    "herdr": "/tmp/cnative-aatdhrcp/herdr.log"
+  }
+}

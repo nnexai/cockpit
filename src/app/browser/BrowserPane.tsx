@@ -24,7 +24,7 @@ type PaneStatus = "hidden" | "loading" | "ready" | "stale" | "error" | "unsuppor
 type Tool = "browse" | "select" | "freehand" | "region" | "element";
 type Gesture = { pointerId: number; points: BrowserPoint[]; origin: BrowserPoint; frame: number; document: number; viewport: number };
 type WheelIntent = { clientX: number; clientY: number; deltaX: number; deltaY: number; modifiers: number };
-type InputJob = { generation: number; kind: "move" | "wheel" | "boundary"; run: () => Promise<void>; wheel?: WheelIntent };
+type InputJob = { generation: number; kind: "move" | "wheel" | "boundary" | "release"; run: () => Promise<void>; wheel?: WheelIntent };
 type PointerIntent = {
   pointerId: number;
   kind: "move" | "down" | "up" | "cancel";
@@ -59,6 +59,8 @@ type DraftAssociationOwner = {
   sealed: boolean;
   mutationTail: Promise<void>;
   pendingAnnotationMutations: PendingAnnotationMutation[];
+  retiredDraftIds: Set<string>;
+  retiredDocumentKeys: Set<string>;
 };
 type PendingAnnotationMutation = {
   key: string;
@@ -106,13 +108,11 @@ const statusFor = (snapshot: BrowserViewSnapshot): PaneStatus => snapshot.blocke
 const statusText = (status: PaneStatus, message: string | null): string => {
   if (status === "ready") return "Live browser view";
   if (status === "loading") return "Loading browser view…";
-  if (status === "stale") return "Showing last confirmed frame";
+  if (status === "stale") return message ?? "The browser rejected a stale input; it was not replayed.";
   if (status === "empty") return "No browser page is selected";
   if (status === "hidden") return "Browser view hidden";
   return message ?? (status === "unsupported" ? "Browser view is unsupported by this runtime" : "Browser stream error");
 };
-const hasRecoverableDraft = (candidate: BrowserViewDraftState): boolean =>
-  candidate.annotations.length > 0 || candidate.editor.note_text.trim().length > 0;
 const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
 const isLocalBrowserChrome = (target: EventTarget | null): boolean =>
@@ -164,8 +164,11 @@ function context(snapshot: BrowserViewSnapshot) {
   return snapshot.document && snapshot.displayed_target_id ? { target_id: snapshot.displayed_target_id, document_generation: snapshot.document.document_generation, lease_generation: snapshot.control.lease_generation } : null;
 }
 function location(snapshot: BrowserViewSnapshot, frame: BrowserViewFramePacket["descriptor"]): BrowserViewLocation | null {
-  return snapshot.document && snapshot.viewport && snapshot.displayed_target_id ? { target_id: snapshot.displayed_target_id, document_generation: snapshot.document.document_generation, viewport_revision: snapshot.viewport.viewport_revision, presented_frame_sequence: frame.frame_sequence, lease_generation: snapshot.control.lease_generation } : null;
+  return snapshot.document && snapshot.viewport && snapshot.displayed_target_id ? { target_id: snapshot.displayed_target_id, document_generation: snapshot.document.document_generation, viewport_revision: frame.viewport_revision, presented_frame_sequence: frame.frame_sequence, lease_generation: snapshot.control.lease_generation } : null;
 }
+const retiredDraft = (owner: DraftAssociationOwner, draft: BrowserViewDraftState): boolean =>
+  owner.retiredDraftIds.has(draft.draft_id);
+const retiredDocumentKey = (targetId: string, generation: number): string => `${targetId}:${generation}`;
 const ownsBrowserControl = (snapshot: BrowserViewSnapshot | null): boolean =>
   snapshot?.control.status === "controlled" && snapshot.control.controller_view_id === snapshot.identity.view_id;
 export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onBackToTerminals, onExpand, registerCloseGuard, className }: BrowserPaneProps) {
@@ -211,10 +214,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const associationOwnerRef = useRef<DraftAssociationOwner | null>(null);
   const ownerKey = `${target.session_id}:${target.space_id ?? ""}:${target.pane_id ?? ""}:${target.endpoint_path ?? ""}`;
   if (!associationOwnerRef.current || associationOwnerRef.current.key !== ownerKey) {
-    if (associationOwnerRef.current) associationOwnerRef.current.sealed = true;
-    associationOwnerRef.current = { key: ownerKey, target: { ...target }, draft: null, localDraftRevision: null, noteId: null, noteText: "", notesOpen: false, editorGeneration: 0, sealed: false, mutationTail: Promise.resolve(), pendingAnnotationMutations: [] };
+    associationOwnerRef.current = { key: ownerKey, target: { ...target }, draft: null, localDraftRevision: null, noteId: null, noteText: "", notesOpen: false, editorGeneration: 0, sealed: false, mutationTail: Promise.resolve(), pendingAnnotationMutations: [], retiredDraftIds: new Set(), retiredDocumentKeys: new Set() };
   }
   const associationOwner = associationOwnerRef.current!;
+  const retryRetiredDraftsRef = useRef<((targetId: string, documentGeneration: number | null) => void) | null>(null);
   const previousAssociationOwnerKeyRef = useRef<string | null>(null);
   const associationChanged = previousAssociationOwnerKeyRef.current !== ownerKey;
   previousAssociationOwnerKeyRef.current = ownerKey;
@@ -226,7 +229,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const [deliveryState, setDeliveryState] = useState<DeliveryState | null>(null);
   const [deliveryDuplicateRisk, setDeliveryDuplicateRisk] = useState(false);
   const [draft, setDraft] = useState<BrowserViewDraftState | null>(null);
-  const [staleDrafts, setStaleDrafts] = useState<BrowserViewDraftState[]>([]);
   const [tool, setTool] = useState<Tool>("browse");
   const [color, setColor] = useState<string>(COLORS[0]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -260,6 +262,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (!urlEditing.current) setUrl(next.navigation?.url ?? "");
   }, []);
   const applyDraft = useCallback((next: BrowserViewDraftState) => {
+    if (retiredDraft(associationOwner, next)) return;
     const current = draftRef.current;
     if (current && current.draft_id === next.draft_id && next.revision < current.revision) return;
     draftRef.current = next; associationOwner.draft = next; setDraft(next);
@@ -289,13 +292,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const drawing = canvas?.getContext("2d");
     if (canvas && drawing) drawing.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
-  const invalidateInteractionFrame = useCallback((nextMessage: string) => {
+  const invalidateInteractionFrame = useCallback(() => {
     gestureRef.current = null;
     setGesture(null);
-    // Keep the displayed identity and queued key releases. Location-sensitive
-    // jobs revalidate against current metadata before dispatch.
-    setStatus("stale");
-    setMessage(nextMessage);
   }, []);
   const runInputJobs = useCallback((): Promise<void> => {
     if (inputDrainRef.current) return inputDrainRef.current;
@@ -303,7 +302,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       try {
         while (inputJobsRef.current.length > 0) {
           const job = inputJobsRef.current.shift()!;
-          if (job.generation !== inputGenerationRef.current) continue;
+          if (job.generation !== inputGenerationRef.current && job.kind !== "release") continue;
           try { await job.run(); } catch { /* command reports transport errors */ }
         }
       } finally {
@@ -317,7 +316,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const jobs = inputJobsRef.current;
     const generation = inputGenerationRef.current;
     const next = { generation, kind, run };
-    if (kind === "move") {
+    if (kind === "release") {
+      jobs.push(next);
+    } else if (kind === "move") {
       const pending = jobs.findIndex((job) => job.kind === "move");
       if (pending >= 0) jobs[pending] = next;
       else if (jobs.length < MAX_INPUT_JOBS) jobs.push(next);
@@ -376,10 +377,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           setMessage(`Input stale: ${response.message || "the input sequence is no longer current"} Retry the gesture; it was not replayed.`);
           return null;
         }
-        if (response.status === "stale") {
-          setStatus("stale");
-          setMessage(`Input stale: ${response.message} Retry the gesture; it was not replayed.`);
-        } else if (response.status === "unsupported") {
+        if (response.status === "stale") return null;
+        if (response.status === "unsupported") {
           setStatus("unsupported");
           setMessage(`Input unsupported: ${response.message}`);
         } else if (response.status === "rejected") {
@@ -408,7 +407,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
             || Math.abs(descriptor.viewport_css_height - (next.viewport?.css_height ?? descriptor.viewport_css_height)) > 0.01
             || Math.abs(descriptor.scroll_x - (next.viewport?.scroll_x ?? descriptor.scroll_x)) > 0.01
             || Math.abs(descriptor.scroll_y - (next.viewport?.scroll_y ?? descriptor.scroll_y)) > 0.01)) {
-            invalidateInteractionFrame("Showing last confirmed frame while the browser catches up.");
+            invalidateInteractionFrame();
           }
           applySnapshot(next);
           presenterRef.current?.revalidate();
@@ -517,15 +516,30 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     return pending;
   }, [command, paneViewport]);
   const openDraft = useCallback(async (): Promise<void> => {
+    const request = ++draftRequestRef.current;
+    await associationOwner.mutationTail;
+    if (request !== draftRequestRef.current) return;
     const current = snapshotRef.current; const documentContext = current ? context(current) : null;
     if (!documentContext || !current?.document || current.document.target_id !== current.displayed_target_id) return;
+    const key = retiredDocumentKey(documentContext.target_id, documentContext.document_generation);
+    let currentDocumentRetired = false;
+    const targetPrefix = `${documentContext.target_id}:`;
+    for (const retirementKey of associationOwner.retiredDocumentKeys) {
+      if (!retirementKey.startsWith(targetPrefix)) continue;
+      const suffix = retirementKey.slice(targetPrefix.length);
+      if (suffix === "*") {
+        retryRetiredDraftsRef.current?.(documentContext.target_id, null);
+        currentDocumentRetired = true;
+      } else {
+        const retiredGeneration = Number(suffix);
+        if (!Number.isSafeInteger(retiredGeneration)) continue;
+        retryRetiredDraftsRef.current?.(documentContext.target_id, retiredGeneration);
+        if (retirementKey === key) currentDocumentRetired = true;
+      }
+    }
+    if (currentDocumentRetired) return;
     const retained = draftRef.current;
     if (retained && (retained.target_id !== documentContext.target_id || retained.document_generation !== documentContext.document_generation)) {
-      if (hasRecoverableDraft(retained) || editorDirtyRef.current) {
-        setStatus("stale");
-        setMessage("Draft marks belong to an earlier page; choose an explicit recovery action.");
-        return;
-      }
       draftRef.current = null;
       associationOwner.draft = null;
       associationOwner.localDraftRevision = null;
@@ -534,69 +548,51 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setNoteId(null);
       setNoteValue("");
     }
-    const request = ++draftRequestRef.current;
     const listed = await command({ type: "draft", context: documentContext, draft_id: null, expected_revision: null, command: { type: "list" } });
     if (request !== draftRequestRef.current || !listed || listed.type !== "draft_inventory") return;
     const latest = snapshotRef.current;
-    if (!latest || JSON.stringify(context(latest)) !== JSON.stringify(documentContext)) { setPendingCaptureState(null); return; }
-    const currentDraft = listed.inventory.drafts.find((candidate) => candidate.target_id === documentContext.target_id && candidate.document_generation === documentContext.document_generation);
-    setStaleDrafts(listed.inventory.drafts.filter((candidate) => candidate.draft_id !== currentDraft?.draft_id && hasRecoverableDraft(candidate)));
-    // Pending captures belong to the association, including earlier documents.
+    if (!latest || JSON.stringify(context(latest)) !== JSON.stringify(documentContext)) return;
+    const currentDraft = listed.inventory.drafts.find((candidate) => candidate.target_id === documentContext.target_id && candidate.document_generation === documentContext.document_generation && !retiredDraft(associationOwner, candidate));
     setPendingCaptureState(listed.inventory.pending_capture);
     const draftId = currentDraft?.draft_id ?? null;
     await command({ type: "draft", context: documentContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
   }, [associationOwner, command, setPendingCaptureState]);
-  const startCurrentDraft = useCallback((): void => {
-    if (editorDirtyRef.current) {
-      setMessage("The current draft editor still has unsaved text; close or save it before starting a new draft.");
-      return;
-    }
-    void associationOwner.mutationTail.then(() => {
-      draftRequestRef.current += 1;
-      draftRef.current = null; associationOwner.draft = null; associationOwner.localDraftRevision = null;
-      setDraft(null);
-      setSelectedId(null);
-      setNoteId(null);
-      setNoteValue("");
-      void openDraft();
-    }).catch((error) => setMessage(`Could not preserve the earlier draft: ${errorMessage(error)}`));
-  }, [associationOwner, openDraft]);
-  const discardStaleDraft = useCallback(async (): Promise<void> => {
-    const stale = draftRef.current;
-    if (!stale) return;
-    try {
-      const response = await client.browserDraftRecovery({ target, action: { type: "discard_draft", draft_id: stale.draft_id, expected_revision: stale.revision } });
-      if (response.type !== "draft_inventory" && response.type !== "none") throw new Error("The stale draft discard was not acknowledged.");
-      startCurrentDraft();
-    } catch (error) {
-      setStatus("error");
-      setMessage(`Could not discard stale draft: ${errorMessage(error)}`);
-    }
-  }, [client, startCurrentDraft, target]);
-  const discardInventoryDraft = useCallback(async (stale: BrowserViewDraftState): Promise<void> => {
-    try {
-      const response = await client.browserDraftRecovery({ target, action: { type: "discard_draft", draft_id: stale.draft_id, expected_revision: stale.revision } });
-      if (response.type !== "draft_inventory" && response.type !== "none") throw new Error("The stale draft discard was not acknowledged.");
-      setStaleDrafts((current) => current.filter((candidate) => candidate.draft_id !== stale.draft_id));
-    } catch (error) {
-      setStatus("error");
-      setMessage(`Could not discard stale draft: ${errorMessage(error)}`);
-    }
-  }, [client, target]);
-  const reviewInventoryDraft = useCallback((stale: BrowserViewDraftState): void => {
-    draftRef.current = stale; associationOwner.draft = stale; associationOwner.localDraftRevision = null;
-    setDraft(stale);
-    setSelectedId(null);
-    setNoteId((stale.editor.note_annotation_id ?? stale.editor.selected_annotation_id));
-    setNoteValue(stale.editor.note_text.slice(0, 4000));
-    setStatus("stale");
-    setMessage("Reviewing a retained draft from an earlier page.");
-  }, [associationOwner]);
   const queueDraftMutation = useCallback(<T,>(run: () => Promise<T>): Promise<T> => {
     const next = associationOwner.mutationTail.catch(() => undefined).then(run);
     associationOwner.mutationTail = next.then(() => undefined, () => undefined);
     return next;
   }, [associationOwner]);
+  const retireDraftsFor = useCallback((targetId: string, documentGeneration: number | null): void => {
+    const owner = associationOwner;
+    const retirementKey = documentGeneration === null ? `${targetId}:*` : retiredDocumentKey(targetId, documentGeneration);
+    owner.retiredDocumentKeys.add(retirementKey);
+    if (owner.draft?.target_id === targetId
+      && (documentGeneration === null || owner.draft.document_generation === documentGeneration)) {
+      const draftId = owner.draft.draft_id;
+      owner.retiredDraftIds.add(draftId);
+      owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((mutation) => mutation.draftId !== draftId);
+    }
+    void queueDraftMutation(async () => {
+      const listed = await client.browserDraftRecovery({ target: owner.target, action: { type: "list" } });
+      if (listed.type !== "draft_inventory") return;
+      if (associationOwnerRef.current === owner && !owner.sealed) setPendingCaptureState(listed.inventory.pending_capture);
+      const drafts = listed.inventory.drafts.filter((draft) => draft.target_id === targetId
+        && (documentGeneration === null || draft.document_generation === documentGeneration));
+      const ids = new Set(drafts.map((draft) => draft.draft_id));
+      for (const id of ids) owner.retiredDraftIds.add(id);
+      owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((mutation) => !ids.has(mutation.draftId));
+      let complete = true;
+      for (const draft of drafts) {
+        try {
+          await client.browserDraftRecovery({ target: owner.target, action: { type: "discard_draft", draft_id: draft.draft_id, expected_revision: draft.revision } });
+        } catch {
+          complete = false;
+        }
+      }
+      if (complete) owner.retiredDocumentKeys.delete(retirementKey);
+    }).catch(() => undefined);
+  }, [associationOwner, client, queueDraftMutation, setPendingCaptureState]);
+  retryRetiredDraftsRef.current = retireDraftsFor;
   const persistEditor = useCallback(async (requestedGeneration = associationOwner.editorGeneration): Promise<void> => {
     const owner = associationOwner;
     let savedNoteId: string | null = null;
@@ -621,7 +617,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         editor,
       };
       const response = await client.browserDraftRecovery({ target: owner.target, action });
-      if (response.type === "draft") {
+      if (response.type === "draft" && !retiredDraft(owner, response.draft)) {
         owner.draft = response.draft;
         owner.localDraftRevision = response.draft.revision;
         if (associationOwnerRef.current === owner && !owner.sealed) applyDraft(response.draft);
@@ -662,12 +658,26 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }, 120);
     return () => window.clearTimeout(timer);
   }, [editorTick, noteId, noteValue, notesOpen, persistEditor]);
+  const releaseRemotePointer = useCallback((): Promise<void> => {
+    const intent = remotePointerIntentRef.current;
+    const current = snapshotRef.current;
+    remotePointerRef.current = null;
+    remotePointerIntentRef.current = null;
+    remotePointRef.current = null;
+    if (!current || !intent || !ownsBrowserControl(current)) return flushInput();
+    const where = { ...intent.location, lease_generation: current.control.lease_generation };
+    return enqueueInput("release", async () => {
+      const input_sequence = inputSequence.current++;
+      await command({ type: "pointer", location: where, input: { kind: "cancel", button: null, x: intent.point.x, y: intent.point.y, buttons: 0, modifiers: 0, click_count: 0, input_sequence } });
+    });
+  }, [command, enqueueInput, flushInput]);
   useEffect(() => {
     let closed = false;
     let presenter: FramePresenter | null = null;
+    let consecutiveFrameErrors = 0;
+    let frameFailureVisible = false;
     let stream: BrowserViewStream | null = null;
     let cursor: number | null = null;
-    let hardViewportRevision = 0;
     const controller = new AbortController();
     const close = () => {
       if (closed) return;
@@ -732,7 +742,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (closed) return;
       if (incoming.type === "attached") {
         if (identityRef.current) return;
-        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; hardViewportRevision = incoming.snapshot.viewport?.viewport_revision ?? 0; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
+        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
       }
       const identity = identityRef.current;
       if (!identity || incoming.metadata.view_id !== identity.id || incoming.metadata.stream_epoch !== identity.epoch) return;
@@ -744,35 +754,33 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "targets_changed": {
           next = { ...previous, targets: incoming.targets, displayed_target_id: incoming.displayed_target_id };
           if (previous.displayed_target_id !== incoming.displayed_target_id) {
-            ++inputGenerationRef.current; clearPresentedFrame(); inputJobsRef.current = []; remotePointerRef.current = null; remotePointerIntentRef.current = null; remotePointRef.current = null; gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
+            if (previous.document && previous.displayed_target_id) retireDraftsFor(previous.displayed_target_id, previous.document.document_generation);
+            void releaseRemotePointer();
+            ++inputGenerationRef.current; clearPresentedFrame(); gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
+            draftRef.current = null; associationOwner.draft = null; associationOwner.localDraftRevision = null;
+            associationOwner.noteId = null; associationOwner.noteText = ""; associationOwner.notesOpen = false; associationOwner.editorGeneration += 1;
+            editorDirtyRef.current = false; setDraft(null); setNoteId(null); setNoteValue(""); setNotesOpen(false); setMessage(null); setStatus("loading");
           }
           break;
         }
         case "document_changed": {
+          if (previous.document && previous.displayed_target_id) retireDraftsFor(previous.displayed_target_id, previous.document.document_generation);
+          void releaseRemotePointer();
           next = { ...previous, document: incoming.document };
-          ++inputGenerationRef.current; clearPresentedFrame(); inputJobsRef.current = []; remotePointerRef.current = null; remotePointerIntentRef.current = null; remotePointRef.current = null; gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
-          setStatus("stale"); setMessage("The page changed; earlier draft marks remain available for explicit recovery.");
+          ++inputGenerationRef.current; clearPresentedFrame(); gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
+          draftRef.current = null; associationOwner.draft = null; associationOwner.localDraftRevision = null;
+          associationOwner.noteId = null; associationOwner.noteText = ""; associationOwner.notesOpen = false; associationOwner.editorGeneration += 1;
+          editorDirtyRef.current = false; setDraft(null); setNoteId(null); setNoteValue(""); setNotesOpen(false); setMessage(null); setStatus("loading");
           break;
         }
         case "navigation_changed": {
           next = { ...previous, navigation: incoming.navigation };
-          if (incoming.navigation?.loading) invalidateInteractionFrame("Showing last confirmed frame while navigation completes.");
+          if (incoming.navigation?.loading) invalidateInteractionFrame();
           break;
         }
         case "viewport_changed": {
           next = { ...previous, viewport: incoming.viewport };
-          const prior = previous.viewport;
-          const current = incoming.viewport;
-          const scrollOnly = prior && current && prior.geometry_fresh && current.geometry_fresh
-            && current.viewport_revision === prior.viewport_revision + 1
-            && current.css_width === prior.css_width && current.css_height === prior.css_height
-            && current.device_pixel_ratio === prior.device_pixel_ratio
-            && current.visual_offset_x === prior.visual_offset_x && current.visual_offset_y === prior.visual_offset_y
-            && current.visual_scale === prior.visual_scale && current.page_scale === prior.page_scale
-            && (current.scroll_x !== prior.scroll_x || current.scroll_y !== prior.scroll_y);
-          if (!scrollOnly && current) hardViewportRevision = current.viewport_revision;
           if (previous.viewport?.viewport_revision !== incoming.viewport?.viewport_revision) {
-            // Keep annotation gestures tied to the geometry where they began.
             gestureRef.current = null;
             setGesture(null);
           }
@@ -784,7 +792,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "capabilities_changed": next = { ...previous, capabilities: incoming.capabilities }; break;
         case "control_changed": inputSequence.current = incoming.control.next_input_sequence; next = { ...previous, control: incoming.control }; break;
         case "frame_descriptor": return;
-        case "frame_transport_revoked": setStatus("stale"); setMessage(incoming.message); return;
+        case "frame_transport_revoked": setStatus("error"); setMessage(incoming.message); return;
         case "failed": setStatus("error"); setMessage(incoming.message); return;
         case "closed": setStatus("error"); setMessage(incoming.reason); return;
       }
@@ -798,33 +806,24 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     };
     const canPresent = (descriptor: BrowserViewFramePacket["descriptor"]): boolean => {
       const current = snapshotRef.current; const identity = identityRef.current;
-      return Boolean(current?.document && current.viewport?.geometry_fresh && current.displayed_target_id && identity
+      return Boolean(current?.document && current.displayed_target_id && identity
         && descriptor.stream_epoch === identity.epoch
         && descriptor.target_id === current.displayed_target_id
-        && descriptor.document_generation === current.document.document_generation
-        && descriptor.viewport_revision >= hardViewportRevision
-        && descriptor.viewport_revision <= current.viewport.viewport_revision
-        && Math.abs(descriptor.viewport_css_width - current.viewport.css_width) <= 0.01
-        && Math.abs(descriptor.viewport_css_height - current.viewport.css_height) <= 0.01);
+        && descriptor.document_generation === current.document.document_generation);
     };
     presenter = new FramePresenter({
-      isExpectedStale: (descriptor) => {
-        const current = snapshotRef.current;
-        return Boolean(current?.document && current.viewport && !canPresent(descriptor));
-      },
+      isExpectedStale: (descriptor) => !canPresent(descriptor),
       shouldDefer: (descriptor) => {
         const current = snapshotRef.current; const identity = identityRef.current; const presented = frameRef.current;
-        if (!current?.document || !current.viewport || !identity || descriptor.stream_epoch !== identity.epoch) return false;
+        if (!current?.document || !identity || descriptor.stream_epoch !== identity.epoch) return false;
         if (presented && descriptor.frame_sequence <= presented.sequence) return false;
         const knownTarget = descriptor.target_id === current.displayed_target_id || current.targets.some((candidate) => candidate.target_id === descriptor.target_id);
-        return knownTarget && (descriptor.document_generation > current.document.document_generation
-          || (descriptor.document_generation === current.document.document_generation
-            && descriptor.viewport_revision > current.viewport.viewport_revision));
+        return knownTarget && descriptor.document_generation > current.document.document_generation;
       },
       validate: (descriptor) => {
         const current = snapshotRef.current;
-        if (!canPresent(descriptor) || !current?.viewport) throw new BrowserFrameError("identity_mismatch", "Browser frame is for a stale document or viewport");
-        validateFrameDescriptor(descriptor, { streamEpoch: descriptor.stream_epoch, targetId: descriptor.target_id, displayedTargetId: current.displayed_target_id, documentGeneration: descriptor.document_generation, viewportRevision: descriptor.viewport_revision, viewportCssWidth: current.viewport.css_width, viewportCssHeight: current.viewport.css_height });
+        if (!canPresent(descriptor)) throw new BrowserFrameError("identity_mismatch", "Browser frame is for a stale document");
+        validateFrameDescriptor(descriptor, { streamEpoch: identityRef.current!.epoch, targetId: current!.displayed_target_id!, displayedTargetId: current!.displayed_target_id!, documentGeneration: current!.document!.document_generation, viewportRevision: descriptor.viewport_revision, viewportCssWidth: descriptor.viewport_css_width, viewportCssHeight: descriptor.viewport_css_height });
       },
       present: (image, descriptor) => {
         if (!canPresent(descriptor)) throw new BrowserFrameError("identity_mismatch", "Browser frame became stale while decoding");
@@ -833,9 +832,19 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         if (targetCanvas.width !== descriptor.image_width) targetCanvas.width = descriptor.image_width;
         if (targetCanvas.height !== descriptor.image_height) targetCanvas.height = descriptor.image_height;
         drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
-        const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted); if (!errorRef.current) setStatus("ready");
+        const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted);
+        consecutiveFrameErrors = 0;
+        if (frameFailureVisible && !errorRef.current) { frameFailureVisible = false; setMessage(null); setStatus("ready"); }
+        else if (!errorRef.current) setStatus("ready");
       },
-      onError: (error) => { if (!closed) { errorRef.current = true; setStatus("error"); setMessage(errorMessage(error)); } },
+      onError: (error) => {
+        consecutiveFrameErrors += 1;
+        if (consecutiveFrameErrors >= 3 && !errorRef.current) {
+          frameFailureVisible = true;
+          setStatus("error");
+          setMessage(errorMessage(error));
+        }
+      },
     });
     presenterRef.current = presenter;
     const request: BrowserViewOpenRequest = { target, client_id: clientId ?? clientRef.current, presentation, viewport: paneViewport(), takeover: false };
@@ -846,7 +855,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }).catch((error: unknown) => { if (!closed && !controller.signal.aborted) { setStatus("error"); setMessage(errorMessage(error)); } });
     return close;
   // Browser-only is local layout state; it must not revoke the live frame stream.
-  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
+  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
       ++inputGenerationRef.current;
@@ -880,15 +889,16 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       timer = window.setTimeout(() => {
         const current = snapshotRef.current;
         const requested = paneViewport();
-        if (!visible || !current?.viewport || !ownsBrowserControl(current)
+        if (!visible || !liveInputEnabledRef.current || !current?.viewport
           || (current.viewport.css_width === requested.css_width
             && current.viewport.css_height === requested.css_height
             && current.viewport.device_pixel_ratio === requested.device_pixel_ratio)) return;
         void enqueueInput("boundary", async () => {
+          const controlled = await ensureControl();
           const latest = snapshotRef.current;
           const latestRequested = paneViewport();
           const documentContext = latest ? context(latest) : null;
-          if (!latest || !latest.viewport || !ownsBrowserControl(latest) || !documentContext
+          if (!controlled || !latest || !latest.viewport || !ownsBrowserControl(latest) || !documentContext
             || (latest.viewport.css_width === latestRequested.css_width
               && latest.viewport.css_height === latestRequested.css_height
               && latest.viewport.device_pixel_ratio === latestRequested.device_pixel_ratio)) return;
@@ -905,7 +915,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       window.removeEventListener("resize", scheduleResize);
       resolutionQuery?.removeEventListener("change", onResolutionChange);
     };
-  }, [command, enqueueInput, paneViewport, snapshot?.control.status, snapshot?.control.controller_view_id, snapshot?.viewport?.viewport_revision, viewport, visible]);
+  }, [command, enqueueInput, ensureControl, paneViewport, snapshot?.control.status, snapshot?.control.controller_view_id, snapshot?.viewport?.viewport_revision, viewport, visible]);
 
   const paintedRectFor = useCallback((allowScrollTransition = false) => {
     const current = frameRef.current; const surface = surfaceRef.current;
@@ -959,7 +969,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         expectedDraft();
         return command({ type: "draft", context: documentContext, draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, command: { type: "upsert_annotation", annotation } });
       });
-      if (acknowledgedResult?.type === "draft") {
+      if (acknowledgedResult?.type === "draft" && !retiredDraft(owner, acknowledgedResult.draft)) {
         owner.draft = acknowledgedResult.draft;
         owner.localDraftRevision = acknowledgedResult.draft.revision;
       }
@@ -967,15 +977,19 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       const mutation = owner.pendingAnnotationMutations.find((candidate) => candidate.key === mutationKey);
       if (mutation) mutation.expectedRevision = expectedRevision;
       let accepted = sameContext && acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => sameDraftAnnotation(candidate, annotation));
-      if (!accepted) {
+      if (!accepted && !owner.retiredDraftIds.has(draftAtIntent.draft_id)) {
         const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ target: owner.target, action: { type: "upsert_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation } }));
         acknowledgedResult = recovery.type === "draft" ? recovery : null;
-        if (acknowledgedResult?.type === "draft") {
+        if (acknowledgedResult?.type === "draft" && !retiredDraft(owner, acknowledgedResult.draft)) {
           owner.draft = acknowledgedResult.draft;
           owner.localDraftRevision = acknowledgedResult.draft.revision;
           if (associationOwnerRef.current === owner && !owner.sealed) applyDraft(acknowledgedResult.draft);
         }
         accepted = Boolean(acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => sameDraftAnnotation(candidate, annotation)));
+      }
+      if (owner.retiredDraftIds.has(draftAtIntent.draft_id)) {
+        owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
+        return false;
       }
       latest = snapshotRef.current; sameContext = Boolean(latest && JSON.stringify(context(latest)) === JSON.stringify(documentContext));
       if (accepted) {
@@ -997,7 +1011,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       } else setMessage("Annotation save was not acknowledged; retry it before closing.");
       return accepted;
     } catch (error) {
-      setMessage(`Annotation save failed; retry it before closing: ${errorMessage(error)}`);
+      if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation save failed; retry it before closing: ${errorMessage(error)}`);
+      else owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
       return false;
     }
   };
@@ -1020,10 +1035,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         expectedRevision = candidate.revision;
       };
       let acknowledgedResult = await queueDraftMutation(async () => {
+        if (owner.retiredDraftIds.has(draftAtIntent.draft_id)) return null;
         expectedDraft();
         return command({ type: "draft", context: documentContext, draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, command: { type: "remove_annotation", annotation_id: annotationId } });
       });
-      if (acknowledgedResult?.type === "draft") {
+      if (owner.retiredDraftIds.has(draftAtIntent.draft_id)) {
+        owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
+        return;
+      }
+      if (acknowledgedResult?.type === "draft" && !retiredDraft(owner, acknowledgedResult.draft)) {
         owner.draft = acknowledgedResult.draft;
         owner.localDraftRevision = acknowledgedResult.draft.revision;
       }
@@ -1034,10 +1054,14 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (!acknowledged) {
         const recovery = await queueDraftMutation(() => client.browserDraftRecovery({ target: owner.target, action: { type: "remove_annotation", draft_id: draftAtIntent.draft_id, expected_revision: expectedRevision, annotation_id: annotationId } }));
         acknowledgedResult = recovery.type === "draft" ? recovery : null;
-        if (acknowledgedResult?.type === "draft") {
+        if (acknowledgedResult?.type === "draft" && !retiredDraft(owner, acknowledgedResult.draft)) {
           owner.draft = acknowledgedResult.draft;
           owner.localDraftRevision = acknowledgedResult.draft.revision;
           if (associationOwnerRef.current === owner && !owner.sealed) applyDraft(acknowledgedResult.draft);
+        }
+        if (owner.retiredDraftIds.has(draftAtIntent.draft_id)) {
+          owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
+          return;
         }
         acknowledged = Boolean(acknowledgedResult?.type === "draft" && acknowledgedResult.draft.draft_id === draftAtIntent.draft_id && !acknowledgedResult.draft.annotations.some((candidate: BrowserViewDraftAnnotation) => candidate.id === annotationId));
       }
@@ -1045,15 +1069,24 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((mutation) => mutation.key !== mutationKey);
       }
       else setMessage("Annotation removal was not acknowledged; retry it before closing.");
-    })().catch((error) => setMessage(`Annotation removal failed; retry it before closing: ${errorMessage(error)}`));
+    })().catch((error) => {
+      if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation removal failed; retry it before closing: ${errorMessage(error)}`);
+      else owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
+    });
     setSelectedId((selected) => selected === annotationId ? null : selected);
   };
   const retryAnnotationMutations = useCallback(async (): Promise<void> => {
     const owner = associationOwner;
     for (const mutation of [...owner.pendingAnnotationMutations]) {
+      if (owner.retiredDraftIds.has(mutation.draftId)) {
+        owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutation.key);
+        continue;
+      }
       try {
         const resolution = await queueDraftMutation(async () => {
+          if (owner.retiredDraftIds.has(mutation.draftId)) throw new Error("Browser draft was retired during navigation.");
           const inventory = await client.browserDraftRecovery({ target: owner.target, action: { type: "list" } });
+          if (owner.retiredDraftIds.has(mutation.draftId)) throw new Error("Browser draft was retired during navigation.");
           if (inventory.type !== "draft_inventory") throw new Error("The retained annotation inventory could not be read.");
           const current = inventory.inventory.drafts.find((candidate) => candidate.draft_id === mutation.draftId);
           if (!current) throw new Error("The retained annotation draft no longer exists.");
@@ -1080,12 +1113,20 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
             : !nextDraft.annotations.some((candidate) => candidate.id === mutation.annotationId)));
           return { draft: nextDraft, acknowledged, local: true };
         });
+        if (owner.retiredDraftIds.has(mutation.draftId)) {
+          owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutation.key);
+          continue;
+        }
         if (!resolution.draft || !resolution.acknowledged) throw new Error("The retained annotation action was not acknowledged.");
         owner.draft = resolution.draft;
         if (resolution.local) owner.localDraftRevision = resolution.draft.revision;
         owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutation.key);
         if (associationOwnerRef.current === owner && !owner.sealed) applyDraft(resolution.draft);
       } catch (error) {
+        if (owner.retiredDraftIds.has(mutation.draftId)) {
+          owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutation.key);
+          continue;
+        }
         setMessage(`Could not reconcile retained annotation work: ${errorMessage(error)}`);
         return;
       }
@@ -1189,11 +1230,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const current = snapshotRef.current;
     const accepted = frameRef.current;
     const where = current && accepted && frameMatchesCurrent(accepted) ? location(current, accepted.descriptor) : null;
-    if (!point || !accepted || !where) {
-      setStatus("stale");
-      setMessage("Input cancelled before dispatch; the browser frame is not ready for this gesture.");
-      return;
-    }
+    if (!point || !accepted || !where) return;
     const intent: PointerIntent = {
       pointerId: event.pointerId,
       kind,
@@ -1223,8 +1260,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         remotePointerRef.current = null;
         remotePointerIntentRef.current = null;
         remotePointRef.current = null;
-        setStatus("stale");
-        setMessage("Input stale: the original browser geometry changed; retry the gesture.");
         return;
       }
       const input_sequence = nextInput();
@@ -1236,20 +1271,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       }
     });
   };
-  const releaseRemotePointer = useCallback((): Promise<void> => {
-    const intent = remotePointerIntentRef.current;
-    const current = snapshotRef.current;
-    remotePointerRef.current = null;
-    remotePointerIntentRef.current = null;
-    remotePointRef.current = null;
-    if (!current || !intent || !ownsBrowserControl(current)) return flushInput();
-    const where = locationForInputIntent(intent);
-    if (!where) return flushInput();
-    return enqueueInput("boundary", async () => {
-      const input_sequence = inputSequence.current++;
-      await command({ type: "pointer", location: where, input: { kind: "cancel", button: null, x: intent.point.x, y: intent.point.y, buttons: 0, modifiers: 0, click_count: 0, input_sequence } });
-    });
-  }, [command, enqueueInput, flushInput, locationForInputIntent]);
   const previousToolRef = useRef<Tool>(tool);
   useEffect(() => {
     if (previousToolRef.current !== tool) {
@@ -1375,12 +1396,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       const latest = snapshotRef.current;
       const accepted = frameRef.current;
       const point = viewportPointFor(intent, false, true);
-      const inputLocation = latest && accepted && ownsBrowserControl(latest) && point
+      const paintedLocation = latest && accepted && ownsBrowserControl(latest) && point
         ? location(latest, accepted.descriptor)
         : null;
+      // A scroll-only viewport event advances the input revision before its
+      // pixels arrive; use the painted transform but the current wire cursor.
+      const inputLocation = paintedLocation && latest?.viewport
+        ? { ...paintedLocation, viewport_revision: latest.viewport.viewport_revision }
+        : null;
       if (!point || !inputLocation || generation !== inputGenerationRef.current) {
-        setStatus("stale");
-        setMessage("Scroll is waiting for the resized browser frame. Retry once it is ready.");
         return;
       }
       const input_sequence = nextInput();
@@ -1428,7 +1452,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     setInspection(null);
     gestureRef.current = null;
     setGesture(null);
-    setMessage("Navigation started; existing draft marks remain available for review.");
     onInteractionFocus?.(); void releaseRemotePointer();
     void enqueueInput("boundary", async () => {
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
@@ -1722,7 +1745,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     return () => registerCloseGuard(null);
   }, [associationOwner, closeGuard, discardAnnotationMutations, registerCloseGuard, retryAnnotationMutations]);
   const draftMatchesSnapshot = Boolean(draft && snapshot?.displayed_target_id === draft.target_id && snapshot.document?.document_generation === draft.document_generation);
-  const staleDraft = Boolean(draft && !draftMatchesSnapshot && (hasRecoverableDraft(draft) || editorDirtyRef.current));
   const annotations = draftMatchesSnapshot ? (draft?.annotations ?? []) : [];
   const descriptor = frame?.descriptor;
   const imagePoint = (point: BrowserPoint): BrowserPoint | null => {
@@ -1765,7 +1787,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
-    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{(status === "stale" || status === "error") ? <button type="button" onClick={() => void reconnectView()}>Retry</button> : null}{presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><AnnotationIcon name="expand" /></button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><AnnotationIcon name="expand" /></button> : null}</div></header>
+    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{status === "error" ? <button type="button" onClick={() => void reconnectView()}>Retry</button> : null}{presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><AnnotationIcon name="expand" /></button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><AnnotationIcon name="expand" /></button> : null}</div></header>
     <div className="browser-tabs" role="tablist" aria-label="Browser tabs">{targetTabs.map((browserTarget) => <div key={browserTarget.target_id} className="browser-tab-wrap"><button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{browserTarget.title || browserTarget.url || "New tab"}</button>{browserTarget.can_close ? <button type="button" className="browser-tab-close" aria-label="Close browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } })}>×</button> : null}</div>)}<button type="button" className="browser-new-tab" aria-label="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}>+</button></div>
     <div className="browser-navigation"><button type="button" disabled={!snapshot?.navigation?.can_go_back} onClick={() => navigation("back")}>←</button><button type="button" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}>→</button><button type="button" disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}>{snapshot?.navigation?.loading ? "■" : "↻"}</button><form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}><input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" /></form></div>
     <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
@@ -1788,8 +1810,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={(event) => sendKey(event, "down")} onKeyUp={(event) => sendKey(event, "up")} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
       {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="none" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
-      {frame && (status === "stale" || status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
-      {(staleDraft || staleDrafts.length > 0) ? <div className="browser-recovery browser-recovery-actions" role="status"><span>{staleDraft ? "Draft marks belong to an earlier page; review before continuing." : "Retained drafts are available for review."}</span>{staleDraft ? <><button type="button" onClick={startCurrentDraft}>Start current draft</button><button type="button" onClick={() => void discardStaleDraft()}>Discard stale draft</button></> : null}{staleDrafts.length > 0 ? <ul>{staleDrafts.map((candidate) => <li key={candidate.draft_id}><button type="button" onClick={() => reviewInventoryDraft(candidate)}>Review draft revision {candidate.revision}</button><button type="button" onClick={() => void discardInventoryDraft(candidate)}>Discard</button></li>)}</ul> : null}</div> : null}
+      {frame && (status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
       {blocker ? <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => void command({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div> : null}
       {noteId ? <div className="browser-note-editor"><textarea autoFocus value={noteValue} onChange={(event) => { markEditorDirty(); setNoteValue(event.target.value.slice(0, 4000)); }} maxLength={4000} aria-label="Annotation note" onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); saveNote(); } if (event.key === "Escape") { setNoteId(null); setNoteValue(""); markEditorDirty(); } }} /><div><button type="button" onClick={saveNote}>Save</button><button type="button" onClick={() => { setNoteId(null); setNoteValue(""); markEditorDirty(); }}>Cancel</button></div></div> : null}
     </div>

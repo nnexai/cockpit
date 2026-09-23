@@ -1,0 +1,11 @@
+native_start
+window_close_requested
+window_destroyed
+exit_requested=None
+prevent_exit
+shutdown_spawn
+shutdown_begin
+shutdown_ok
+app_exit
+exit_requested=Some(0)
+exit

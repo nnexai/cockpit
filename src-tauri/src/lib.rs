@@ -1714,6 +1714,7 @@ pub fn run() {
             .clone(),
     );
     let service = service.with_comments(comments);
+    let shutdown_started = Arc::new(AtomicBool::new(false));
     tauri::Builder::default()
         .manage(service)
         .manage(browser_runtime.clone())
@@ -1805,12 +1806,22 @@ pub fn run() {
             } = event
             {
                 api.prevent_exit();
+                if shutdown_started.swap(true, Ordering::AcqRel) {
+                    return;
+                }
                 let projects = shutdown_projects.clone();
                 let browser_runtime = browser_runtime.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    projects.shutdown().await;
+                    // Stop the owned helper before waiting on workspace
+                    // operations that may be waiting on an external Herdr
+                    // response. Neither shutdown path may keep app exit open.
                     let _ = browser_runtime.shutdown().await;
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        projects.shutdown(),
+                    )
+                    .await;
                     app.exit(0);
                 });
             }

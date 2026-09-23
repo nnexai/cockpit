@@ -1,0 +1,58 @@
+{
+  "source_sha256": "552acf44e67aff1dce9bbbe2b51cb3e2d8ee5ab9ab72d0fe01615e32ea5bc22e",
+  "viewport": {
+    "width": 1568,
+    "height": 1009,
+    "dpr": 1.25
+  },
+  "surface": {
+    "width": 1342,
+    "height": 823
+  },
+  "arm_status": 204,
+  "elapsed_ms": 3250,
+  "before": {
+    "count": 26,
+    "canvas": [
+      1342,
+      823
+    ],
+    "status": "Live browser view"
+  },
+  "after": {
+    "count": 220,
+    "canvas": [
+      1342,
+      823
+    ],
+    "sizes": [
+      "703x1029",
+      "562x823",
+      "703x1029",
+      "562x823",
+      "1342x823",
+      "1678x1029",
+      "1342x823",
+      "1678x1029",
+      "1342x823"
+    ],
+    "status": "Live browser view",
+    "alerts": []
+  },
+  "remote_first": {
+    "count": 30,
+    "width": 1342,
+    "height": 823,
+    "dpr": 1.25,
+    "at": 53994.39999997616,
+    "received_at": 144526.387317784
+  },
+  "remote_last": {
+    "count": 180,
+    "width": 1342,
+    "height": 823,
+    "dpr": 1.25,
+    "at": 56494.19999998808,
+    "received_at": 144528.886615143
+  }
+}

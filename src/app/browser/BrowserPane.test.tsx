@@ -88,6 +88,8 @@ describe("BrowserPane wheel recovery", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 30));
     });
     expect(firstFrame.ack).toHaveBeenCalledOnce();
+    const canvas = host.querySelector<HTMLCanvasElement>("canvas.browser-frame")!;
+    expect([canvas.width, canvas.height]).toEqual([4, 3]);
 
     await act(async () => {
       emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, viewport: viewport(2, 120) });

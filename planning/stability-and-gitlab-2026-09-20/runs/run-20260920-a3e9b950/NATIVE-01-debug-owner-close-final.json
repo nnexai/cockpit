@@ -1,0 +1,22 @@
+{
+  "session": "native-e90eec058b4f",
+  "installed_binary_sha256": "370fc51e14fdaf3c3ae0ffd4c9eb0c3a78da9db0fac3bf39bc9309d430291a3e",
+  "installed_and_running_inode": 471917,
+  "native_open_source": "Cockpit Tauri UI",
+  "gateway_started": false,
+  "first_canvas": {"css": [674, 188.46875], "bitmap": [1348, 376], "dpr": 2},
+  "animation": {"canvas_draws": 361, "seconds": 6.008305486990139, "fps": 60.08349621730751, "root_scroll_y": 3900, "left_and_right_header_rgb": [0, 167, 75]},
+  "wheels": [
+    {"target": "nested", "delta_y_css": 180, "nested_scroll_top": 180, "root_scroll_y": 3900, "paint_count": 362},
+    {"target": "nested", "delta_y_css": -70, "nested_scroll_top": 110, "root_scroll_y": 3900, "paint_count": 365},
+    {"target": "root", "delta_y_css": 160, "nested_scroll_top": 110, "root_scroll_y": 4060, "paint_count": 369},
+    {"target": "root", "delta_y_css": -90, "nested_scroll_top": 110, "root_scroll_y": 3970, "paint_count": 372}
+  ],
+  "native_descendants_before_close": [
+    {"pid": 1955204, "start_ticks": 31259541, "comm": "cockpit"},
+    {"pid": 1955271, "start_ticks": 31259556, "comm": "WebKitWebProces"},
+    {"pid": 1955243, "start_ticks": 31259551, "comm": "WebKitNetworkPr"}
+  ],
+  "close": {"method": "private Niri close-window --id 2", "socket_native_owned_before": true, "live_native_descendants_after": [], "owner_sockets_remaining": [], "herdr_alive_after": true},
+  "note": "Actual uninstrumented shipping debug build; post-wheel bitmap was CSS-sized, so physical-density gate remains open."
+}

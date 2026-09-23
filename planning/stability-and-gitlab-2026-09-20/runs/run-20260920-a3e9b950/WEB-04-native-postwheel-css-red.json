@@ -1,0 +1,158 @@
+{
+  "source_sha256": "552acf44e67aff1dce9bbbe2b51cb3e2d8ee5ab9ab72d0fe01615e32ea5bc22e",
+  "session": "native-d8cdd1f9f647",
+  "failure": "RuntimeError: Timed out waiting for settled physical-size native bitmap after nested and root wheel gestures",
+  "canvas_after_wheels": {
+    "cssWidth": 674,
+    "height": 188,
+    "dpr": 2,
+    "width": 674,
+    "cssHeight": 188.46875
+  },
+  "first_canvas": {
+    "width": 1348,
+    "left": 1,
+    "heightCss": 188.46875,
+    "widthCss": 674,
+    "top": 645.53125,
+    "height": 376
+  },
+  "paints": {
+    "source": "canvas.browser-frame CanvasRenderingContext2D.drawImage",
+    "timestamps": 362,
+    "interval_seconds": 6.011999128997559,
+    "fixture_animation_ms": 6011.399999976158,
+    "fps": 60.21291624178261,
+    "threshold_fps_exclusive": 15,
+    "final_scroll_y": 3900,
+    "visible_final_marker_rgb": [
+      0,
+      167,
+      75
+    ],
+    "full_width_marker": {
+      "right": [
+        0,
+        167,
+        75
+      ],
+      "left": [
+        0,
+        167,
+        75
+      ],
+      "bitmap": [
+        674,
+        188
+      ],
+      "surface": [
+        674,
+        188.46875
+      ]
+    }
+  },
+  "nested_wheel": [
+    {
+      "step": "nested forward",
+      "delta_y_css": 180,
+      "surface_position": {
+        "x": 121,
+        "y": 745.53125
+      },
+      "page_scroll_y": 3900,
+      "nested_scroll_top": 180,
+      "nested_wheel_y": 90,
+      "paint_count": 363,
+      "host_scroll_y": 0
+    },
+    {
+      "step": "nested reverse",
+      "delta_y_css": -70,
+      "surface_position": {
+        "x": 121,
+        "y": 745.53125
+      },
+      "page_scroll_y": 3900,
+      "nested_scroll_top": 110,
+      "nested_wheel_y": -35,
+      "paint_count": 367,
+      "host_scroll_y": 0
+    },
+    {
+      "step": "outer forward",
+      "delta_y_css": 160,
+      "surface_position": {
+        "x": 121,
+        "y": 811.53125
+      },
+      "page_scroll_y": 4060,
+      "nested_scroll_top": 110,
+      "nested_wheel_y": -35,
+      "paint_count": 370,
+      "host_scroll_y": 0
+    },
+    {
+      "step": "outer reverse",
+      "delta_y_css": -90,
+      "surface_position": {
+        "x": 121,
+        "y": 811.53125
+      },
+      "page_scroll_y": 3970,
+      "nested_scroll_top": 110,
+      "nested_wheel_y": -35,
+      "paint_count": 373,
+      "host_scroll_y": 0
+    }
+  ],
+  "last_scroll_screenshot_lanes": [
+    {
+      "phase": "screenshot_send",
+      "monotonic_ms": 143920362,
+      "pid": 1883904,
+      "clip": {
+        "x": 0,
+        "y": 3970,
+        "width": 674,
+        "height": 188,
+        "scale": 1
+      }
+    },
+    {
+      "phase": "screenshot_send",
+      "monotonic_ms": 143920362,
+      "pid": 1883948,
+      "clip": {
+        "x": 0,
+        "y": 3970,
+        "width": 674,
+        "height": 188,
+        "scale": 1
+      }
+    },
+    {
+      "phase": "screenshot_send",
+      "monotonic_ms": 143920523,
+      "pid": 1883948,
+      "clip": {
+        "x": 0,
+        "y": 3970,
+        "width": 674,
+        "height": 188,
+        "scale": 1
+      }
+    },
+    {
+      "phase": "screenshot_send",
+      "monotonic_ms": 143920523,
+      "pid": 1883904,
+      "clip": {
+        "x": 0,
+        "y": 3970,
+        "width": 674,
+        "height": 188,
+        "scale": 1
+      }
+    }
+  ]
+}

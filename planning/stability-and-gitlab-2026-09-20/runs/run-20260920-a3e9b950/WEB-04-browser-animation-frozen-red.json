@@ -1,0 +1,39 @@
+{
+  "source_sha256": "5bb6c1f0b95144e42f708e3326724457d0855fca83c564daee5daa1b93a73547",
+  "viewport": {
+    "width": 1342,
+    "height": 823,
+    "dpr": 1.25
+  },
+  "before": {
+    "draws": 5,
+    "canvas": [
+      1678,
+      1029
+    ]
+  },
+  "after": {
+    "draws": 5,
+    "canvas": [
+      1678,
+      1029
+    ],
+    "alerts": []
+  },
+  "remote_first": {
+    "count": 30,
+    "width": 1342,
+    "height": 823,
+    "dpr": 1.25,
+    "at": 12990.600000023842,
+    "received_at": 143306.219378917
+  },
+  "remote_last": {
+    "count": 180,
+    "width": 1342,
+    "height": 823,
+    "dpr": 1.25,
+    "at": 15490.5,
+    "received_at": 143308.719491275
+  }
+}

@@ -126,6 +126,9 @@ struct WireError {
 
 struct Owner {
     lock: File,
+    socket: PathBuf,
+    socket_device: u64,
+    socket_inode: u64,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -210,6 +213,10 @@ impl BrowserRuntime {
                     .map_err(|error| io_error("browser_owner_unavailable", error))?;
                 fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
                     .map_err(|error| io_error("browser_owner_unavailable", error))?;
+                let socket_metadata = fs::symlink_metadata(&socket)
+                    .map_err(|error| io_error("browser_owner_unavailable", error))?;
+                let socket_device = socket_metadata.dev();
+                let socket_inode = socket_metadata.ino();
                 let expected_uid = lock
                     .metadata()
                     .map_err(|error| io_error("browser_owner_unavailable", error))?
@@ -218,6 +225,8 @@ impl BrowserRuntime {
                 let (stop_tx, mut stop_rx) = oneshot::channel();
                 let owner_service = Arc::clone(&service);
                 let cleanup_socket = socket.clone();
+                let cleanup_device = socket_device;
+                let cleanup_inode = socket_inode;
                 let mut reconcile = tokio::time::interval(Duration::from_secs(15));
                 let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
                 let mut retired = helper.take_retired_receiver().await.expect("retirement receiver available");
@@ -244,11 +253,20 @@ impl BrowserRuntime {
                             }
                         }
                     }
-                    let _ = fs::remove_file(cleanup_socket);
+                    if let Ok(metadata) = fs::symlink_metadata(&cleanup_socket)
+                        && metadata.file_type().is_socket()
+                        && metadata.dev() == cleanup_device
+                        && metadata.ino() == cleanup_inode
+                    {
+                        let _ = fs::remove_file(cleanup_socket);
+                    }
                 });
                 Ok(Self {
                     role: Mutex::new(RuntimeRole::Owner(Owner {
                         lock,
+                        socket: socket.clone(),
+                        socket_device,
+                        socket_inode,
                         stop: Some(stop_tx),
                         task: Some(task),
                     })),
@@ -477,31 +495,48 @@ impl BrowserRuntime {
         let owner = {
             let mut role = self.role.lock().await;
             match &mut *role {
-                RuntimeRole::Owner(owner) => (
-                    owner.stop.take(),
-                    owner.task.take(),
-                ),
-                RuntimeRole::Observer { .. } => (None, None),
+                RuntimeRole::Owner(owner)
+                    if owner.stop.is_some() || owner.task.is_some() =>
+                {
+                    Some((
+                        owner.stop.take(),
+                        owner.task.take(),
+                        owner.socket.clone(),
+                        owner.socket_device,
+                        owner.socket_inode,
+                    ))
+                }
+                RuntimeRole::Owner(_) | RuntimeRole::Observer { .. } => None,
             }
         };
-        if owner.0.is_some() {
-            if let Some(helper) = &self.helper {
-                helper.shutdown().await;
-            }
-            let service_result = self.service.shutdown().await;
-            if let Some(stop) = owner.0 {
-                let _ = stop.send(());
-            }
-            if let Some(task) = owner.1 {
+        let Some((stop, mut task, socket, socket_device, socket_inode)) = owner else {
+            return Ok(());
+        };
+        if let Some(helper) = &self.helper {
+            helper.shutdown().await;
+        }
+        if let Some(stop) = stop {
+            let _ = stop.send(());
+        }
+        if let Some(mut task) = task.take() {
+            if timeout(Duration::from_secs(2), &mut task).await.is_err() {
+                task.abort();
                 let _ = task.await;
             }
-            let mut role = self.role.lock().await;
-            if let RuntimeRole::Owner(owner) = &mut *role {
-                let _ = owner.lock.unlock();
-            }
-            return service_result;
         }
-        Ok(())
+        if let Ok(metadata) = fs::symlink_metadata(&socket)
+            && metadata.file_type().is_socket()
+            && metadata.dev() == socket_device
+            && metadata.ino() == socket_inode
+        {
+            let _ = fs::remove_file(&socket);
+        }
+        let service_result = self.service.shutdown().await;
+        let mut role = self.role.lock().await;
+        if let RuntimeRole::Owner(owner) = &mut *role {
+            let _ = owner.lock.unlock();
+        }
+        service_result
     }
 
     pub async fn is_owner(&self) -> bool {

@@ -22,6 +22,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UnixStream},
     sync::Mutex,
+    task::JoinSet,
 };
 use uuid::Uuid;
 
@@ -387,16 +388,51 @@ impl BrowserService {
         self.shutting_down.store(true, Ordering::Release);
         let _operation = self.operation_lock.lock().await;
         let receipts = self.load_all()?;
-        let mut first_error = None;
-        for mut receipt in receipts {
-            if let Err(error) = self.close(&mut receipt).await {
-                first_error.get_or_insert(error);
+        let mut pending = receipts.into_iter().enumerate();
+        let mut receipt_errors = std::iter::repeat_with(|| None)
+            .take(pending.len())
+            .collect::<Vec<Option<InspectionError>>>();
+        let mut closing = JoinSet::new();
+        let mut task_error = None;
+
+        loop {
+            while closing.len() < 4 {
+                let Some((index, mut receipt)) = pending.next() else {
+                    break;
+                };
+                let service = self.clone();
+                closing.spawn(async move {
+                    let mut first_error = None;
+                    if let Err(error) = service.close(&mut receipt).await {
+                        first_error = Some(error);
+                    }
+                    if let Err(error) = service.store(&receipt) {
+                        first_error.get_or_insert(error);
+                    }
+                    (index, first_error)
+                });
             }
-            if let Err(error) = self.store(&receipt) {
-                first_error.get_or_insert(error);
+            let Some(result) = closing.join_next().await else {
+                break;
+            };
+            match result {
+                Ok((index, error)) => receipt_errors[index] = error,
+                Err(_) => {
+                    task_error.get_or_insert_with(|| {
+                        InspectionError::new(
+                            "browser_shutdown_task_failed",
+                            "Browser association shutdown task failed",
+                        )
+                    });
+                }
             }
         }
-        first_error.map_or(Ok(()), Err)
+        receipt_errors
+            .into_iter()
+            .flatten()
+            .next()
+            .or(task_error)
+            .map_or(Ok(()), Err)
     }
 
     async fn resolve_target(

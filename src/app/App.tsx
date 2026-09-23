@@ -1306,7 +1306,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     setBrowserBusy(false);
     browserBusyRef.current = false;
     return () => { browserRequest.current += 1; };
-  }, [browserAction, selection.spaceId, state.sessionId, state.sync]);
+  // A transient Herdr sync loss does not change the selected association: keep
+  // its in-flight open response, then render the view read-only until sync resumes.
+  }, [selection.spaceId, state.sessionId, state.epoch]);
   const feedbackBusyRef = useRef(false);
   const feedbackRequest = useRef(0);
   const sendFeedback = useCallback(async (ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => {

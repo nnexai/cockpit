@@ -1,0 +1,18 @@
+{
+  "session": "native-1c274e6f49ce",
+  "installed_binary_sha256": "370fc51e14fdaf3c3ae0ffd4c9eb0c3a78da9db0fac3bf39bc9309d430291a3e",
+  "installed_and_running_inode": 462920,
+  "native_owner_socket": "/tmp/cnative-uq8zu8f5/cockpit-state/browser/owner.sock",
+  "socket_held_by_native_tree_before_close": true,
+  "native_descendants_before_close": [
+    {"pid": 1930956, "start_ticks": 31217290, "comm": "cockpit"},
+    {"pid": 1931021, "start_ticks": 31217306, "comm": "WebKitWebProces"},
+    {"pid": 1930993, "start_ticks": 31217300, "comm": "WebKitNetworkPr"}
+  ],
+  "close_action": "WebDriver DELETE /window",
+  "after_15_seconds": {
+    "live_native_descendants": [],
+    "owned_sockets_remaining": ["/tmp/cnative-uq8zu8f5/cockpit-state/browser/owner.sock"]
+  },
+  "result": "failure: exact owner socket remained after installed app and descendants exited; isolated private Herdr remained independent"
+}

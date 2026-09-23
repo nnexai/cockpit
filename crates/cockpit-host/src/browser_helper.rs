@@ -735,8 +735,11 @@ impl BrowserHelperSupervisor {
         }
         if last_view {
             let _ = managed.input.send(HelperInput::Detach).await;
-            if let Some(task) = managed.task.lock().await.take() {
-                let _ = timeout(HELPER_STOP_TIMEOUT, task).await;
+            if let Some(mut task) = managed.task.lock().await.take() {
+                if timeout(HELPER_STOP_TIMEOUT, &mut task).await.is_err() {
+                    task.abort();
+                    let _ = task.await;
+                }
             }
         } else {
             let _ = managed
@@ -800,22 +803,49 @@ impl BrowserHelperSupervisor {
         let last_view = associations.values().all(Vec::is_empty) || associations.values().all(|ids| ids.is_empty());
         associations.retain(|_, ids| !ids.is_empty());
         drop(associations);
-        if let Some(task) = managed.forward_task { task.abort(); }
+        if let Some(task) = managed.forward_task {
+            task.abort();
+        }
         if last_view {
             let _ = managed.input.send(HelperInput::Detach).await;
-            if let Some(task) = managed.task.lock().await.take() { let _ = timeout(HELPER_STOP_TIMEOUT, task).await; }
-        } else { let _ = managed.input.send(HelperInput::DetachView { view_id: view_id.to_owned() }).await; }
+            if let Some(mut task) = managed.task.lock().await.take() {
+                if timeout(HELPER_STOP_TIMEOUT, &mut task).await.is_err() {
+                    task.abort();
+                    let _ = task.await;
+                }
+            }
+        } else {
+            let _ = managed
+                .input
+                .send(HelperInput::DetachView {
+                    view_id: view_id.to_owned(),
+                })
+                .await;
+        }
     }
     pub(crate) async fn shutdown(&self) {
         self.associations.lock().await.clear();
         self.native_connections.lock().await.clear();
         let views = std::mem::take(&mut *self.views.lock().await);
         let mut stopped = std::collections::HashSet::new();
+        let mut tasks = Vec::new();
         for (_, view) in views {
-            if let Some(task) = view.forward_task { task.abort(); }
+            if let Some(task) = view.forward_task {
+                task.abort();
+            }
             if stopped.insert(Arc::as_ptr(&view.task) as usize) {
-                let _ = view.input.send(HelperInput::Stop).await;
-                if let Some(task) = view.task.lock().await.take() { let _ = timeout(HELPER_STOP_TIMEOUT, task).await; }
+                let _ = view.input.try_send(HelperInput::Stop);
+                if let Some(task) = view.task.lock().await.take() {
+                    tasks.push(task);
+                }
+            }
+        }
+        let deadline = tokio::time::Instant::now() + HELPER_STOP_TIMEOUT;
+        for mut task in tasks {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if timeout(remaining, &mut task).await.is_err() {
+                task.abort();
+                let _ = task.await;
             }
         }
     }
@@ -914,7 +944,7 @@ fn set_private_permissions(path: &Path, file: bool) -> Result<(), InspectionErro
 
 
 async fn run_helper(
-    mut child: Child,
+    _child: Child,
     mut stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
     input: &mut mpsc::Receiver<HelperInput>,

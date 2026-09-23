@@ -1,0 +1,47 @@
+{
+  "source_browser_helper_sha256": "552acf44e67aff1dce9bbbe2b51cb3e2d8ee5ab9ab72d0fe01615e32ea5bc22e",
+  "installed_release_executable_sha256": "ba7e84c33c42a5a0804376491df4a6b7198b9ee8f990e523ad6d46ac855dfe1c",
+  "embedded_frontend_script": "tauri://localhost/assets/index-CzXuBxoL.js",
+  "verification_binary": "/tmp/cinstall-stream-vQqZ6f/share/cockpit/bin/cockpit",
+  "first_open_failures": [
+    {
+      "session": "native-6ff6469f0398",
+      "scenario_root": "/tmp/cnative-k7duzshr",
+      "timeout_seconds": 20,
+      "observation": "Browser association receipt was open with target_id 9C1339BCC3C9DD15439AA3FA14F341ED, but the embedded frontend still showed the terminal and no browser navigation field."
+    },
+    {
+      "session": "native-742dec9189af",
+      "scenario_root": "/tmp/cnative-hn4bck_g",
+      "timeout_seconds": 35,
+      "observation": "Browser association receipt was open with target_id 8578E0EC408B4425EFE56CB94B05896B, but the same first-open UI assertion timed out."
+    },
+    {
+      "session": "native-6a3fefc67afd",
+      "scenario_root": "/tmp/cnative-4clcg1d_",
+      "timeout_seconds": 12,
+      "before": {"sync": "live", "epoch": 1, "selection": {"spaceId": "w1", "tabId": "w1:t1", "paneId": "w1:p1"}, "react_browser_request_ref_index_66": 5},
+      "after": {"sync": "live", "epoch": 1, "selection": {"spaceId": "w1", "tabId": "w1:t1", "paneId": "w1:p1"}, "react_browser_request_ref_index_66": 10, "browserPane": false, "browserToggle": "Open browser"},
+      "second_click_probe": {"triggered": true, "browserPaneAfterRetry": true},
+      "failed_first_click_screenshot": "NATIVE-01-release-open-race-red.png",
+      "failed_first_click_screenshot_sha256": "eaedafba81c52ed6d3b0616b3188b5eeb51c93e7a3550b37a9f3f23927bc311d"
+    }
+  ],
+  "intermittent_success_before_fix": {
+    "session": "native-631f0d9f66a2",
+    "scenario_root": "/tmp/cnative-tgoxnflz",
+    "single_first_click": true,
+    "embedded_frontend_script": "tauri://localhost/assets/index-CzXuBxoL.js",
+    "first_bitmap": [1348, 376],
+    "first_css_surface": [674, 188.46875],
+    "actual_native_canvas_draws": 361,
+    "animation_seconds": 6.010002186987549,
+    "fps": 60.06653388273516,
+    "routed_nested_scroll": [0, 180, 110],
+    "routed_outer_scroll": [3900, 4060, 3970],
+    "real_compositor_close": {"window_id": 2, "native_descendants_after": [], "owned_sockets_after": [], "herdr_alive": true},
+    "screenshot": "NATIVE-01-release-before-sync-fix-green.png",
+    "screenshot_sha256": "c175b776c8133ff532bba0ed9acd6e6073a904d96bf7a106ec02ac583ad789e4"
+  },
+  "diagnosis": "The first click sometimes opened a real exact-owned association and completed its receipt while transient Herdr sync changes invalidated the frontend request token. A later click could display that already-open association. This red evidence is not native lifecycle acceptance; it motivates removing sync from same-session/Space request invalidation."
+}

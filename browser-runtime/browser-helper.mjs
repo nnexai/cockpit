@@ -19,6 +19,7 @@ const FRAME_INTERVAL_MS = 1000 / 30;
 const MAX_FRAME_PEERS = 32;
 const PREAUTH_TIMEOUT_MS = 5000;
 const SCROLL_SETTLE_DELAY_MS = 120;
+const MAX_DENSITY_REFINEMENT_ATTEMPTS = 2;
 
 const START_PAGE_PATH = '/__cockpit_browser_start__';
 const START_PAGE_HTML = `<!doctype html>
@@ -30,6 +31,7 @@ const START_PAGE_HTML = `<!doctype html>
 let frameBarrier = Promise.resolve();
 let frameGeometryRepair = Promise.resolve();
 let screencastTransition = Promise.resolve();
+let viewportControl = Promise.resolve();
 let screencastActive = false;
 let context;
 let browser;
@@ -39,12 +41,15 @@ let browserCdp;
 let state;
 let densityScreenshotInFlight = false;
 let densityScreenshotPending = null;
-let liveFrameValidationInFlight = false;
-let liveFrameValidationPending = null;
-let liveViewportProof = null;
+let densityScreenshotPromise = Promise.resolve('stale');
 let scrollRefinementTimer = null;
 let scrollRefinementContext = null;
-let densityScreenshotPromise = Promise.resolve('stale');
+let wheelRefinementTimer = null;
+let wheelRefinementContext = null;
+let densityRefinementTimer = null;
+let densityRefinementContext = null;
+let screencastFrameArrivalSequence = 0;
+let screenshotCommandInFlight = null;
 let server;
 let dummyServer;
 let dummyUrl;
@@ -218,9 +223,8 @@ function documentState() {
 function viewportState() {
   return {
     viewport_revision: state.viewportRevision,
-    // Requested CSS dimensions and measured visual-viewport geometry are
-    // intentionally tracked separately. Until metrics are confirmed, expose
-    // the request but mark the geometry stale so consumers cannot act on it.
+    // Geometry is measured from the live page while requested dimensions are
+    // retained separately for the asynchronous emulation correction.
     css_width: state.geometryFresh ? state.viewportCssWidth : state.requestedCssWidth,
     css_height: state.geometryFresh ? state.viewportCssHeight : state.requestedCssHeight,
     visual_offset_x: state.visualOffsetX,
@@ -229,7 +233,7 @@ function viewportState() {
     scroll_y: state.scrollY,
     visual_scale: state.visualScale,
     page_scale: state.pageScale,
-    device_pixel_ratio: state.requestedDevicePixelRatio,
+    device_pixel_ratio: state.geometryFresh ? state.measuredDevicePixelRatio : state.requestedDevicePixelRatio,
     geometry_fresh: state.geometryFresh,
   };
 }
@@ -397,7 +401,7 @@ function geometrySnapshot() {
     scrollY: state.scrollY,
     visualScale: state.visualScale,
     pageScale: state.pageScale,
-    dpr: state.requestedDevicePixelRatio,
+    dpr: state.measuredDevicePixelRatio,
     captureToken: state.captureToken,
   };
 }
@@ -417,52 +421,58 @@ function geometryEqual(left, right) {
     && left.pageScale === right.pageScale
     && left.captureToken === right.captureToken);
 }
-function invalidateViewport() {
-  state.viewportRevision++;
-  state.inputViewportRevision = state.viewportRevision;
-  state.geometryFresh = false;
-  state.viewportTransition = true;
-  resetFrameTransport();
+function queueViewportControl(operation) {
+  const next = viewportControl.then(operation, operation);
+  viewportControl = next.catch(() => {});
+  return next;
 }
-async function applyRequestedViewport(viewport, expectedCdp = pageCdp, expectedBinding = pageBindingGeneration, commitRequest = true) {
+async function applyRequestedViewport(
+  viewport,
+  expectedCdp = pageCdp,
+  expectedBinding = pageBindingGeneration,
+  commitRequest = true,
+  current = () => true,
+) {
   const requested = requestedViewport(viewport);
-  await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
-    width: requested.width,
-    height: requested.height,
-    deviceScaleFactor: requested.dpr,
-    mobile: false,
-    screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
-    screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
+  return queueViewportControl(async () => {
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !current()) {
+      throw new Error('browser page identity changed before viewport control');
+    }
+    await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
+      width: requested.width,
+      height: requested.height,
+      deviceScaleFactor: requested.dpr,
+      mobile: false,
+      screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
+      screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
+    });
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !current()) {
+      throw new Error('browser page identity changed while applying viewport');
+    }
+    if (commitRequest) {
+      state.requestedCssWidth = requested.width;
+      state.requestedCssHeight = requested.height;
+      state.requestedDevicePixelRatio = requested.dpr;
+      prepareDensityCorrectionForCurrentRequest();
+    }
+    return requested;
   });
-  if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding)) throw new Error('browser page binding changed while applying viewport');
-  if (commitRequest) {
-    state.requestedCssWidth = requested.width;
-    state.requestedCssHeight = requested.height;
-    state.requestedDevicePixelRatio = requested.dpr;
-    prepareDensityCorrectionForCurrentRequest();
-  }
-  return requested;
 }
 function pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding) {
   return Boolean(state && page === expectedPage && pageCdp === expectedCdp && pageBindingGeneration === expectedBinding);
 }
-function measuredGeometry(metrics, dpr, requestedCssWidth, requestedCssHeight) {
+function measuredGeometry(metrics, dpr, actualCssWidth, actualCssHeight) {
   const visual = metrics?.cssVisualViewport || metrics?.visualViewport;
-  if (!visual || !Number.isFinite(Number(requestedCssWidth))
-    || !Number.isFinite(Number(requestedCssHeight))
-    || requestedCssWidth <= 0 || requestedCssHeight <= 0
+  if (!visual || !Number.isFinite(Number(actualCssWidth))
+    || !Number.isFinite(Number(actualCssHeight))
+    || actualCssWidth <= 0 || actualCssHeight <= 0
     || !Number.isFinite(Number(visual.offsetX)) || !Number.isFinite(Number(visual.offsetY))
     || !Number.isFinite(Number(visual.pageX)) || !Number.isFinite(Number(visual.pageY))
     || !Number.isFinite(Number(visual.scale)) || Number(visual.scale) <= 0
     || !Number.isFinite(Number(dpr)) || Number(dpr) <= 0) return null;
   return {
-    // CDP's cssVisualViewport.clientWidth can shrink when a page gains a
-    // scrollbar, while screencast pixels and Input.dispatchMouseEvent still
-    // cover the full emulated layout viewport. Keep that coordinate space
-    // anchored to the accepted emulation size; otherwise navigation can
-    // oscillate frame geometry and shift pointer coordinates by scrollbar width.
-    width: requestedCssWidth,
-    height: requestedCssHeight,
+    width: actualCssWidth,
+    height: actualCssHeight,
     offsetX: Number(visual.offsetX),
     offsetY: Number(visual.offsetY),
     scrollX: Number(visual.pageX),
@@ -474,10 +484,12 @@ function measuredGeometry(metrics, dpr, requestedCssWidth, requestedCssHeight) {
 }
 function prepareDensityCorrectionForCurrentRequest() {
   if (state.densityRepairDocumentGeneration === state.documentGeneration
+    && state.densityRepairBindingGeneration === pageBindingGeneration
     && state.densityRepairCssWidth === state.requestedCssWidth
     && state.densityRepairCssHeight === state.requestedCssHeight
     && state.densityRepairDpr === state.requestedDevicePixelRatio) return;
   state.densityRepairDocumentGeneration = state.documentGeneration;
+  state.densityRepairBindingGeneration = pageBindingGeneration;
   state.densityRepairCssWidth = state.requestedCssWidth;
   state.densityRepairCssHeight = state.requestedCssHeight;
   state.densityRepairDpr = state.requestedDevicePixelRatio;
@@ -500,18 +512,9 @@ function requestedViewportStillMatches(requested) {
     && state.requestedCssHeight === requested.height
     && state.requestedDevicePixelRatio === requested.dpr;
 }
-function reportViewportDrift(message) {
-  if (state.densityRepairFailed) return;
-  state.densityRepairFailed = true;
-  emit({
-    type: 'failed',
-    code: 'browser_viewport_drift',
-    message: `Browser CSS viewport or DPR differs from the accepted request: ${message}`,
-  });
-}
-async function reapplyRequestedViewportForDrift(expectedPage, expectedCdp, expectedBinding) {
+function scheduleRequestedViewportCorrection(expectedPage, expectedCdp, expectedBinding) {
   prepareDensityCorrectionForCurrentRequest();
-  if (state.densityRepairAttempted || state.densityRepairInFlight || state.densityRepairFailed) return false;
+  if (state.densityRepairAttempted || state.densityRepairInFlight || state.densityRepairFailed) return;
   const requested = {
     width: state.requestedCssWidth,
     height: state.requestedCssHeight,
@@ -519,34 +522,65 @@ async function reapplyRequestedViewportForDrift(expectedPage, expectedCdp, expec
   };
   const documentGeneration = state.documentGeneration;
   const attemptId = ++state.densityRepairAttemptId;
+  state.densityRepairAttempted = true;
   state.densityRepairInFlight = true;
-  const sameDocumentAndRequest = () => pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)
+  const stillCurrent = () => pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)
+    && state.documentGeneration === documentGeneration
+    && requestedViewportStillMatches(requested)
+    && state.densityRepairAttemptId === attemptId;
+  void (async () => {
+    try {
+      await applyRequestedViewport({
+        css_width: requested.width,
+        css_height: requested.height,
+        device_pixel_ratio: requested.dpr,
+      }, expectedCdp, expectedBinding, false, stillCurrent);
+      if (!stillCurrent()) return;
+      const changed = await updatePageState(expectedPage, expectedCdp, expectedBinding, false);
+      if (!stillCurrent()) return;
+      if (changed) emitEvent('viewport_changed', { viewport: viewportState() });
+      // A failed best-effort correction leaves the measured stream usable.
+      state.densityRepairFailed = !state.geometryFresh || !actualViewportMatchesRequest({
+        width: state.viewportCssWidth,
+        height: state.viewportCssHeight,
+        dpr: state.measuredDevicePixelRatio,
+      });
+    } catch {
+      if (stillCurrent()) state.densityRepairFailed = true;
+    } finally {
+      if (state.densityRepairAttemptId === attemptId) state.densityRepairInFlight = false;
+    }
+  })();
+}
+async function restoreCssInputModeAfterLoader(expectedPage, expectedCdp, expectedBinding, loaderId, documentGeneration) {
+  const requested = {
+    width: state.requestedCssWidth,
+    height: state.requestedCssHeight,
+    dpr: state.requestedDevicePixelRatio,
+  };
+  const targetId = state.targetId;
+  const current = () => pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)
+    && state.targetId === targetId
+    && state.loaderId === loaderId
     && state.documentGeneration === documentGeneration
     && requestedViewportStillMatches(requested);
+  if (!current()) return false;
   try {
-    await stopScreencast(expectedCdp);
-    if (!sameDocumentAndRequest()) return false;
-    await applyRequestedViewport({
+    const applied = await applyRequestedViewport({
       css_width: requested.width,
       css_height: requested.height,
       device_pixel_ratio: requested.dpr,
-    }, expectedCdp, expectedBinding, false);
-    if (pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) state.cdpInputScale = 1;
-    if (!sameDocumentAndRequest()) return false;
-    state.densityRepairAttempted = true;
-    await updatePageState(expectedPage, expectedCdp, expectedBinding, false);
-    if (!state.geometryFresh) return false;
-    await startScreencast(expectedCdp, expectedBinding);
-    await captureCurrentFrame(expectedCdp, expectedBinding);
+    }, expectedCdp, expectedBinding, false, current);
+    if (!current() || applied.width !== requested.width || applied.height !== requested.height
+      || applied.dpr !== requested.dpr) return false;
+    state.cdpInputScale = 1;
     return true;
-  } catch (error) {
-    if (sameDocumentAndRequest()) reportViewportDrift(String(error.message || error));
+  } catch {
+    // Keep the conservative current input mapping if CDP did not confirm the
+    // identity-pinned same-viewport override.
     return false;
-  } finally {
-    if (state.densityRepairAttemptId === attemptId) state.densityRepairInFlight = false;
   }
 }
-
 async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expectedBinding = pageBindingGeneration, allowCorrection = true) {
   if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
   prepareDensityCorrectionForCurrentRequest();
@@ -563,29 +597,15 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
       dpr: Number(window.devicePixelRatio),
     })).catch(() => null);
     if (!pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return false;
-    const previousMeasuredDevicePixelRatio = state.measuredDevicePixelRatio;
-    state.measuredDevicePixelRatio = Number.isFinite(Number(actual?.dpr)) ? Number(actual.dpr) : null;
-    if (!actualViewportMatchesRequest(actual)) {
-      if (state.geometryFresh) invalidateViewport();
-      else resetFrameTransport();
-      if (!allowCorrection) {
-        reportViewportDrift('live page metrics still conflict after reapplying the accepted viewport');
-        return false;
-      }
-      if (state.densityRepairAttempted || state.densityRepairInFlight || state.densityRepairFailed) {
-        if (!state.densityRepairInFlight) reportViewportDrift('live page metrics conflict after the bounded correction');
-        return false;
-      }
-      return await reapplyRequestedViewportForDrift(expectedPage, expectedCdp, expectedBinding);
+    if (!Number.isFinite(Number(actual?.width)) || !Number.isFinite(Number(actual?.height))
+      || !Number.isFinite(Number(actual?.dpr)) || actual.width <= 0 || actual.height <= 0 || actual.dpr <= 0) {
+      if (!state.captureBaseline) state.geometryFresh = false;
+      return false;
     }
-    const geometry = measuredGeometry(
-      metrics,
-      state.requestedDevicePixelRatio,
-      state.requestedCssWidth,
-      state.requestedCssHeight,
-    );
+    const previousMeasuredDevicePixelRatio = state.measuredDevicePixelRatio;
+    const geometry = measuredGeometry(metrics, actual.dpr, actual.width, actual.height);
     if (!geometry) {
-      state.geometryFresh = false;
+      if (!state.captureBaseline) state.geometryFresh = false;
       return false;
     }
     const changed = state.viewportCssWidth !== geometry.width
@@ -596,7 +616,7 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
       || state.scrollY !== geometry.scrollY
       || state.visualScale !== geometry.scale
       || state.pageScale !== geometry.pageScale
-      || previousMeasuredDevicePixelRatio !== Number(actual.dpr);
+      || previousMeasuredDevicePixelRatio !== geometry.dpr;
     state.viewportCssWidth = geometry.width;
     state.viewportCssHeight = geometry.height;
     state.visualOffsetX = geometry.offsetX;
@@ -605,17 +625,21 @@ async function updatePageState(expectedPage = page, expectedCdp = pageCdp, expec
     state.scrollY = geometry.scrollY;
     state.visualScale = geometry.scale;
     state.pageScale = geometry.pageScale;
-    state.measuredDevicePixelRatio = Number(actual.dpr);
+    state.measuredDevicePixelRatio = geometry.dpr;
     state.geometryFresh = true;
-    if (changed && !state.viewportTransition) {
+    if (changed) {
       state.viewportRevision++;
       state.inputViewportRevision = state.viewportRevision;
-      resetFrameTransport();
+      // Keep the active screencast and its bounded credit chain. Frames already
+      // captured against the previous revision are discarded by identity.
+      state.captureBaseline = state.captureBaseline ? geometrySnapshot() : null;
     }
-    state.viewportTransition = false;
+    if (allowCorrection && !actualViewportMatchesRequest(actual)) {
+      scheduleRequestedViewportCorrection(expectedPage, expectedCdp, expectedBinding);
+    }
     return changed;
   } catch {
-    state.geometryFresh = false;
+    if (!state.captureBaseline) state.geometryFresh = false;
     return false;
   }
 }
@@ -718,19 +742,46 @@ function virtualKeyCode(key, code) {
   const punctuation = { Backquote: 192, Minus: 189, Equal: 187, BracketLeft: 219, Backslash: 220, BracketRight: 221, Semicolon: 186, Quote: 222, Comma: 188, Period: 190, Slash: 191, NumpadDecimal: 110 };
   return named[key] ?? punctuation[code] ?? (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
 }
-function advanceInput(sequence) { if (sequence !== null) state.nextInputSequence = sequence + 1; }
+function advanceInput(sequence) {
+  if (sequence === null) return;
+  state.nextInputSequence = sequence + 1;
+  if (densityRefinementContext && latestFrameNeedsRequestedDensity()) {
+    scheduleDensityRefinement(page, pageCdp, pageBindingGeneration);
+  }
+  if (wheelRefinementContext) {
+    scheduleWheelSettledCapture(page, pageCdp, pageBindingGeneration, state.captureBaseline, state.frameSequence);
+  }
+}
 function cdpInputPoint(x, y) {
   const scale = state.cdpInputScale;
   return { x: x * scale, y: y * scale };
 }
 async function releaseHeldInput() {
-  const buttons = state?.pressedButtons || 0;
+  const heldState = state;
+  if (!heldState) return;
+  const expectedPage = page;
+  const expectedCdp = pageCdp;
+  const expectedBinding = pageBindingGeneration;
+  const expectedLeaseGeneration = heldState.leaseGeneration;
+  const expectedControllerViewId = heldState.controllerViewId;
+  const expectedInputSequence = heldState.nextInputSequence;
+  const buttons = heldState.pressedButtons || 0;
+  const heldKeys = [...heldState.heldKeys.entries()];
+  const point = {
+    x: (heldState.pointer?.x || 0) * heldState.cdpInputScale,
+    y: (heldState.pointer?.y || 0) * heldState.cdpInputScale,
+  };
+  const bindingCurrent = () => state === heldState
+    && pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding);
+  const leaseCurrent = () => heldState.leaseGeneration === expectedLeaseGeneration
+    && heldState.controllerViewId === expectedControllerViewId;
+  if (!bindingCurrent() || !leaseCurrent()) return;
+  const releases = [];
   const buttonNames = [[1, 'left'], [2, 'right'], [4, 'middle']];
   for (const [mask, button] of buttonNames) {
-    if (!(buttons & mask)) continue;
-    const point = cdpInputPoint(state.pointer?.x || 0, state.pointer?.y || 0);
+    if (!(buttons & mask) || !bindingCurrent() || !leaseCurrent()) continue;
     try {
-      await pageCdp?.send('Input.dispatchMouseEvent', {
+      releases.push(Promise.resolve(expectedCdp.send('Input.dispatchMouseEvent', {
         type: 'mouseReleased',
         x: point.x,
         y: point.y,
@@ -738,25 +789,29 @@ async function releaseHeldInput() {
         buttons: 0,
         clickCount: 0,
         modifiers: 0,
-      });
+      })).catch(() => {}));
     } catch {}
   }
-  for (const input of state?.heldKeys?.values() || []) {
+  for (const [key, input] of heldKeys) {
+    if (!bindingCurrent() || !leaseCurrent()) break;
     try {
-      await pageCdp?.send('Input.dispatchKeyEvent', {
+      releases.push(Promise.resolve(expectedCdp.send('Input.dispatchKeyEvent', {
         type: 'keyUp',
         key: input.key,
         code: input.code,
         location: input.location,
         modifiers: input.modifiers,
         autoRepeat: false,
-      });
+      })).catch(() => {}));
     } catch {}
   }
-  if (state) {
-    state.pressedButtons = 0;
-    state.heldKeys.clear();
+  if (state === heldState && heldState.nextInputSequence === expectedInputSequence) {
+    if (heldState.pressedButtons === buttons) heldState.pressedButtons = 0;
+    for (const [key, input] of heldKeys) {
+      if (heldState.heldKeys.get(key) === input) heldState.heldKeys.delete(key);
+    }
   }
+  await Promise.all(releases);
 }
 async function enumerateTargets(requireSelected = true) {
   const all = (await browserCdp.send('Target.getTargets')).targetInfos;
@@ -815,7 +870,12 @@ async function bindPage(targetId, restartScreencast = true) {
   }
   if (!restartScreencast) await ensureInitialPage();
   await installPageObservers();
-  await applyRequestedViewport({ css_width: state.requestedCssWidth, css_height: state.requestedCssHeight, device_pixel_ratio: state.requestedDevicePixelRatio });
+  await applyRequestedViewport({
+    css_width: state.requestedCssWidth,
+    css_height: state.requestedCssHeight,
+    device_pixel_ratio: state.requestedDevicePixelRatio,
+  });
+  if (pageBindingIsCurrent(page, pageCdp, pageBindingGeneration)) state.cdpInputScale = 1;
   await updatePageState();
   await updateFrameId();
   await updateHistory();
@@ -1016,17 +1076,22 @@ function cleanupSocket(socket) {
 }
 function resetFrameTransport() {
   const retired = latestFrame;
-  latestFrame = null;
-  frameHistory.clear();
-  if (state) {
-    state.highDensityFramePublished = false;
-    state.captureToken++;
-    state.captureBaseline = null;
-  }
+  clearTimeout(wheelRefinementTimer);
+  wheelRefinementTimer = null;
+  wheelRefinementContext = null;
   clearTimeout(scrollRefinementTimer);
   scrollRefinementTimer = null;
   scrollRefinementContext = null;
-  liveViewportProof = null;
+  clearTimeout(densityRefinementTimer);
+  densityRefinementTimer = null;
+  densityRefinementContext = null;
+  screencastFrameArrivalSequence++;
+  latestFrame = null;
+  frameHistory.clear();
+  if (state) {
+    state.captureToken++;
+    state.captureBaseline = null;
+  }
   if (retired) acknowledgeFrame(retired);
   for (const socket of sockets) {
     // Pending replacements belong to the retired capture baseline. Release
@@ -1090,17 +1155,9 @@ function queueFrameGeometryRepair(expectedPage, expectedCdp, expectedBinding, ba
     const changed = await updatePageState(expectedPage, expectedCdp, expectedBinding);
     if (!changed || !pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) return;
     emitEvent('viewport_changed', { viewport: viewportState() });
-    await stopScreencast(expectedCdp);
-    await startScreencast(expectedCdp, expectedBinding);
-    // Only screencast metadata can bind pixels to compositor scroll geometry.
-    // A separate screenshot could already show a later scroll position.
+    // Keep the live screencast; its listener binds subsequent pixels to the
+    // refreshed measured baseline and discards only packets from the old one.
   }).catch(() => {});
-}
-function initialFrameNeedsDensityRepair(dimensions, geometry) {
-  if (!geometry || geometry.dpr <= 1) return false;
-  const expectedWidth = Math.floor(geometry.cssWidth * geometry.dpr);
-  const expectedHeight = Math.floor(geometry.cssHeight * geometry.dpr);
-  return dimensions.width + 1 < expectedWidth || dimensions.height + 1 < expectedHeight;
 }
 function captureViewportCompatible(left, right) {
   return Boolean(left && right
@@ -1115,14 +1172,14 @@ function captureViewportCompatible(left, right) {
     && left.dpr === right.dpr
     && left.captureToken === right.captureToken);
 }
-function geometryMatchesCapture(geometry, baseline, allowScrollChange = false) {
+function geometryMatchesCapture(geometry, baseline, scrollTolerance = 0.01) {
   return Boolean(geometry && baseline
     && Math.abs(geometry.width - baseline.cssWidth) <= 0.01
     && Math.abs(geometry.height - baseline.cssHeight) <= 0.01
     && Math.abs(geometry.offsetX - baseline.offsetX) <= 0.01
     && Math.abs(geometry.offsetY - baseline.offsetY) <= 0.01
-    && (allowScrollChange || (Math.abs(geometry.scrollX - baseline.scrollX) <= 0.01
-      && Math.abs(geometry.scrollY - baseline.scrollY) <= 0.01))
+    && Math.abs(geometry.scrollX - baseline.scrollX) <= scrollTolerance
+    && Math.abs(geometry.scrollY - baseline.scrollY) <= scrollTolerance
     && Math.abs(geometry.scale - baseline.visualScale) <= 0.01
     && Math.abs(geometry.pageScale - baseline.pageScale) <= 0.01
     && Math.abs(geometry.dpr - baseline.dpr) <= 0.01);
@@ -1139,7 +1196,7 @@ function measuredGeometryEqual(left, right) {
     && Math.abs(left.pageScale - right.pageScale) <= 0.01
     && Math.abs(left.dpr - right.dpr) <= 0.001);
 }
-function screenshotContextCurrent(context) {
+function screenshotGeometryCurrent(context) {
   const current = state?.captureBaseline;
   const viewportIsCurrent = context.streamingScroll
     ? captureViewportCompatible(current, context.baseline)
@@ -1148,75 +1205,119 @@ function screenshotContextCurrent(context) {
     && state.documentGeneration === context.baseline.documentGeneration
     && (context.streamingScroll || state.viewportRevision === context.baseline.viewportRevision)
     && state.geometryFresh && viewportIsCurrent
-    && state.captureToken === context.baseline.captureToken;
+    && state.captureToken === context.baseline.captureToken
+    && (context.expectedInputSequence === undefined || state.nextInputSequence === context.expectedInputSequence);
 }
-async function readCaptureGeometry(context) {
+function screenshotContextCurrent(context) {
+  return screenshotGeometryCurrent(context)
+    && (!context.streamingScroll || context.frameArrivalSequence === screencastFrameArrivalSequence)
+    && (context.expectedStreamArrivalSequence === undefined
+      || context.expectedStreamArrivalSequence === screencastFrameArrivalSequence)
+    && (context.expectedFrameSequence === undefined || state.frameSequence === context.expectedFrameSequence);
+}
+async function readCaptureGeometry(context, allowCorrection = true, requireStableStream = true) {
   const metrics = await context.cdp.send('Page.getLayoutMetrics');
   const actual = await context.page.evaluate(() => ({
     width: Number(window.innerWidth),
     height: Number(window.innerHeight),
     dpr: Number(window.devicePixelRatio),
   }));
-  if (!screenshotContextCurrent(context)) return null;
-  if (!actualViewportMatchesRequest(actual)) {
-    if (state.geometryFresh) invalidateViewport();
-    else resetFrameTransport();
-    prepareDensityCorrectionForCurrentRequest();
-    if (state.densityRepairAttempted || state.densityRepairFailed) {
-      reportViewportDrift('live page metrics conflict during screenshot capture');
-    } else if (!state.densityRepairInFlight) {
-      void reapplyRequestedViewportForDrift(context.page, context.cdp, context.binding);
-    }
-    return null;
+  if (!(requireStableStream ? screenshotContextCurrent(context) : screenshotGeometryCurrent(context))) return null;
+  if (!Number.isFinite(actual.width) || !Number.isFinite(actual.height) || !Number.isFinite(actual.dpr)) return null;
+  if (allowCorrection && !actualViewportMatchesRequest(actual)) {
+    scheduleRequestedViewportCorrection(context.page, context.cdp, context.binding);
   }
-  state.measuredDevicePixelRatio = actual.dpr;
-  return measuredGeometry(
-    metrics,
-    actual.dpr,
-    context.baseline.cssWidth,
-    context.baseline.cssHeight,
-  );
+  return measuredGeometry(metrics, actual.dpr, actual.width, actual.height);
+}
+async function capturePageScreenshot(cdp, options, afterCapture = undefined) {
+  let release;
+  const lock = new Promise((resolve) => { release = resolve; });
+  screenshotCommandInFlight = lock;
+  try {
+    const capture = await cdp.send('Page.captureScreenshot', options);
+    await afterCapture?.();
+    return capture;
+  } finally {
+    if (screenshotCommandInFlight === lock) screenshotCommandInFlight = null;
+    release();
+  }
+}
+function waitForScreenshotBeforeInput(command) {
+  const pending = screenshotCommandInFlight;
+  if (!pending) return true;
+  return pending.catch(() => {}).then(() => proofMatches(command));
+}
+function screenshotDimensionsMatchDensity(dimensions, baseline) {
+  const expectedWidth = Math.round(baseline.cssWidth * baseline.dpr);
+  const expectedHeight = Math.round(baseline.cssHeight * baseline.dpr);
+  return Boolean(dimensions
+    && dimensions.width <= MAX_WIDTH
+    && dimensions.height <= MAX_HEIGHT
+    && dimensions.width * dimensions.height <= MAX_PIXELS
+    && Math.abs(dimensions.width - expectedWidth) <= 1
+    && Math.abs(dimensions.height - expectedHeight) <= 1);
 }
 async function captureStableDensityFrame(context) {
-  if (!screenshotContextCurrent(context)) return 'stale';
+  if (!screenshotGeometryCurrent(context)) return 'stale';
   try {
-    const before = await readCaptureGeometry(context);
-    if (!geometryMatchesCapture(before, context.baseline, context.streamingScroll)) return 'stale';
-    const captureOptions = { format: 'jpeg', quality: 80, captureBeyondViewport: context.streamingScroll };
-    // Pin the capture to the measured document-space viewport; a bare surface
-    // screenshot can keep the old scroll origin while layout metrics advance.
-    if (context.streamingScroll) {
-      captureOptions.clip = {
+    const before = await readCaptureGeometry(context, true, false);
+    if (!geometryMatchesCapture(before, context.baseline, 0.5)) return 'stale';
+    const captureOptions = {
+      format: 'jpeg',
+      quality: 80,
+      captureBeyondViewport: false,
+      clip: {
         x: before.scrollX,
         y: before.scrollY,
         width: context.baseline.cssWidth,
         height: context.baseline.cssHeight,
         scale: 1,
+      },
+    };
+    let viewportRestored = false;
+    const capture = await capturePageScreenshot(context.cdp, captureOptions, async () => {
+      if (!screenshotGeometryCurrent(context)) return;
+      const requested = {
+        css_width: context.baseline.cssWidth,
+        css_height: context.baseline.cssHeight,
+        device_pixel_ratio: context.baseline.dpr,
       };
-    }
-    const capture = await context.cdp.send('Page.captureScreenshot', captureOptions);
-    if (!screenshotContextCurrent(context) || typeof capture.data !== 'string') return 'stale';
-    const after = await readCaptureGeometry(context);
-    if (!geometryMatchesCapture(after, context.baseline, context.streamingScroll)
+      const applied = await applyRequestedViewport(
+        requested,
+        context.cdp,
+        context.binding,
+        false,
+        () => screenshotGeometryCurrent(context),
+      );
+      viewportRestored = applied.width === context.baseline.cssWidth
+        && applied.height === context.baseline.cssHeight
+        && Math.abs(applied.dpr - context.baseline.dpr) <= 0.01
+        && screenshotGeometryCurrent(context);
+    });
+    if (!viewportRestored || !screenshotContextCurrent(context) || typeof capture.data !== 'string') return 'stale';
+    const jpeg = Buffer.from(capture.data, 'base64');
+    const dimensions = encodedJpegDimensions(jpeg);
+    if (!jpeg.length || jpeg.length > MAX_JPEG || jpeg[0] !== 0xff || jpeg[1] !== 0xd8
+      || jpeg[jpeg.length - 2] !== 0xff || jpeg[jpeg.length - 1] !== 0xd9
+      || !screenshotDimensionsMatchDensity(dimensions, context.baseline)) return 'failed';
+    const captureTimestamp = await context.page.evaluate(() => performance.now() / 1000);
+    const after = await readCaptureGeometry(context, false);
+    if (!geometryMatchesCapture(after, context.baseline, 0.5)
       || !measuredGeometryEqual(after, before)) return 'stale';
     const currentBaseline = state.captureBaseline;
-    if (context.streamingScroll && !captureViewportCompatible(currentBaseline, context.baseline)) return 'stale';
-    const frameGeometry = context.streamingScroll
-      ? { ...currentBaseline, scrollX: after.scrollX, scrollY: after.scrollY }
-      : context.baseline;
+    if (context.streamingScroll && !geometryEqual(currentBaseline, context.baseline)) return 'stale';
+    const frameGeometry = context.baseline;
     enqueueFrame({
       data: capture.data,
-      metadata: { timestamp: Date.now() / 1000 },
+      metadata: { timestamp: captureTimestamp },
+      _jpeg: jpeg,
       _cdp: context.cdp,
       _captureToken: context.baseline.captureToken,
       _geometry: frameGeometry,
       _screenshotCapture: true,
     });
     return 'captured';
-  } catch (error) {
-    if (screenshotContextCurrent(context)) {
-      emit({ type: 'failed', code: 'browser_frame_capture', message: String(error.message || error) });
-    }
+  } catch {
     return 'failed';
   }
 }
@@ -1252,192 +1353,106 @@ function queueDensityScreenshot(context) {
   densityScreenshotPromise = runDensityScreenshot(context);
   return densityScreenshotPromise;
 }
-function requestDensityScreenshot(frame, streamingScroll = false) {
-  return queueDensityScreenshot({
-    page,
-    cdp: frame._cdp || pageCdp,
-    binding: pageBindingGeneration,
-    baseline: frame._geometry,
-    streamingScroll,
-  });
-}
-function scheduleScrollRefinement(frame) {
+function scheduleScrollSettledCapture(frame) {
   clearTimeout(scrollRefinementTimer);
-  scrollRefinementContext = {
+  const capture = {
     page: frame._page,
     cdp: frame._cdp || pageCdp,
     binding: frame._binding,
     baseline: frame._geometry,
+    streamingScroll: true,
+    frameArrivalSequence: screencastFrameArrivalSequence,
+    expectedInputSequence: state.nextInputSequence,
   };
+  scrollRefinementContext = capture;
   scrollRefinementTimer = setTimeout(() => {
-    const capture = scrollRefinementContext;
     scrollRefinementTimer = null;
-    scrollRefinementContext = null;
-    if (!capture || !screenshotContextCurrent(capture)) return;
-    if (!state.highDensityFramePublished && !state.densityRepairAttempted && !state.densityRepairInFlight) {
-      repairInitialFrameDensity(capture.page, capture.cdp, capture.binding, capture.baseline);
-    } else {
-      void queueDensityScreenshot(capture);
+    if (scrollRefinementContext !== capture) return;
+    if (!screenshotContextCurrent(capture)) {
+      scrollRefinementContext = null;
+      return;
     }
+    void queueDensityScreenshot(capture).then(() => {
+      if (scrollRefinementContext === capture && scrollRefinementTimer === null) {
+        scrollRefinementContext = null;
+      }
+    });
   }, SCROLL_SETTLE_DELAY_MS);
 }
-function repairInitialFrameDensity(expectedPage, expectedCdp, expectedBinding, baseline) {
-  const repairAttemptId = (state.densityRepairAttemptId || 0) + 1;
-  state.densityRepairAttemptId = repairAttemptId;
-  const requested = {
-    width: state.requestedCssWidth,
-    height: state.requestedCssHeight,
-    dpr: state.requestedDevicePixelRatio,
-  };
-  state.densityRepairDocumentGeneration = baseline.documentGeneration;
-  state.densityRepairInFlight = true;
-  void (async () => {
-    const sameDocument = () => pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)
-      && state.documentGeneration === baseline.documentGeneration;
-    const sameCapture = () => sameDocument()
-      && state.viewportRevision === baseline.viewportRevision
-      && state.captureToken === baseline.captureToken
-      && requestedViewportStillMatches(requested);
-    try {
-      if (!baseline || !sameCapture()) return;
-      await stopScreencast(expectedCdp);
-      if (!sameCapture()) {
-        // Scrolling can rebase the accepted viewport while stopScreencast is
-        // in flight. Resume only from current, fresh geometry; never replay
-        // the stale capture baseline or requested tuple from this attempt.
-        if (sameDocument() && state.geometryFresh && state.viewIds.size > 0) {
-          await startScreencast(expectedCdp, expectedBinding);
-          if (sameDocument() && state.geometryFresh) await captureCurrentFrame(expectedCdp, expectedBinding);
-        }
-        return;
-      }
-      resetFrameTransport();
-      await applyRequestedViewport({
-        css_width: requested.width,
-        css_height: requested.height,
-        device_pixel_ratio: requested.dpr,
-      }, expectedCdp, expectedBinding, false);
-      if (state.densityRepairAttemptId === repairAttemptId && requestedViewportStillMatches(requested)) {
-        state.densityRepairAttempted = true;
-      }
-      // Reapplying device metrics switches Chromium input dispatch to CSS
-      // coordinates, matching the accepted viewport-resize transition.
-      if (pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) state.cdpInputScale = 1;
-      if (!sameDocument() || !requestedViewportStillMatches(requested)) return;
-      await updatePageState(expectedPage, expectedCdp, expectedBinding);
-      if (!sameDocument() || !state.geometryFresh) {
-        throw new Error('initial frame density repair could not refresh page geometry');
-      }
-      await startScreencast(expectedCdp, expectedBinding);
-      const context = {
-        page: expectedPage,
-        cdp: expectedCdp,
-        binding: expectedBinding,
-        baseline: state.captureBaseline,
-      };
-      await queueDensityScreenshot(context);
-    } catch (error) {
-      if (state.densityRepairAttemptId === repairAttemptId
-        && sameDocument() && requestedViewportStillMatches(requested)) {
-        state.densityRepairFailed = true;
-        emit({ type: 'failed', code: 'browser_initial_frame_density', message: `Initial high-density frame repair failed: ${String(error.message || error)}` });
-      }
-    } finally {
-      if (state.densityRepairAttemptId === repairAttemptId) state.densityRepairInFlight = false;
-    }
-  })();
+function cancelDensityRefinement() {
+  clearTimeout(densityRefinementTimer);
+  densityRefinementTimer = null;
+  densityRefinementContext = null;
 }
-
-function liveViewportProofMatches(pageRef, cdp, binding, baseline) {
-  const proof = liveViewportProof;
-  return Boolean(proof
-    && proof.page === pageRef && proof.cdp === cdp && proof.binding === binding
-    && proof.captureToken === baseline?.captureToken
-    && proof.documentGeneration === baseline?.documentGeneration
-    && proof.width === state.requestedCssWidth
-    && proof.height === state.requestedCssHeight
-    && proof.dpr === state.requestedDevicePixelRatio);
-}
-
-async function validateLiveViewportForFrame(context) {
-  const { page: pageRef, cdp, binding, baseline } = context;
-  const requested = { width: state.requestedCssWidth, height: state.requestedCssHeight, dpr: state.requestedDevicePixelRatio };
-  const current = () => pageBindingIsCurrent(pageRef, cdp, binding)
-    && state.documentGeneration === baseline.documentGeneration
-    && state.captureToken === baseline.captureToken
-    && state.captureBaseline?.captureToken === baseline.captureToken
-    && state.geometryFresh && requestedViewportStillMatches(requested);
-  let metrics;
-  let actual;
-  try {
-    metrics = await cdp.send('Page.getLayoutMetrics');
-    actual = await pageRef.evaluate(() => ({
-      width: Number(window.innerWidth),
-      height: Number(window.innerHeight),
-      dpr: Number(window.devicePixelRatio),
-    }));
-  } catch {
-    return false;
-  }
-  if (!current()) return false;
-  if (!actualViewportMatchesRequest(actual)) {
-    if (state.geometryFresh) invalidateViewport();
-    else resetFrameTransport();
-    prepareDensityCorrectionForCurrentRequest();
-    if (state.densityRepairAttempted || state.densityRepairFailed) {
-      reportViewportDrift('live page metrics conflict before screencast publication');
-    } else if (!state.densityRepairInFlight) {
-      void reapplyRequestedViewportForDrift(pageRef, cdp, binding);
-    }
-    return false;
-  }
-  state.measuredDevicePixelRatio = actual.dpr;
-  liveViewportProof = {
-    page: pageRef,
-    cdp,
-    binding,
-    captureToken: baseline.captureToken,
-    documentGeneration: baseline.documentGeneration,
-    width: requested.width,
-    height: requested.height,
-    dpr: requested.dpr,
-  };
-  return true;
-}
-
-function requestLiveViewportFrameValidation(frame) {
-  if (liveFrameValidationInFlight) {
-    liveFrameValidationPending = frame;
+function scheduleDensityRefinement(expectedPage, expectedCdp, expectedBinding) {
+  clearTimeout(densityRefinementTimer);
+  const baseline = state?.geometryFresh ? state.captureBaseline : null;
+  if (!baseline || !pageBindingIsCurrent(expectedPage, expectedCdp, expectedBinding)) {
+    cancelDensityRefinement();
     return;
   }
-  liveFrameValidationInFlight = true;
-  void (async () => {
-    const context = {
-      page: frame._page,
-      cdp: frame._cdp,
-      binding: frame._binding,
-      baseline: frame._geometry,
-    };
-    try {
-      if (await validateLiveViewportForFrame(context)) {
-        const current = liveFrameValidationPending || frame;
-        liveFrameValidationPending = null;
-        if (liveViewportProofMatches(current._page, current._cdp, current._binding, current._geometry)
-          && current._captureToken === state.captureToken) enqueueFrame(current);
-      }
-    } catch {}
-    finally {
-      liveFrameValidationInFlight = false;
-      const pending = liveFrameValidationPending;
-      liveFrameValidationPending = null;
-      if (pending && !liveViewportProofMatches(pending._page, pending._cdp, pending._binding, pending._geometry)) {
-        requestLiveViewportFrameValidation(pending);
-      } else if (pending && pending._captureToken === state.captureToken) {
-        enqueueFrame(pending);
-      }
+  if (!geometryEqual(state.densityRefinementAttemptGeometry, baseline)) {
+    state.densityRefinementAttemptGeometry = baseline;
+    state.densityRefinementAttempts = 0;
+  }
+  if (state.densityRefinementAttempts >= MAX_DENSITY_REFINEMENT_ATTEMPTS) {
+    cancelDensityRefinement();
+    return;
+  }
+  const capture = {
+    page: expectedPage,
+    cdp: expectedCdp,
+    binding: expectedBinding,
+    baseline,
+    expectedFrameSequence: state.frameSequence,
+    expectedInputSequence: state.nextInputSequence,
+    expectedStreamArrivalSequence: screencastFrameArrivalSequence,
+  };
+  densityRefinementContext = capture;
+  densityRefinementTimer = setTimeout(() => {
+    densityRefinementTimer = null;
+    if (densityRefinementContext !== capture) return;
+    if (!screenshotContextCurrent(capture) || !latestFrameNeedsRequestedDensity()) return;
+    if (!geometryEqual(state.densityRefinementAttemptGeometry, capture.baseline)) {
+      state.densityRefinementAttemptGeometry = capture.baseline;
+      state.densityRefinementAttempts = 0;
     }
-  })();
+    if (state.densityRefinementAttempts >= MAX_DENSITY_REFINEMENT_ATTEMPTS) return;
+    state.densityRefinementAttempts++;
+    void queueDensityScreenshot(capture);
+  }, SCROLL_SETTLE_DELAY_MS);
 }
+function scheduleWheelSettledCapture(expectedPage, expectedCdp, expectedBinding, baseline, expectedFrameSequence) {
+  clearTimeout(wheelRefinementTimer);
+  wheelRefinementTimer = null;
+  wheelRefinementContext = null;
+  if (!baseline || state.frameSequence !== expectedFrameSequence
+    || !geometryEqual(state.captureBaseline, baseline)) return;
+  const capture = {
+    page: expectedPage,
+    cdp: expectedCdp,
+    binding: expectedBinding,
+    baseline,
+    expectedFrameSequence,
+    expectedInputSequence: state.nextInputSequence,
+    expectedStreamArrivalSequence: screencastFrameArrivalSequence,
+  };
+  wheelRefinementContext = capture;
+  wheelRefinementTimer = setTimeout(() => {
+    wheelRefinementTimer = null;
+    if (wheelRefinementContext !== capture) return;
+    if (!screenshotContextCurrent(capture)) {
+      wheelRefinementContext = null;
+      return;
+    }
+    void queueDensityScreenshot(capture).then(() => {
+      if (wheelRefinementContext === capture && wheelRefinementTimer === null) {
+        wheelRefinementContext = null;
+      }
+    });
+  }, SCROLL_SETTLE_DELAY_MS);
+}
+
 
 
 function enqueueFrame(frame) {
@@ -1446,17 +1461,21 @@ function enqueueFrame(frame) {
     if (!frame?._ackScheduled) ackSession(frame?.sessionId, frame?._cdp);
     return;
   }
-  if (frame?.sessionId !== undefined
-    && !liveViewportProofMatches(frame._page, frame._cdp, frame._binding, frame._geometry)) {
-    requestLiveViewportFrameValidation(frame);
+  if (frame?.sessionId !== undefined && !pageBindingIsCurrent(frame._page, frame._cdp, frame._binding)) {
+    if (!frame._ackScheduled) ackSession(frame.sessionId, frame._cdp);
     return;
   }
   let next;
   try {
     if (!frame || typeof frame.data !== 'string') throw new Error('screencast payload is not base64 text');
-    const jpeg = Buffer.from(frame.data, 'base64');
+    const jpeg = Buffer.isBuffer(frame._jpeg) ? frame._jpeg : Buffer.from(frame.data, 'base64');
     const geometry = frameGeometry(frame);
-    if (!geometry) throw new Error('screencast frame geometry is stale or inconclusive');
+    if (!geometry) {
+      // A resize/scroll can retire one delivered packet while its screencast
+      // session remains healthy; release credit without surfacing a warning.
+      if (!frame._ackScheduled) ackSession(frame.sessionId, frame._cdp);
+      return;
+    }
     const dimensions = encodedJpegDimensions(jpeg);
     const width = dimensions.width;
     const height = dimensions.height;
@@ -1465,39 +1484,36 @@ function enqueueFrame(frame) {
       || width > MAX_WIDTH || height > MAX_HEIGHT || width * height > MAX_PIXELS) {
       throw new Error('screencast frame exceeds frozen bounds');
     }
-    if (initialFrameNeedsDensityRepair(dimensions, geometry)) {
-      prepareDensityCorrectionForCurrentRequest();
-      if (frame._screenshotCapture) {
-        if (state.densityRepairInFlight && !state.densityRepairAttempted) return;
-        if (!state.densityRepairAttempted) {
-          repairInitialFrameDensity(page, frame._cdp || pageCdp, pageBindingGeneration, frame._geometry);
-        } else if (!state.densityRepairFailed) {
-          state.densityRepairFailed = true;
-          emit({
-            type: 'failed',
-            code: 'browser_initial_frame_density',
-            message: `Initial frame remained below requested ${geometry.dpr}× density after one metrics correction`,
-          });
-        }
-        return;
+    const requestedBitmapWidth = Math.round(state.requestedCssWidth * state.requestedDevicePixelRatio);
+    const requestedBitmapHeight = Math.round(state.requestedCssHeight * state.requestedDevicePixelRatio);
+    const physicalDensityFrame = Math.abs(width - requestedBitmapWidth) <= 1
+      && Math.abs(height - requestedBitmapHeight) <= 1;
+    const cssDensityFrame = Math.abs(width - geometry.cssWidth) <= 1
+      && Math.abs(height - geometry.cssHeight) <= 1
+      && Math.abs(geometry.cssWidth - state.requestedCssWidth) <= 1
+      && Math.abs(geometry.cssHeight - state.requestedCssHeight) <= 1;
+    if (frame.sessionId !== undefined
+      && ((!physicalDensityFrame && !cssDensityFrame)
+        || Math.abs(geometry.cssWidth - state.requestedCssWidth) > 1
+        || Math.abs(geometry.cssHeight - state.requestedCssHeight) > 1)) {
+      if (frame._scrollChanged || scrollRefinementContext) scheduleScrollSettledCapture(frame);
+      if (densityRefinementContext) {
+        scheduleDensityRefinement(frame._page, frame._cdp || pageCdp, frame._binding);
       }
-      if (state.densityRepairInFlight) return;
-      if (!state.highDensityFramePublished && !state.densityRepairAttempted) {
-        if (frame._scrollChanged) scheduleScrollRefinement(frame);
-        if (frame._scrollChanged || scrollRefinementTimer !== null) return;
-        repairInitialFrameDensity(page, frame._cdp || pageCdp, pageBindingGeneration, frame._geometry);
-        return;
+      if (wheelRefinementContext) {
+        scheduleWheelSettledCapture(frame._page, frame._cdp || pageCdp, frame._binding,
+          state.captureBaseline, state.frameSequence);
       }
-      if (frame._scrollChanged) scheduleScrollRefinement(frame);
-      requestDensityScreenshot(frame, true);
-      // The screencast bitmap is physically undersized; only a measured,
-      // high-density screenshot may replace it, including during active scroll.
+      if (!frame._ackScheduled) ackSession(frame.sessionId, frame._cdp);
       return;
-    } else {
-      state.highDensityFramePublished = true;
     }
     const rawMetadata = frame.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
     const timestamp = boundedNumber(rawMetadata.timestamp, Date.now() / 1000, Number.MAX_SAFE_INTEGER / 1_000_000);
+    if (frame.sessionId !== undefined && scrollRefinementContext && !frame._screenshotCapture) {
+      scheduleScrollSettledCapture(frame);
+    } else if (frame._scrollChanged && frame.sessionId !== undefined) {
+      scheduleScrollSettledCapture(frame);
+    }
     const descriptor = {
       target_id: geometry.targetId,
       stream_epoch: state.streamEpoch,
@@ -1537,6 +1553,18 @@ function enqueueFrame(frame) {
     return;
   }
   latestFrame = next;
+  if (frame.sessionId !== undefined && wheelRefinementContext) {
+    clearTimeout(wheelRefinementTimer);
+    wheelRefinementTimer = null;
+    wheelRefinementContext = null;
+  }
+  if (frame.sessionId !== undefined) {
+    if (latestFrameNeedsRequestedDensity()) {
+      scheduleDensityRefinement(frame._page, frame._cdp || pageCdp, frame._binding);
+    } else {
+      cancelDensityRefinement();
+    }
+  }
   for (const socket of sockets) queueFrame(socket, next);
   const delay = Math.max(0, FRAME_INTERVAL_MS - (performance.now() - lastScreencastAcknowledgement));
   setTimeout(() => {
@@ -1735,8 +1763,6 @@ async function startScreencast(expectedCdp = pageCdp, expectedBinding = pageBind
     try {
       await expectedCdp.send('Page.startScreencast', {
         format: 'jpeg', quality: 80,
-        maxWidth: Math.max(1, Math.floor(state.requestedCssWidth * state.requestedDevicePixelRatio)),
-        maxHeight: Math.max(1, Math.floor(state.requestedCssHeight * state.requestedDevicePixelRatio)),
         everyNthFrame: 1,
       });
       if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) screencastActive = true;
@@ -1760,11 +1786,26 @@ async function captureCurrentFrame(expectedCdp = pageCdp, expectedBinding = page
   const baseline = state.captureBaseline;
   if (!baseline) return;
   return queueDensityScreenshot({
+    expectedFrameSequence: state.frameSequence,
+    expectedInputSequence: state.nextInputSequence,
+    expectedStreamArrivalSequence: screencastFrameArrivalSequence,
     page,
     cdp: expectedCdp,
     binding: expectedBinding,
     baseline,
   });
+}
+function latestFrameNeedsRequestedDensity() {
+  const descriptor = latestFrame?.descriptor;
+  if (!descriptor || descriptor.target_id !== state.targetId
+    || descriptor.document_generation !== state.documentGeneration
+    || descriptor.viewport_revision !== state.viewportRevision
+    || Math.abs(descriptor.viewport_css_width - state.viewportCssWidth) > 1
+    || Math.abs(descriptor.viewport_css_height - state.viewportCssHeight) > 1) return true;
+  const expectedWidth = Math.round(state.viewportCssWidth * state.requestedDevicePixelRatio);
+  const expectedHeight = Math.round(state.viewportCssHeight * state.requestedDevicePixelRatio);
+  return Math.abs(descriptor.image_width - expectedWidth) > 1
+    || Math.abs(descriptor.image_height - expectedHeight) > 1;
 }
 async function installPageObservers() {
   if (observedPage && observedPageHandlers) {
@@ -1785,16 +1826,11 @@ async function installPageObservers() {
       // The CDP loader ID changes only when Chromium replaces the document.
       let loaderId = null;
       try { loaderId = (await cdp.send('Page.getFrameTree')).frameTree.frame.loaderId || null; } catch {}
-      if (!bindingCurrent()) return;
+      if (!bindingCurrent() || loaderId === null) return;
       if (loaderId === state.loaderId) {
         const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
         await updateHistory(cdp, bindingGeneration);
-        if (viewportChanged) {
-          await stopScreencast(cdp);
-          await startScreencast(cdp, bindingGeneration);
-          await captureCurrentFrame(cdp, bindingGeneration);
-          emitEvent('viewport_changed', { viewport: viewportState() });
-        }
+        if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
         if (bindingCurrent()) emitNavigation();
         return;
       }
@@ -1806,14 +1842,20 @@ async function installPageObservers() {
       state.frameGeneration = nextGeneration(state.frameGeneration);
       resetFrameTransport();
       void dismissPendingBlocker();
+      const documentGeneration = state.documentGeneration;
       frameBarrier = frameBarrier.then(async () => {
-        if (!bindingCurrent()) return;
+        const loaderCurrent = () => bindingCurrent()
+          && state.loaderId === loaderId
+          && state.documentGeneration === documentGeneration;
+        if (!loaderCurrent()) return;
+        await restoreCssInputModeAfterLoader(observed, cdp, bindingGeneration, loaderId, documentGeneration);
+        if (!loaderCurrent()) return;
         const viewportChanged = await updatePageState(observed, cdp, bindingGeneration);
-        if (!bindingCurrent()) return;
+        if (!loaderCurrent()) return;
         await updateFrameId(cdp, bindingGeneration);
-        if (!bindingCurrent()) return;
+        if (!loaderCurrent()) return;
         await updateHistory(cdp, bindingGeneration);
-        if (!bindingCurrent()) return;
+        if (!loaderCurrent()) return;
         if (viewportChanged) emitEvent('viewport_changed', { viewport: viewportState() });
         emitEvent('document_changed', { document: documentState() });
         emitNavigation();
@@ -1845,10 +1887,6 @@ async function installPageObservers() {
           state.title = title;
           emitEvent('targets_changed', { targets: state.targets, displayed_target_id: state.targetId });
         }).catch(() => {});
-        if (!state.captureBaseline) {
-          await stopScreencast(cdp);
-          await startScreencast(cdp, bindingGeneration);
-        }
         await captureCurrentFrame(cdp, bindingGeneration);
       })
       .catch(() => {});
@@ -1882,6 +1920,13 @@ async function installPageObservers() {
     // Capture geometry and identity at CDP delivery time. The page can scroll
     // on the compositor after a command returns, so never read the mutable
     // baseline after waiting on navigation or another frame.
+    screencastFrameArrivalSequence++;
+    if (densityRefinementContext && latestFrameNeedsRequestedDensity()) {
+      scheduleDensityRefinement(observed, cdp, bindingGeneration);
+    }
+    if (wheelRefinementContext) {
+      scheduleWheelSettledCapture(observed, cdp, bindingGeneration, state.captureBaseline, state.frameSequence);
+    }
     const baseline = state?.captureBaseline ? { ...state.captureBaseline } : null;
     frame._cdp = cdp;
     frame._page = observed;
@@ -1931,8 +1976,9 @@ async function attach(message) {
     requestedCssWidth: viewport.width, requestedCssHeight: viewport.height,
     viewportCssWidth: viewport.width, viewportCssHeight: viewport.height,
     visualOffsetX: 0, visualOffsetY: 0, visualScale: 1, pageScale: 1,
-    geometryFresh: false, viewportTransition: false, captureToken: 0, captureBaseline: null,
-    highDensityFramePublished: false,
+    geometryFresh: false, captureToken: 0, captureBaseline: null,
+    densityRefinementAttemptGeometry: null,
+    densityRefinementAttempts: 0,
     requestedDevicePixelRatio: viewport.dpr, measuredDevicePixelRatio: viewport.dpr,
     scrollX: 0, scrollY: 0, inputViewportRevision: 1, targets: [], targetId: message.target_id,
     densityRepairDocumentGeneration: null, densityRepairCssWidth: null,
@@ -1991,7 +2037,14 @@ async function command(request) {
       if (request.command.lease_generation !== state.leaseGeneration || state.controllerViewId !== request.view_id) {
         throw Object.assign(new Error('stale control lease'), { code: 'stale_control' });
       }
+      const releaseState = state;
+      const releaseLeaseGeneration = state.leaseGeneration;
       await releaseHeldInput();
+      if (state !== releaseState || !state.controlled
+        || state.leaseGeneration !== releaseLeaseGeneration
+        || state.controllerViewId !== request.view_id) {
+        throw Object.assign(new Error('stale control lease'), { code: 'stale_control' });
+      }
       state.controlled = false;
       state.controllerViewId = null;
       state.leaseGeneration++;
@@ -2006,10 +2059,10 @@ async function command(request) {
         dpr: state.requestedDevicePixelRatio,
       };
       const expectedCdp = pageCdp;
-      await stopScreencast(expectedCdp);
-      invalidateViewport();
-      // Rebind the observer closure as well as CDP capture. This prevents a
-      // delayed callback from the retired screencast using the new baseline.
+      // Resize is a viewport-fit transition, not a new capture identity. Keep
+      // screencast credit flowing while requested metrics are applied.
+      // Rebind the observer closure so retired callbacks cannot publish under
+      // the new binding while the existing screencast continues.
       pageBindingGeneration++;
       await installPageObservers();
       await applyRequestedViewport(request.command.viewport);
@@ -2018,15 +2071,16 @@ async function command(request) {
         || state.requestedDevicePixelRatio !== previousViewport.dpr) {
         state.cdpInputScale = 1;
       }
-      const changed = await updatePageState(page, expectedCdp, pageBindingGeneration);
+      await updatePageState(page, expectedCdp, pageBindingGeneration);
       if (!state.geometryFresh) {
         emitEvent('viewport_changed', { viewport: viewportState() });
         return { status: 'accepted', ...base, outcome: { type: 'none' } };
       }
       await startScreencast(expectedCdp, pageBindingGeneration);
-      await captureCurrentFrame(expectedCdp, pageBindingGeneration);
-      if (changed) emitEvent('viewport_changed', { viewport: viewportState() });
-      else emitEvent('viewport_changed', { viewport: viewportState() });
+      if (latestFrameNeedsRequestedDensity()) {
+        scheduleDensityRefinement(page, expectedCdp, pageBindingGeneration);
+      }
+      emitEvent('viewport_changed', { viewport: viewportState() });
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
     if (request.command.type === 'navigation') {
@@ -2055,7 +2109,36 @@ async function command(request) {
       emitNavigation();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
+    if (request.command.type === 'wheel') {
+      const inputReady = waitForScreenshotBeforeInput(request.command);
+      if (inputReady !== true && !await inputReady) {
+        return { status: 'stale', ...base, current_stream_epoch: state.streamEpoch,
+          current_metadata_sequence: state.metadataSequence, code: 'stale_location',
+          message: 'target, document, viewport, frame, or lease proof changed' };
+      }
+      const sequence = requireInputControl(request.command); const i = request.command.input;
+      if (!Number.isFinite(i.x) || !Number.isFinite(i.y) || i.x < 0 || i.y < 0
+        || i.x >= state.viewportCssWidth || i.y >= state.viewportCssHeight) {
+        return { status: 'rejected', ...base, code: 'invalid_wheel_coordinates', message: 'Wheel coordinates are outside the current browser viewport' };
+      }
+      const point = cdpInputPoint(i.x, i.y);
+      const expectedPage = page;
+      const expectedCdp = pageCdp;
+      const expectedBinding = pageBindingGeneration;
+      const baseline = state.captureBaseline;
+      const expectedFrameSequence = state.frameSequence;
+      await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers });
+      advanceInput(sequence); emitControl();
+      scheduleWheelSettledCapture(expectedPage, expectedCdp, expectedBinding, baseline, expectedFrameSequence);
+      return { status: 'accepted', ...base, outcome: { type: 'none' } };
+    }
     if (request.command.type === 'pointer') {
+      const inputReady = waitForScreenshotBeforeInput(request.command);
+      if (inputReady !== true && !await inputReady) {
+        return { status: 'stale', ...base, current_stream_epoch: state.streamEpoch,
+          current_metadata_sequence: state.metadataSequence, code: 'stale_location',
+          message: 'target, document, viewport, frame, or lease proof changed' };
+      }
       const sequence = requireInputControl(request.command);
       const i = request.command.input;
       const cdpButton = i.kind === 'move'
@@ -2073,17 +2156,6 @@ async function command(request) {
       state.pressedButtons = i.buttons;
       state.pointerSampleSequence++;
       await updateCursor();
-      return { status: 'accepted', ...base, outcome: { type: 'none' } };
-    }
-    if (request.command.type === 'wheel') {
-      const sequence = requireInputControl(request.command); const i = request.command.input;
-      if (!Number.isFinite(i.x) || !Number.isFinite(i.y) || i.x < 0 || i.y < 0
-        || i.x >= state.viewportCssWidth || i.y >= state.viewportCssHeight) {
-        return { status: 'rejected', ...base, code: 'invalid_wheel_coordinates', message: 'Wheel coordinates are outside the current browser viewport' };
-      }
-      const point = cdpInputPoint(i.x, i.y);
-      await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: i.delta_x_css, deltaY: i.delta_y_css, modifiers: i.modifiers });
-      advanceInput(sequence); emitControl();
       return { status: 'accepted', ...base, outcome: { type: 'none' } };
     }
     if (request.command.type === 'keyboard') {
