@@ -667,7 +667,8 @@
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
         "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9",
-        "9f758f448b081cdd78a25640f16f3395298c901d"
+        "9f758f448b081cdd78a25640f16f3395298c901d",
+        "bf165186a9a2fa4c9903e1955d3e0dfb9d3d637b"
       ],
       "notes": [
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
