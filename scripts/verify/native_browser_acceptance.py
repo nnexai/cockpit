@@ -55,7 +55,7 @@ class StaticHandler(http.server.SimpleHTTPRequestHandler):
 FIXTURE_HTML = r"""<!doctype html><meta charset=utf-8><title>Native scroll fixture</title>
 <style>*{box-sizing:border-box}html,body{margin:0;width:100%;font:20px sans-serif}body{min-height:8000px;background:linear-gradient(#fff,#dceeff)}
 header{position:sticky;top:0;background:#fff;padding:12px;border-bottom:2px solid #567;z-index:2}#status{font-weight:bold}
-#nested{height:65px;overflow:auto;background:#e5f4ff;border:2px solid #578;margin-top:4px}#nested div{height:700px;padding:5px}
+#nested{height:65px;overflow:auto;background:#e5f4ff;border:2px solid #578;margin-top:4px}#nested div{height:700px;padding:5px;background:repeating-linear-gradient(#e5f4ff 0 22px,#9fc5dd 22px 44px)}
 section{padding:24px;height:900px;border-bottom:2px solid #678}h1{margin:0}</style>
 <header><h1>Native browser acceptance</h1><div id=status>waiting for routed native pointer</div><div id=nested><div>Nested scroll target</div></div></header>
 <section><p>This fixture must fill the entire browser viewport without doubled CSS width.</p></section>
@@ -74,9 +74,10 @@ const nested=document.querySelector('#nested');
 nested.addEventListener('wheel',event=>{window.nestedWheelY=event.deltaY},{passive:true});
 nested.addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(report,100)},{passive:true});
 let started=false;
+const sustainedMs=Number(new URLSearchParams(location.search).get('sustained')||0)*1000;
 addEventListener('pointerup',()=>{if(started)return;started=true;scrollStart=performance.now();document.querySelector('#status').textContent='scrolling';report();
- const begin=scrollStart, from=scrollY, duration=6000;
- const tick=now=>{const t=Math.min(1,(now-begin)/duration);scrollTo(0,from+3900*t);if(t<1)requestAnimationFrame(tick);else{scrollTo(0,3900);document.querySelector('header').style.background='#00a84b';scrollFinish=performance.now();document.querySelector('#status').textContent='scroll complete';report()}};
+ const begin=scrollStart, from=scrollY, duration=sustainedMs||6000;
+ const tick=now=>{const t=Math.min(1,(now-begin)/duration);scrollTo(0,sustainedMs ? 1700-700*Math.cos((now-begin)*Math.PI/4000) : from+3900*t);if(t<1)requestAnimationFrame(tick);else{scrollTo(0,3900);document.querySelector('header').style.background='#00a84b';scrollFinish=performance.now();document.querySelector('#status').textContent='scroll complete';report()}};
  requestAnimationFrame(tick);
 },{once:true});
 </script>"""
@@ -179,6 +180,42 @@ def require_binary(value, label):
     return str(Path(found).resolve())
 
 
+def sample_owned_processes(children):
+    """Linux /proc PSS KiB and CPU ticks for this run's live process trees."""
+    roots = [("acceptance-runner", os.getpid())] + [(label, child.pid) for label, child in children]
+    seen, by_root = set(), {}
+    for label, root_pid in roots:
+        stack, pss_kib, cpu_ticks, count, processes = [root_pid], 0, 0, 0, []
+        while stack:
+            pid = stack.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            proc = Path("/proc") / str(pid)
+            try:
+                stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+                comm = (proc / "comm").read_text().strip()
+                memory = (proc / "smaps_rollup").read_text()
+                pss = next(int(line.split()[1]) for line in memory.splitlines() if line.startswith("Pss:"))
+                descendants = ((proc / "task" / str(pid) / "children").read_text().split()
+                               if label != "acceptance-runner" else [])
+            except (OSError, IndexError, StopIteration, ValueError):
+                continue  # A child exited while this sample was taken.
+            stack.extend(int(child) for child in descendants)
+            count += 1
+            pss_kib += pss
+            ticks = int(stat[11]) + int(stat[12])
+            cpu_ticks += ticks
+            processes.append({"pid": pid, "comm": comm, "start_ticks": int(stat[19]),
+                              "pss_kib": pss, "cpu_ticks": ticks})
+        by_root[label] = {"pss_kib": pss_kib, "cpu_ticks": cpu_ticks, "process_count": count,
+                          "processes": processes}
+    return {"pss_kib": sum(part["pss_kib"] for part in by_root.values()),
+            "cpu_ticks": sum(part["cpu_ticks"] for part in by_root.values()),
+            "process_count": sum(part["process_count"] for part in by_root.values()),
+            "roots": by_root}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", default=str(REPO / "target/debug/cockpit-tauri"), help="native Cockpit executable")
@@ -194,7 +231,10 @@ def main():
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
     parser.add_argument("--annotation", action="store_true", help="also exercise native region and note saves against the retained draft")
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
+    parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
     args = parser.parse_args()
+    if args.sustain_seconds and args.sustain_seconds < 330:
+        parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -220,8 +260,9 @@ def main():
     fixture = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
     fixture_thread = threading.Thread(target=fixture.serve_forever, daemon=True)
     fixture_thread.start()
-    fixture_url = f"http://127.0.0.1:{fixture.server_port}/"
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("HERDR_", "COCKPIT_"))}
+    fixture_url = f"http://127.0.0.1:{fixture.server_port}/" + (f"?sustained={args.sustain_seconds}" if args.sustain_seconds else "")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("HERDR_", "COCKPIT_")) and k not in ("PI_TOOL_BRIDGE_TOKEN", "SSH_AUTH_SOCK")}
     env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
                XDG_CACHE_HOME=str(root / "cache"), XDG_DATA_HOME=str(root / "data"),
                HERDR_CONFIG_PATH=str(root / "config/herdr/config.toml"), HERDR_SOCKET_PATH=str(session_socket),
@@ -230,6 +271,16 @@ def main():
     children, driver, frontend = [], None, None
     result = {"session": session, "space": space_label, "fixture_url": fixture_url, "root": str(root),
               "failure": None, "geometries": {}, "paints": {}, "cleanup": []}
+    resource_samples = []
+    sampler_stop = threading.Event()
+    sampler = None
+
+    def sample_resources(start):
+        next_sample = start
+        while not sampler_stop.wait(max(0, next_sample - time.monotonic())):
+            resource_samples.append({"elapsed_seconds": time.monotonic() - start,
+                                     **sample_owned_processes(children)})
+            next_sample += 1
 
     def launch(label, argv, runenv):
         log = (root / f"{label}.log").open("w")
@@ -314,13 +365,23 @@ def main():
                        env=dict(app_env, NIRI_SOCKET=niri_socket), check=True, timeout=5,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         result["geometries"]["outer_requested"] = {"width": args.width, "height": args.height, "dpr": 2}
+        output_response = subprocess.run([bins["compositor"], "msg", "-j", "outputs"],
+                                         env=dict(app_env, NIRI_SOCKET=niri_socket), check=True,
+                                         capture_output=True, text=True, timeout=5)
+        outputs = json.loads(output_response.stdout)
+        logical_width = max((item.get("logical") or {}).get("width", 0) for item in outputs.values())
+        if logical_width < 320:
+            raise RuntimeError(f"private compositor has no usable full-width output: {outputs}")
+        result["geometries"]["compositor_logical_width"] = logical_width
         last_outer, stable_outer_samples = None, 0
         def fixed_outer():
             nonlocal last_outer, stable_outer_samples
             raw = webdriver.execute("({w:innerWidth,h:innerHeight,d:devicePixelRatio})")
             observed = {"width": raw["w"], "height": raw["h"], "dpr": raw["d"]}
             result["geometries"]["outer_last_observed"] = observed
-            if observed["width"] >= 320 and observed["height"] >= 240 and observed["dpr"] == 2:
+            # Niri reserves its own gaps around the full-width column; the
+            # WebKit content box is smaller than the logical output itself.
+            if observed["width"] >= logical_width * 0.85 and observed["height"] >= 240 and observed["dpr"] == 2:
                 if observed == last_outer:
                     stable_outer_samples += 1
                 else:
@@ -331,7 +392,7 @@ def main():
             else:
                 last_outer, stable_outer_samples = observed, 0
             return None
-        wait_until(fixed_outer, "stable fixed DPR2 app viewport (at least 320×240)", args.timeout,
+        wait_until(fixed_outer, "stable full-column DPR2 app viewport matching the private compositor output", args.timeout,
                    [("WebKitWebDriver", driver_process)])
         # Open the uniquely named Space and its browser canvas; no splitter is moved during this sequence.
         webdriver.execute("(()=>{window.__nativeAcceptanceErrors=[];addEventListener('error',e=>window.__nativeAcceptanceErrors.push(String(e.message||e.error||'window error').slice(0,300)));addEventListener('unhandledrejection',e=>window.__nativeAcceptanceErrors.push(String(e.reason).slice(0,300)));return true})()")
@@ -459,11 +520,16 @@ def main():
                               "paint_rate_derived_from": "CanvasRenderingContext2D.drawImage timestamps only"}
         # Count actual drawImage calls on the displayed canvas, not WebDriver polling or helper activity.
         webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame');if(!c)throw Error('canvas disappeared');const p=CanvasRenderingContext2D.prototype,d=p.drawImage;window.__nativePaintTimes=[];p.drawImage=function(...a){if(this.canvas===c)window.__nativePaintTimes.push(performance.now());return d.apply(this,a)};const s=document.querySelector('.browser-surface');if(!s)throw Error('browser surface absent');s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;s.releasePointerCapture=()=>{};return true})()")
+        if args.sustain_seconds:
+            sample_start = time.monotonic()
+            sampler = threading.Thread(target=sample_resources, args=(sample_start,), daemon=True)
+            sampler.start()
         webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect(),x=r.left+100,y=r.top+30;for(const type of ['pointerdown','pointerup'])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',clientX:x,clientY:y,button:0,buttons:type==='pointerdown'?1:0}));return {x,y}})()")
         completed = wait_until(lambda: next((report for report in reversed(FixtureHandler.state["reports"])
             if report.get("status") == "scroll complete" and report.get("started")
             and report.get("scrollFinish") is not None and report.get("scrollY", 0) >= 3899), None),
-            "fixture scroll completion and final position 3900", 10, [("WebKitWebDriver", driver_process)])
+            "fixture scroll completion and final position 3900", args.sustain_seconds + 10 if args.sustain_seconds else 10,
+            [("WebKitWebDriver", driver_process)])
         started_report = next((report for report in FixtureHandler.state["reports"]
                                if report.get("started") and report.get("status") == "scrolling"), None)
         if not started_report:
@@ -476,14 +542,33 @@ def main():
                              "interval_seconds": duration, "fixture_animation_ms": scroll_duration, "fps": fps,
                              "threshold_fps_exclusive": args.fps_min, "final_scroll_y": completed.get("scrollY")}
         result["activity"]["webdriver_commands_including_polling"] = webdriver.commands
-        if abs(scroll_duration - 6000) > 250:
-            raise RuntimeError(f"fixture scroll animation did not sustain its fixed six-second duration: {scroll_duration:.0f} ms")
+        if abs(scroll_duration - (args.sustain_seconds * 1000 if args.sustain_seconds else 6000)) > 500:
+            raise RuntimeError(f"fixture scroll animation did not sustain its requested duration: {scroll_duration:.0f} ms")
         if fps <= args.fps_min:
             raise RuntimeError(f"actual native canvas drawImage presentation rate {fps:.2f} FPS is not greater than {args.fps_min}")
         final_marker = wait_until(
             lambda: (lambda rgb: rgb if rgb[1] >= 100 and rgb[0] < 80 and rgb[2] < 130 else None)(
                 webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame');return [...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3)})()")),
             "completed scroll marker painted on native canvas", 3, [("WebKitWebDriver", driver_process)])
+        if args.sustain_seconds:
+            sampler_stop.set()
+            sampler.join(timeout=3)
+            post_warmup = [sample for sample in resource_samples if sample["elapsed_seconds"] >= 30]
+            result["resources"] = {"raw_samples": str(root / "sustained-samples.json"),
+                                   "sample_period_seconds": 1, "warmup_seconds": 30,
+                                   "post_warmup_count": len(post_warmup), "cpu_tick_hz": os.sysconf("SC_CLK_TCK"),
+                                   "sampled_roots": [label for label, _ in [("acceptance-runner", os.getpid())] +
+                                                     [(label, child.pid) for label, child in children]]}
+            if len(post_warmup) < 300 or any(sample["process_count"] < 5 or sample["pss_kib"] <= 0
+                                              for sample in post_warmup):
+                raise RuntimeError(f"sustained process tree sampling was incomplete: {result['resources']}")
+            time.sleep(2)
+            first_idle_paint = webdriver.execute("window.__nativePaintTimes.length")
+            time.sleep(3)
+            last_idle_paint = webdriver.execute("window.__nativePaintTimes.length")
+            result["resources"]["idle_paints_over_three_seconds"] = last_idle_paint - first_idle_paint
+            if last_idle_paint - first_idle_paint > 2:
+                raise RuntimeError(f"static page kept painting after sustained scroll: {result['resources']}")
         result["paints"]["visible_final_marker_rgb"] = final_marker
         if args.nested_wheel:
             # The WebKit driver cannot send OS wheel actions on this compositor.
@@ -539,6 +624,11 @@ def main():
             except Exception:
                 pass
     finally:
+        sampler_stop.set()
+        if sampler:
+            sampler.join(timeout=3)
+            (root / "sustained-samples.json").write_text(json.dumps(resource_samples))
+            result.setdefault("resources", {})["raw_samples"] = str(root / "sustained-samples.json")
         if driver:
             driver.delete()
             result.setdefault("activity", {})["webdriver_commands_including_polling"] = driver.commands

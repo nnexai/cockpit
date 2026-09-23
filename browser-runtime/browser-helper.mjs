@@ -19,7 +19,6 @@ const FRAME_INTERVAL_MS = 1000 / 30;
 const MAX_FRAME_PEERS = 32;
 const PREAUTH_TIMEOUT_MS = 5000;
 const SCROLL_SETTLE_DELAY_MS = 120;
-const STABLE_DENSITY_CAPTURE_INTERVAL_MS = 1000;
 
 const START_PAGE_PATH = '/__cockpit_browser_start__';
 const START_PAGE_HTML = `<!doctype html>
@@ -45,9 +44,7 @@ let liveFrameValidationPending = null;
 let liveViewportProof = null;
 let scrollRefinementTimer = null;
 let scrollRefinementContext = null;
-let densityScreenshotFeedback = null;
 let densityScreenshotPromise = Promise.resolve('stale');
-let lastStableDensityCaptureAt = -Infinity;
 let server;
 let dummyServer;
 let dummyUrl;
@@ -1030,8 +1027,6 @@ function resetFrameTransport() {
   scrollRefinementTimer = null;
   scrollRefinementContext = null;
   liveViewportProof = null;
-  densityScreenshotFeedback = null;
-  lastStableDensityCaptureAt = -Infinity;
   if (retired) acknowledgeFrame(retired);
   for (const socket of sockets) {
     // Pending replacements belong to the retired capture baseline. Release
@@ -1043,7 +1038,10 @@ function resetFrameTransport() {
 function frameGeometry(frame) {
   const metadata = frame?.metadata && typeof frame.metadata === 'object' ? frame.metadata : {};
   const baseline = frame?._geometry || state.captureBaseline;
-  if (!baseline || !geometryEqual(baseline, state.captureBaseline) || !state.geometryFresh) return null;
+  const geometryCurrent = frame?._screenshotCapture
+    ? captureViewportCompatible(baseline, state.captureBaseline)
+    : geometryEqual(baseline, state.captureBaseline);
+  if (!baseline || !geometryCurrent || !state.geometryFresh) return null;
   for (const [key, expected] of [['scrollOffsetX', baseline.scrollX], ['scrollOffsetY', baseline.scrollY]]) {
     if (metadata[key] !== undefined && (!Number.isFinite(Number(metadata[key])) || Math.abs(Number(metadata[key]) - expected) > 0.01)) return null;
   }
@@ -1104,14 +1102,27 @@ function initialFrameNeedsDensityRepair(dimensions, geometry) {
   const expectedHeight = Math.floor(geometry.cssHeight * geometry.dpr);
   return dimensions.width + 1 < expectedWidth || dimensions.height + 1 < expectedHeight;
 }
-function geometryMatchesCapture(geometry, baseline) {
+function captureViewportCompatible(left, right) {
+  return Boolean(left && right
+    && left.targetId === right.targetId
+    && left.documentGeneration === right.documentGeneration
+    && left.cssWidth === right.cssWidth
+    && left.cssHeight === right.cssHeight
+    && left.offsetX === right.offsetX
+    && left.offsetY === right.offsetY
+    && left.visualScale === right.visualScale
+    && left.pageScale === right.pageScale
+    && left.dpr === right.dpr
+    && left.captureToken === right.captureToken);
+}
+function geometryMatchesCapture(geometry, baseline, allowScrollChange = false) {
   return Boolean(geometry && baseline
     && Math.abs(geometry.width - baseline.cssWidth) <= 0.01
     && Math.abs(geometry.height - baseline.cssHeight) <= 0.01
     && Math.abs(geometry.offsetX - baseline.offsetX) <= 0.01
     && Math.abs(geometry.offsetY - baseline.offsetY) <= 0.01
-    && Math.abs(geometry.scrollX - baseline.scrollX) <= 0.01
-    && Math.abs(geometry.scrollY - baseline.scrollY) <= 0.01
+    && (allowScrollChange || (Math.abs(geometry.scrollX - baseline.scrollX) <= 0.01
+      && Math.abs(geometry.scrollY - baseline.scrollY) <= 0.01))
     && Math.abs(geometry.scale - baseline.visualScale) <= 0.01
     && Math.abs(geometry.pageScale - baseline.pageScale) <= 0.01
     && Math.abs(geometry.dpr - baseline.dpr) <= 0.01);
@@ -1129,10 +1140,14 @@ function measuredGeometryEqual(left, right) {
     && Math.abs(left.dpr - right.dpr) <= 0.001);
 }
 function screenshotContextCurrent(context) {
+  const current = state?.captureBaseline;
+  const viewportIsCurrent = context.streamingScroll
+    ? captureViewportCompatible(current, context.baseline)
+    : geometryEqual(current, context.baseline);
   return pageBindingIsCurrent(context.page, context.cdp, context.binding)
     && state.documentGeneration === context.baseline.documentGeneration
-    && state.viewportRevision === context.baseline.viewportRevision
-    && state.geometryFresh && geometryEqual(state.captureBaseline, context.baseline)
+    && (context.streamingScroll || state.viewportRevision === context.baseline.viewportRevision)
+    && state.geometryFresh && viewportIsCurrent
     && state.captureToken === context.baseline.captureToken;
 }
 async function readCaptureGeometry(context) {
@@ -1162,51 +1177,43 @@ async function readCaptureGeometry(context) {
     context.baseline.cssHeight,
   );
 }
-function consumeDensityScreenshotFeedback(geometry) {
-  const feedback = densityScreenshotFeedback;
-  if (!feedback) return false;
-  densityScreenshotFeedback = null;
-  return pageBindingIsCurrent(feedback.page, feedback.cdp, feedback.binding)
-    && geometryEqual(feedback.baseline, geometry);
-}
 async function captureStableDensityFrame(context) {
   if (!screenshotContextCurrent(context)) return 'stale';
-  let feedback = null;
   try {
     const before = await readCaptureGeometry(context);
-    if (!geometryMatchesCapture(before, context.baseline)) return 'stale';
-    feedback = {
-      page: context.page,
-      cdp: context.cdp,
-      binding: context.binding,
-      baseline: context.baseline,
-    };
-    densityScreenshotFeedback = feedback;
-    lastStableDensityCaptureAt = performance.now();
-    const capture = await context.cdp.send('Page.captureScreenshot', {
-      format: 'jpeg', quality: 80, captureBeyondViewport: false,
-    });
-    if (!screenshotContextCurrent(context) || typeof capture.data !== 'string') {
-      if (densityScreenshotFeedback === feedback) densityScreenshotFeedback = null;
-      return 'stale';
+    if (!geometryMatchesCapture(before, context.baseline, context.streamingScroll)) return 'stale';
+    const captureOptions = { format: 'jpeg', quality: 80, captureBeyondViewport: context.streamingScroll };
+    // Pin the capture to the measured document-space viewport; a bare surface
+    // screenshot can keep the old scroll origin while layout metrics advance.
+    if (context.streamingScroll) {
+      captureOptions.clip = {
+        x: before.scrollX,
+        y: before.scrollY,
+        width: context.baseline.cssWidth,
+        height: context.baseline.cssHeight,
+        scale: 1,
+      };
     }
+    const capture = await context.cdp.send('Page.captureScreenshot', captureOptions);
+    if (!screenshotContextCurrent(context) || typeof capture.data !== 'string') return 'stale';
     const after = await readCaptureGeometry(context);
-    if (!geometryMatchesCapture(after, context.baseline)
-      || !measuredGeometryEqual(after, before)) {
-      if (densityScreenshotFeedback === feedback) densityScreenshotFeedback = null;
-      return 'stale';
-    }
+    if (!geometryMatchesCapture(after, context.baseline, context.streamingScroll)
+      || !measuredGeometryEqual(after, before)) return 'stale';
+    const currentBaseline = state.captureBaseline;
+    if (context.streamingScroll && !captureViewportCompatible(currentBaseline, context.baseline)) return 'stale';
+    const frameGeometry = context.streamingScroll
+      ? { ...currentBaseline, scrollX: after.scrollX, scrollY: after.scrollY }
+      : context.baseline;
     enqueueFrame({
       data: capture.data,
       metadata: { timestamp: Date.now() / 1000 },
       _cdp: context.cdp,
       _captureToken: context.baseline.captureToken,
-      _geometry: context.baseline,
+      _geometry: frameGeometry,
       _screenshotCapture: true,
     });
     return 'captured';
   } catch (error) {
-    if (densityScreenshotFeedback === feedback) densityScreenshotFeedback = null;
     if (screenshotContextCurrent(context)) {
       emit({ type: 'failed', code: 'browser_frame_capture', message: String(error.message || error) });
     }
@@ -1245,12 +1252,13 @@ function queueDensityScreenshot(context) {
   densityScreenshotPromise = runDensityScreenshot(context);
   return densityScreenshotPromise;
 }
-function requestDensityScreenshot(frame) {
+function requestDensityScreenshot(frame, streamingScroll = false) {
   return queueDensityScreenshot({
     page,
     cdp: frame._cdp || pageCdp,
     binding: pageBindingGeneration,
     baseline: frame._geometry,
+    streamingScroll,
   });
 }
 function scheduleScrollRefinement(frame) {
@@ -1481,22 +1489,10 @@ function enqueueFrame(frame) {
         return;
       }
       if (frame._scrollChanged) scheduleScrollRefinement(frame);
-      if (frame._scrollChanged || scrollRefinementTimer !== null) {
-        if (!state.highDensityFramePublished) return;
-        // During scroll, preserve exact compositor metadata and refine once
-        // the trailing settle timer fires instead of capturing moving pixels.
-      } else {
-        if (densityScreenshotInFlight || consumeDensityScreenshotFeedback(geometry)) return;
-        if (!state.densityRepairFailed
-          && (!state.highDensityFramePublished
-            || performance.now() - lastStableDensityCaptureAt >= STABLE_DENSITY_CAPTURE_INTERVAL_MS)) {
-          requestDensityScreenshot(frame);
-          return;
-        }
-        if (!state.highDensityFramePublished) return;
-        // Preserve independently animated low-density frames between bounded
-        // sharp refreshes; do not let still screenshot feedback replace one.
-      }
+      requestDensityScreenshot(frame, true);
+      // The screencast bitmap is physically undersized; only a measured,
+      // high-density screenshot may replace it, including during active scroll.
+      return;
     } else {
       state.highDensityFramePublished = true;
     }

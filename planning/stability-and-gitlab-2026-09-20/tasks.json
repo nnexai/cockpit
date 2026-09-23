@@ -657,10 +657,11 @@
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
       "blockers": [
-        "Slow-observer protocol boundaries passed; the WEB-04 stale-frame recovery repair still lacks a repeated live browser scroll/reconnect run."
+        "Sustained native scroll passed 19,383 canvas paints over 335.004 seconds (57.86 FPS), a DPR2 first frame, a painted final marker, and zero static idle paints. Two five-minute runs showed non-plateauing PSS; a per-PID run attributed +200.32 KiB/s to WebKit web content and +35.93 KiB/s to WebKit networking. End-to-end slow-observer, crash/reconnect, hide/show, resource queue/decode ledger, and full WEB-04 recovery remain unverified; requested 1392-pixel native width was not achieved (676 CSS pixels observed)."
       ],
       "evidence": [
-        "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
+        "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
+        "runs/run-20260920-a3e9b950/WEB-06.md"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
@@ -668,7 +669,8 @@
       ],
       "notes": [
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "Two five-minute native scroll runs passed 57.86 painted FPS and zero static-idle paints; WebKit content/network PSS remained non-plateauing. Full WEB-06 lifecycle/resource acceptance remains blocked."
       ]
     },
     {
