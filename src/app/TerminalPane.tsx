@@ -219,7 +219,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       return;
     }
     const stream = streamRef.current;
-    if (!stream) return;
+    if (!stream || (ownershipRef.current !== "owned" && ownershipRef.current !== "observing")) return;
     const geometry = terminalCellGeometry(terminal, renderedGridRef.current ?? { cols: terminal.cols, rows: terminal.rows });
     const resizeCommand: TerminalResize = {
       type: "terminal.resize",
@@ -485,7 +485,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       desiredViewportGridRef.current = { cols, rows };
       renderedGridRef.current = { cols, rows };
       const stream = streamRef.current;
-      if (!stream) return;
+      if (!stream || (ownershipRef.current !== "owned" && ownershipRef.current !== "observing")) return;
       const bounds = terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.getBoundingClientRect();
       const resizeCommand: TerminalResize = {
         type: "terminal.resize",
@@ -646,8 +646,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     lastSequence.current = null;
     setError(null);
     setClosed(false);
-    ownershipRef.current = wantsControl ? "pending" : "observing";
-    setOwnership(ownershipRef.current);
+    ownershipRef.current = "pending";
+    setOwnership("pending");
     const fail = (code: string, message: string) => {
       clearPendingCommands();
       clearMouseMode();
@@ -743,6 +743,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
         } else if (message.state === "released") clearMouseMode();
         ownershipRef.current = message.state;
         setOwnership(message.state);
+        if (message.state === "owned" || message.state === "observing") requestViewportSizing();
         if (message.state === "owned") flushPending();
         return;
       }
@@ -825,7 +826,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       }
       stream = opened;
       streamRef.current = opened;
-      if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal) requestViewportSizing();
+      if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal
+        && (ownershipRef.current === "owned" || ownershipRef.current === "observing")) requestViewportSizing();
       if (restoreFocus) terminal.focus();
       flushPending();
       registerStream?.(opened, true);

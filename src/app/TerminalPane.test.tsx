@@ -384,7 +384,10 @@ describe("TerminalPane fitting and pointer ownership", () => {
     try {
       await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
       const terminal = mocks.terminals.at(-1)!;
-      act(() => messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 60, height: 12, full: true, bytes: btoa("frame") }));
+      act(() => {
+        messages[0]!(message("owned"));
+        messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 60, height: 12, full: true, bytes: btoa("frame") });
+      });
       await act(async () => { await settle(); });
       const fit = mocks.fits.at(-1)!;
       const fitCount = fit.fit.mock.calls.length;
@@ -563,7 +566,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
     });
   });
 
-  it("re-fits after delayed attachment and sends one changed authoritative resize", async () => {
+  it("defers a changed viewport resize until authoritative terminal ownership", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
     mocks.fitDimensions.push([100, 30], [120, 40]);
@@ -591,6 +594,10 @@ describe("TerminalPane fitting and pointer ownership", () => {
         resolveOpened!(stream(sent));
         await settle();
       });
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
+      act(() => messages[0]!(message("pending")));
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
+      act(() => messages[0]!(message("owned")));
       expect(sent.filter((command): command is Extract<TerminalCommand, { type: "terminal.resize" }> => command.type === "terminal.resize")).toEqual([
         { type: "terminal.resize", cols: 120, rows: 40, cell_width_px: 7, cell_height_px: 10 },
       ]);
@@ -631,6 +638,8 @@ describe("TerminalPane fitting and pointer ownership", () => {
       await vi.advanceTimersByTimeAsync(99);
       expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
+      act(() => messages[0]!(message("owned")));
       expect(sent.filter((command): command is Extract<TerminalCommand, { type: "terminal.resize" }> => command.type === "terminal.resize")).toEqual([
         { type: "terminal.resize", cols: 120, rows: 40, cell_width_px: 7, cell_height_px: 10 },
       ]);
