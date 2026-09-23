@@ -1,0 +1,748 @@
+{
+  "session": "native-77765d6b73ff",
+  "space": "Native browser 32bd2208",
+  "fixture_url": "http://127.0.0.1:44069/",
+  "root": "/tmp/cnative-00mv_nzz",
+  "failure": "RuntimeError: Timed out waiting for fixture viewport report matching the first canvas paint",
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Live browser view",
+      "alerts": [],
+      "body": "                            \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nLive browser view\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n0\n\nSend annotations\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\nPane\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                         ",
+      "painted": true,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 376,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      }
+    },
+    "native_only_surface": {
+      "pane": {
+        "css": {
+          "height": "331.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 331.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 331,
+          "width": 674
+        }
+      },
+      "canvas": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      },
+      "surface": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "hidden"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      }
+    }
+  },
+  "paints": {},
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 975059,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 975022,
+      "returncode": 0
+    },
+    {
+      "name": "gateway",
+      "pid": 974999,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 974965,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "helper_trace_module": {
+    "path": "/tmp/cnative-00mv_nzz/browser-helper-trace.mjs",
+    "source_sha256": "f1117a7add8aeef674393d16d7da0d56c6511239ec6300ff592f9d5b396a791d",
+    "instrumented_sha256": "c1948531ec8fc1edfb1d780ebcc26d7316d7d49900e8346822fad36398a0bde7"
+  },
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "socketWrapped": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:44069/"
+  },
+  "owned_helper_pids_at_first_canvas": [
+    {
+      "pid": 975835,
+      "start_ticks": 28014735,
+      "comm": "MainThread"
+    }
+  ],
+  "ok": false,
+  "failure_screenshot": "/tmp/cnative-00mv_nzz/native-failure.png",
+  "navigation_diagnostics": {
+    "status": "Live browser view",
+    "alerts": [],
+    "field": "http://127.0.0.1:44069/",
+    "javascriptErrors": [],
+    "tabs": [
+      {
+        "title": "Native scroll fixture",
+        "url": "http://127.0.0.1:44069/"
+      }
+    ],
+    "submits": [
+      {
+        "value": "http://127.0.0.1:44069/",
+        "defaultPrevented": true
+      }
+    ],
+    "fixture_report_count": 5,
+    "browser_trace": {
+      "frames": [
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3016,
+          "image_width": 1348,
+          "frame_sequence": 1,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3050.0000000000005,
+          "image_width": 1348,
+          "frame_sequence": 2,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3322,
+          "image_width": 1348,
+          "frame_sequence": 3,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3370,
+          "image_width": 1348,
+          "frame_sequence": 4,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3418,
+          "image_width": 1348,
+          "frame_sequence": 5,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3469,
+          "image_width": 1348,
+          "frame_sequence": 6,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3520,
+          "image_width": 1348,
+          "frame_sequence": 7,
+          "viewport_revision": 1
+        }
+      ],
+      "started": 472.00000000000006,
+      "sockets": 1,
+      "events": [
+        {
+          "type": "attached",
+          "time": 3014.0000000000005,
+          "viewport": {
+            "viewport_revision": 1,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 188,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "document_changed",
+          "time": 3287,
+          "viewport": null
+        }
+      ]
+    }
+  },
+  "owner_processes": {
+    "gateway": [
+      {
+        "pid": 974999,
+        "comm": "cockpit",
+        "start_ticks": 28014408
+      }
+    ],
+    "webdriver": [
+      {
+        "pid": 975059,
+        "comm": "WebKitWebDriver",
+        "start_ticks": 28014438
+      },
+      {
+        "pid": 975067,
+        "comm": "cockpit-tauri",
+        "start_ticks": 28014448
+      },
+      {
+        "pid": 975138,
+        "comm": "WebKitWebProces",
+        "start_ticks": 28014463
+      },
+      {
+        "pid": 975109,
+        "comm": "WebKitNetworkPr",
+        "start_ticks": 28014458
+      }
+    ]
+  },
+  "owned_helper_pids_at_failure": [
+    {
+      "pid": 975835,
+      "start_ticks": 28014735,
+      "comm": "MainThread"
+    }
+  ],
+  "fixture_reports": {
+    "count": 5,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126764.465076093
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126764.531186645
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126764.631481402
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 126764.681397649
+      }
+    ]
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 55
+  },
+  "cdp_override_trace": {
+    "path": "/tmp/cnative-00mv_nzz/browser-cdp-overrides.jsonl",
+    "count": 4,
+    "first": [
+      {
+        "phase": "send",
+        "monotonic_ms": 126764069,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126764088,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126764148,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126764149,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      }
+    ],
+    "last": [
+      {
+        "phase": "send",
+        "monotonic_ms": 126764069,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126764088,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 126764148,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 126764149,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      }
+    ]
+  },
+  "capture_lane_trace": {
+    "path": "/tmp/cnative-00mv_nzz/browser-cdp-overrides.jsonl",
+    "count": 12,
+    "last_counts": [
+      {
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "lane": "screencast",
+        "sampled_count": 8
+      },
+      {
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "lane": "screenshot_accepted",
+        "sampled_count": 8
+      },
+      {
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "lane": "screenshot_send",
+        "sampled_count": 8
+      }
+    ],
+    "first": [
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 1,
+        "monotonic_ms": 126764101,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 1,
+        "monotonic_ms": 126764143,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 1,
+        "monotonic_ms": 126764159,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 2,
+        "monotonic_ms": 126764161,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 2,
+        "monotonic_ms": 126764194,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 2,
+        "monotonic_ms": 126764204,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 4,
+        "monotonic_ms": 126764483,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 4,
+        "monotonic_ms": 126764512,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      }
+    ],
+    "last": [
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 2,
+        "monotonic_ms": 126764194,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 2,
+        "monotonic_ms": 126764204,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 3
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 4,
+        "monotonic_ms": 126764483,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 4,
+        "monotonic_ms": 126764512,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 4,
+        "monotonic_ms": 126764513,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 8,
+        "monotonic_ms": 126764659,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 8,
+        "monotonic_ms": 126764671,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 8,
+        "monotonic_ms": 126764710,
+        "pid": 975835,
+        "start_ticks": 28014735,
+        "target_id": "19EAE3E8B71998B8A4CE20A1C97EB3DF",
+        "page_binding_generation": 1,
+        "capture_token": 6
+      }
+    ]
+  },
+  "logs": {
+    "webdriver": "/tmp/cnative-00mv_nzz/webdriver.log",
+    "compositor": "/tmp/cnative-00mv_nzz/compositor.log",
+    "gateway": "/tmp/cnative-00mv_nzz/gateway.log",
+    "herdr": "/tmp/cnative-00mv_nzz/herdr.log"
+  }
+}
