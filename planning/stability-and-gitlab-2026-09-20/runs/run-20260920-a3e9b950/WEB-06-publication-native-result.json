@@ -1,0 +1,755 @@
+{
+  "session": "native-599bdf8e8515",
+  "space": "Native browser 38742bec",
+  "fixture_url": "http://127.0.0.1:34137/",
+  "root": "/tmp/cnative-igrw6etp",
+  "failure": null,
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Live browser view",
+      "alerts": [],
+      "body": "                            \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nLive browser view\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n0\n\nSend annotations\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\nPane\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                         ",
+      "painted": true,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 188.46875,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      },
+      "surfaceCss": {
+        "height": 188.46875,
+        "width": 674
+      }
+    },
+    "native_only_surface": {
+      "pane": {
+        "css": {
+          "height": "331.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 331.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 331,
+          "width": 674
+        }
+      },
+      "canvas": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      },
+      "surface": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "hidden"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      }
+    },
+    "first_canvas_viewport": {
+      "dpr": 2,
+      "height": 835,
+      "width": 676
+    },
+    "native_canvas": {
+      "width": 1348,
+      "left": 1,
+      "heightCss": 188.46875,
+      "widthCss": 674,
+      "top": 645.53125,
+      "height": 376
+    },
+    "fixture_first_paint": {
+      "innerWidth": 674,
+      "innerHeight": 188,
+      "dpr": 2,
+      "scrollY": 0,
+      "nestedScrollTop": 0,
+      "nestedWheelY": null,
+      "ready": "complete",
+      "heading": "Native browser acceptance",
+      "headingWidth": 650,
+      "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+      "status": "waiting for routed native pointer",
+      "started": false,
+      "scrollStart": null,
+      "scrollFinish": null,
+      "received_at": 130479.386601366
+    },
+    "bitmap_density": {
+      "bitmap_width_per_css": 2.0,
+      "bitmap_height_per_css": 1.995025700547173
+    },
+    "splitter_moved": false
+  },
+  "paints": {
+    "source": "canvas.browser-frame CanvasRenderingContext2D.drawImage",
+    "timestamps": 362,
+    "interval_seconds": 6.016631320992019,
+    "fixture_animation_ms": 6016.399999991059,
+    "fps": 60.16655844226028,
+    "threshold_fps_exclusive": 15.0,
+    "final_scroll_y": 3900,
+    "visible_final_marker_rgb": [
+      0,
+      167,
+      75
+    ]
+  },
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 1160002,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 1159962,
+      "returncode": 0
+    },
+    {
+      "name": "gateway",
+      "pid": 1159939,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 1159905,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "helper_trace_module": {
+    "path": "/tmp/cnative-igrw6etp/browser-helper-trace.mjs",
+    "source_sha256": "f0d3bf00d2430863011c0aac0420ff0a79497dd428bbb8df515b7bb85306a483",
+    "instrumented_sha256": "fe55a0c61b7f07b69c92ab6353d362bb15eabbcbfa63a0e8b2452145d10f2901"
+  },
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "socketWrapped": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:34137/"
+  },
+  "owned_helper_pids_at_first_canvas": [
+    {
+      "pid": 1160780,
+      "start_ticks": 28386201,
+      "comm": "MainThread"
+    },
+    {
+      "pid": 1160814,
+      "start_ticks": 28386228,
+      "comm": "MainThread"
+    }
+  ],
+  "screenshots": {
+    "first_paint_before_gesture": "/tmp/cnative-igrw6etp/native-first.png"
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 61,
+    "excluded_from_fps": "WebDriver/CDP requests and helper activity",
+    "paint_rate_derived_from": "CanvasRenderingContext2D.drawImage timestamps only"
+  },
+  "screenshot": "/tmp/cnative-igrw6etp/native-window.png",
+  "ok": true,
+  "fixture_reports": {
+    "count": 4,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 130479.386601366
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scrolling",
+        "started": true,
+        "scrollStart": 285.1000000089407,
+        "scrollFinish": null,
+        "received_at": 130479.650762439
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 3900,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scroll complete",
+        "started": true,
+        "scrollStart": 285.1000000089407,
+        "scrollFinish": 6301.5,
+        "received_at": 130485.66739376
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 3900,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scroll complete",
+        "started": true,
+        "scrollStart": 285.1000000089407,
+        "scrollFinish": 6301.5,
+        "received_at": 130485.782913597
+      }
+    ]
+  },
+  "cdp_override_trace": {
+    "path": "/tmp/cnative-igrw6etp/browser-cdp-overrides.jsonl",
+    "count": 6,
+    "first": [
+      {
+        "phase": "send",
+        "monotonic_ms": 130478746,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 130478767,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 130479000,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 130479003,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 130479093,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 130479094,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      }
+    ],
+    "last": [
+      {
+        "phase": "send",
+        "monotonic_ms": 130478746,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 130478767,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 130479000,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 130479003,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": true,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "send",
+        "monotonic_ms": 130479093,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      },
+      {
+        "phase": "accepted",
+        "monotonic_ms": 130479094,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "commit_request": false,
+        "requested": {
+          "width": 674,
+          "height": 188,
+          "deviceScaleFactor": 2,
+          "mobile": false,
+          "screenWidth": 1348,
+          "screenHeight": 376
+        },
+        "error": null
+      }
+    ]
+  },
+  "capture_lane_trace": {
+    "path": "/tmp/cnative-igrw6etp/browser-cdp-overrides.jsonl",
+    "count": 46,
+    "last_counts": [
+      {
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "lane": "frame_published",
+        "sampled_count": 256
+      },
+      {
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "lane": "screencast",
+        "sampled_count": 256
+      },
+      {
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "lane": "screenshot_accepted",
+        "sampled_count": 4
+      },
+      {
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "lane": "screenshot_send",
+        "sampled_count": 4
+      },
+      {
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "lane": "frame_published",
+        "sampled_count": 256
+      },
+      {
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "lane": "screencast",
+        "sampled_count": 256
+      },
+      {
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "lane": "screenshot_accepted",
+        "sampled_count": 2
+      },
+      {
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "lane": "screenshot_send",
+        "sampled_count": 2
+      }
+    ],
+    "first": [
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 1,
+        "monotonic_ms": 130478780,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 1,
+        "monotonic_ms": 130478829,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "frame_published",
+        "count": 1,
+        "monotonic_ms": 130478832,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 1,
+        "monotonic_ms": 130478855,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_send",
+        "count": 2,
+        "monotonic_ms": 130478859,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screenshot_accepted",
+        "count": 2,
+        "monotonic_ms": 130478892,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 2,
+        "monotonic_ms": 130478893,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "frame_published",
+        "count": 2,
+        "monotonic_ms": 130478895,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 1
+      }
+    ],
+    "last": [
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 128,
+        "monotonic_ms": 130481594,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 4
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "frame_published",
+        "count": 128,
+        "monotonic_ms": 130481595,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 4
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "frame_published",
+        "count": 128,
+        "monotonic_ms": 130481644,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 5
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 128,
+        "monotonic_ms": 130481661,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 5
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 256,
+        "monotonic_ms": 130483731,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 4
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "frame_published",
+        "count": 256,
+        "monotonic_ms": 130483731,
+        "pid": 1160780,
+        "start_ticks": 28386201,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 4
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "frame_published",
+        "count": 256,
+        "monotonic_ms": 130483776,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 5
+      },
+      {
+        "phase": "capture_lane",
+        "lane": "screencast",
+        "count": 256,
+        "monotonic_ms": 130483795,
+        "pid": 1160814,
+        "start_ticks": 28386228,
+        "target_id": "806BA3F68E85EEF60B5E5F05E635B27C",
+        "page_binding_generation": 1,
+        "capture_token": 5
+      }
+    ]
+  },
+  "logs": {
+    "webdriver": "/tmp/cnative-igrw6etp/webdriver.log",
+    "compositor": "/tmp/cnative-igrw6etp/compositor.log",
+    "gateway": "/tmp/cnative-igrw6etp/gateway.log",
+    "herdr": "/tmp/cnative-igrw6etp/herdr.log"
+  }
+}

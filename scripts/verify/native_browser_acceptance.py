@@ -254,7 +254,7 @@ def owned_helper_processes(helper_path):
             continue
     return sorted(found, key=lambda item: item["pid"])
 
-def traced_helper_source(source, capture_lanes=False):
+def traced_helper_source(source, capture_lanes=False, frame_publication=False):
     """Instrument only a disposable helper copy, leaving packaged source intact."""
     import_line = "import readline from 'node:readline';\n"
     original = """  await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
@@ -320,11 +320,19 @@ function traceCaptureLane(lane) {
     screenshot_site = "    const capture = await context.cdp.send('Page.captureScreenshot', captureOptions);\n"
     if instrumented.count(fs_import) != 1 or instrumented.count(screencast_site) != 1 or instrumented.count(screenshot_site) != 1:
         raise RuntimeError("packaged helper capture lanes changed; refusing unmatched diagnostic instrumentation")
-    return (instrumented.replace(fs_import, fs_import + lane_trace, 1)
-            .replace(screencast_site, screencast_site + "    traceCaptureLane('screencast');\n", 1)
-            .replace(screenshot_site,
-                     "    traceCaptureLane('screenshot_send');\n" + screenshot_site
-                     + "    traceCaptureLane('screenshot_accepted');\n", 1))
+    instrumented = (instrumented.replace(fs_import, fs_import + lane_trace, 1)
+                    .replace(screencast_site, screencast_site + "    traceCaptureLane('screencast');\n", 1)
+                    .replace(screenshot_site,
+                             "    traceCaptureLane('screenshot_send');\n" + screenshot_site
+                             + "    traceCaptureLane('screenshot_accepted');\n", 1))
+    if frame_publication:
+        counter_site = "screencast: 0, screenshot_send: 0, screenshot_accepted: 0"
+        publication_site = "    emit({ type: 'frame', descriptor });\n"
+        if instrumented.count(counter_site) != 1 or instrumented.count(publication_site) != 1:
+            raise RuntimeError("packaged helper frame publication changed; refusing unmatched diagnostic instrumentation")
+        instrumented = (instrumented.replace(counter_site, counter_site + ", frame_published: 0", 1)
+                        .replace(publication_site, publication_site + "    traceCaptureLane('frame_published');\n", 1))
+    return instrumented
 
 
 
@@ -350,6 +358,7 @@ def main():
     parser.add_argument("--native-only-open", action="store_true", help="skip gateway browser pre-open; open and navigate using only the actual native UI")
     parser.add_argument("--trace-cdp-overrides", action="store_true", help="log CDP device-metrics sends from only a run-owned helper copy")
     parser.add_argument("--trace-capture-lanes", action="store_true", help="also count screencast and screenshot capture in the run-owned helper copy")
+    parser.add_argument("--trace-frame-publication", action="store_true", help="also count helper frame-descriptor publication from only the run-owned helper copy")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
@@ -365,6 +374,8 @@ def main():
         parser.error("--trace-cdp-overrides requires --native-only-open")
     if args.trace_capture_lanes and not args.trace_cdp_overrides:
         parser.error("--trace-capture-lanes requires --trace-cdp-overrides and --native-only-open")
+    if args.trace_frame_publication and not args.trace_capture_lanes:
+        parser.error("--trace-frame-publication requires --trace-capture-lanes and --native-only-open")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -424,7 +435,8 @@ def main():
     try:
         if args.trace_cdp_overrides:
             source = (REPO / "browser-runtime/browser-helper.mjs").read_text()
-            instrumented = traced_helper_source(source, capture_lanes=args.trace_capture_lanes)
+            instrumented = traced_helper_source(source, capture_lanes=args.trace_capture_lanes,
+                                                frame_publication=args.trace_frame_publication)
             helper_path.write_text(instrumented)
             syntax = subprocess.run(["node", "--check", str(helper_path)],
                                     capture_output=True, text=True, timeout=10)
