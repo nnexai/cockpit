@@ -645,6 +645,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     let presenter: FramePresenter | null = null;
     let stream: BrowserViewStream | null = null;
     let cursor: number | null = null;
+    let hardViewportRevision = 0;
     const controller = new AbortController();
     const close = () => {
       if (closed) return;
@@ -709,7 +710,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (closed) return;
       if (incoming.type === "attached") {
         if (identityRef.current) return;
-        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
+        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; hardViewportRevision = incoming.snapshot.viewport?.viewport_revision ?? 0; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
       }
       const identity = identityRef.current;
       if (!identity || incoming.metadata.view_id !== identity.id || incoming.metadata.stream_epoch !== identity.epoch) return;
@@ -738,6 +739,16 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         }
         case "viewport_changed": {
           next = { ...previous, viewport: incoming.viewport };
+          const prior = previous.viewport;
+          const current = incoming.viewport;
+          const scrollOnly = prior && current && prior.geometry_fresh && current.geometry_fresh
+            && current.viewport_revision === prior.viewport_revision + 1
+            && current.css_width === prior.css_width && current.css_height === prior.css_height
+            && current.device_pixel_ratio === prior.device_pixel_ratio
+            && current.visual_offset_x === prior.visual_offset_x && current.visual_offset_y === prior.visual_offset_y
+            && current.visual_scale === prior.visual_scale && current.page_scale === prior.page_scale
+            && (current.scroll_x !== prior.scroll_x || current.scroll_y !== prior.scroll_y);
+          if (!scrollOnly && current) hardViewportRevision = current.viewport_revision;
           if (previous.viewport?.viewport_revision !== incoming.viewport?.viewport_revision) {
             // Keep annotation gestures tied to the geometry where they began.
             gestureRef.current = null;
@@ -763,18 +774,21 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         if (nextStatus !== "loading" || !frameRef.current) setStatus(nextStatus);
       }
     };
+    const canPresent = (descriptor: BrowserViewFramePacket["descriptor"]): boolean => {
+      const current = snapshotRef.current; const identity = identityRef.current;
+      return Boolean(current?.document && current.viewport?.geometry_fresh && current.displayed_target_id && identity
+        && descriptor.stream_epoch === identity.epoch
+        && descriptor.target_id === current.displayed_target_id
+        && descriptor.document_generation === current.document.document_generation
+        && descriptor.viewport_revision >= hardViewportRevision
+        && descriptor.viewport_revision <= current.viewport.viewport_revision
+        && Math.abs(descriptor.viewport_css_width - current.viewport.css_width) <= 0.01
+        && Math.abs(descriptor.viewport_css_height - current.viewport.css_height) <= 0.01);
+    };
     presenter = new FramePresenter({
       isExpectedStale: (descriptor) => {
-        const current = snapshotRef.current; const identity = identityRef.current;
-        if (!current?.document || !current.viewport || !identity) return false;
-        return descriptor.stream_epoch !== identity.epoch
-          || descriptor.target_id !== current.displayed_target_id
-          || descriptor.document_generation !== current.document.document_generation
-          || descriptor.viewport_revision !== current.viewport.viewport_revision
-          || Math.abs(descriptor.viewport_css_width - current.viewport.css_width) > 0.01
-          || Math.abs(descriptor.viewport_css_height - current.viewport.css_height) > 0.01
-          || Math.abs(descriptor.scroll_x - current.viewport.scroll_x) > 0.01
-          || Math.abs(descriptor.scroll_y - current.viewport.scroll_y) > 0.01;
+        const current = snapshotRef.current;
+        return Boolean(current?.document && current.viewport && !canPresent(descriptor));
       },
       shouldDefer: (descriptor) => {
         const current = snapshotRef.current; const identity = identityRef.current; const presented = frameRef.current;
@@ -786,15 +800,17 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
             && descriptor.viewport_revision > current.viewport.viewport_revision));
       },
       validate: (descriptor) => {
-        const current = snapshotRef.current; const identity = identityRef.current;
-        if (!current?.document || !current.viewport || !current.displayed_target_id || !identity) throw new BrowserFrameError("identity_mismatch", "Browser frame arrived before its snapshot");
-        validateFrameDescriptor(descriptor, { streamEpoch: identity.epoch, targetId: current.displayed_target_id, displayedTargetId: current.displayed_target_id, documentGeneration: current.document.document_generation, viewportRevision: current.viewport.viewport_revision, viewportCssWidth: current.viewport.css_width, viewportCssHeight: current.viewport.css_height, scrollX: current.viewport.scroll_x, scrollY: current.viewport.scroll_y });
+        const current = snapshotRef.current;
+        if (!canPresent(descriptor) || !current?.viewport) throw new BrowserFrameError("identity_mismatch", "Browser frame is for a stale document or viewport");
+        validateFrameDescriptor(descriptor, { streamEpoch: descriptor.stream_epoch, targetId: descriptor.target_id, displayedTargetId: current.displayed_target_id, documentGeneration: descriptor.document_generation, viewportRevision: descriptor.viewport_revision, viewportCssWidth: current.viewport.css_width, viewportCssHeight: current.viewport.css_height });
       },
       present: (image, descriptor) => {
-        if (!frameMatchesCurrent({ descriptor, sequence: descriptor.frame_sequence })) throw new BrowserFrameError("identity_mismatch", "Browser frame became stale while decoding");
+        if (!canPresent(descriptor)) throw new BrowserFrameError("identity_mismatch", "Browser frame became stale while decoding");
         const targetCanvas = canvasRef.current; const drawing = targetCanvas?.getContext("2d");
         if (!targetCanvas || !drawing) throw new Error("Browser view canvas is unavailable");
-        targetCanvas.width = descriptor.image_width; targetCanvas.height = descriptor.image_height; drawing.clearRect(0, 0, targetCanvas.width, targetCanvas.height); drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
+        if (targetCanvas.width !== descriptor.image_width) targetCanvas.width = descriptor.image_width;
+        if (targetCanvas.height !== descriptor.image_height) targetCanvas.height = descriptor.image_height;
+        drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
         const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted); if (!errorRef.current) setStatus("ready");
       },
       onError: (error) => { if (!closed) { errorRef.current = true; setStatus("error"); setMessage(errorMessage(error)); } },

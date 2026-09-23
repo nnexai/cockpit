@@ -689,11 +689,13 @@ dependencies = [
  "cockpit-host",
  "cockpit-protocol",
  "cockpit-providers",
+ "futures-util",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 

@@ -69,7 +69,8 @@ describe("BrowserPane wheel recovery", () => {
     originalDpr = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
     Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 1.25 });
     vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 4, height: 3, close: vi.fn() })));
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage } as unknown as CanvasRenderingContext2D);
     host = document.createElement("div");
     document.body.append(host);
     await act(async () => {
@@ -111,6 +112,11 @@ describe("BrowserPane wheel recovery", () => {
 
     await act(async () => {
       emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 3 }, viewport: viewport(3, 180) });
+      const laggedFrame = packet(descriptor(2, 2, 120));
+      emitFrame(laggedFrame);
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(laggedFrame.ack).toHaveBeenCalledOnce();
+      expect(drawImage).toHaveBeenCalledTimes(2);
       const nextFrame = packet(descriptor(3, 3, 180));
       emitFrame(nextFrame);
       await new Promise<void>((resolve) => setTimeout(resolve, 30));

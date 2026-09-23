@@ -43,15 +43,22 @@ use cockpit_protocol::{
         TerminalOwnershipState, TerminalStreamMessage,
     },
 };
+use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
-use tauri::{
-    Manager, State,
-    ipc::{Channel, InvokeResponseBody},
-};
+use tauri::{Manager, State, ipc::Channel};
 use tokio::{
     io::AsyncWriteExt,
+    net::TcpListener,
     process::Command as TokioCommand,
     sync::{Notify, mpsc},
+};
+use tokio_tungstenite::{
+    WebSocketStream,
+    tungstenite::{
+        Message,
+        handshake::server::{Request as WsRequest, Response as WsResponse},
+        protocol::WebSocketConfig,
+    },
 };
 use uuid::Uuid;
 
@@ -60,6 +67,105 @@ const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(25
 const MAX_TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 const MAX_MUTATION_REQUEST_BYTES: usize = 64 * 1024;
 const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const BROWSER_SOCKET_AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const BROWSER_SOCKET_PEER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const BROWSER_SOCKET_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+const BROWSER_SOCKET_MAX_MESSAGE_BYTES: usize = 1024;
+
+fn valid_browser_socket_origin(origin: &str) -> bool {
+    matches!(
+        origin,
+        "http://localhost:5173"
+            | "http://tauri.localhost"
+            | "https://tauri.localhost"
+            | "tauri://localhost"
+    )
+}
+
+fn validate_browser_socket_request(request: &WsRequest, expected_host: &str) -> Result<(), ()> {
+    let host = request
+        .headers()
+        .get("host")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(())?;
+    let origin = request
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(())?;
+    if host != expected_host || !valid_browser_socket_origin(origin) {
+        return Err(());
+    }
+    Ok(())
+}
+
+async fn browser_socket_accept(
+    listener: &TcpListener,
+    expected_host: &str,
+) -> Result<WebSocketStream<tokio::net::TcpStream>, ()> {
+    tokio::time::timeout(BROWSER_SOCKET_PEER_TIMEOUT, async {
+        let (stream, _) = listener.accept().await.map_err(|_| ())?;
+        stream.set_nodelay(true).map_err(|_| ())?;
+        let expected_host = expected_host.to_owned();
+        let callback = move |request: &WsRequest, response: WsResponse| {
+            if validate_browser_socket_request(request, &expected_host).is_ok() {
+                Ok(response)
+            } else {
+                Err(WsResponse::builder()
+                    .status(403)
+                    .body(Some("Forbidden".to_owned()))
+                    .expect("valid websocket rejection response"))
+            }
+        };
+        let mut config = WebSocketConfig::default();
+        config.max_message_size = Some(BROWSER_SOCKET_MAX_MESSAGE_BYTES);
+        config.max_frame_size = Some(BROWSER_SOCKET_MAX_MESSAGE_BYTES);
+        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(config))
+            .await
+            .map_err(|_| ())
+    })
+    .await
+    .map_err(|_| ())?
+}
+
+async fn browser_socket_send<S>(
+    socket: &mut S,
+    message: Message,
+    cancel_notify: &Notify,
+) -> Result<(), ()>
+where
+    S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    tokio::select! {
+        _ = cancel_notify.notified() => Err(()),
+        result = tokio::time::timeout(BROWSER_SOCKET_IO_TIMEOUT, socket.send(message)) => {
+            result.map_err(|_| ())?.map_err(|_| ())
+        }
+    }
+}
+
+async fn send_browser_socket_json<S>(
+    socket: &mut S,
+    message: impl Serialize,
+    cancel_notify: &Notify,
+) -> Result<(), ()>
+where
+    S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    let json = serde_json::to_string(&message).map_err(|_| ())?;
+    browser_socket_send(socket, Message::Text(json.into()), cancel_notify).await
+}
+
+async fn browser_frame_credit(
+    frame: &mut FrameConnection,
+    kind: &'static str,
+    sequence: u64,
+) -> Result<(), ()> {
+    tokio::time::timeout(BROWSER_SOCKET_IO_TIMEOUT, frame.send_credit(kind, sequence))
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())
+}
 
 #[tauri::command]
 async fn cockpit_clipboard_write(text: String) -> Result<(), ErrorResponse> {
@@ -197,9 +303,10 @@ async fn write_macos_clipboard(text: &str) -> Result<(), ErrorResponse> {
             )
         })?;
     let result = tokio::time::timeout(CLIPBOARD_TIMEOUT, async {
-        let mut stdin = process.stdin.take().ok_or_else(|| {
-            stream_error("clipboard_unavailable", "pbcopy stdin was unavailable")
-        })?;
+        let mut stdin = process
+            .stdin
+            .take()
+            .ok_or_else(|| stream_error("clipboard_unavailable", "pbcopy stdin was unavailable"))?;
         stdin.write_all(text.as_bytes()).await.map_err(|error| {
             stream_error(
                 "clipboard_write_failed",
@@ -221,7 +328,8 @@ async fn write_macos_clipboard(text: &str) -> Result<(), ErrorResponse> {
                 format!("pbcopy exited with {status}"),
             ))
         }
-    }).await;
+    })
+    .await;
     match result {
         Ok(result) => result,
         Err(_) => {
@@ -353,7 +461,6 @@ enum StreamEntry {
     },
     BrowserView {
         control: Arc<StreamControl>,
-        acknowledgements: mpsc::Sender<u64>,
     },
 }
 
@@ -392,16 +499,6 @@ impl StreamRegistry {
         let entries = self.entries.lock().expect("stream registry lock poisoned");
         match entries.get(stream_id) {
             Some(StreamEntry::Terminal { commands, .. }) => Some(commands.clone()),
-            _ => None,
-        }
-    }
-
-    fn browser_view_acknowledgements(&self, stream_id: &str) -> Option<mpsc::Sender<u64>> {
-        let entries = self.entries.lock().expect("stream registry lock poisoned");
-        match entries.get(stream_id) {
-            Some(StreamEntry::BrowserView {
-                acknowledgements, ..
-            }) => Some(acknowledgements.clone()),
             _ => None,
         }
     }
@@ -554,28 +651,10 @@ async fn cockpit_browser_feedback_send(
         .map_err(inspection_error_response)
 }
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum BrowserViewChannelMessage {
-    Event {
-        event: BrowserViewEvent,
-    },
-    Frame {
-        descriptor: cockpit_protocol::browser_view::BrowserViewFrameDescriptor,
-    },
-    Error {
-        code: String,
-        message: String,
-    },
-}
-
-fn send_browser_view_message(
-    channel: &Channel<InvokeResponseBody>,
-    message: BrowserViewChannelMessage,
-) -> bool {
-    let Ok(json) = serde_json::to_string(&message) else {
-        return false;
-    };
-    channel.send(InvokeResponseBody::Json(json)).is_ok()
+struct BrowserViewSubscribeResponse {
+    stream_id: String,
+    endpoint: String,
+    grant: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -585,11 +664,32 @@ struct BrowserViewOpenNativeResponse {
 }
 
 #[tauri::command]
+async fn cockpit_browser_view_release(
+    view_id: String,
+    runtime: State<'_, Arc<BrowserRuntime>>,
+) -> Result<(), ErrorResponse> {
+    if view_id.trim().is_empty() {
+        return Err(stream_error(
+            "invalid_browser_view_id",
+            "Browser view id is required",
+        ));
+    }
+    runtime
+        .browser_view_detach(&view_id)
+        .await
+        .map_err(inspection_error_response)?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn cockpit_browser_draft_recovery(
     request: cockpit_protocol::browser_view::BrowserDraftRecoveryRequest,
     runtime: State<'_, Arc<BrowserRuntime>>,
 ) -> Result<cockpit_protocol::browser_view::BrowserViewCommandOutcome, ErrorResponse> {
-    runtime.browser_draft_recovery(request).await.map_err(inspection_error_response)
+    runtime
+        .browser_draft_recovery(request)
+        .await
+        .map_err(inspection_error_response)
 }
 
 #[tauri::command]
@@ -627,26 +727,53 @@ async fn cockpit_browser_view_command(
 async fn cockpit_browser_view_subscribe(
     view_id: String,
     stream_epoch: u64,
-    channel: Channel<InvokeResponseBody>,
     runtime: State<'_, Arc<BrowserRuntime>>,
     registry: State<'_, StreamRegistry>,
-) -> Result<String, ErrorResponse> {
+) -> Result<BrowserViewSubscribeResponse, ErrorResponse> {
     let subscription = runtime
         .browser_view_native_subscribe(&view_id, stream_epoch)
         .await
         .map_err(inspection_error_response)?;
-    let initial_snapshot = subscription.snapshot.clone();
-    let grant = subscription.grant.clone();
-    let endpoint = subscription.endpoint.clone();
-    let (ack_tx, mut ack_rx) = mpsc::channel(8);
+    let snapshot = subscription.snapshot;
+    let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            runtime
+                .browser_view_native_release(&snapshot.identity.view_id)
+                .await;
+            return Err(stream_error(
+                "browser_socket_unavailable",
+                format!("Could not bind browser stream socket: {error}"),
+            ));
+        }
+    };
+    let local_addr = match listener.local_addr() {
+        Ok(address) => address,
+        Err(error) => {
+            runtime
+                .browser_view_native_release(&snapshot.identity.view_id)
+                .await;
+            return Err(stream_error(
+                "browser_socket_unavailable",
+                format!("Could not read browser stream socket address: {error}"),
+            ));
+        }
+    };
+    let endpoint = format!("ws://127.0.0.1:{}/", local_addr.port());
+    let socket_host = format!("127.0.0.1:{}", local_addr.port());
+    let helper_endpoint = subscription.endpoint.clone();
     let control = StreamControl::new_browser();
+    let frontend_grant = Uuid::new_v4().simple().to_string();
+    let helper_grant = subscription.grant.grant.clone();
+    let response_grant = frontend_grant.clone();
     let stream_id = match registry.allocate(StreamEntry::BrowserView {
         control: Arc::clone(&control),
-        acknowledgements: ack_tx,
     }) {
         Ok(stream_id) => stream_id,
         Err(error) => {
-            runtime.browser_view_native_release(&view_id).await;
+            runtime
+                .browser_view_native_release(&snapshot.identity.view_id)
+                .await;
             return Err(error);
         }
     };
@@ -654,164 +781,268 @@ async fn cockpit_browser_view_subscribe(
     let task_stream_id = stream_id.clone();
     let task_control = Arc::clone(&control);
     let task_runtime = runtime.inner().clone();
-    let task_view_id = initial_snapshot.identity.view_id.clone();
-    let cancel_notify = task_control
+    let task_view_id = snapshot.identity.view_id.clone();
+    let task_cancel_notify = task_control
         .cancel_notify
         .clone()
         .expect("browser stream cancellation notification");
     let task = tokio::spawn(async move {
-        let mut events = subscription.events;
-        let mut frame = tokio::select! {
-            _ = cancel_notify.notified() => {
-                drop(events);
-                drop(ack_rx);
-                task_registry.complete(&task_stream_id);
-                let _ = task_runtime.browser_view_native_release(&task_view_id).await;
-                return;
-            }
-            result = FrameConnection::connect(&endpoint, &grant.grant) => match result {
-                Ok(frame) => frame,
-                Err(error) => {
-                    let _ = send_browser_view_message(
-                        &channel,
-                        BrowserViewChannelMessage::Error {
-                            code: error.code.to_owned(),
-                            message: error.message.to_owned(),
-                        },
-                    );
-                    drop(events);
-                    drop(ack_rx);
-                    task_registry.complete(&task_stream_id);
-                    let _ = task_runtime.browser_view_native_release(&task_view_id).await;
-                    return;
-                }
-            },
-        };
-        let mut target_id = initial_snapshot
-            .displayed_target_id
-            .clone()
-            .unwrap_or_default();
-        let metadata = cockpit_protocol::browser_view::BrowserViewEventMetadata {
-            view_id: initial_snapshot.identity.view_id.clone(),
+        let _ = run_browser_view_socket(
+            listener,
+            socket_host,
+            helper_endpoint,
+            helper_grant,
+            frontend_grant,
+            snapshot,
             stream_epoch,
-            metadata_sequence: initial_snapshot.metadata_sequence,
-        };
-        if !send_browser_view_message(
-            &channel,
-            BrowserViewChannelMessage::Event {
-                event: BrowserViewEvent::Attached {
-                    metadata,
-                    snapshot: initial_snapshot.clone(),
-                },
-            },
-        ) {
-            drop(frame);
-            drop(events);
-            drop(ack_rx);
-            task_registry.complete(&task_stream_id);
-            let _ = task_runtime.browser_view_native_release(&task_view_id).await;
-            return;
-        }
-        let mut outstanding = None;
-        while !task_control.cancelled.load(Ordering::Acquire) {
-            tokio::select! {
-                _ = cancel_notify.notified() => break,
-                event = events.recv() => match event {
-                    Ok(event) => {
-                        if let BrowserViewEvent::Attached { snapshot, .. } = &event { target_id = snapshot.displayed_target_id.clone().unwrap_or(target_id); }
-                        if let BrowserViewEvent::TargetsChanged { displayed_target_id, .. } = &event { target_id = displayed_target_id.clone().unwrap_or(target_id); }
-                        if !send_browser_view_message(&channel, BrowserViewChannelMessage::Event { event }) { break; }
-                    }
-                    Err(_) => {
-                        let _ = send_browser_view_message(
-                            &channel,
-                            BrowserViewChannelMessage::Error {
-                                code: "browser_metadata_closed".into(),
-                                message: "Browser metadata stream closed".into(),
-                            },
-                        );
-                        break;
-                    }
-                },
-                ack = ack_rx.recv() => {
-                    let Some(sequence) = ack else { break; };
-                    if outstanding == Some(sequence) {
-                        if frame.send_credit("ack", sequence).await.is_err() { break; }
-                        outstanding = None;
-                    }
-                }
-                incoming = frame.recv() => match incoming {
-                    Ok(Some(payload)) => {
-                        let packet = match decode_frame(&payload, &target_id, stream_epoch) {
-                            Ok(packet) => packet,
-                            Err(error) => {
-                                let _ = send_browser_view_message(
-                                    &channel,
-                                    BrowserViewChannelMessage::Error {
-                                        code: error.code.to_owned(),
-                                        message: error.message.to_owned(),
-                                    },
-                                );
-                                break;
-                            }
-                        };
-                        if outstanding.is_some() {
-                            if frame.send_credit("discard", packet.descriptor.frame_sequence).await.is_err() { break; }
-                            continue;
-                        }
-                        let sequence = packet.descriptor.frame_sequence;
-                        let descriptor = packet.descriptor;
-                        let jpeg = packet.jpeg;
-                        outstanding = Some(sequence);
-                        if !send_browser_view_message(
-                            &channel,
-                            BrowserViewChannelMessage::Frame { descriptor },
-                        ) {
-                            outstanding = None;
-                            let _ = frame.send_credit("discard", sequence).await;
-                            break;
-                        }
-                        if channel.send(InvokeResponseBody::Raw(jpeg)).is_err() {
-                            outstanding = None;
-                            let _ = frame.send_credit("discard", sequence).await;
-                            break;
-                        }
-                    }
-                    Ok(None) | Err(_) => break,
-                }
-            }
-        }
-        if let Some(sequence) = outstanding {
-            let _ = frame.send_credit("discard", sequence).await;
-        }
-        drop(frame);
-        drop(events);
-        drop(ack_rx);
+            subscription.events,
+            task_control,
+            task_cancel_notify,
+        )
+        .await;
         task_registry.complete(&task_stream_id);
-        let _ = task_runtime.browser_view_native_release(&task_view_id).await;
+        task_runtime
+            .browser_view_native_release(&task_view_id)
+            .await;
     });
     control.set_abort(task.abort_handle());
-    Ok(stream_id)
+    Ok(BrowserViewSubscribeResponse {
+        stream_id,
+        endpoint,
+        grant: response_grant,
+    })
 }
 
-#[tauri::command]
-async fn cockpit_browser_view_frame_ack(
-    stream_id: String,
-    frame_sequence: u64,
-    registry: State<'_, StreamRegistry>,
-) -> Result<(), ErrorResponse> {
-    let Some(acknowledgements) = registry.browser_view_acknowledgements(&stream_id) else {
-        return Err(stream_error(
-            "stream_not_found",
-            "The browser view stream is not active",
-        ));
-    };
-    acknowledgements.try_send(frame_sequence).map_err(|_| {
-        stream_error(
-            "stream_closed",
-            "The browser view stream is not accepting frame credit",
+async fn run_browser_view_socket(
+    listener: TcpListener,
+    socket_host: String,
+    helper_endpoint: String,
+    helper_grant: String,
+    frontend_grant: String,
+    snapshot: BrowserViewSnapshot,
+    stream_epoch: u64,
+    mut events: tokio::sync::broadcast::Receiver<BrowserViewEvent>,
+    control: Arc<StreamControl>,
+    cancel_notify: Arc<Notify>,
+) -> Result<(), (&'static str, String)> {
+    let auth_deadline = tokio::time::Instant::now() + BROWSER_SOCKET_AUTH_TIMEOUT;
+    let socket = 'authenticate: loop {
+        let mut accepted = tokio::select! {
+            _ = cancel_notify.notified() => return Ok(()),
+            result = tokio::time::timeout_at(
+                auth_deadline,
+                browser_socket_accept(&listener, &socket_host),
+            ) => match result {
+                Ok(Ok(socket)) => socket,
+                Ok(Err(())) => continue,
+                Err(_) => return Err(("browser_socket_rejected", "Browser stream authentication timed out".to_owned())),
+            },
+        };
+        let auth = tokio::select! {
+            _ = cancel_notify.notified() => {
+                let _ = tokio::time::timeout(BROWSER_SOCKET_IO_TIMEOUT, accepted.close(None)).await;
+                return Ok(());
+            }
+            result = tokio::time::timeout_at(
+                auth_deadline,
+                tokio::time::timeout(BROWSER_SOCKET_PEER_TIMEOUT, accepted.next()),
+            ) => match result {
+                Ok(Ok(message)) => message,
+                Ok(Err(_)) | Err(_) => {
+                    let _ = tokio::time::timeout(BROWSER_SOCKET_IO_TIMEOUT, accepted.close(None)).await;
+                    if tokio::time::Instant::now() >= auth_deadline {
+                        return Err(("browser_socket_rejected", "Browser stream authentication timed out".to_owned()));
+                    }
+                    continue;
+                }
+            },
+        };
+        let authorized = match auth {
+            Some(Ok(Message::Text(text))) if text.len() <= BROWSER_SOCKET_MAX_MESSAGE_BYTES => {
+                serde_json::from_str::<serde_json::Value>(text.as_str())
+                    .ok()
+                    .and_then(|value| value.as_object().cloned())
+                    .is_some_and(|object| {
+                        object.len() == 1
+                            && object.get("grant").and_then(serde_json::Value::as_str)
+                                == Some(frontend_grant.as_str())
+                    })
+            }
+            _ => false,
+        };
+        if authorized {
+            break 'authenticate accepted;
+        }
+        let _ = send_browser_socket_json(
+            &mut accepted,
+            serde_json::json!({
+                "kind": "error",
+                "code": "browser_grant_invalid",
+                "message": "Browser stream grant was invalid",
+            }),
+            &cancel_notify,
         )
-    })
+        .await;
+        let _ = tokio::time::timeout(BROWSER_SOCKET_IO_TIMEOUT, accepted.close(None)).await;
+    };
+    let mut socket = socket;
+    let mut frame = tokio::select! {
+        _ = cancel_notify.notified() => return Ok(()),
+        result = FrameConnection::connect(&helper_endpoint, &helper_grant) => match result {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = send_browser_socket_json(&mut socket, serde_json::json!({
+                    "kind": "error",
+                    "code": error.code,
+                    "message": error.message,
+                }), &cancel_notify).await;
+                return Err(("browser_frame_connection_failed", "Could not connect browser frame stream".to_owned()));
+            },
+        },
+    };
+    send_browser_socket_json(
+        &mut socket,
+        serde_json::json!({"kind": "ready"}),
+        &cancel_notify,
+    )
+    .await
+    .map_err(|_| {
+        (
+            "browser_socket_closed",
+            "Browser stream socket closed".to_owned(),
+        )
+    })?;
+    let metadata = cockpit_protocol::browser_view::BrowserViewEventMetadata {
+        view_id: snapshot.identity.view_id.clone(),
+        stream_epoch,
+        metadata_sequence: snapshot.metadata_sequence,
+    };
+    send_browser_socket_json(
+        &mut socket,
+        serde_json::json!({
+            "kind": "event",
+            "event": BrowserViewEvent::Attached {
+                metadata,
+                snapshot: snapshot.clone(),
+            },
+        }),
+        &cancel_notify,
+    )
+    .await
+    .map_err(|_| {
+        (
+            "browser_socket_closed",
+            "Browser stream socket closed".to_owned(),
+        )
+    })?;
+
+    let mut outstanding = None;
+    let relay_result: Result<(), (&'static str, String)> = async {
+        let mut target_id = snapshot.displayed_target_id.clone().unwrap_or_default();
+        while !control.cancelled.load(Ordering::Acquire) {
+        tokio::select! {
+            _ = cancel_notify.notified() => break,
+            event = events.recv() => match event {
+                Ok(event) => {
+                    if let BrowserViewEvent::Attached { snapshot, .. } = &event {
+                        target_id = snapshot.displayed_target_id.clone().unwrap_or(target_id);
+                    }
+                    if let BrowserViewEvent::TargetsChanged { displayed_target_id, .. } = &event {
+                        target_id = displayed_target_id.clone().unwrap_or(target_id);
+                    }
+                    send_browser_socket_json(&mut socket, serde_json::json!({
+                        "kind": "event",
+                        "event": event,
+                    }), &cancel_notify).await.map_err(|_| ("browser_socket_closed", "Browser stream socket closed".to_owned()))?;
+                }
+                Err(_) => {
+                    let _ = send_browser_socket_json(&mut socket, serde_json::json!({
+                        "kind": "error",
+                        "code": "browser_metadata_closed",
+                        "message": "Browser metadata stream closed",
+                    }), &cancel_notify).await;
+                    break;
+                }
+            },
+            incoming = socket.next() => match incoming {
+                Some(Ok(Message::Text(text))) if text.len() <= BROWSER_SOCKET_MAX_MESSAGE_BYTES => {
+                    let value: serde_json::Value = serde_json::from_str(text.as_str())
+                        .map_err(|_| ("browser_credit_invalid", "Invalid browser frame credit".to_owned()))?;
+                    let Some(object) = value.as_object() else {
+                        return Err(("browser_credit_invalid", "Invalid browser frame credit".to_owned()));
+                    };
+                    if object.len() != 2 {
+                        return Err(("browser_credit_invalid", "Invalid browser frame credit".to_owned()));
+                    }
+                    let credit = object.get("type").and_then(serde_json::Value::as_str);
+                    let sequence = object.get("frame_sequence").and_then(serde_json::Value::as_u64);
+                    match (credit, sequence, outstanding) {
+                        (Some("ack"), Some(sequence), Some(current)) if sequence == current => {
+                            browser_frame_credit(&mut frame, "ack", sequence).await
+                                .map_err(|_| ("browser_frame_credit_failed", "Could not forward browser frame credit".to_owned()))?;
+                            outstanding = None;
+                        }
+                        (Some("discard"), Some(sequence), Some(current)) if sequence == current => {
+                            browser_frame_credit(&mut frame, "discard", sequence).await
+                                .map_err(|_| ("browser_frame_credit_failed", "Could not forward browser frame credit".to_owned()))?;
+                            outstanding = None;
+                        }
+                        (Some("ack" | "discard"), Some(_), _) => {}
+                        _ => return Err(("browser_credit_invalid", "Invalid browser frame credit".to_owned())),
+                    }
+                }
+                Some(Ok(Message::Ping(payload))) => {
+                    browser_socket_send(&mut socket, Message::Pong(payload), &cancel_notify).await
+                        .map_err(|_| ("browser_socket_closed", "Browser stream socket closed".to_owned()))?;
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                _ => return Err(("browser_message_invalid", "Invalid browser stream message".to_owned())),
+            },
+            incoming = frame.recv() => match incoming {
+                Ok(Some(payload)) => {
+                    let packet = match decode_frame(&payload, &target_id, stream_epoch) {
+                        Ok(packet) => packet,
+                        Err(error) => {
+                            let _ = send_browser_socket_json(&mut socket, serde_json::json!({
+                                "kind": "error",
+                                "code": error.code,
+                                "message": error.message,
+                            }), &cancel_notify).await;
+                            break;
+                        }
+                    };
+                    if outstanding.is_some() {
+                        browser_frame_credit(&mut frame, "discard", packet.descriptor.frame_sequence).await
+                            .map_err(|_| ("browser_frame_credit_failed", "Could not discard pending browser frame".to_owned()))?;
+                        continue;
+                    }
+                    let descriptor = packet.descriptor;
+                    let sequence = descriptor.frame_sequence;
+                    outstanding = Some(sequence);
+                    send_browser_socket_json(&mut socket, serde_json::json!({
+                        "kind": "frame",
+                        "descriptor": descriptor,
+                    }), &cancel_notify).await.map_err(|_| ("browser_socket_closed", "Browser stream socket closed".to_owned()))?;
+                    browser_socket_send(&mut socket, Message::Binary(packet.jpeg.into()), &cancel_notify).await
+                        .map_err(|_| ("browser_socket_closed", "Browser stream socket closed".to_owned()))?;
+
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+    }
+        Ok(())
+    }
+    .await;
+    if let Some(sequence) = outstanding {
+        let _ = tokio::time::timeout(
+            BROWSER_SOCKET_IO_TIMEOUT,
+            frame.send_credit("discard", sequence),
+        )
+        .await;
+    }
+    let _ = tokio::time::timeout(BROWSER_SOCKET_IO_TIMEOUT, socket.close(None)).await;
+    relay_result
 }
 
 #[tauri::command]
@@ -1546,7 +1777,7 @@ pub fn run() {
             cockpit_browser_draft_recovery,
             cockpit_browser_view_command,
             cockpit_browser_view_subscribe,
-            cockpit_browser_view_frame_ack,
+            cockpit_browser_view_release,
             comments::cockpit_comments_preview,
             comments::cockpit_comments_paste_prepare,
             comments::cockpit_comments_paste_send,

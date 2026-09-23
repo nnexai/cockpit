@@ -142,9 +142,33 @@ function nativeBinaryFrame(value: unknown, expectedLength: number): ArrayBuffer 
   return bytes.slice().buffer;
 }
 
+interface NativeBrowserViewSubscription {
+  stream_id: string;
+  endpoint: string;
+  grant: string;
+}
+
+function parseNativeBrowserViewSubscription(value: unknown): NativeBrowserViewSubscription {
+  if (typeof value !== "object" || value === null) throw new CockpitClientError("malformed_response", "Native browser view subscription response is malformed");
+  const body = value as Record<string, unknown>;
+  if (typeof body.stream_id !== "string" || body.stream_id.length === 0 || body.stream_id.length > 256
+    || typeof body.endpoint !== "string" || body.endpoint.length === 0 || body.endpoint.length > 2048
+    || typeof body.grant !== "string" || body.grant.length === 0 || body.grant.length > 4096) {
+    throw new CockpitClientError("malformed_response", "Native browser view subscription response is incomplete");
+  }
+  let endpoint: URL;
+  try { endpoint = new URL(body.endpoint); } catch (cause) {
+    throw new CockpitClientError("malformed_response", "Native browser view WebSocket endpoint is invalid", { cause });
+  }
+  if (endpoint.protocol !== "ws:" || endpoint.hostname !== "127.0.0.1" || endpoint.port.length === 0
+    || endpoint.username !== "" || endpoint.password !== "" || endpoint.hash !== "") {
+    throw new CockpitClientError("malformed_response", "Native browser view WebSocket endpoint is not a loopback endpoint");
+  }
+  return { stream_id: body.stream_id, endpoint: endpoint.href, grant: body.grant };
+}
+
 function nativeBrowserViewSubscription(
   invoke: NativeInvoke,
-  channelFactory: NativeChannelFactory,
   value: BrowserViewOpenRequest,
   onEvent: (event: BrowserViewEvent) => void,
   onFrame: (packet: BrowserViewFramePacket) => void,
@@ -154,101 +178,135 @@ function nativeBrowserViewSubscription(
   let request: BrowserViewOpenRequest;
   try { request = parseBrowserViewOpenRequest(value); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
   const opened = invokeAndParse(invoke, "cockpit_browser_view_open", { request }, "browser view open", parseNativeBrowserViewOpen);
-  const start = (opened: NativeBrowserViewOpenResponse) => new Promise<BrowserViewStream>((resolve, reject) => {
-    const identity = opened.snapshot.identity;
-    let closed = false; let settled = false; let streamId: string | undefined;
+  const start = (openedView: NativeBrowserViewOpenResponse) => new Promise<BrowserViewStream>((resolve, reject) => {
+    const identity = openedView.snapshot.identity;
+    const releaseOpenedView = () => {
+      void invoke("cockpit_browser_view_release", { viewId: identity.view_id }).catch(() => undefined);
+    };
+    let closed = false;
+    let settled = false;
+    let streamId: string | undefined;
+    let socket: WebSocket | undefined;
     let pendingFrame: { descriptor: BrowserViewFrameDescriptor; sequence: number } | undefined;
+    let targetId = openedView.snapshot.displayed_target_id ?? undefined;
     let lastFrameSequence = 0;
-    // A stream can retire before the subscribe invoke returns. Keep this
-    // idempotent so a failure/abort race cannot release the same host stream twice.
     let cancellationRequested = false;
-    let deferredAcknowledgements: number[] = [];
-    let acknowledgementQueue: Promise<unknown> = Promise.resolve();
-    const sendAcknowledgement = (id: string, sequence: number) => {
-      acknowledgementQueue = acknowledgementQueue.then(() => invoke("cockpit_browser_view_frame_ack", { streamId: id, frameSequence: sequence })).catch((cause) => {
-        if (!closed) {
-          try { onError(streamFailure("Native browser frame acknowledgement failed", cause)); } catch { /* Preserve transport cleanup after a consumer callback failure. */ }
-        }
-      });
-    };
-    const releaseFrame = (sequence: number) => {
-      if (streamId === undefined) { deferredAcknowledgements.push(sequence); return; }
-      sendAcknowledgement(streamId, sequence);
-    };
-    const releasePendingFrame = () => {
-      const pending = pendingFrame;
-      if (pending === undefined) return;
-      pendingFrame = undefined;
-      releaseFrame(pending.sequence);
-    };
+    let ready = false;
     const cancel = (id: string) => {
       if (cancellationRequested) return;
       cancellationRequested = true;
-      void acknowledgementQueue.then(() => invoke("cockpit_stream_cancel", { streamId: id })).catch(() => undefined);
+      void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined);
+    };
+    const closeSocket = () => {
+      if (!socket) return;
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      try { socket.close(); } catch { /* Cleanup remains idempotent if the browser already retired it. */ }
     };
     let abort: () => void = () => undefined;
     const fail = (error: CockpitClientError) => {
       if (closed) return;
-      releasePendingFrame();
+      const pending = pendingFrame;
+      pendingFrame = undefined;
+      if (pending) releaseFrame(pending.sequence, "discard");
       closed = true;
       signal?.removeEventListener("abort", abort);
-      if (streamId) cancel(streamId);
-      if (!settled) { settled = true; reject(error); } else onError(error);
+      closeSocket();
+      if (streamId !== undefined) cancel(streamId);
+      else releaseOpenedView();
+      if (!settled) { settled = true; reject(error); }
+      else {
+        try { onError(error); } catch { /* Stream retirement must survive consumer callback failures. */ }
+      }
     };
-    const channel = channelFactory<unknown>((raw) => {
+    const releaseFrame = (sequence: number, kind: "ack" | "discard") => {
+      if (closed || !ready || !socket || socket.readyState !== WebSocket.OPEN) return;
+      try { socket.send(JSON.stringify({ type: kind, frame_sequence: sequence })); }
+      catch (cause) { fail(new CockpitClientError("transport_error", `Could not ${kind} native browser frame`, { cause })); }
+    };
+    const releasePendingFrame = () => {
+      const pending = pendingFrame;
+      if (!pending) return;
+      pendingFrame = undefined;
+      releaseFrame(pending.sequence, "discard");
+    };
+    const deliverFrame = (raw: unknown) => {
+      const pending = pendingFrame;
+      if (!pending) throw new CockpitClientError("malformed_response", "Native browser frame payload has no descriptor");
+      pendingFrame = undefined;
+      const jpeg = nativeBinaryFrame(raw, pending.descriptor.jpeg_length);
+      lastFrameSequence = pending.sequence;
+      let delivered = false;
+      const release = (kind: "ack" | "discard") => {
+        if (delivered || closed) return;
+        delivered = true;
+        releaseFrame(pending.sequence, kind);
+      };
+      try {
+        onFrame({ descriptor: pending.descriptor, jpeg, ack: () => release("ack"), discard: () => release("discard") });
+      } catch (cause) {
+        release("discard");
+        throw new CockpitClientError("transport_error", "Native browser frame handler failed", { cause });
+      }
+    };
+    const message = (raw: unknown) => {
       if (closed) return;
       try {
         if (raw instanceof ArrayBuffer || raw instanceof Uint8Array) {
-          const pending = pendingFrame;
-          if (pending === undefined) throw new CockpitClientError("malformed_response", "Native browser frame payload has no descriptor");
-          pendingFrame = undefined;
-          let jpeg: ArrayBuffer;
-          try { jpeg = nativeBinaryFrame(raw, pending.descriptor.jpeg_length); }
-          catch (error) { releaseFrame(pending.sequence); throw error; }
-          lastFrameSequence = pending.sequence;
-          let delivered = false;
-          try {
-            onFrame({
-              descriptor: pending.descriptor,
-              jpeg,
-              ack() {
-                if (delivered || closed) return;
-                delivered = true;
-                releaseFrame(pending.sequence);
-              },
-              discard() {
-                if (delivered || closed) return;
-                delivered = true;
-                releaseFrame(pending.sequence);
-              },
-            });
-          } catch (error) {
-            if (!delivered) releaseFrame(pending.sequence);
-            throw error;
-          }
+          deliverFrame(raw);
           return;
         }
-        if (typeof raw !== "object" || raw === null) throw new CockpitClientError("malformed_response", "Native browser view message is malformed");
-        const message = raw as Record<string, unknown>;
-        if (pendingFrame !== undefined) {
-          releasePendingFrame();
-          throw new CockpitClientError("malformed_response", "Native browser frame payload is missing");
+        if (typeof raw !== "string") throw new CockpitClientError("malformed_response", "Native browser view message is not JSON text or binary");
+        if (raw.length > 1024 * 1024) throw new CockpitClientError("malformed_response", "Native browser view message exceeds bounds");
+        if (pendingFrame !== undefined) throw new CockpitClientError("malformed_response", "Native browser frame payload is missing");
+        let parsed: unknown;
+        try { parsed = JSON.parse(raw); } catch (cause) {
+          throw new CockpitClientError("malformed_response", "Native browser view message is invalid JSON", { cause });
         }
-        if (message.kind === "error") {
-          throw new CockpitClientError("stream_error", typeof message.message === "string" ? message.message : "Native browser view stream failed", { operationCode: typeof message.code === "string" ? message.code : undefined });
+        if (typeof parsed !== "object" || parsed === null) throw new CockpitClientError("malformed_response", "Native browser view message is malformed");
+        const body = parsed as Record<string, unknown>;
+        if (body.kind === "ready") {
+          if (ready) throw new CockpitClientError("malformed_response", "Native browser view stream sent ready more than once");
+          ready = true;
+          settled = true;
+          resolve({
+            close() {
+              if (closed) return;
+              releasePendingFrame();
+              closed = true;
+              signal?.removeEventListener("abort", abort);
+              closeSocket();
+              if (streamId !== undefined) cancel(streamId);
+            },
+            command(commandValue) {
+              if (closed || !settled) return Promise.reject(new CockpitClientError("stream_error", "Browser view stream is not ready"));
+              let command: BrowserViewCommandRequest;
+              try { command = parseBrowserViewCommandRequest(commandValue); } catch (error) { return Promise.reject(error); }
+              if (command.view_id !== identity.view_id || command.stream_epoch !== identity.stream_epoch) return Promise.reject(new CockpitClientError("malformed_response", "Browser view command identity does not match"));
+              return invokeAndParse(invoke, "cockpit_browser_view_command", { request: command }, "browser view command", (response) => matchBrowserViewCommandResponse(response, command));
+            },
+          });
+          return;
         }
-        if (message.kind === "event") {
-          const event = matchBrowserViewEvent(parseBrowserViewEvent(message.event), identity);
+        if (!ready && body.kind !== "error") throw new CockpitClientError("malformed_response", "Native browser view stream sent data before ready");
+        if (body.kind === "error") {
+          throw new CockpitClientError("stream_error", typeof body.message === "string" ? body.message : "Native browser view stream failed", { operationCode: typeof body.code === "string" ? body.code : undefined });
+        }
+        if (body.kind === "event") {
+          const event = matchBrowserViewEvent(parseBrowserViewEvent(body.event), identity);
+          if (event.type === "attached") targetId = event.snapshot.displayed_target_id ?? undefined;
+          else if (event.type === "targets_changed") targetId = event.displayed_target_id ?? undefined;
+          else if (event.type === "document_changed") targetId = event.document?.target_id;
           onEvent(event);
           return;
         }
-        if (message.kind === "frame") {
-          const descriptor = parseBrowserViewFrameDescriptor(message.descriptor);
-          if (descriptor.stream_epoch !== identity.stream_epoch) throw new CockpitClientError("malformed_response", "Native browser frame identity does not match");
-          if (descriptor.frame_sequence <= lastFrameSequence) {
-            releaseFrame(descriptor.frame_sequence);
-            throw new CockpitClientError("malformed_response", "Native browser frame sequence is out of order");
-          }
+        if (body.kind === "frame") {
+          const descriptor = parseBrowserViewFrameDescriptor(body.descriptor);
+          if (targetId !== undefined && descriptor.target_id !== targetId) throw new CockpitClientError("malformed_response", "Native browser frame target identity does not match");
+          if (descriptor.stream_epoch !== identity.stream_epoch) throw new CockpitClientError("malformed_response", "Native browser frame stream identity does not match");
+          if (descriptor.frame_sequence <= lastFrameSequence) throw new CockpitClientError("malformed_response", "Native browser frame sequence is out of order");
           pendingFrame = { descriptor, sequence: descriptor.frame_sequence };
           return;
         }
@@ -256,31 +314,29 @@ function nativeBrowserViewSubscription(
       } catch (error) {
         fail(error instanceof CockpitClientError ? error : new CockpitClientError("malformed_response", "Native browser view message is malformed", { cause: error }));
       }
-    });
+    };
     abort = () => fail(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
     if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
-    void invokeAndParse(invoke, "cockpit_browser_view_subscribe", { viewId: identity.view_id, streamEpoch: identity.stream_epoch, channel }, "browser view subscription", streamIdValue).then((id) => {
-      streamId = id;
-      const deferred = deferredAcknowledgements;
-      deferredAcknowledgements = [];
-      for (const sequence of deferred) sendAcknowledgement(id, sequence);
-      if (closed) {
-        // Cancellation must follow any release queued during the id-less
-        // window, so the host cannot observe a cancelled outstanding frame.
-        cancel(id);
-        return;
+    if (closed) return;
+    void invokeAndParse(invoke, "cockpit_browser_view_subscribe", { viewId: identity.view_id, streamEpoch: identity.stream_epoch }, "browser view subscription", parseNativeBrowserViewSubscription).then((subscription) => {
+      streamId = subscription.stream_id;
+      if (closed) { cancel(streamId); return; }
+      try {
+        socket = new WebSocket(subscription.endpoint);
+        socket.binaryType = "arraybuffer";
+        socket.onopen = () => {
+          if (closed) return;
+          try { socket?.send(JSON.stringify({ grant: subscription.grant })); }
+          catch (cause) { fail(new CockpitClientError("transport_error", "Could not authenticate native browser view stream", { cause })); }
+        };
+        socket.onmessage = (event) => message(event.data);
+        socket.onerror = (cause) => fail(new CockpitClientError("transport_error", "Native browser view WebSocket failed", { cause }));
+        socket.onclose = (event) => {
+          if (!closed) fail(streamFailure(`Native browser view WebSocket closed${event.reason ? `: ${event.reason}` : ""}`, event));
+        };
+      } catch (cause) {
+        fail(new CockpitClientError("transport_error", "Could not open native browser view WebSocket", { cause }));
       }
-      settled = true;
-      resolve({
-        close() { if (closed) return; releasePendingFrame(); closed = true; signal?.removeEventListener("abort", abort); cancel(id); },
-        command(commandValue) {
-          if (closed || !settled) return Promise.reject(new CockpitClientError("stream_error", "Browser view stream is not ready"));
-          let command: BrowserViewCommandRequest;
-          try { command = parseBrowserViewCommandRequest(commandValue); } catch (error) { return Promise.reject(error); }
-          if (command.view_id !== identity.view_id || command.stream_epoch !== identity.stream_epoch) return Promise.reject(new CockpitClientError("malformed_response", "Browser view command identity does not match"));
-          return invokeAndParse(invoke, "cockpit_browser_view_command", { request: command }, "browser view command", (response) => matchBrowserViewCommandResponse(response, command));
-        },
-      });
     }, (error) => { if (!closed) fail(error); });
   });
   if (!signal) return opened.then(start);
@@ -291,29 +347,21 @@ function nativeBrowserViewSubscription(
       retired = true;
       reject(new CockpitClientError("stream_error", "Browser view attach was cancelled"));
     };
-    if (signal.aborted) {
-      abort();
-    } else {
-      signal.addEventListener("abort", abort, { once: true });
-    }
-    void opened.then((value) => {
+    if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
+    void opened.then((openedView) => {
       signal.removeEventListener("abort", abort);
       if (retired) {
-        void start(value).catch(() => undefined);
+        void invoke("cockpit_browser_view_release", { viewId: openedView.snapshot.identity.view_id }).catch(() => undefined);
         return;
       }
-      void start(value).then(resolve, reject);
+      void start(openedView).then(resolve, reject);
     }, (error) => {
       signal.removeEventListener("abort", abort);
       if (!retired) reject(error);
     });
   });
 }
-function streamIdValue(value: unknown): string {
-  if (typeof value === "string" && value.length > 0) return value;
-  if (typeof value === "object" && value !== null && "stream_id" in value && typeof value.stream_id === "string" && value.stream_id.length > 0) return value.stream_id;
-  throw new CockpitClientError("malformed_response", "Native browser view subscription returned no stream id");
-}
+
 function streamFailure(message: string, cause?: unknown, operationCode?: string): CockpitClientError {
   return new CockpitClientError("stream_error", message, { cause, operationCode });
 }
@@ -845,7 +893,7 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     subscribeSession(sessionId, onMessage, onError, signal) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError, signal); },
     openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },
     openBrowserView(request, onEvent, onFrame, onError, signal) {
-      return nativeBrowserViewSubscription(invoke, channelFactory, request, onEvent, onFrame, onError, signal);
+      return nativeBrowserViewSubscription(invoke, request, onEvent, onFrame, onError, signal);
     },
   };
 }
