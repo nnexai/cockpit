@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import hashlib
 import functools
 import http.server
 import json
@@ -236,6 +237,67 @@ def sample_owned_processes(children):
             "process_count": sum(part["process_count"] for part in by_root.values()),
             "roots": by_root}
 
+def owned_helper_processes(helper_path):
+    """Only return live PIDs whose argv names this fixture's helper module."""
+    marker = os.fsencode(helper_path)
+    found = []
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            if marker not in (proc / "cmdline").read_bytes().split(b"\0"):
+                continue
+            stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+            found.append({"pid": int(proc.name), "start_ticks": int(stat[19]),
+                          "comm": (proc / "comm").read_text().strip()})
+        except (OSError, IndexError, ValueError):
+            continue
+    return sorted(found, key=lambda item: item["pid"])
+
+def traced_helper_source(source):
+    """Instrument only a disposable helper copy, leaving packaged source intact."""
+    import_line = "import readline from 'node:readline';\n"
+    original = """  await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
+    width: requested.width,
+    height: requested.height,
+    deviceScaleFactor: requested.dpr,
+    mobile: false,
+    screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
+    screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
+  });"""
+    replacement = r"""  const metricsOverride = {
+    width: requested.width,
+    height: requested.height,
+    deviceScaleFactor: requested.dpr,
+    mobile: false,
+    screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
+    screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
+  };
+  const traceOverride = (phase, error = null) => {
+    try {
+      const stat = readFileSync('/proc/self/stat', 'utf8').split(') ')[1].trim().split(/\s+/);
+      appendFileSync(process.env.COCKPIT_BROWSER_TRACE_PATH, JSON.stringify({
+        phase, monotonic_ms: Number(process.hrtime.bigint() / 1000000n),
+        pid: process.pid, start_ticks: Number(stat[19]),
+        target_id: state?.targetId ?? null, page_binding_generation: expectedBinding,
+        commit_request: commitRequest, requested: metricsOverride,
+        error: error ? String(error.message || error).slice(0, 180) : null,
+      }) + '\n', { mode: 0o600 });
+    } catch {}
+  };
+  traceOverride('send');
+  try {
+    await expectedCdp.send('Emulation.setDeviceMetricsOverride', metricsOverride);
+    traceOverride('accepted');
+  } catch (error) {
+    traceOverride('failed', error);
+    throw error;
+  }"""
+    if source.count(import_line) != 1 or source.count(original) != 1:
+        raise RuntimeError("packaged helper CDP override source changed; refusing unmatched diagnostic instrumentation")
+    return source.replace(import_line, import_line + "import { appendFileSync, readFileSync } from 'node:fs';\n").replace(original, replacement)
+
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -257,6 +319,7 @@ def main():
     parser.add_argument("--hide-resource-seconds", type=int, default=0, help="hide the browser for at least 30 seconds after sustained animation, then require the same page to repaint on show")
     parser.add_argument("--hidden-scroll-smoke", action="store_true", help="quick native hide/reopen check after the page scrolls while no view is visible")
     parser.add_argument("--native-only-open", action="store_true", help="skip gateway browser pre-open; open and navigate using only the actual native UI")
+    parser.add_argument("--trace-cdp-overrides", action="store_true", help="log CDP device-metrics sends from only a run-owned helper copy")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
@@ -268,6 +331,8 @@ def main():
         parser.error("--hidden-scroll-smoke uses the six-second scroll fixture, not sustained sampling")
     if args.native_only_open and args.annotation:
         parser.error("--native-only-open cannot use gateway-owned draft recovery for --annotation")
+    if args.trace_cdp_overrides and not args.native_only_open:
+        parser.error("--trace-cdp-overrides requires --native-only-open")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -301,6 +366,8 @@ def main():
                HERDR_CONFIG_PATH=str(root / "config/herdr/config.toml"), HERDR_SOCKET_PATH=str(session_socket),
                COCKPIT_CONFIG=str(root / "cockpit.toml"), COCKPIT_HERDR_SESSION=session, COCKPIT_HERDR_SOCKET=str(session_socket),
                COCKPIT_HERDR_EXECUTABLE=bins["herdr"])
+    helper_path = root / "browser-helper-trace.mjs"
+    override_trace_path = root / "browser-cdp-overrides.jsonl"
     children, driver, frontend = [], None, None
     result = {"session": session, "space": space_label, "fixture_url": fixture_url, "root": str(root),
               "failure": None, "geometries": {}, "paints": {}, "cleanup": []}
@@ -323,6 +390,18 @@ def main():
         return child
 
     try:
+        if args.trace_cdp_overrides:
+            source = (REPO / "browser-runtime/browser-helper.mjs").read_text()
+            instrumented = traced_helper_source(source)
+            helper_path.write_text(instrumented)
+            syntax = subprocess.run(["node", "--check", str(helper_path)],
+                                    capture_output=True, text=True, timeout=10)
+            if syntax.returncode:
+                raise RuntimeError(f"disposable helper trace syntax invalid: {syntax.stderr[-600:]}")
+            env.update(COCKPIT_BROWSER_HELPER=str(helper_path), COCKPIT_BROWSER_TRACE_PATH=str(override_trace_path))
+            result["helper_trace_module"] = {
+                "path": str(helper_path), "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                "instrumented_sha256": hashlib.sha256(instrumented.encode()).hexdigest()}
         dev_port = 5173  # The debug Tauri executable loads this fixed devUrl.
         if not (REPO / "dist/index.html").is_file():
             raise RuntimeError("Built frontend unavailable; run `bun run build` before native acceptance")
@@ -380,10 +459,13 @@ def main():
         app_env = dict(env, WAYLAND_DISPLAY=wayland, NIRI_SOCKET=niri_socket)
         app_env.pop("DISPLAY", None)
         launcher = root / "native-launch.sh"
-        launcher.write_text("#!/bin/sh\n" + "".join(f"export {key}={json.dumps(app_env[key])}\n" for key in (
+        launcher_keys = (
             "HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "HERDR_CONFIG_PATH",
             "HERDR_SOCKET_PATH", "COCKPIT_CONFIG", "COCKPIT_HERDR_SESSION", "COCKPIT_HERDR_SOCKET", "COCKPIT_HERDR_EXECUTABLE",
-            "WAYLAND_DISPLAY", "NIRI_SOCKET")) + "unset HERDR_SESSION HERDR_NAME DISPLAY\nexport TAURI_WEBVIEW_AUTOMATION=true\nexec " + json.dumps(bins["native"]) + "\n")
+            "WAYLAND_DISPLAY", "NIRI_SOCKET",
+        ) + (("COCKPIT_BROWSER_HELPER", "COCKPIT_BROWSER_TRACE_PATH") if args.trace_cdp_overrides else ())
+        launcher.write_text("#!/bin/sh\n" + "".join(f"export {key}={json.dumps(app_env[key])}\n" for key in launcher_keys)
+                            + "unset HERDR_SESSION HERDR_NAME DISPLAY\nexport TAURI_WEBVIEW_AUTOMATION=true\nexec " + json.dumps(bins["native"]) + "\n")
         launcher.chmod(0o700)
         with socket.socket() as reserve:
             reserve.bind(("127.0.0.1", 0))
@@ -515,6 +597,8 @@ def main():
             return probe if probe["painted"] and probe["canvas"]["widthCss"] > 0 and probe["canvas"]["heightCss"] > 0 else None
         geometry = wait_until(first_canvas, "first native browser canvas frame paint", args.timeout,
                               [("WebKitWebDriver", driver_process)])
+        if args.trace_cdp_overrides:
+            result["owned_helper_pids_at_first_canvas"] = owned_helper_processes(helper_path)
         if args.native_only_open:
             result["geometries"]["native_only_surface"] = webdriver.execute("(()=>{const info=e=>{if(!e)return null;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {rect:{width:r.width,height:r.height},client:{width:e.clientWidth,height:e.clientHeight},css:{width:s.width,height:s.height,overflow:s.overflow,objectFit:s.objectFit}}};return {pane:info(document.querySelector('.browser-pane')),surface:info(document.querySelector('.browser-surface')),canvas:info(document.querySelector('canvas.browser-frame'))}})()")
         metrics = wait_until(lambda: next((report for report in reversed(FixtureHandler.state["reports"])
@@ -831,6 +915,8 @@ def main():
                 label: [{"pid": process["pid"], "comm": process["comm"], "start_ticks": process["start_ticks"]}
                         for process in record["processes"]]
                 for label, record in census["roots"].items() if label in ("gateway", "webdriver")}
+        if args.trace_cdp_overrides:
+            result["owned_helper_pids_at_failure"] = owned_helper_processes(helper_path)
     finally:
         if args.native_only_open:
             reports = FixtureHandler.state["reports"]
@@ -852,7 +938,14 @@ def main():
         fixture.server_close()
         result["cleanup"].extend(terminate_owned(children))
         result["cleanup"].append({"name": "fixture-http-server", "stopped": True})
+        if args.trace_cdp_overrides:
+            lines = override_trace_path.read_text().splitlines() if override_trace_path.is_file() else []
+            events = [json.loads(line) for line in lines]
+            result["cdp_override_trace"] = {"path": str(override_trace_path), "count": len(events),
+                                             "first": events[:8], "last": events[-8:]}
         result["logs"] = {p.stem: str(p) for p in root.glob("*.log")}
+        if args.trace_cdp_overrides:
+            (root / "native-cdp-result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
 
