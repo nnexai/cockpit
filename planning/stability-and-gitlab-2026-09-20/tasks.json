@@ -660,7 +660,7 @@
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
       "blockers": [
-        "Linux-native hide/show and opening are not accepted: one historical 335s/90s candidate showed 57.87 painted FPS and zero hidden paints, but repeated rebuilt runs either had no first canvas or a 978\u00d71234 bitmap stretched into 674\u00d71234 CSS at requested DPR2; a hidden-scroll probe observed the live page switch to 1348\u00d7376 DPR1 and Show fail. Disposable instrumentation recorded two helper PIDs CDP-attaching the same page. Reverted unverified helper/host fixes; a same-association single-flight attempt fell to 0.82\u20131.15 FPS. WebKit content PSS rose +213.09 KiB/s while animating; hidden memory partially recovered, not an active plateau. Slow-observer, crash/reconnect, decoded-object/queue ledger, and full WEB-04 recovery remain unverified; requested 1392-pixel native width was not achieved (676 CSS pixels observed)."
+        "Linux-native hide/show and opening are not accepted: one historical 335s/90s candidate showed 57.87 painted FPS and zero hidden paints, but repeated rebuilt runs either had no first canvas or a 978\u00d71234 bitmap stretched into 674\u00d71234 CSS at requested DPR2; a hidden-scroll probe observed the live page switch to 1348\u00d7376 DPR1 and Show fail. Disposable instrumentation recorded two helper PIDs CDP-attaching the same page. Reverted unverified helper/host fixes; a same-association single-flight attempt fell to 0.82\u20131.15 FPS. WebKit content PSS rose +213.09 KiB/s while animating; hidden memory partially recovered, not an active plateau. Slow-observer, crash/reconnect, decoded-object/queue ledger, and full WEB-04 recovery remain unverified; requested 1392-pixel native width was not achieved (676 CSS pixels observed). A separate gateway-preopen-free native run navigated the real Page URL, received four 674\u00d7188 CSS/1348\u00d7376 descriptors matching the initial DPR2 fixture, yet the first canvas mismatched/transiently sized or stayed stale and the fixture later reported DPR1. Pre-opening via gateway is not required for failure; one helper/process, the DPR1 CDP actor and any UI resize request remain unproven. Native-only trace and two visual failures are in WEB-06.md; WEB-06 remains blocked."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
@@ -671,13 +671,15 @@
         "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9",
         "9f758f448b081cdd78a25640f16f3395298c901d",
         "bf165186a9a2fa4c9903e1955d3e0dfb9d3d637b",
-        "902b902b1dc00b3c6f3f964b53e4fa23ef32d25e"
+        "902b902b1dc00b3c6f3f964b53e4fa23ef32d25e",
+        "c8a124b2374784f1c912bf7d40a5832e486769e0"
       ],
       "notes": [
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
         "Two five-minute native scroll runs passed 57.86 painted FPS and zero static-idle paints; WebKit content/network PSS remained non-plateauing. Full WEB-06 lifecycle/resource acceptance remains blocked.",
-        "2026-09-23 native lifecycle diagnostic checkpoint 902b902 records actual Commands Hide/Show negative controls, duplicate-helper trace and partial retained-memory samples. No helper repair was delivered; earlier green candidate was not repeatable on the current rebuilt tree. Isolated owned processes cleaned."
+        "2026-09-23 native lifecycle diagnostic checkpoint 902b902 records actual Commands Hide/Show negative controls, duplicate-helper trace and partial retained-memory samples. No helper repair was delivered; earlier green candidate was not repeatable on the current rebuilt tree. Isolated owned processes cleaned.",
+        "2026-09-23 native-only Commands Open diagnostic bypassed gateway pre-open and verified actual WebKit URL-form navigation. Four first-frame descriptors and initial fixture agreed at 674\u00d7188@DPR2, but native presentation failed and the fixture later drifted to DPR1; frame/socket metadata and visually checked geometry/stale screenshots are retained. Process-owner and CDP override provenance is still unresolved, so no product fix or WEB-06 closure was claimed."
       ]
     },
     {
