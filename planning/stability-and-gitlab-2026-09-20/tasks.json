@@ -658,7 +658,7 @@
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
       "blockers": [
-        "Sustained native scroll passed 19,383 canvas paints over 335.004 seconds (57.86 FPS), a DPR2 first frame, a painted final marker, and zero static idle paints. Two five-minute runs showed non-plateauing PSS; a per-PID run attributed +200.32 KiB/s to WebKit web content and +35.93 KiB/s to WebKit networking. End-to-end slow-observer, crash/reconnect, hide/show, resource queue/decode ledger, and full WEB-04 recovery remain unverified; requested 1392-pixel native width was not achieved (676 CSS pixels observed)."
+        "Three isolated 335-second native scrolls sustained 57.86\u201357.88 actual canvas FPS at DPR2 and painted the final marker; a 90-second static control painted zero additional frames. WebKit content PSS still grew +215.83 KiB/s during animation, then shed 6,704 KiB and flattened during idle while ending 56,553 KiB above its animated warm-up baseline. This is not an active memory plateau. End-to-end slow-observer, crash/reconnect, hide/show, decoded-object/queue ledger, and full WEB-04 recovery remain unverified; requested 1392-pixel native width was not achieved (676 CSS pixels observed)."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",

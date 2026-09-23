@@ -232,9 +232,12 @@ def main():
     parser.add_argument("--annotation", action="store_true", help="also exercise native region and note saves against the retained draft")
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
+    parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
+    if args.idle_resource_seconds < 3 or (args.idle_resource_seconds != 3 and not args.sustain_seconds):
+        parser.error("--idle-resource-seconds requires --sustain-seconds and a value of at least 3")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -551,24 +554,43 @@ def main():
                 webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame');return [...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3)})()")),
             "completed scroll marker painted on native canvas", 3, [("WebKitWebDriver", driver_process)])
         if args.sustain_seconds:
-            sampler_stop.set()
-            sampler.join(timeout=3)
-            post_warmup = [sample for sample in resource_samples if sample["elapsed_seconds"] >= 30]
-            result["resources"] = {"raw_samples": str(root / "sustained-samples.json"),
-                                   "sample_period_seconds": 1, "warmup_seconds": 30,
-                                   "post_warmup_count": len(post_warmup), "cpu_tick_hz": os.sysconf("SC_CLK_TCK"),
-                                   "sampled_roots": [label for label, _ in [("acceptance-runner", os.getpid())] +
-                                                     [(label, child.pid) for label, child in children]]}
-            if len(post_warmup) < 300 or any(sample["process_count"] < 5 or sample["pss_kib"] <= 0
-                                              for sample in post_warmup):
-                raise RuntimeError(f"sustained process tree sampling was incomplete: {result['resources']}")
+            animation_end_elapsed = completed["received_at"] - sample_start
             time.sleep(2)
+            idle_start_elapsed = time.monotonic() - sample_start
             first_idle_paint = webdriver.execute("window.__nativePaintTimes.length")
             time.sleep(3)
             last_idle_paint = webdriver.execute("window.__nativePaintTimes.length")
-            result["resources"]["idle_paints_over_three_seconds"] = last_idle_paint - first_idle_paint
-            if last_idle_paint - first_idle_paint > 2:
-                raise RuntimeError(f"static page kept painting after sustained scroll: {result['resources']}")
+            idle_paints = last_idle_paint - first_idle_paint
+            if idle_paints > 2:
+                raise RuntimeError(f"static page kept painting after sustained scroll: {idle_paints}")
+            if args.idle_resource_seconds > 3:
+                time.sleep(args.idle_resource_seconds - 3)
+                long_idle_paints = webdriver.execute("window.__nativePaintTimes.length") - first_idle_paint
+                if long_idle_paints > 2:
+                    raise RuntimeError(f"static page resumed painting during idle resource observation: {long_idle_paints}")
+            sampler_stop.set()
+            sampler.join(timeout=3)
+            active_post_warmup = [sample for sample in resource_samples
+                                  if 30 <= sample["elapsed_seconds"] <= animation_end_elapsed]
+            idle_samples = [sample for sample in resource_samples
+                            if sample["elapsed_seconds"] >= idle_start_elapsed]
+            result["resources"] = {"raw_samples": str(root / "sustained-samples.json"),
+                                   "sample_period_seconds": 1, "warmup_seconds": 30,
+                                   "post_warmup_count": len(active_post_warmup),
+                                   "idle_sample_count": len(idle_samples),
+                                   "animation_end_elapsed_seconds": animation_end_elapsed,
+                                   "idle_start_elapsed_seconds": idle_start_elapsed,
+                                   "idle_end_elapsed_seconds": time.monotonic() - sample_start,
+                                   "idle_observation_seconds": args.idle_resource_seconds,
+                                   "idle_paints_over_three_seconds": idle_paints,
+                                   "cpu_tick_hz": os.sysconf("SC_CLK_TCK"),
+                                   "sampled_roots": [label for label, _ in [("acceptance-runner", os.getpid())] +
+                                                     [(label, child.pid) for label, child in children]]}
+            if args.idle_resource_seconds > 3:
+                result["resources"]["idle_paints_over_observation"] = long_idle_paints
+            if len(active_post_warmup) < 300 or any(sample["process_count"] < 5 or sample["pss_kib"] <= 0
+                                                     for sample in active_post_warmup):
+                raise RuntimeError(f"sustained process tree sampling was incomplete: {result['resources']}")
         result["paints"]["visible_final_marker_rgb"] = final_marker
         if args.nested_wheel:
             # The WebKit driver cannot send OS wheel actions on this compositor.
