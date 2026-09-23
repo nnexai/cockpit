@@ -573,7 +573,8 @@
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
-        "e5bf1cd531375ec09054db8857d1bf68512cc7e7"
+        "e5bf1cd531375ec09054db8857d1bf68512cc7e7",
+        "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9"
       ],
       "notes": [
         "OBS-015 batch: UI input/navigation/ownership belongs to BatchBrowserUI, helper input/leases to BatchBrowserRuntime, adapters to BatchBrowserHost. File-disjoint contracts in AUTORUN.md govern shared-lock groups; wire interfaces remain fixed. Verification follows integration.",
@@ -610,19 +611,21 @@
       "started_at": null,
       "completed_at": null,
       "blockers": [
-        "Prior Linux-native save persisted without UI acknowledgement. Capture the actual Tauri command response/lifecycle before changing the path; broad capture/draft/paste acceptance also remains incomplete."
+        "OBS-023 resolved the persisted-but-unacknowledged Linux-native annotation save with real Tauri response and browser/native proof. Broader capture/draft/paste, feedback lookup/ack, concurrency/capacity, iframe and failure-retention acceptance remains unexecuted."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
         "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md"
       ],
       "commits": [
-        "23a6aaad08992807b276050c7cc24ed7ff6d8e78"
+        "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
+        "c4c53fc52652fed083b1eac340e404cd657bcc9a"
       ],
       "notes": [
         "OBS-015 batch: BrowserUI owns capture/draft/feedback interaction and stable send operation identity; BrowserRuntime owns frame-bound geometry; BrowserHost owns durable browser delivery. BatchWorkflows alone owns generic comment-paste implementation; its API is unchanged.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
-        "OBS-019: Linux-native annotation acknowledgement remains unresolved; capture the actual Tauri command response/lifecycle before making a code change. macOS-specific execution and acceptance are excluded by the user."
+        "OBS-019: Linux-native annotation acknowledgement was unresolved pending actual Tauri response proof; macOS-specific execution and acceptance are excluded by the user.",
+        "OBS-023: accepted native draft revision 2 rounded one-ULP coordinates; strict JSON comparison falsely retained a retry intent. Tolerant coordinate-only comparison now acknowledges the same mark and exact note in isolated WebKit and Chromium runs; full WEB-05 matrix is still open."
       ]
     },
     {
@@ -656,7 +659,8 @@
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
       ],
       "commits": [
-        "23a6aaad08992807b276050c7cc24ed7ff6d8e78"
+        "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
+        "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9"
       ],
       "notes": [
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
