@@ -752,7 +752,7 @@
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
       "blockers": [
-        "Security boundary checks passed; completion dependency WEB-06 remains unresolved."
+        "Only bounded hostile Host/Origin, unauthenticated socket, observer-mutation, grant-expiry and held-pointer-release probes passed. The broader A12/A13/A15/A22/A25 hostile matrix, native page isolation/file cases and positive controls remain unexecuted. WEB-04, WEB-05 and WEB-06 completion dependencies are also open; no external platform blocker was identified."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
@@ -762,7 +762,8 @@
       ],
       "notes": [
         "OBS-015 batch repairs concrete helper/host/transport security gaps within existing boundaries, without a new security layer. Separate security review and bounded hostile/positive verification follow integration; no runtime security pass is claimed.",
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "2026-09-23 user-requested seven-task audit in OBSERVATIONS.md (commit 1cb2443e37021ae7b7d7ee6640ef66b741b950d2) corrected the overbroad security-pass wording; only final-protocol-boundaries.json hostile subset has runtime proof. WEB-08 remains blocked on broader hostile verification and completion of WEB-04/05/06, not on an unavailable external resource."
       ]
     },
     {
