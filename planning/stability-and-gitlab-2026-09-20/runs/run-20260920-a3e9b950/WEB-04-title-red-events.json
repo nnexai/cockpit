@@ -1,0 +1,101 @@
+[
+  {
+    "url": "http://127.0.0.1:40417/",
+    "title": "Fixture landing",
+    "why": "load",
+    "historyLength": 2,
+    "innerWidth": 1280,
+    "innerHeight": 720,
+    "dpr": 1,
+    "at": 18.700000002980232,
+    "received_monotonic": 127659.590481359
+  },
+  {
+    "url": "http://127.0.0.1:40417/#hash-step",
+    "title": "Fixture hash step",
+    "why": "popstate",
+    "historyLength": 3,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 82185.59999999404,
+    "received_monotonic": 127741.756224212
+  },
+  {
+    "url": "http://127.0.0.1:40417/#hash-step",
+    "title": "Fixture hash step",
+    "why": "hashchange",
+    "historyLength": 3,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 82188,
+    "received_monotonic": 127741.758409593
+  },
+  {
+    "url": "http://127.0.0.1:40417/?spa=push",
+    "title": "Fixture SPA push",
+    "why": "push",
+    "historyLength": 4,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 138834.29999999702,
+    "received_monotonic": 127798.405028457
+  },
+  {
+    "url": "http://127.0.0.1:40417/?spa=push",
+    "title": "Fixture SPA push",
+    "why": "push",
+    "historyLength": 5,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 181570.29999999702,
+    "received_monotonic": 127841.141259939
+  },
+  {
+    "url": "http://127.0.0.1:40417/?spa=replace",
+    "title": "Fixture SPA replace",
+    "why": "replace",
+    "historyLength": 5,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 196331.40000000596,
+    "received_monotonic": 127855.902269981
+  },
+  {
+    "url": "http://127.0.0.1:40417/landed?from=redirect",
+    "title": "Fixture redirect landed",
+    "why": "load",
+    "historyLength": 6,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 19.899999991059303,
+    "received_monotonic": 127874.115567712
+  },
+  {
+    "url": "http://127.0.0.1:40417/?spa=replace",
+    "title": "Fixture SPA replace",
+    "why": "load",
+    "historyLength": 6,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 12.599999994039536,
+    "received_monotonic": 127881.135526916
+  },
+  {
+    "url": "http://127.0.0.1:40417/page2",
+    "title": "Fixture page two",
+    "why": "load",
+    "historyLength": 6,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 14,
+    "received_monotonic": 128032.83934999
+  }
+]

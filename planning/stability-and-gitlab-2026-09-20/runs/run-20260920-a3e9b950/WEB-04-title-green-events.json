@@ -1,0 +1,101 @@
+[
+  {
+    "url": "http://127.0.0.1:36839/",
+    "title": "Fixture landing",
+    "why": "load",
+    "historyLength": 2,
+    "innerWidth": 1280,
+    "innerHeight": 720,
+    "dpr": 1,
+    "at": 19.100000008940697,
+    "received_monotonic": 128572.599048778
+  },
+  {
+    "url": "http://127.0.0.1:36839/page2",
+    "title": "Fixture page two",
+    "why": "load",
+    "historyLength": 3,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 16,
+    "received_monotonic": 128684.02802976
+  },
+  {
+    "url": "http://127.0.0.1:36839/",
+    "title": "Fixture landing",
+    "why": "load",
+    "historyLength": 3,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 10,
+    "received_monotonic": 128699.167285802
+  },
+  {
+    "url": "http://127.0.0.1:36839/page2",
+    "title": "Fixture page two",
+    "why": "load",
+    "historyLength": 3,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 11.299999997019768,
+    "received_monotonic": 128706.250547521
+  },
+  {
+    "url": "http://127.0.0.1:36839/page2",
+    "title": "Fixture page two",
+    "why": "load",
+    "historyLength": 3,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 12.700000002980232,
+    "received_monotonic": 128722.758725203
+  },
+  {
+    "url": "http://127.0.0.1:36839/landed?from=redirect",
+    "title": "Fixture redirect landed",
+    "why": "load",
+    "historyLength": 4,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 15.600000008940697,
+    "received_monotonic": 128864.452701686
+  },
+  {
+    "url": "http://127.0.0.1:36839/landed?from=redirect",
+    "title": "Fixture redirect landed",
+    "why": "load",
+    "historyLength": 4,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 12.5,
+    "received_monotonic": 128873.200528271
+  },
+  {
+    "url": "http://127.0.0.1:36839/landed?from=redirect#hash-step",
+    "title": "Fixture redirect landed",
+    "why": "popstate",
+    "historyLength": 5,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 25242.70000000298,
+    "received_monotonic": 128898.432725281
+  },
+  {
+    "url": "http://127.0.0.1:36839/landed?from=redirect#hash-step",
+    "title": "Fixture redirect landed",
+    "why": "hashchange",
+    "historyLength": 5,
+    "innerWidth": 489,
+    "innerHeight": 617,
+    "dpr": 1.25,
+    "at": 25245.09999999404,
+    "received_monotonic": 128898.435231418
+  }
+]

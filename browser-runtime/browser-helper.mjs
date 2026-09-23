@@ -1834,6 +1834,17 @@ async function installPageObservers() {
       .then(async () => {
         if (!current()) return;
         emitNavigation();
+        const loadedDocument = state.documentGeneration;
+        const loadedUrl = observed.url();
+        const titleBeforeRead = state.targets.find((target) => target.target_id === targetId)?.title;
+        void observed.title().then((title) => {
+          if (!current() || state.documentGeneration !== loadedDocument || observed.url() !== loadedUrl) return;
+          const selected = state.targets.find((target) => target.target_id === targetId);
+          if (!selected || selected.title !== titleBeforeRead || selected.title === title) return;
+          selected.title = title;
+          state.title = title;
+          emitEvent('targets_changed', { targets: state.targets, displayed_target_id: state.targetId });
+        }).catch(() => {});
         if (!state.captureBaseline) {
           await stopScreencast(cdp);
           await startScreencast(cdp, bindingGeneration);
