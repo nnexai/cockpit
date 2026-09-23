@@ -230,7 +230,10 @@
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
-        "runs/run-20260920-a3e9b950/FLOW-01.md"
+        "runs/run-20260920-a3e9b950/FLOW-01.md",
+        "runs/run-20260920-a3e9b950/FLOW-01-review-stale-red.json",
+        "runs/run-20260920-a3e9b950/FLOW-01-review-stale-green.json",
+        "runs/run-20260920-a3e9b950/FLOW-01-review-native-red.json"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
@@ -238,7 +241,8 @@
         "dbe0f57d9a2ccba717dcb1c0f5cdefaf62da70fd",
         "31a8768f71c71ca12bb589b96a3e819669ce2142",
         "3a42c46620c41726c974a8439b3dea61f427e47d",
-        "d9276f12276728209bda71b5c1b760114c2c76cb"
+        "d9276f12276728209bda71b5c1b760114c2c76cb",
+        "1f433ff7b236f667b11c0cb305fdaf90031b9a18"
       ],
       "notes": [
         "OBS-015 consolidated batch accepted in AUTORUN.md. BatchWorkflows owns non-browser workflow implementation, preserving returned Context/Review/terminal fixes and delivered setup/source contracts. No validation during writing; delegated integrated verification follows all writers.",
@@ -247,7 +251,8 @@
         "2026-09-23 isolated Linux-native Tauri/WebKit and Herdr session native-flow-add14802e3ef verified changed-source rejection with no dispatched draft, explicit stale-excerpt override, accepted bracketed paste without Enter to real Pi, saved-batch/Pi draft after WebView reload, and clean owned teardown. Three native screenshots plus both durable receipt JSONs are in FLOW-01.md; all fixture services and root were removed.",
         "2026-09-23 isolated browser gateway/Herdr session flowborrowed8f8875fc verified ordinary plain and Git-nested directories as borrowed and non-removable, preserved source bytes on close, refused dirty linked worktree removal while file and manifest survived, and removed only the subsequently clean Cockpit-owned child after fresh preview and typed challenge. Browser and Herdr hierarchy matched; seven screenshots, IDs and hashes in FLOW-01.md; fixture stopped and removed. Native borrowed/dirty parity and the wider FLOW matrix remain unexecuted.",
         "2026-09-23 private Review fixture flowreview8f88949c: browser All local changes, separate staged/unstaged overlap, untracked and explicit main branch diffs rendered exact markers; edited untracked source refresh kept selection and replaced stale line. Private Reviewr TUI showed same changed paths. Initial adjacent terminal reported attach pending until explicit Retry restored shell; OBS-025 tracks first-attach repair. Eight browser captures and clean owned teardown in FLOW-01.md; fixture removed.",
-        "2026-09-23 OBS-025: red-capable pending-ownership regression caught premature viewport resize; gated initial and xterm resize until Herdr owned/observing, focused 22/22 and build passed. Private browser Reviewr split, three reattaches, physical divider drag and 1024x640 minimum showed fish plus Review diff without attach error; private Linux Tauri/WebKit showed the same shell/diff and three reattaches. Four screenshots and cleanup details in FLOW-01.md; larger FLOW-01 remains blocked."
+        "2026-09-23 OBS-025: red-capable pending-ownership regression caught premature viewport resize; gated initial and xterm resize until Herdr owned/observing, focused 22/22 and build passed. Private browser Reviewr split, three reattaches, physical divider drag and 1024x640 minimum showed fish plus Review diff without attach error; private Linux Tauri/WebKit showed the same shell/diff and three reattaches. Four screenshots and cleanup details in FLOW-01.md; larger FLOW-01 remains blocked.",
+        "2026-09-23 Review line/file browser regression: prose edit on changed staged source returned false-current for both drafts before fix; now source-state refresh before commit returns both changed with immutable old anchors, focused red/green test and real browser reload pass (1f433ff7b236f667b11c0cb305fdaf90031b9a18). Actual native WebKit Review edit did not pass (WebDriver invalid session); broader FLOW-01 native/restart/borrowed criteria remain blocked."
       ]
     },
     {
