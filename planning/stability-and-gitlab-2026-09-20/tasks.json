@@ -226,7 +226,7 @@
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
       "blockers": [
-        "Browser and Linux-native representative same-tab Context line comment, changed-source refusal, exact real Pi no-Enter paste and reload retention passed; Linux-native clean owned worktree teardown removed only the child Space/checkout/companion. Plain and nested borrowed-directory setup/refusal, dirty-worktree retention, Review staged/unstaged/branch/untracked breadth, source/media/search breadth, save/paste response-loss reconciliation and full process/session restart remain unexecuted. FLOW-01 is not complete."
+        "Representative browser and Linux-native same-tab Context comment, changed-source refusal, exact real Pi no-Enter paste and reload retention passed; browser plain/nested borrowed teardown refusal, dirty owned checkout retention, and explicit clean owned removal passed. Native borrowed/dirty parity, Review staged/unstaged/branch/untracked, source/media/mermaid/search breadth, save/paste response-loss reconciliation and full process/session restart remain unexecuted. FLOW-01 is not complete."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
@@ -235,13 +235,15 @@
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
         "5800d5b45822b9aea5e5bfc731c7e84678b0b040",
-        "dbe0f57d9a2ccba717dcb1c0f5cdefaf62da70fd"
+        "dbe0f57d9a2ccba717dcb1c0f5cdefaf62da70fd",
+        "31a8768f71c71ca12bb589b96a3e819669ce2142"
       ],
       "notes": [
         "OBS-015 consolidated batch accepted in AUTORUN.md. BatchWorkflows owns non-browser workflow implementation, preserving returned Context/Review/terminal fixes and delivered setup/source contracts. No validation during writing; delegated integrated verification follows all writers.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
         "2026-09-23 isolated browser/Herdr slice: reviewed companion snapshot, saved line comment, stale-source refusal without dispatch, explicit re-preparation, exact real Pi input without Enter, and browser reload persistence passed; FLOW-01 remains blocked on native and broader matrices.",
-        "2026-09-23 isolated Linux-native Tauri/WebKit and Herdr session native-flow-add14802e3ef verified changed-source rejection with no dispatched draft, explicit stale-excerpt override, accepted bracketed paste without Enter to real Pi, saved-batch/Pi draft after WebView reload, and clean owned teardown. Three native screenshots plus both durable receipt JSONs are in FLOW-01.md; all fixture services and root were removed."
+        "2026-09-23 isolated Linux-native Tauri/WebKit and Herdr session native-flow-add14802e3ef verified changed-source rejection with no dispatched draft, explicit stale-excerpt override, accepted bracketed paste without Enter to real Pi, saved-batch/Pi draft after WebView reload, and clean owned teardown. Three native screenshots plus both durable receipt JSONs are in FLOW-01.md; all fixture services and root were removed.",
+        "2026-09-23 isolated browser gateway/Herdr session flowborrowed8f8875fc verified ordinary plain and Git-nested directories as borrowed and non-removable, preserved source bytes on close, refused dirty linked worktree removal while file and manifest survived, and removed only the subsequently clean Cockpit-owned child after fresh preview and typed challenge. Browser and Herdr hierarchy matched; seven screenshots, IDs and hashes in FLOW-01.md; fixture stopped and removed. Native borrowed/dirty parity and the wider FLOW matrix remain unexecuted."
       ]
     },
     {
