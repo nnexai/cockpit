@@ -576,18 +576,20 @@
       "started_at": null,
       "completed_at": null,
       "blockers": [
-        "OBS-024 passed repeated native synthetic and browser physical nested/outer wheel routing with a painted native frame after each gesture; exact remote DOM wheel delta still differs at DPR 2 and 1.25. WEB-04 remains blocked: native OS input, horizontal/trackpad, keyboard/IME/clipboard, terminal handoff, multi-client ownership, blockers, repeated reconnect and cleanup acceptance are incomplete. OBS-027 adds a browser DPR1.25 post-navigation physical click misroute: visually Hash generated Page two reload; exact CDP coordinate mode requires disposable browser/native proof."
+        "OBS-024 passed repeated native synthetic and browser physical nested/outer wheel routing with a painted native frame after each gesture; exact remote DOM wheel delta still differs at DPR 2 and 1.25. WEB-04 remains blocked: native OS input, horizontal/trackpad, keyboard/IME/clipboard, terminal handoff, multi-client ownership, blockers, repeated reconnect and cleanup acceptance are incomplete. OBS-027 adds a browser DPR1.25 post-navigation physical click misroute: visually Hash generated Page two reload; exact CDP coordinate mode requires disposable browser/native proof. OBS-027 exact fixture events now prove a 1.25× remote pointer coordinate drift after full navigation, reset by physical internal splitter resize. A same-viewport metrics-reapply candidate corrected browser DPR1.25 pointer twice but native DPR2 painted 0 frames during 6.0073 seconds of remote scrolling; it was reverted. Diagnose native descriptor admission and failure-safe capture before another fix; retain the full WEB-04 input/ownership matrix."
       ],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
-        "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md"
+        "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md",
+        "runs/run-20260920-a3e9b950/WEB-04.md"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
         "e5bf1cd531375ec09054db8857d1bf68512cc7e7",
         "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9",
         "d3afde761108df45877ecf634b96c0337ce60377",
-        "7ba976920b42097820f397269f4b8a28ce362311"
+        "7ba976920b42097820f397269f4b8a28ce362311",
+        "89ddfa86c96e0342bfac47974aba5abb8b7742e5"
       ],
       "notes": [
         "OBS-015 batch: UI input/navigation/ownership belongs to BatchBrowserUI, helper input/leases to BatchBrowserRuntime, adapters to BatchBrowserHost. File-disjoint contracts in AUTORUN.md govern shared-lock groups; wire interfaces remain fixed. Verification follows integration.",
@@ -596,7 +598,8 @@
         "OBS-019: Main is handling the shared browser-ui lock; the scroll recovery repair is under focused verification.",
         "OBS-019: wheel input is retained through matching-frame recovery; adjacent compatible deltas accumulate, a shared two-second deadline prevents queue starvation, and input-generation changes cancel stale work. Focused tests and production build pass. Actual browser gateway acceptance remains required.",
         "OBS-024: repeatable nested and outer wheel fixture passed browser/native painted positions; calibrated host/remote DPR wheel delta discrepancy stays assigned to WEB-04 and does not close its physical native/input matrix.",
-        "2026-09-23 OBS-026: private real Chromium browser gateway reproduced stale selected title after full-document history; helper now sends identity-guarded asynchronous selected-title event after load. Real page-two, Back, Forward, 302 redirect, reload and hash page events matched painted Cockpit URL and selected title; file:///etc/passwd was rejected visibly with URL and page unchanged and Retry restored Live view. Reviewed final nonblocking title-value guard and recorded red/green screenshots, reports and cleanup in WEB-04.md. OBS-027 new browser DPR1.25 pointer after a full navigation clicked visually Hash but fixture loaded Page two instead; A04/A09 physical click/native input matrix remains open. No WEB-04 completion claim."
+        "2026-09-23 OBS-026: private real Chromium browser gateway reproduced stale selected title after full-document history; helper now sends identity-guarded asynchronous selected-title event after load. Real page-two, Back, Forward, 302 redirect, reload and hash page events matched painted Cockpit URL and selected title; file:///etc/passwd was rejected visibly with URL and page unchanged and Retry restored Live view. Reviewed final nonblocking title-value guard and recorded red/green screenshots, reports and cleanup in WEB-04.md. OBS-027 new browser DPR1.25 pointer after a full navigation clicked visually Hash but fixture loaded Page two instead; A04/A09 physical click/native input matrix remains open. No WEB-04 completion claim.",
+        "2026-09-23 OBS-027 follow-up: 89ddfa86c96e0342bfac47974aba5abb8b7742e5 records raw browser pointer events before/after the main loader, native first/final screenshots, and a rejected/reverted metrics-reapply candidate. Real browser events/paint passed at DPR1.25; native remote scroll reached 3900 but actual WebKit canvas paints remained 0 in 6.0073s, below the >15 FPS gate. Reviewer identified capture-not-restarted override-error path. WEB-04 still blocked, product source and binary restored to title-only baseline; all disposable services cleaned."
       ]
     },
     {
