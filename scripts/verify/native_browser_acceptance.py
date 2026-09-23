@@ -24,17 +24,23 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
-    state = {"reports": [], "errors": []}
+    state = {"reports": [], "errors": [], "hidden_scroll_armed": False}
 
     def do_GET(self):
-        body = FIXTURE_HTML.encode()
+        control = self.path == "/control"
+        body = json.dumps({"hidden_scroll_armed": self.state["hidden_scroll_armed"]}).encode() if control else FIXTURE_HTML.encode()
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", "application/json" if control else "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_POST(self):
+        if self.path == "/arm-hidden-scroll":
+            self.state["hidden_scroll_armed"] = True
+            self.send_response(204)
+            self.end_headers()
+            return
         try:
             value = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             value["received_at"] = time.monotonic()
@@ -77,7 +83,7 @@ let started=false;
 const sustainedMs=Number(new URLSearchParams(location.search).get('sustained')||0)*1000;
 addEventListener('pointerup',()=>{if(started)return;started=true;scrollStart=performance.now();document.querySelector('#status').textContent='scrolling';report();
  const begin=scrollStart, from=scrollY, duration=sustainedMs||6000;
- const tick=now=>{const t=Math.min(1,(now-begin)/duration);scrollTo(0,sustainedMs ? 1700-700*Math.cos((now-begin)*Math.PI/4000) : from+3900*t);if(t<1)requestAnimationFrame(tick);else{scrollTo(0,3900);document.querySelector('header').style.background='#00a84b';scrollFinish=performance.now();document.querySelector('#status').textContent='scroll complete';report()}};
+ const tick=now=>{const t=Math.min(1,(now-begin)/duration);scrollTo(0,sustainedMs ? 1700-700*Math.cos((now-begin)*Math.PI/4000) : from+3900*t);if(t<1)requestAnimationFrame(tick);else{scrollTo(0,3900);document.querySelector('header').style.background='#00a84b';scrollFinish=performance.now();document.querySelector('#status').textContent='scroll complete';report();if(new URLSearchParams(location.search).has('hiddenScroll')){let mutated=false;const poll=setInterval(()=>{fetch('/control').then(r=>r.json()).then(value=>{if(mutated||!value.hidden_scroll_armed)return;mutated=true;clearInterval(poll);scrollTo(0,4100);document.querySelector('header').style.background='#1645ad';document.querySelector('#status').textContent='hidden scroll complete';report();setInterval(report,500)}).catch(()=>{})},250)}}};
  requestAnimationFrame(tick);
 },{once:true});
 </script>"""
@@ -142,6 +148,21 @@ def wait_until(predicate, description, seconds, children=()):
             last = error
         time.sleep(0.1)
     raise RuntimeError(f"Timed out waiting for {description}" + (f": {last}" if last else ""))
+
+
+def choose_browser_command(driver, label, children):
+    """Click an actual Commands row; do not call private React callbacks."""
+    driver.execute("(()=>{const trigger=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Commands');if(!trigger)throw Error('Commands trigger unavailable');trigger.click();return true})()")
+    wait_until(lambda: driver.execute("!!document.querySelector('input[aria-label=\"Find a command\"]')"),
+               "native Commands search field", 3, children)
+    driver.execute("(()=>{const input=document.querySelector('input[aria-label=\"Find a command\"]');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,"
+                   + json.dumps(label) + ");input.dispatchEvent(new Event('input',{bubbles:true}));return true})()")
+    option = "[...document.querySelectorAll('button[role=\"option\"]')].find(b=>b.querySelector('.command-row-label')?.textContent.trim()===" + json.dumps(label) + ")"
+    wait_until(lambda: driver.execute("(()=>{const row=" + option + ";return !!row&&!row.disabled})()"),
+               f"enabled native Commands row {label}", 3, children)
+    driver.execute("(()=>{const row=" + option + ";if(!row||row.disabled)throw Error('Commands row unavailable');row.click();return true})()")
+
+
 
 
 def post_json(url, value, timeout=10):
@@ -233,11 +254,17 @@ def main():
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
     parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
+    parser.add_argument("--hide-resource-seconds", type=int, default=0, help="hide the browser for at least 30 seconds after sustained animation, then require the same page to repaint on show")
+    parser.add_argument("--hidden-scroll-smoke", action="store_true", help="quick native hide/reopen check after the page scrolls while no view is visible")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
     if args.idle_resource_seconds < 3 or (args.idle_resource_seconds != 3 and not args.sustain_seconds):
         parser.error("--idle-resource-seconds requires --sustain-seconds and a value of at least 3")
+    if args.hide_resource_seconds and (not args.sustain_seconds or args.hide_resource_seconds < 30):
+        parser.error("--hide-resource-seconds requires --sustain-seconds and at least 30 seconds")
+    if args.hidden_scroll_smoke and args.sustain_seconds:
+        parser.error("--hidden-scroll-smoke uses the six-second scroll fixture, not sustained sampling")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -263,7 +290,7 @@ def main():
     fixture = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
     fixture_thread = threading.Thread(target=fixture.serve_forever, daemon=True)
     fixture_thread.start()
-    fixture_url = f"http://127.0.0.1:{fixture.server_port}/" + (f"?sustained={args.sustain_seconds}" if args.sustain_seconds else "")
+    fixture_url = f"http://127.0.0.1:{fixture.server_port}/" + (f"?sustained={args.sustain_seconds}" if args.sustain_seconds else "?hiddenScroll=1" if args.hidden_scroll_smoke else "")
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("HERDR_", "COCKPIT_")) and k not in ("PI_TOOL_BRIDGE_TOKEN", "SSH_AUTH_SOCK")}
     env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
@@ -426,7 +453,7 @@ def main():
                    args.timeout, [("WebKitWebDriver", driver_process)])
         webdriver.execute("(()=>{[...document.querySelectorAll('button.command-row')].find(x=>x.textContent.trim()==='Open browser for Space').click();return true})()")
         def first_canvas():
-            probe = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),r=c?.getBoundingClientRect();return {painted:!!c && document.querySelector('.browser-toolbar-status')?.textContent==='Live browser view' && c.width!==300 && c.height!==150,status:document.querySelector('.browser-toolbar-status')?.textContent,canvas:{width:c?.width||0,height:c?.height||0,left:r?.left||0,top:r?.top||0,widthCss:r?.width||0,heightCss:r?.height||0},viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},surface:!!document.querySelector('.browser-surface'),body:(document.body?.innerText||'').slice(-600)}})()")
+            probe = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),r=c?.getBoundingClientRect();return {painted:!!c && document.querySelector('.browser-toolbar-status')?.textContent==='Live browser view' && c.width!==300 && c.height!==150,status:document.querySelector('.browser-toolbar-status')?.textContent,canvas:{width:c?.width||0,height:c?.height||0,left:r?.left||0,top:r?.top||0,widthCss:r?.width||0,heightCss:c?.height||0},viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},surface:!!document.querySelector('.browser-surface'),alerts:[...document.querySelectorAll('[role=alert]')].map(x=>x.textContent?.trim()).filter(Boolean),commandOpen:!!document.querySelector('button.command-row'),bodyStart:(document.body?.innerText||'').slice(0,400),body:(document.body?.innerText||'').slice(-600)}})()")
             result["geometries"]["first_canvas_last_observed"] = probe
             return probe if probe["painted"] and probe["canvas"]["widthCss"] > 0 and probe["canvas"]["heightCss"] > 0 else None
         geometry = wait_until(first_canvas, "first native browser canvas frame paint", args.timeout,
@@ -553,6 +580,55 @@ def main():
             lambda: (lambda rgb: rgb if rgb[1] >= 100 and rgb[0] < 80 and rgb[2] < 130 else None)(
                 webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame');return [...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3)})()")),
             "completed scroll marker painted on native canvas", 3, [("WebKitWebDriver", driver_process)])
+        if args.hidden_scroll_smoke:
+            page_before = webdriver.execute("document.querySelector('input[aria-label=\"Page URL\"]')?.value")
+            if page_before != fixture_url:
+                raise RuntimeError(f"native browser URL changed before hidden-scroll smoke: {page_before!r}")
+            choose_browser_command(webdriver, "Hide browser view", [("WebKitWebDriver", driver_process)])
+            wait_until(lambda: webdriver.execute("document.querySelector('.browser-region')?.style.display==='none' && document.querySelector('.browser-pane')?.classList.contains('browser-pane-hidden')"),
+                       "hidden native browser view before fixture scroll", 5, [("WebKitWebDriver", driver_process)])
+            result["hidden_scroll"] = {}
+            hidden_at = time.monotonic()
+            paints_before_hidden_scroll = webdriver.execute("window.__nativePaintTimes.length")
+            post_json(fixture_url.split("?", 1)[0] + "arm-hidden-scroll", {})
+            moved = wait_until(lambda: next((item for item in reversed(FixtureHandler.state["reports"])
+                if item["received_at"] > hidden_at and item.get("status") == "hidden scroll complete"
+                and abs(item.get("scrollY", 0) - 4100) <= 1), None),
+                "fixture's authoritative scroll to 4100 while browser view hidden", 8, [("WebKitWebDriver", driver_process)])
+            hidden_paints = webdriver.execute("window.__nativePaintTimes.length") - paints_before_hidden_scroll
+            if hidden_paints:
+                raise RuntimeError(f"native browser canvas painted {hidden_paints} frames while hidden")
+            shown_at = time.monotonic()
+            choose_browser_command(webdriver, "Show browser view", [("WebKitWebDriver", driver_process)])
+            def reopened_scrolled():
+                state = webdriver.execute("(()=>{const r=document.querySelector('.browser-region'),c=document.querySelector('canvas.browser-frame');return {visible:!!r&&getComputedStyle(r).display!=='none',status:document.querySelector('.browser-toolbar-status')?.textContent,url:document.querySelector('input[aria-label=\"Page URL\"]')?.value,paints:window.__nativePaintTimes.length,marker:c?[...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3):null}})()")
+                result["hidden_scroll"]["last_reopen_state"] = state
+                return state if state["visible"] and state["status"] == "Live browser view" and state["url"] == fixture_url and state["paints"] > paints_before_hidden_scroll and state["marker"] and all(abs(a-b)<=8 for a,b in zip(state["marker"], (22, 69, 173))) else None
+            result["hidden_scroll"].update({"moved": moved, "hidden_paints": hidden_paints})
+            result["hidden_scroll"]["reopened"] = wait_until(reopened_scrolled, "new measured scroll marker on the reopened native canvas",
+                                                              args.timeout, [("WebKitWebDriver", driver_process)])
+            result["hidden_scroll"]["reopened_page_metrics"] = wait_until(lambda: next((item for item in reversed(FixtureHandler.state["reports"])
+                if item["received_at"] >= shown_at and item.get("status") == "hidden scroll complete"
+                and abs(item.get("innerWidth", 0) - geometry["canvas"]["widthCss"]) <= 2
+                and abs(item.get("innerHeight", 0) - geometry["canvas"]["heightCss"]) <= 2
+                and abs(item.get("dpr", 0) - 2) <= .01), None),
+                "reopened page restoring the accepted CSS viewport and DPR2", 5, [("WebKitWebDriver", driver_process)])
+            reopened_image = root / "native-hidden-scroll-reopened.png"
+            reopened_image.write_bytes(base64.b64decode(webdriver.request("GET", webdriver.path("/screenshot"))["value"]))
+            result["screenshots"]["hidden_scroll_reopened"] = str(reopened_image)
+            result["hidden_scroll"]["page_reports"] = [item for item in FixtureHandler.state["reports"] if item["received_at"] >= hidden_at][-8:]
+            result["hidden_scroll"]["surface"] = webdriver.execute("(()=>{const s=document.querySelector('.browser-surface'),c=document.querySelector('canvas.browser-frame'),r=s?.getBoundingClientRect();return {width:r?.width,height:r?.height,canvas_width:c?.width,canvas_height:c?.height,host_scroll_y:window.scrollY,status:document.querySelector('.browser-toolbar-status')?.textContent}})()")
+            surface = result["hidden_scroll"]["surface"]
+            if not surface["width"] or not surface["height"] or abs(surface["canvas_width"] / surface["width"] - 2) > .05 or abs(surface["canvas_height"] / surface["height"] - 2) > .05:
+                raise RuntimeError(f"reopened native canvas did not retain DPR2 image density: {surface}")
+            wheel_at = time.monotonic()
+            webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect();s.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:r.left+120,clientY:r.top+166,deltaX:0,deltaY:120,deltaMode:0}));return true})()")
+            try:
+                result["hidden_scroll"]["wheel_report"] = wait_until(lambda: next((item for item in reversed(FixtureHandler.state["reports"])
+                    if item["received_at"] > wheel_at and 4100 < item.get("scrollY", 0) < 4500), None),
+                    "reopened viewport accepting routed wheel at scroll 4100", 5, [("WebKitWebDriver", driver_process)])
+            finally:
+                result["hidden_scroll"]["page_reports_after_wheel"] = [item for item in FixtureHandler.state["reports"] if item["received_at"] >= hidden_at][-8:]
         if args.sustain_seconds:
             animation_end_elapsed = completed["received_at"] - sample_start
             time.sleep(2)
@@ -568,29 +644,67 @@ def main():
                 long_idle_paints = webdriver.execute("window.__nativePaintTimes.length") - first_idle_paint
                 if long_idle_paints > 2:
                     raise RuntimeError(f"static page resumed painting during idle resource observation: {long_idle_paints}")
+            hidden_start_elapsed = None
+            if args.hide_resource_seconds:
+                page_before = webdriver.execute("document.querySelector('input[aria-label=\"Page URL\"]')?.value")
+                if page_before != fixture_url:
+                    raise RuntimeError(f"native browser URL changed before hide: {page_before!r}")
+                choose_browser_command(webdriver, "Hide browser view", [("WebKitWebDriver", driver_process)])
+                wait_until(lambda: webdriver.execute("document.querySelector('.browser-region')?.style.display==='none' && document.querySelector('.browser-pane')?.classList.contains('browser-pane-hidden')"),
+                           "hidden browser view and retired stream", 5, [("WebKitWebDriver", driver_process)])
+                hidden_image = root / "native-hidden.png"
+                hidden_image.write_bytes(base64.b64decode(webdriver.request("GET", webdriver.path("/screenshot"))["value"]))
+                result["screenshots"]["browser_hidden"] = str(hidden_image)
+                hidden_start_elapsed = time.monotonic() - sample_start
+                hidden_start_paints = webdriver.execute("window.__nativePaintTimes.length")
+                time.sleep(args.hide_resource_seconds)
+                hidden_end_elapsed = time.monotonic() - sample_start
+                hidden_end_paints = webdriver.execute("window.__nativePaintTimes.length")
+                if hidden_end_paints != hidden_start_paints:
+                    raise RuntimeError(f"hidden native browser painted {hidden_end_paints-hidden_start_paints} frames")
+                result["lifecycle"] = {"page_before_hide": page_before,
+                                       "hidden_paints": hidden_end_paints - hidden_start_paints,
+                                       "hidden_seconds": args.hide_resource_seconds}
             sampler_stop.set()
             sampler.join(timeout=3)
             active_post_warmup = [sample for sample in resource_samples
                                   if 30 <= sample["elapsed_seconds"] <= animation_end_elapsed]
             idle_samples = [sample for sample in resource_samples
-                            if sample["elapsed_seconds"] >= idle_start_elapsed]
+                            if idle_start_elapsed <= sample["elapsed_seconds"]
+                            and (hidden_start_elapsed is None or sample["elapsed_seconds"] < hidden_start_elapsed)]
             result["resources"] = {"raw_samples": str(root / "sustained-samples.json"),
                                    "sample_period_seconds": 1, "warmup_seconds": 30,
                                    "post_warmup_count": len(active_post_warmup),
                                    "idle_sample_count": len(idle_samples),
                                    "animation_end_elapsed_seconds": animation_end_elapsed,
                                    "idle_start_elapsed_seconds": idle_start_elapsed,
-                                   "idle_end_elapsed_seconds": time.monotonic() - sample_start,
+                                   "idle_end_elapsed_seconds": hidden_start_elapsed if hidden_start_elapsed is not None else time.monotonic() - sample_start,
                                    "idle_observation_seconds": args.idle_resource_seconds,
                                    "idle_paints_over_three_seconds": idle_paints,
                                    "cpu_tick_hz": os.sysconf("SC_CLK_TCK"),
                                    "sampled_roots": [label for label, _ in [("acceptance-runner", os.getpid())] +
                                                      [(label, child.pid) for label, child in children]]}
+            if hidden_start_elapsed is not None:
+                hidden_samples = [sample for sample in resource_samples
+                                  if hidden_start_elapsed <= sample["elapsed_seconds"] <= hidden_end_elapsed]
+                result["resources"].update({"hidden_start_elapsed_seconds": hidden_start_elapsed,
+                                            "hidden_end_elapsed_seconds": hidden_end_elapsed,
+                                            "hidden_sample_count": len(hidden_samples)})
+                if len(hidden_samples) < args.hide_resource_seconds - 1:
+                    raise RuntimeError(f"hidden resource sampling was incomplete: {result['resources']}")
             if args.idle_resource_seconds > 3:
                 result["resources"]["idle_paints_over_observation"] = long_idle_paints
             if len(active_post_warmup) < 300 or any(sample["process_count"] < 5 or sample["pss_kib"] <= 0
                                                      for sample in active_post_warmup):
                 raise RuntimeError(f"sustained process tree sampling was incomplete: {result['resources']}")
+            if hidden_start_elapsed is not None:
+                choose_browser_command(webdriver, "Show browser view", [("WebKitWebDriver", driver_process)])
+                def reopened_browser():
+                    state = webdriver.execute("(()=>{const r=document.querySelector('.browser-region'),c=document.querySelector('canvas.browser-frame'),b=c?.getBoundingClientRect();return {visible:!!r&&getComputedStyle(r).display!=='none',status:document.querySelector('.browser-toolbar-status')?.textContent,url:document.querySelector('input[aria-label=\"Page URL\"]')?.value,paints:window.__nativePaintTimes.length,marker:c?[...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3):null,canvas_width:c?.width||0,canvas_height:c?.height||0,css_width:b?.width||0,css_height:b?.height||0}})()")
+                    result["lifecycle"]["last_reopen_state"] = state
+                    return state if state["visible"] and state["status"] == "Live browser view" and state["url"] == fixture_url and state["paints"] > hidden_end_paints and state["marker"] and all(abs(a-b)<=8 for a,b in zip(state["marker"], final_marker)) and state["css_width"] and state["css_height"] and abs(state["canvas_width"]/state["css_width"]-2)<=.05 and abs(state["canvas_height"]/state["css_height"]-2)<=.05 else None
+                result["lifecycle"]["reopened"] = wait_until(reopened_browser, "same native browser page and painted marker after show",
+                                                                args.timeout, [("WebKitWebDriver", driver_process)])
         result["paints"]["visible_final_marker_rgb"] = final_marker
         if args.nested_wheel:
             # The WebKit driver cannot send OS wheel actions on this compositor.
