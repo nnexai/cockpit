@@ -256,6 +256,7 @@ def main():
     parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
     parser.add_argument("--hide-resource-seconds", type=int, default=0, help="hide the browser for at least 30 seconds after sustained animation, then require the same page to repaint on show")
     parser.add_argument("--hidden-scroll-smoke", action="store_true", help="quick native hide/reopen check after the page scrolls while no view is visible")
+    parser.add_argument("--native-only-open", action="store_true", help="skip gateway browser pre-open; open and navigate using only the actual native UI")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
@@ -265,6 +266,8 @@ def main():
         parser.error("--hide-resource-seconds requires --sustain-seconds and at least 30 seconds")
     if args.hidden_scroll_smoke and args.sustain_seconds:
         parser.error("--hidden-scroll-smoke uses the six-second scroll fixture, not sustained sampling")
+    if args.native_only_open and args.annotation:
+        parser.error("--native-only-open cannot use gateway-owned draft recovery for --annotation")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -358,7 +361,9 @@ def main():
                    "private gateway HTTP readiness", args.timeout, [("gateway", gateway)])
         action = {"target": {"session_id": session, "space_id": space_id, "pane_id": None,
                              "endpoint_path": str(session_socket)}, "action": {"kind": "open", "url": fixture_url}}
-        post_json(gateway_url + "/api/v1/browser/action", action)
+        if not args.native_only_open:
+            post_json(gateway_url + "/api/v1/browser/action", action)
+        result["association_open_source"] = "native" if args.native_only_open else "gateway-then-native"
 
         config = root / "niri.kdl"
         config.write_text('output "Smithay Winit Unknown" { scale 2; }\n')
@@ -441,6 +446,32 @@ def main():
         space_selected = "(()=>{const b=[...document.querySelectorAll('button.resource-select')].find(x=>x.title===" + json.dumps(space_label) + ");return !!b?.closest('.resource-row')?.classList.contains('is-selected')})()"
         wait_until(lambda: webdriver.execute(space_selected), "unique Space selection", args.timeout,
                    [("WebKitWebDriver", driver_process)])
+        if args.native_only_open:
+            result["native_only_trace_install"] = webdriver.execute("""(()=>{
+              const trace={started:performance.now(),frames:[],events:[],sockets:0};
+              window.__nativeBrowserTrace=trace;
+              const RealSocket=window.WebSocket;
+              window.WebSocket=new Proxy(RealSocket,{construct(Target,args){
+                const socket=new Target(...args);trace.sockets++;
+                socket.addEventListener('message',event=>{
+                  if(typeof event.data!=='string')return;
+                  try{
+                    const body=JSON.parse(event.data),time=performance.now();
+                    if(body.kind==='frame'&&trace.frames.length<24){
+                      const d=body.descriptor||{};
+                      trace.frames.push({time,target_id:d.target_id,frame_sequence:d.frame_sequence,
+                        viewport_revision:d.viewport_revision,viewport_css_width:d.viewport_css_width,
+                        viewport_css_height:d.viewport_css_height,image_width:d.image_width,image_height:d.image_height});
+                    }else if(body.kind==='event'&&trace.events.length<24){
+                      const e=body.event||{};
+                      if(['attached','viewport_changed','document_changed'].includes(e.type))
+                        trace.events.push({time,type:e.type,viewport:e.viewport||e.snapshot?.viewport||null});
+                    }
+                  }catch{}
+                });return socket;
+              }});
+              return {socketWrapped:true};
+            })()""")
         # The toolbar's "Open browser" label is a toggle: once the preloaded
         # association arrives it changes to "Close browser". Use the stable
         # command action instead so an asynchronous state update cannot close it.
@@ -452,12 +483,40 @@ def main():
         wait_until(lambda: webdriver.execute(browser_action), "enabled browser open command",
                    args.timeout, [("WebKitWebDriver", driver_process)])
         webdriver.execute("(()=>{[...document.querySelectorAll('button.command-row')].find(x=>x.textContent.trim()==='Open browser for Space').click();return true})()")
+        if args.native_only_open:
+            wait_until(lambda: webdriver.execute("(()=>!!document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]') && document.querySelector('.browser-toolbar-status')?.textContent==='Live browser view')()"),
+                       "live native browser and Page URL field", args.timeout, [("WebKitWebDriver", driver_process)])
+            webdriver.execute("(()=>{const input=document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]');const form=input.closest('form');window.__nativeUrlSubmits=[];form.addEventListener('submit',e=>{const value=input.value;setTimeout(()=>window.__nativeUrlSubmits.push({value,defaultPrevented:e.defaultPrevented}),0)},true);input.focus();input.select();return true})()")
+            typed_with = "webdriver-actions"
+            try:
+                keys = [key for character in fixture_url for key in
+                        ({"type": "keyDown", "value": character}, {"type": "keyUp", "value": character})]
+                webdriver.request("POST", webdriver.path("/actions"),
+                                  {"actions": [{"type": "key", "id": "url-keyboard", "actions": keys}]})
+            except RuntimeError as error:
+                if "unsupported operation" not in str(error):
+                    raise
+                typed_with = "focused-input-insertText"
+                inserted = webdriver.execute("document.execCommand('insertText',false," + json.dumps(fixture_url) + ")")
+                if not inserted:
+                    raise RuntimeError("WebKit native Page URL insertText was not accepted") from error
+            time.sleep(0.15)
+            input_value = webdriver.execute("document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]').value")
+            result["navigation_input"] = {"method": typed_with, "field_after_render": input_value}
+            if input_value != fixture_url:
+                raise RuntimeError(f"native Page URL React field did not retain fixture URL: {input_value!r}")
+            webdriver.execute("(()=>{document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]').closest('form').requestSubmit();return true})()")
+            wait_until(lambda: next((report for report in reversed(FixtureHandler.state["reports"])
+                if report.get("ready") == "complete" and report.get("heading") == "Native browser acceptance"), None),
+                "fixture navigation after native-only open", args.timeout, [("WebKitWebDriver", driver_process)])
         def first_canvas():
             probe = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),r=c?.getBoundingClientRect();return {painted:!!c && document.querySelector('.browser-toolbar-status')?.textContent==='Live browser view' && c.width!==300 && c.height!==150,status:document.querySelector('.browser-toolbar-status')?.textContent,canvas:{width:c?.width||0,height:c?.height||0,left:r?.left||0,top:r?.top||0,widthCss:r?.width||0,heightCss:c?.height||0},viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},surface:!!document.querySelector('.browser-surface'),alerts:[...document.querySelectorAll('[role=alert]')].map(x=>x.textContent?.trim()).filter(Boolean),commandOpen:!!document.querySelector('button.command-row'),bodyStart:(document.body?.innerText||'').slice(0,400),body:(document.body?.innerText||'').slice(-600)}})()")
             result["geometries"]["first_canvas_last_observed"] = probe
             return probe if probe["painted"] and probe["canvas"]["widthCss"] > 0 and probe["canvas"]["heightCss"] > 0 else None
         geometry = wait_until(first_canvas, "first native browser canvas frame paint", args.timeout,
                               [("WebKitWebDriver", driver_process)])
+        if args.native_only_open:
+            result["geometries"]["native_only_surface"] = webdriver.execute("(()=>{const info=e=>{if(!e)return null;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {rect:{width:r.width,height:r.height},client:{width:e.clientWidth,height:e.clientHeight},css:{width:s.width,height:s.height,overflow:s.overflow,objectFit:s.objectFit}}};return {pane:info(document.querySelector('.browser-pane')),surface:info(document.querySelector('.browser-surface')),canvas:info(document.querySelector('canvas.browser-frame'))}})()")
         metrics = wait_until(lambda: next((report for report in reversed(FixtureHandler.state["reports"])
             if report.get("ready") == "complete"
             and abs(report.get("innerWidth", 0) - geometry["canvas"]["widthCss"]) <= 2
@@ -759,7 +818,24 @@ def main():
                 result["failure_screenshot"] = str(failure_screenshot)
             except Exception:
                 pass
+        if args.native_only_open and driver:
+            try:
+                result["navigation_diagnostics"] = driver.execute("(()=>({field:document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]')?.value,status:document.querySelector('.browser-toolbar-status')?.textContent,submits:window.__nativeUrlSubmits||[],tabs:[...document.querySelectorAll('.browser-tabs [role=\"tab\"]')].map(b=>({title:b.textContent,url:b.title})),alerts:[...document.querySelectorAll('[role=\"alert\"]')].map(e=>e.textContent?.trim()),javascriptErrors:window.__nativeAcceptanceErrors||[]}))()")
+                result["navigation_diagnostics"]["fixture_report_count"] = len(FixtureHandler.state["reports"])
+                result["navigation_diagnostics"]["browser_trace"] = driver.execute("window.__nativeBrowserTrace||null")
+            except Exception as diagnostic_error:
+                result["navigation_diagnostics_error"] = str(diagnostic_error)[:800]
+        if args.native_only_open:
+            census = sample_owned_processes(children)
+            result["owner_processes"] = {
+                label: [{"pid": process["pid"], "comm": process["comm"], "start_ticks": process["start_ticks"]}
+                        for process in record["processes"]]
+                for label, record in census["roots"].items() if label in ("gateway", "webdriver")}
     finally:
+        if args.native_only_open:
+            reports = FixtureHandler.state["reports"]
+            result["fixture_reports"] = {"count": len(reports),
+                                         "first": reports[:2], "last": reports[-2:]}
         sampler_stop.set()
         if sampler:
             sampler.join(timeout=3)

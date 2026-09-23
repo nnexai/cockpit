@@ -1,0 +1,35 @@
+{
+  "session": "native-d2bef5ad6d80",
+  "fixture_url": "http://127.0.0.1:45757/",
+  "association_open_source": "native",
+  "native_view_sockets_observed": 1,
+  "native_outer_viewport": {"width": 676, "height": 835, "dpr": 2},
+  "first_canvas_last_observed": {
+    "status": "Showing last confirmed frame",
+    "bitmap_width": 1348,
+    "bitmap_height": 376,
+    "bounding_rect_width": 674,
+    "bounding_rect_height": 376
+  },
+  "frame_descriptors": [
+    {"target_id": "886D73757058C62DA932AF0DCBB9B6E6", "frame_sequence": 1, "viewport_revision": 1, "viewport_css_width": 674, "viewport_css_height": 188, "image_width": 1348, "image_height": 376, "page_performance_ms": 3410},
+    {"target_id": "886D73757058C62DA932AF0DCBB9B6E6", "frame_sequence": 2, "viewport_revision": 1, "viewport_css_width": 674, "viewport_css_height": 188, "image_width": 1348, "image_height": 376, "page_performance_ms": 3484},
+    {"target_id": "886D73757058C62DA932AF0DCBB9B6E6", "frame_sequence": 3, "viewport_revision": 1, "viewport_css_width": 674, "viewport_css_height": 188, "image_width": 1348, "image_height": 376, "page_performance_ms": 3566.0000000000005},
+    {"target_id": "886D73757058C62DA932AF0DCBB9B6E6", "frame_sequence": 4, "viewport_revision": 1, "viewport_css_width": 674, "viewport_css_height": 188, "image_width": 1348, "image_height": 376, "page_performance_ms": 3634}
+  ],
+  "view_events": [
+    {"type": "attached", "page_performance_ms": 3408, "css_width": 674, "css_height": 188, "device_pixel_ratio": 2, "viewport_revision": 1},
+    {"type": "document_changed", "page_performance_ms": 3684}
+  ],
+  "fixture_reports": [
+    {"received_monotonic_seconds": 120723.496449021, "inner_width": 674, "inner_height": 188, "dpr": 2},
+    {"received_monotonic_seconds": 120723.572389724, "inner_width": 674, "inner_height": 188, "dpr": 2},
+    {"received_monotonic_seconds": 120752.438320938, "inner_width": 674, "inner_height": 188, "dpr": 1}
+  ],
+  "native_navigation": {"input_method": "focused-input-insertText", "form_submitted_url": "http://127.0.0.1:45757/", "form_default_prevented": true, "tab_url": "http://127.0.0.1:45757/"},
+  "failure": "Timed out waiting for first native browser canvas frame paint",
+  "command_trace_valid": false,
+  "command_trace_note": "A window.__TAURI_INTERNALS__.invoke wrapper saw no commands even though native navigation succeeded; no resize-command conclusion follows.",
+  "helper_pid_count_verified": false,
+  "clock_note": "Page performance.now and fixture host monotonic receive time are separate clocks; correlate ordered events, not absolute numbers."
+}
