@@ -679,7 +679,8 @@
         "bf165186a9a2fa4c9903e1955d3e0dfb9d3d637b",
         "902b902b1dc00b3c6f3f964b53e4fa23ef32d25e",
         "c8a124b2374784f1c912bf7d40a5832e486769e0",
-        "1f70ec7fd1d5073ebbe972d9f8b77e17888884f2"
+        "1f70ec7fd1d5073ebbe972d9f8b77e17888884f2",
+        "e549a2dc15a51e613eddc9514e718d90340eb830"
       ],
       "notes": [
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
@@ -687,7 +688,8 @@
         "Two five-minute native scroll runs passed 57.86 painted FPS and zero static-idle paints; WebKit content/network PSS remained non-plateauing. Full WEB-06 lifecycle/resource acceptance remains blocked.",
         "2026-09-23 native lifecycle diagnostic checkpoint 902b902 records actual Commands Hide/Show negative controls, duplicate-helper trace and partial retained-memory samples. No helper repair was delivered; earlier green candidate was not repeatable on the current rebuilt tree. Isolated owned processes cleaned.",
         "2026-09-23 native-only Commands Open diagnostic bypassed gateway pre-open and verified actual WebKit URL-form navigation. Four first-frame descriptors and initial fixture agreed at 674\u00d7188@DPR2, but native presentation failed and the fixture later drifted to DPR1; frame/socket metadata and visually checked geometry/stale screenshots are retained. Process-owner and CDP override provenance is still unresolved, so no product fix or WEB-06 closure was claimed.",
-        "2026-09-23 native-only run-owned helper-copy diagnostic verified two same-target CDP device-metrics writers, eight send/result events at DPR2, live helper process IDs, later fixture DPR1, distorted first native canvas and full owned process cleanup. Raw trace/result and actual WebKit screenshot retained in WEB-06.md. Earlier serialized gate fell to 0.82\u20131.15 FPS; no unverified product gate or density special case was delivered."
+        "2026-09-23 native-only run-owned helper-copy diagnostic verified two same-target CDP device-metrics writers, eight send/result events at DPR2, live helper process IDs, later fixture DPR1, distorted first native canvas and full owned process cleanup. Raw trace/result and actual WebKit screenshot retained in WEB-06.md. Earlier serialized gate fell to 0.82\u20131.15 FPS; no unverified product gate or density special case was delivered.",
+        "2026-09-23 new private native-only run native-a9c8176f2dcb failed first canvas readiness: four same-target DPR2 descriptors arrived but Tauri showed stale black with Retry; fixture later reported DPR1. Bounded helper-copy trace confirmed two same-target PIDs, each receiving >=16 screencast frames and >=4 accepted direct screenshots. No first paint/FPS/hide-show acceptance; product unchanged. Opt-in trace generator, raw counters, WebKit failure screenshot, build identities and full fixture cleanup are in WEB-06.md; the admission race and page-DPR actor remain open."
       ]
     },
     {
