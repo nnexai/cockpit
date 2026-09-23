@@ -1,0 +1,78 @@
+{
+  "rejected": {
+    "receipt": {
+      "operation_id": "727c974b-16e3-41b3-a812-1e2a2a6fa573",
+      "request_id": "727c974b-16e3-41b3-a812-1e2a2a6fa573",
+      "batch_id": "e7bf6fb4-edb5-4398-a2f5-c3f67080dad4",
+      "batch_generation": 1,
+      "payload_hash": "sha256:a1eaacc94729b68535fe6b3f95c7d10fbaa7a1bb2693164f9f73640326e7c7c1",
+      "target": {
+        "endpoint_identity": "unix-socket:/tmp/cflow-native-kbwfeytp/config/herdr/sessions/native-flow-add14802e3ef/herdr.sock:pid=478965:uid=1000:gid=1000:start=26863731",
+        "session_id": "native-flow-add14802e3ef",
+        "workspace_id": "w2",
+        "tab_id": "w2:t2",
+        "pane_id": "w2:p3",
+        "terminal_id": "term_65c25083c493d4",
+        "agent_label": "pi",
+        "agent_fingerprint": "sha256:81aea4926aaea0fd50cf1345c31cb0965085a40dd839a5789ae1d7c8f474cb1c"
+      },
+      "state": "rejected",
+      "sent_draft_ids": [],
+      "created_at": "1790164357211",
+      "completed_at": "1790164357211",
+      "message": "one or more sources changed, disappeared, or became unavailable",
+      "user_confirmed": false
+    },
+    "sent_drafts": null
+  },
+  "accepted": {
+    "receipt": {
+      "operation_id": "46e6d7b6-111d-489a-a27a-b40d955b86ff",
+      "request_id": "46e6d7b6-111d-489a-a27a-b40d955b86ff",
+      "batch_id": "e7bf6fb4-edb5-4398-a2f5-c3f67080dad4",
+      "batch_generation": 1,
+      "payload_hash": "sha256:a1eaacc94729b68535fe6b3f95c7d10fbaa7a1bb2693164f9f73640326e7c7c1",
+      "target": {
+        "endpoint_identity": "unix-socket:/tmp/cflow-native-kbwfeytp/config/herdr/sessions/native-flow-add14802e3ef/herdr.sock:pid=478965:uid=1000:gid=1000:start=26863731",
+        "session_id": "native-flow-add14802e3ef",
+        "workspace_id": "w2",
+        "tab_id": "w2:t2",
+        "pane_id": "w2:p3",
+        "terminal_id": "term_65c25083c493d4",
+        "agent_label": "pi",
+        "agent_fingerprint": "sha256:81aea4926aaea0fd50cf1345c31cb0965085a40dd839a5789ae1d7c8f474cb1c"
+      },
+      "state": "accepted",
+      "sent_draft_ids": [
+        "b3a2c1df-c06e-40f4-bf0c-080d8d93f352"
+      ],
+      "created_at": "1790164433490",
+      "completed_at": "1790164433592",
+      "message": "Herdr accepted one raw bracketed-paste write; no Enter was sent.",
+      "user_confirmed": false
+    },
+    "sent_drafts": [
+      {
+        "draft_id": "b3a2c1df-c06e-40f4-bf0c-080d8d93f352",
+        "file_ref": {
+          "root_id": "companion:de285ec1-8a71-44ee-92f0-927c1fc55be6:54:340500",
+          "path": "repos/repo-5d3521c410de7450820da3da9bd419e5634286e50a4c9113b6eb53dd524ecdf3/snapshots/d3b9eb3fee5b473a957d2b16c4861339/README.md",
+          "absolute_path": "/tmp/cflow-native-kbwfeytp/companions/de285ec1-8a71-44ee-92f0-927c1fc55be6/repos/repo-5d3521c410de7450820da3da9bd419e5634286e50a4c9113b6eb53dd524ecdf3/snapshots/d3b9eb3fee5b473a957d2b16c4861339/README.md",
+          "revision": "54:340568:71:1790164123301958172",
+          "content_hash": "sha256:d047881481eaa17ff82988cc3aaf91ddc6d88bd5579686a60b611fda4da9ed29"
+        },
+        "anchor": {
+          "kind": "lines",
+          "start_line": 2,
+          "end_line": 2,
+          "selected_lines": [
+            "Line one: retain this native comment.\n"
+          ]
+        },
+        "comment_text": "FLOW01 native: preserve line two; paste this source note into Pi without submitting.",
+        "source_state": "changed",
+        "updated_at": "1790164256778"
+      }
+    ]
+  }
+}
