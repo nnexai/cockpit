@@ -234,8 +234,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const associationOwner = associationOwnerRef.current!;
   const retryRetiredDraftsRef = useRef<((targetId: string, documentGeneration: number | null) => void) | null>(null);
   const previousAssociationOwnerKeyRef = useRef<string | null>(null);
-  const associationChanged = previousAssociationOwnerKeyRef.current !== ownerKey;
-  previousAssociationOwnerKeyRef.current = ownerKey;
   const [status, setStatus] = useState<PaneStatus>(visible ? "loading" : "hidden");
   const [message, setMessage] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<BrowserViewSnapshot | null>(null);
@@ -754,6 +752,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     });
   }, [command, enqueueInput, flushInput]);
   useEffect(() => {
+    const associationChanged = previousAssociationOwnerKeyRef.current !== associationOwner.key;
+    previousAssociationOwnerKeyRef.current = associationOwner.key;
     let closed = false;
     let presenter: FramePresenter | null = null;
     let consecutiveFrameErrors = 0;
@@ -927,8 +927,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
         const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted);
         consecutiveFrameErrors = 0;
-        if (frameFailureVisible && !errorRef.current) { frameFailureVisible = false; setMessage(null); setStatus("ready"); }
-        else if (!errorRef.current) setStatus("ready");
+        if (frameFailureVisible && !errorRef.current) { frameFailureVisible = false; setMessage(null); }
+        if (!errorRef.current) setStatus(streamRef.current ? "ready" : "loading");
       },
       onError: (error) => {
         consecutiveFrameErrors += 1;
@@ -944,11 +944,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     void client.openBrowserView(request, event, (packet) => presenter?.push(packet), (error) => { if (!closed) { setStatus("error"); setMessage(errorMessage(error)); } }, controller.signal).then((opened) => {
       stream = opened;
       if (closed) opened.close();
-      else { streamRef.current = opened; void openDraft(); void refreshSavedFeedback(); }
+      else { streamRef.current = opened; if (frameRef.current && !errorRef.current) setStatus("ready"); void openDraft(); void refreshSavedFeedback(); }
     }).catch((error: unknown) => { if (!closed && !controller.signal.aborted) { setStatus("error"); setMessage(errorMessage(error)); } });
     return close;
   // Browser-only is local layout state; it must not revoke the live frame stream.
-  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, refreshSavedFeedback, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
+  }, [applySnapshot, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, refreshSavedFeedback, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
       ++inputGenerationRef.current;

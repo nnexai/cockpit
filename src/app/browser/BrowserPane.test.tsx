@@ -173,4 +173,71 @@ describe("BrowserPane wheel recovery", () => {
     expect(inputAndNavigation.some(({ command }) => command.type === "wheel")).toBe(true);
     expect(inputAndNavigation.at(-1)?.command).toMatchObject({ type: "tab", command: { type: "create" } });
   });
+  it("waits for the stream command handle before exposing a painted page as live", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const commands: BrowserViewCommandRequest[] = [];
+    let resolveOpen!: (stream: { command: (request: BrowserViewCommandRequest) => Promise<BrowserViewCommandResponse>; close: () => void }) => void;
+    let emitFrame!: (frame: BrowserViewFramePacket) => void;
+    const client = {
+      openBrowserView: vi.fn((_request, onEvent, onFrame) => {
+        emitFrame = onFrame;
+        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
+        return new Promise<{ command: (request: BrowserViewCommandRequest) => Promise<BrowserViewCommandResponse>; close: () => void }>((resolve) => { resolveOpen = resolve; });
+      }),
+    } as unknown as CockpitClient;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 4, height: 3, close: vi.fn() })));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      emitFrame(packet(descriptor(1, 1, 0)));
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    expect(host.querySelector<HTMLCanvasElement>("canvas.browser-frame")?.width).toBe(4);
+    expect(host.querySelector(".browser-toolbar-status")?.textContent).toBe("Loading browser view…");
+    await act(async () => {
+      resolveOpen({ command: async (request) => { commands.push(request); return accepted(request); }, close: vi.fn() });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host.querySelector(".browser-toolbar-status")?.textContent).toBe("Live browser view");
+    await act(async () => {
+      const input = host!.querySelector<HTMLInputElement>('input[aria-label="Page URL"]')!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "https://example.test/next");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.closest("form")!.requestSubmit();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(commands.some(({ command }) => command.type === "navigation" && command.command.type === "navigate"
+      && command.command.url === "https://example.test/next")).toBe(true);
+  });
+
+  it("opens one stream for the initial association across hydration rerenders and resizes", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const close = vi.fn();
+    const client = {
+      openBrowserView: vi.fn(async () => ({ command: vi.fn(async () => accepted({} as BrowserViewCommandRequest)), close })),
+    } as unknown as CockpitClient;
+    const target = { session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null };
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={target} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(client.openBrowserView).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root?.render(<BrowserPane client={client} target={target} viewport={{ css_width: 900, css_height: 600, device_pixel_ratio: 1 }} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(client.openBrowserView).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+  });
 });

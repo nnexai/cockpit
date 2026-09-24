@@ -25,11 +25,11 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
-    state = {"reports": [], "errors": [], "hidden_scroll_armed": False}
+    state = {"reports": [], "errors": [], "hidden_scroll_armed": False, "raster_marker": False}
 
     def do_GET(self):
         control = self.path == "/control"
-        body = json.dumps({"hidden_scroll_armed": self.state["hidden_scroll_armed"]}).encode() if control else FIXTURE_HTML.encode()
+        body = json.dumps({"hidden_scroll_armed": self.state["hidden_scroll_armed"]}).encode() if control else (FIXTURE_HTML + (RASTER_MARKER_HTML if self.state["raster_marker"] else "")).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json" if control else "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -89,6 +89,9 @@ addEventListener('pointerup',()=>{if(started)return;started=true;scrollStart=per
 },{once:true});
 </script>"""
 
+
+RASTER_MARKER_HTML = r"""<style>#raster-marker{position:fixed;left:400px;top:5px;width:120px;height:80px;background:#f000f0;color:white;z-index:200;font:bold 40px sans-serif;text-align:center;line-height:80px}</style>
+<div id=raster-marker>G0</div><script>window.__rasterAdvance=()=>{const marker=document.querySelector('#raster-marker');marker.textContent='G1';marker.style.background='#00f0f0';return marker.textContent;};</script>"""
 
 class WebDriver:
     def __init__(self, base, timeout=10):
@@ -254,60 +257,65 @@ def owned_helper_processes(helper_path):
             continue
     return sorted(found, key=lambda item: item["pid"])
 
-def traced_helper_source(source, capture_lanes=False, frame_publication=False):
+def traced_helper_source(source, capture_lanes=False, frame_publication=False, skip_screenshot_restore=False, raster_generation=False, physical_screencast_ceiling=False, snapshot_throughput_probe=False):
     """Instrument only a disposable helper copy, leaving packaged source intact."""
     import_line = "import readline from 'node:readline';\n"
-    original = """  await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
-    width: requested.width,
-    height: requested.height,
-    deviceScaleFactor: requested.dpr,
-    mobile: false,
-    screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
-    screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
-  });"""
-    replacement = r"""  const metricsOverride = {
-    width: requested.width,
-    height: requested.height,
-    deviceScaleFactor: requested.dpr,
-    mobile: false,
-    screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
-    screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
-  };
-  const traceOverride = (phase, error = null) => {
+    original = """    await expectedCdp.send('Emulation.setDeviceMetricsOverride', {
+      width: requested.width,
+      height: requested.height,
+      deviceScaleFactor: requested.dpr,
+      mobile: false,
+      screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
+      screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
+    });"""
+    replacement = r"""    const metricsOverride = {
+      width: requested.width,
+      height: requested.height,
+      deviceScaleFactor: requested.dpr,
+      mobile: false,
+      screenWidth: Math.max(1, Math.round(requested.width * requested.dpr)),
+      screenHeight: Math.max(1, Math.round(requested.height * requested.dpr)),
+    };
+    const traceOverride = (phase, error = null) => {
+      try {
+        const stat = readFileSync('/proc/self/stat', 'utf8').split(') ')[1].trim().split(/\s+/);
+        appendFileSync(process.env.COCKPIT_BROWSER_TRACE_PATH, JSON.stringify({
+          phase, monotonic_ms: Number(process.hrtime.bigint() / 1000000n),
+          pid: process.pid, start_ticks: Number(stat[19]),
+          target_id: state?.targetId ?? null, page_binding_generation: expectedBinding,
+          commit_request: commitRequest, requested: metricsOverride,
+          error: error ? String(error.message || error).slice(0, 180) : null,
+        }) + '\n', { mode: 0o600 });
+      } catch {}
+    };
+    traceOverride('send');
     try {
-      const stat = readFileSync('/proc/self/stat', 'utf8').split(') ')[1].trim().split(/\s+/);
-      appendFileSync(process.env.COCKPIT_BROWSER_TRACE_PATH, JSON.stringify({
-        phase, monotonic_ms: Number(process.hrtime.bigint() / 1000000n),
-        pid: process.pid, start_ticks: Number(stat[19]),
-        target_id: state?.targetId ?? null, page_binding_generation: expectedBinding,
-        commit_request: commitRequest, requested: metricsOverride,
-        error: error ? String(error.message || error).slice(0, 180) : null,
-      }) + '\n', { mode: 0o600 });
-    } catch {}
-  };
-  traceOverride('send');
-  try {
-    await expectedCdp.send('Emulation.setDeviceMetricsOverride', metricsOverride);
-    traceOverride('accepted');
-  } catch (error) {
-    traceOverride('failed', error);
-    throw error;
-  }"""
+      await expectedCdp.send('Emulation.setDeviceMetricsOverride', metricsOverride);
+      traceOverride('accepted');
+    } catch (error) {
+      traceOverride('failed', error);
+      throw error;
+    }"""
     if source.count(import_line) != 1 or source.count(original) != 1:
         raise RuntimeError("packaged helper CDP override source changed; refusing unmatched diagnostic instrumentation")
-    fs_import = "import { appendFileSync, readFileSync } from 'node:fs';\n"
+    fs_import = "import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';\n"
     instrumented = source.replace(import_line, import_line + fs_import).replace(original, replacement)
+    if physical_screencast_ceiling:
+        screencast_site = "        format: 'jpeg', quality: 80,\n        everyNthFrame: 1,\n"
+        if instrumented.count(screencast_site) != 1:
+            raise RuntimeError("packaged helper screencast options changed; refusing unmatched diagnostic instrumentation")
+        instrumented = instrumented.replace(screencast_site, screencast_site + "        maxWidth: Math.round(state.captureBaseline.cssWidth * state.captureBaseline.dpr),\n        maxHeight: Math.round(state.captureBaseline.cssHeight * state.captureBaseline.dpr),\n", 1)
     if not capture_lanes:
         return instrumented
     lane_trace = r"""
-const captureLaneCounts = { screencast: 0, screenshot_send: 0, screenshot_accepted: 0 };
-function traceCaptureLane(lane) {
+const captureLaneCounts = { screencast: 0, screenshot_send: 0, screenshot_accepted: 0, density_result: 0, physical_published: 0 };
+function traceCaptureLane(lane, geometry = null) {
   const count = ++captureLaneCounts[lane];
-  if (count !== 1 && (count & (count - 1)) !== 0) return;
+  if (lane === 'density_result' || lane === 'physical_published' ? count > 16 : count !== 1 && (count & (count - 1)) !== 0) return;
   try {
     const stat = readFileSync('/proc/self/stat', 'utf8').split(') ')[1].trim().split(/\s+/);
     appendFileSync(process.env.COCKPIT_BROWSER_TRACE_PATH, JSON.stringify({
-      phase: 'capture_lane', lane, count,
+      phase: 'capture_lane', lane, count, geometry,
       monotonic_ms: Number(process.hrtime.bigint() / 1000000n),
       pid: process.pid, start_ticks: Number(stat[19]),
       target_id: state?.targetId ?? null, page_binding_generation: pageBindingGeneration,
@@ -317,21 +325,109 @@ function traceCaptureLane(lane) {
 }
 """
     screencast_site = "  screencastListener = (frame) => {\n"
-    screenshot_site = "    const capture = await context.cdp.send('Page.captureScreenshot', captureOptions);\n"
+    screenshot_site = "    const capture = await cdp.send('Page.captureScreenshot', options);\n"
     if instrumented.count(fs_import) != 1 or instrumented.count(screencast_site) != 1 or instrumented.count(screenshot_site) != 1:
         raise RuntimeError("packaged helper capture lanes changed; refusing unmatched diagnostic instrumentation")
     instrumented = (instrumented.replace(fs_import, fs_import + lane_trace, 1)
                     .replace(screencast_site, screencast_site + "    traceCaptureLane('screencast');\n", 1)
                     .replace(screenshot_site,
                              "    traceCaptureLane('screenshot_send');\n" + screenshot_site
-                             + "    traceCaptureLane('screenshot_accepted');\n", 1))
+                             + "    traceCaptureLane('screenshot_accepted', typeof capture.data === 'string' ? encodedJpegDimensions(Buffer.from(capture.data, 'base64')) : null);\n", 1))
+    result_site = "      result = await captureStableDensityFrame(current);\n"
+    if instrumented.count(result_site) != 1:
+        raise RuntimeError("packaged helper density result source changed; refusing unmatched diagnostic instrumentation")
+    instrumented = instrumented.replace(result_site, result_site + "      traceCaptureLane('density_result', { result, expected_frame: current.expectedFrameSequence, current_frame: state?.frameSequence, expected_arrival: current.expectedStreamArrivalSequence, current_arrival: screencastFrameArrivalSequence, attempts: state?.densityRefinementAttempts, expected_revision: current.baseline.viewportRevision, current_revision: state?.captureBaseline?.viewportRevision });\n", 1)
     if frame_publication:
-        counter_site = "screencast: 0, screenshot_send: 0, screenshot_accepted: 0"
+        counter_site = "screencast: 0, screenshot_send: 0, screenshot_accepted: 0, density_result: 0, physical_published: 0"
         publication_site = "    emit({ type: 'frame', descriptor });\n"
         if instrumented.count(counter_site) != 1 or instrumented.count(publication_site) != 1:
             raise RuntimeError("packaged helper frame publication changed; refusing unmatched diagnostic instrumentation")
         instrumented = (instrumented.replace(counter_site, counter_site + ", frame_published: 0", 1)
-                        .replace(publication_site, publication_site + "    traceCaptureLane('frame_published');\n", 1))
+                        .replace(publication_site, publication_site + "    if (frame._screenshotCapture) traceCaptureLane('physical_published', { frame_sequence: descriptor.frame_sequence, viewport_revision: descriptor.viewport_revision, document_generation: descriptor.document_generation, image_width: descriptor.image_width, scroll_y: descriptor.scroll_y });\n    traceCaptureLane('frame_published', { image_width: descriptor.image_width, image_height: descriptor.image_height, viewport_css_width: descriptor.viewport_css_width, viewport_css_height: descriptor.viewport_css_height, viewport_revision: descriptor.viewport_revision, document_generation: descriptor.document_generation });\n", 1))
+    if skip_screenshot_restore:
+        restore_site = """      const applied = await applyRequestedViewport(
+        requested,
+        context.cdp,
+        context.binding,
+        false,
+        () => screenshotGeometryCurrent(context),
+      );"""
+        observe_only = """      const applied = await context.page.evaluate(() => ({
+        width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio,
+      }));"""
+        if instrumented.count(restore_site) != 1:
+            raise RuntimeError("packaged helper screenshot restoration changed; refusing unmatched diagnostic instrumentation")
+        instrumented = instrumented.replace(restore_site, observe_only, 1)
+    if raster_generation:
+        marker_trace = r"""
+let rasterFramesSaved = 0;
+let rasterCapturesAtFinal = 0;
+function saveRasterImage(kind, sequence, jpeg) {
+  if (rasterFramesSaved >= 16 || !jpeg?.length) return;
+  const path = `${process.env.COCKPIT_BROWSER_TRACE_PATH}.${kind}-${sequence}.jpg`;
+  writeFileSync(path, jpeg, { mode: 0o600 });
+  rasterFramesSaved++;
+  traceCaptureLane('raster_image', { kind, sequence, path });
+}
+"""
+        mutation_site = "      if (!screenshotGeometryCurrent(context)) return;\n"
+        screenshot_result_site = "    if (!viewportRestored || !screenshotContextCurrent(context) || typeof capture.data !== 'string') return 'stale';\n"
+        publication_site = "    emit({ type: 'frame', descriptor });\n"
+        if any(instrumented.count(site) != 1 for site in (mutation_site, screenshot_result_site, publication_site)):
+            raise RuntimeError("packaged helper raster sites changed; refusing unmatched diagnostic instrumentation")
+        instrumented = (instrumented.replace(fs_import, fs_import + marker_trace, 1)
+                        .replace(mutation_site, mutation_site + "      if (context.baseline.scrollY >= 3899 && ++rasterCapturesAtFinal === 2) { const generation = await context.page.evaluate(() => window.__rasterAdvance?.() ?? null); traceCaptureLane('raster_mutation', { generation }); }\n", 1)
+                        .replace(screenshot_result_site,
+                                 "    if (context.baseline.scrollY >= 3899 && typeof capture.data === 'string') saveRasterImage('capture', rasterCapturesAtFinal, Buffer.from(capture.data, 'base64'));\n" + screenshot_result_site, 1)
+                        .replace(publication_site, publication_site + "    if (descriptor.scroll_y >= 3899) saveRasterImage('frame', descriptor.frame_sequence, jpeg);\n", 1))
+    if snapshot_throughput_probe:
+        probe_source = r"""
+async function probePhysicalSnapshotThroughput(expectedCdp, expectedBinding) {
+  const captureToken = state.captureToken;
+  let captures = 0;
+  let scrolling = 0;
+  let scrollFirst = 0;
+  let scrollLast = 0;
+  let reportedScroll = false;
+  const sample = async () => {
+    if (!pageBindingIsCurrent(page, expectedCdp, expectedBinding) || !screencastActive || !state.viewIds.size || state.captureToken !== captureToken) return;
+    const before = geometrySnapshot();
+    try {
+      const response = await expectedCdp.send('Page.captureScreenshot', {
+        format: 'jpeg', quality: 80, captureBeyondViewport: false,
+        clip: { x: before.scrollX, y: before.scrollY, width: before.cssWidth, height: before.cssHeight, scale: 1 },
+      });
+      const now = performance.now();
+      const dimensions = encodedJpegDimensions(Buffer.from(response.data, 'base64'));
+      captures++;
+      if (before.scrollY > 0 && before.scrollY < 3900 && screenshotDimensionsMatchDensity(dimensions, before)) {
+        scrolling++;
+        scrollFirst ||= now;
+        scrollLast = now;
+      }
+      if (!reportedScroll && before.scrollY >= 3900 && scrolling) {
+        reportedScroll = true;
+        traceCaptureLane('snapshot_probe_scroll', { captures, scrolling, scroll_seconds: (scrollLast - scrollFirst) / 1000,
+          image_width: dimensions.width, image_height: dimensions.height, dpr: before.dpr });
+      }
+      if (captures === 1 || (captures & (captures - 1)) === 0) {
+        traceCaptureLane('snapshot_probe', { captures, scrolling, scroll_seconds: (scrollLast - scrollFirst) / 1000,
+          before_scroll: before.scrollY, after_scroll: state.scrollY, image_width: dimensions.width,
+          image_height: dimensions.height, dpr: before.dpr });
+      }
+    } catch (error) {
+      traceCaptureLane('snapshot_probe_error', { message: String(error?.message ?? error) });
+    }
+    setTimeout(sample, 0);
+  };
+  void sample();
+}
+"""
+        startup_site = "      if (pageBindingIsCurrent(page, expectedCdp, expectedBinding)) screencastActive = true;\n"
+        if instrumented.count(startup_site) != 1:
+            raise RuntimeError("packaged helper stream start changed; refusing unmatched throughput probe")
+        instrumented = (instrumented.replace(fs_import, fs_import + probe_source, 1)
+                        .replace(startup_site, startup_site + "      if (screencastActive) void probePhysicalSnapshotThroughput(expectedCdp, expectedBinding);\n", 1))
     return instrumented
 
 
@@ -359,6 +455,12 @@ def main():
     parser.add_argument("--trace-cdp-overrides", action="store_true", help="log CDP device-metrics sends from only a run-owned helper copy")
     parser.add_argument("--trace-capture-lanes", action="store_true", help="also count screencast and screenshot capture in the run-owned helper copy")
     parser.add_argument("--trace-frame-publication", action="store_true", help="also count helper frame-descriptor publication from only the run-owned helper copy")
+    parser.add_argument("--trace-density-convergence", action="store_true", help="sample bounded native bitmap/paint convergence after the first usable image without relaxing its DPR2 gate")
+    parser.add_argument("--density-diagnostic-continue", action="store_true", help="collect post-scroll evidence after a first-frame DPR2 failure; still fail the run")
+    parser.add_argument("--trace-no-restore-override", action="store_true", help="diagnostic helper copy omits only the post-screenshot identical CDP override; never an acceptance run")
+    parser.add_argument("--trace-raster-generation", action="store_true", help="save bounded run-only JPEGs and mutate the raster after the second settled capture; never an acceptance run")
+    parser.add_argument("--trace-physical-screencast-ceiling", action="store_true", help="request physical-sized WebKit screencast JPEGs only in the run-owned helper; never an acceptance run")
+    parser.add_argument("--trace-snapshot-throughput", action="store_true", help="measure physical snapshot throughput under real scroll alongside native live stream; never an acceptance run")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
         parser.error("--sustain-seconds must be at least 330 for a full 300-second post-warm-up sample")
@@ -376,6 +478,18 @@ def main():
         parser.error("--trace-capture-lanes requires --trace-cdp-overrides and --native-only-open")
     if args.trace_frame_publication and not args.trace_capture_lanes:
         parser.error("--trace-frame-publication requires --trace-capture-lanes and --native-only-open")
+    if args.trace_density_convergence and not args.trace_frame_publication:
+        parser.error("--trace-density-convergence requires --trace-frame-publication")
+    if args.density_diagnostic_continue and not args.trace_density_convergence:
+        parser.error("--density-diagnostic-continue requires --trace-density-convergence")
+    if args.trace_no_restore_override and not args.density_diagnostic_continue:
+        parser.error("--trace-no-restore-override requires --density-diagnostic-continue")
+    if args.trace_raster_generation and not args.density_diagnostic_continue:
+        parser.error("--trace-raster-generation requires --density-diagnostic-continue")
+    if args.trace_physical_screencast_ceiling and not args.density_diagnostic_continue:
+        parser.error("--trace-physical-screencast-ceiling requires --density-diagnostic-continue")
+    if args.trace_snapshot_throughput and not args.density_diagnostic_continue:
+        parser.error("--trace-snapshot-throughput requires --density-diagnostic-continue")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -388,6 +502,7 @@ def main():
     bins = {"native": require_binary(args.native, "native Cockpit"), "herdr": require_binary(args.herdr, "Herdr"),
             "gateway": require_binary(args.gateway, "Cockpit gateway"), "driver": require_binary(args.driver, "WebKitWebDriver"),
             "compositor": require_binary(args.compositor, "Niri")}
+    FixtureHandler.state["raster_marker"] = args.trace_raster_generation
     root = Path(tempfile.mkdtemp(prefix="cnative-", dir="/tmp")).resolve()
     for folder in ("config/herdr", "state", "data", "cache", "space", "www"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -436,7 +551,11 @@ def main():
         if args.trace_cdp_overrides:
             source = (REPO / "browser-runtime/browser-helper.mjs").read_text()
             instrumented = traced_helper_source(source, capture_lanes=args.trace_capture_lanes,
-                                                frame_publication=args.trace_frame_publication)
+                                                frame_publication=args.trace_frame_publication,
+                                                skip_screenshot_restore=args.trace_no_restore_override,
+                                                raster_generation=args.trace_raster_generation,
+                                                physical_screencast_ceiling=args.trace_physical_screencast_ceiling,
+                                                snapshot_throughput_probe=args.trace_snapshot_throughput)
             helper_path.write_text(instrumented)
             syntax = subprocess.run(["node", "--check", str(helper_path)],
                                     capture_output=True, text=True, timeout=10)
@@ -574,7 +693,7 @@ def main():
                    [("WebKitWebDriver", driver_process)])
         if args.native_only_open:
             result["native_only_trace_install"] = webdriver.execute("""(()=>{
-              const trace={started:performance.now(),frames:[],events:[],sockets:0};
+              const trace={started:performance.now(),frames:[],tailFrames:[],frameCount:0,events:[],sockets:0};
               window.__nativeBrowserTrace=trace;
               const RealSocket=window.WebSocket;
               window.WebSocket=new Proxy(RealSocket,{construct(Target,args){
@@ -583,11 +702,13 @@ def main():
                   if(typeof event.data!=='string')return;
                   try{
                     const body=JSON.parse(event.data),time=performance.now();
-                    if(body.kind==='frame'&&trace.frames.length<24){
-                      const d=body.descriptor||{};
-                      trace.frames.push({time,target_id:d.target_id,frame_sequence:d.frame_sequence,
+                    if(body.kind==='frame'){
+                      const d=body.descriptor||{},frame={time,target_id:d.target_id,frame_sequence:d.frame_sequence,
                         viewport_revision:d.viewport_revision,viewport_css_width:d.viewport_css_width,
-                        viewport_css_height:d.viewport_css_height,image_width:d.image_width,image_height:d.image_height});
+                        viewport_css_height:d.viewport_css_height,image_width:d.image_width,image_height:d.image_height};
+                      trace.frameCount++;
+                      if(trace.frames.length<24)trace.frames.push(frame);
+                      trace.tailFrames.push(frame);if(trace.tailFrames.length>24)trace.tailFrames.shift();
                     }else if(body.kind==='event'&&trace.events.length<24){
                       const e=body.event||{};
                       if(['attached','viewport_changed','document_changed'].includes(e.type))
@@ -661,6 +782,24 @@ def main():
         first_screenshot_path = root / "native-first.png"
         first_screenshot_path.write_bytes(base64.b64decode(first_screenshot))
         result["screenshots"] = {"first_paint_before_gesture": str(first_screenshot_path)}
+        if args.trace_density_convergence:
+            samples = []
+            start = time.monotonic()
+            deadline = start + 5
+            while True:
+                sample = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),r=c?.getBoundingClientRect();return {bitmap_width:c?.width||0,bitmap_height:c?.height||0,css_width:r?.width||0,css_height:r?.height||0,paints:window.__nativePaintTimes?.length||0,status:document.querySelector('.browser-toolbar-status')?.textContent}})()")
+                sample["elapsed_seconds"] = round(time.monotonic() - start, 3)
+                if not samples or any(sample[key] != samples[-1][key] for key in ("bitmap_width", "bitmap_height", "css_width", "css_height", "paints", "status")):
+                    samples.append(sample)
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(.2)
+            result["density_convergence"] = {"samples": samples, "fixture_dpr": metrics["dpr"],
+                "observed_seconds": round(time.monotonic() - start, 3),
+                "final": samples[-1], "full_density_seen": any(
+                    abs(s["bitmap_width"] / s["css_width"] - metrics["dpr"]) <= .05
+                    and abs(s["bitmap_height"] / s["css_height"] - metrics["dpr"]) <= .05
+                    for s in samples if s["css_width"] and s["css_height"])}
         if geometry["viewport"] != result["geometries"].get("outer"):
             raise RuntimeError(f"native outer viewport changed before browser view attach: {geometry['viewport']}")
         if abs(metrics["dpr"] - 2) > .01 or abs(metrics["innerWidth"] - geometry["canvas"]["widthCss"]) > 2 or abs(metrics["innerHeight"] - geometry["canvas"]["heightCss"]) > 2:
@@ -668,7 +807,9 @@ def main():
         if metrics.get("heading") != "Native browser acceptance" or "without doubled CSS width" not in metrics.get("contentText", "") or metrics.get("headingWidth", 0) < metrics["innerWidth"] * .9:
             raise RuntimeError(f"first-paint CSS text/width report is incomplete or distorted: {metrics}")
         if abs(density["bitmap_width_per_css"] - 2) > .05 or abs(density["bitmap_height_per_css"] - 2) > .05:
-            raise RuntimeError(f"distorted first paint: canvas bitmap density is not DPR2: {density}")
+            if not args.density_diagnostic_continue:
+                raise RuntimeError(f"distorted first paint: canvas bitmap density is not DPR2: {density}")
+            result["diagnostic_first_density_failure"] = density
         if args.annotation:
             webdriver.execute("(()=>{const s=document.querySelector('.browser-surface');if(!s)throw Error('browser surface unavailable');s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;s.releasePointerCapture=()=>{};return true})()")
             def draft_opened():
@@ -933,10 +1074,33 @@ def main():
             if any(step["nested_wheel_y"] is None or step["nested_wheel_y"] * step["delta_y_css"] <= 0
                    for step in routed[:2]):
                 raise RuntimeError(f"nested wheel gesture did not reach the intended page container: {routed}")
+        if args.trace_density_convergence:
+            post_scroll = []
+            start = time.monotonic()
+            while True:
+                image = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),r=c?.getBoundingClientRect();return {bitmap_width:c?.width||0,bitmap_height:c?.height||0,css_width:r?.width||0,css_height:r?.height||0,paints:window.__nativePaintTimes?.length||0,status:document.querySelector('.browser-toolbar-status')?.textContent}})()")
+                image["elapsed_seconds"] = round(time.monotonic() - start, 3)
+                if not post_scroll or any(image[key] != post_scroll[-1][key] for key in ("bitmap_width", "bitmap_height", "css_width", "css_height", "paints", "status")):
+                    post_scroll.append(image)
+                if time.monotonic() - start >= 5:
+                    break
+                time.sleep(.2)
+            result["density_convergence"]["post_scroll"] = post_scroll
+            result["density_convergence"]["post_scroll_observed_seconds"] = round(time.monotonic() - start, 3)
+            settled = post_scroll[-1]
+            if not settled["css_width"] or not settled["css_height"] or (
+                abs(settled["bitmap_width"] / settled["css_width"] - metrics["dpr"]) > .05
+                or abs(settled["bitmap_height"] / settled["css_height"] - metrics["dpr"]) > .05
+            ):
+                if not args.density_diagnostic_continue:
+                    raise RuntimeError(f"native canvas lost DPR2 density after settled scroll: {settled}")
+                result["diagnostic_settled_density_failure"] = settled
         # Preserve visual evidence from the actual native WebKit window.
         screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
         (root / "native-window.png").write_bytes(base64.b64decode(screenshot))
         result["screenshot"] = str(root / "native-window.png")
+        if result.get("diagnostic_first_density_failure") or result.get("diagnostic_settled_density_failure") or args.trace_no_restore_override or args.trace_raster_generation or args.trace_physical_screencast_ceiling or args.trace_snapshot_throughput:
+            raise RuntimeError("density diagnostic retained a DPR2 failure or used a run-only helper modification")
         result["ok"] = True
     except Exception as error:
         result["failure"] = f"{type(error).__name__}: {error}"
