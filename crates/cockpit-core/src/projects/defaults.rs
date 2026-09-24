@@ -93,7 +93,7 @@ impl ProjectService {
             )
         })?;
         let metadata = sources
-            .metadata(SourceFetchRequest {
+            .metadata_for_setup(SourceFetchRequest {
                 provider_id: artifact.provider_id.clone(),
                 artifact_url: artifact.canonical_url.clone(),
                 authority,
@@ -224,7 +224,7 @@ async fn linked_work_items(
             let result = match authority {
                 Ok(authority) => {
                     sources
-                        .metadata(SourceFetchRequest {
+                        .metadata_for_setup(SourceFetchRequest {
                             provider_id: artifact.provider_id.clone(),
                             artifact_url: artifact.canonical_url.clone(),
                             authority,

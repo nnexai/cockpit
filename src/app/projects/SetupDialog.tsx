@@ -14,8 +14,10 @@ import { rankFuzzyMatches } from "../input/fileNavigation";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
   LinkedArtifact,
+  PaneSummary,
   RepositoryCandidate,
   RepositoryListResponse,
+  SpaceSummary,
   WorkspaceDefaults,
   WorkspaceOperation,
   WorkspaceOperationState,
@@ -28,7 +30,7 @@ import "./setup.css";
 import "./taskSetup.css";
 
 export type SetupClient = Pick<CockpitClient,
-  "repositories" | "resolveWorkspaceDefaults" | "planWorkspace" | "startWorkspace" | "workspaceOperation" | "cancelWorkspace" | "resumeWorkspace" | "reconcileWorkspace"
+  "repositories" | "sessionSnapshot" | "resolveWorkspaceDefaults" | "planWorkspace" | "startWorkspace" | "workspaceOperation" | "cancelWorkspace" | "resumeWorkspace" | "reconcileWorkspace"
 >;
 
 export type SetupDialogProps = {
@@ -36,6 +38,8 @@ export type SetupDialogProps = {
   sessionId: string;
   open: boolean;
   selectedParent?: SetupParent | null;
+  /** The Space the dialog opened from; its pane folders are re-read on open. */
+  parentSpaceId?: string | null;
   onClose: () => void;
   onCompleted: (operation: WorkspaceOperation) => void;
 };
@@ -166,12 +170,30 @@ function sourceRetry(operation: WorkspaceOperation): boolean {
   return operation.error?.code.startsWith("source_") ?? false;
 }
 
-function resolveParentRepository(repositories: RepositoryCandidate[], parent: SetupParent): RepositoryCandidate | null {
+/** The Space's own checkout, else the focused pane's folder (may be nested). */
+export function setupParentFor(space: SpaceSummary | undefined, panes: PaneSummary[], focusedPaneId: string | null): SetupParent | null {
+  if (!space) return null;
+  if (space.git) return { label: space.label, repositoryKey: space.git.repository_key, checkoutPath: space.git.checkout_path };
+  const spacePanes = panes.filter((pane) => pane.space_id === space.id);
+  const pane = spacePanes.find((candidate) => candidate.id === focusedPaneId) ?? spacePanes.find((candidate) => candidate.focused) ?? spacePanes[0];
+  return pane?.cwd ? { label: space.label, repositoryKey: "", checkoutPath: pane.cwd } : null;
+}
+
+function contains(folder: string, path: string): boolean {
+  return path === folder || path.startsWith(folder.endsWith("/") ? folder : `${folder}/`);
+}
+
+export function resolveParentRepository(repositories: RepositoryCandidate[], parent: SetupParent): RepositoryCandidate | null {
   const checkoutMatches = repositories.filter((repository) => repository.checkout_path === parent.checkoutPath || repository.root === parent.checkoutPath);
   if (checkoutMatches.length === 1) return checkoutMatches[0];
   if (checkoutMatches.length > 1) return null;
-  const commonMatches = repositories.filter((repository) => repository.common_dir === parent.repositoryKey);
-  return commonMatches.length === 1 ? commonMatches[0] : null;
+  const commonMatches = parent.repositoryKey ? repositories.filter((repository) => repository.common_dir === parent.repositoryKey) : [];
+  if (commonMatches.length === 1) return commonMatches[0];
+  // A pane folder inside a checkout: the innermost containing checkout wins.
+  const containing = repositories.filter((repository) => contains(repository.checkout_path, parent.checkoutPath));
+  const depth = Math.max(-1, ...containing.map((repository) => repository.checkout_path.length));
+  const innermost = containing.filter((repository) => repository.checkout_path.length === depth);
+  return innermost.length === 1 ? innermost[0] : null;
 }
 
 function recoveryActionFor(operation: WorkspaceOperation): WorkspaceRecoveryAction | null {
@@ -324,7 +346,7 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
   </section>;
 }
 
-export function SetupDialog({ client, sessionId, open, selectedParent = null, onClose, onCompleted }: SetupDialogProps) {
+export function SetupDialog({ client, sessionId, open, selectedParent = null, parentSpaceId = null, onClose, onCompleted }: SetupDialogProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const loadRequestToken = useRef(0);
@@ -337,6 +359,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
   const pollCount = useRef(0);
   const loadedSession = useRef<string | null>(null);
   const openRef = useRef(open);
+  const parentChoice = useRef<string | null>(null);
   const explicit = useRef<ExplicitFields>({ repository: false, branch: false, checkoutPath: false, label: false });
   const [form, setForm] = useState<FormState>(initialForm);
   const [repositories, setRepositories] = useState<RepositoryCandidate[]>([]);
@@ -404,6 +427,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
   const chooseRepository = useCallback((repository: RepositoryCandidate) => {
     if (dispatchRef.current) return;
     explicit.current.repository = true;
+    parentChoice.current = null;
     defaultsRequestToken.current += 1;
     setLookupRevision((current) => current + 1);
     setForm((current) => ({ ...current, repositoryId: repository.repository_id }));
@@ -421,6 +445,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
   const resetCompletedOperation = useCallback(() => {
     setDispatch(false);
     completedOperation.current = null;
+    parentChoice.current = null;
     explicit.current = { repository: false, branch: false, checkoutPath: false, label: false };
     setForm(initialForm());
     setSourceState({ defaults: null, error: null, pending: false });
@@ -455,20 +480,36 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     setLoadState("loading");
     setLoadError(null);
     if (sessionChanged && !dispatchRef.current) resetCompletedOperation();
-    void client.repositories().then((response) => {
+    // Changing folders emits no Herdr event, so the live snapshot can lag.
+    const freshParent = parentSpaceId
+      ? client.sessionSnapshot(sessionId).then(
+        (snapshot) => setupParentFor(snapshot.spaces.find((space) => space.id === parentSpaceId), snapshot.panes, snapshot.focused_pane_id),
+        () => null,
+      )
+      : Promise.resolve(null);
+    void Promise.all([client.repositories(), freshParent]).then(([response, fresh]) => {
       if (!active || token !== loadRequestToken.current) return;
+      const parent = fresh ?? selectedParent;
       setRepositories(response.repositories);
       setDiagnostics(response.diagnostics);
       setLoadState(response.repositories.length === 0 ? "empty" : "ready");
-      const parentRepository = selectedParent ? resolveParentRepository(response.repositories, selectedParent) : null;
-      if (!dispatchRef.current && parentRepository) setForm((current) => ({ ...current, repositoryId: current.repositoryId || parentRepository.repository_id }));
+      const parentRepository = parent ? resolveParentRepository(response.repositories, parent) : null;
+      if (!dispatchRef.current && parentRepository) {
+        // Follow the current Space while the repository is still our own
+        // earlier guess; never replace a choice or a link's repository.
+        setForm((current) => {
+          if (current.repositoryId && current.repositoryId !== parentChoice.current) return current;
+          parentChoice.current = parentRepository.repository_id;
+          return { ...current, repositoryId: parentRepository.repository_id };
+        });
+      }
     }).catch((error: unknown) => {
       if (!active || token !== loadRequestToken.current) return;
       setLoadState("error");
       setLoadError(errorMessage(error, "Could not load repositories."));
     });
     return () => { active = false; };
-  }, [client, open, requestRefresh, resetCompletedOperation, selectedParent?.checkoutPath, selectedParent?.repositoryKey, sessionId]);
+  }, [client, open, parentSpaceId, requestRefresh, resetCompletedOperation, selectedParent?.checkoutPath, selectedParent?.repositoryKey, sessionId]);
 
   // Resolve a pasted link into repository, branch and name defaults.
   useEffect(() => {
@@ -488,6 +529,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
       }).then((defaults) => {
         if (token !== defaultsRequestToken.current || dispatchRef.current) return;
         setSourceState({ defaults, error: null, pending: false });
+        if (!explicit.current.repository && defaults.repository_id) parentChoice.current = null;
         setForm((current) => ({
           ...current,
           repositoryId: explicit.current.repository ? current.repositoryId : defaults.repository_id ?? current.repositoryId,

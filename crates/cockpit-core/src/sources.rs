@@ -40,6 +40,11 @@ const HYDRATION_REPORT_PREFIX: &str = "source-hydration-";
 const MAX_METADATA_DESCRIPTION_BYTES: usize = 256 * 1024;
 const MAX_HYDRATION_REPORT_BYTES: usize = 64 * 1024;
 const MAX_HYDRATION_REPORT_DIAGNOSTIC_TEXT: usize = 512;
+/// Setup reads one artifact while planning, checking before start and
+/// importing, usually within seconds. It may reuse a provider result this
+/// recent; explicit imports and refreshes always ask the provider.
+const SETUP_REUSE_WINDOW: Duration = Duration::from_secs(120);
+const MAX_RECENT_READS: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -429,6 +434,49 @@ pub struct SourceService {
     cache: Arc<ProjectStore>,
     providers: Arc<Vec<Arc<dyn SourceProvider>>>,
     operation_timeout: Duration,
+    recent: Arc<std::sync::Mutex<RecentReads>>,
+}
+
+/// Successful provider results kept briefly for setup reuse, newest last.
+/// A setup read of one artifact holds its key's gate, so a start that
+/// arrives during the background prefetch waits for it instead of asking
+/// the provider a second time.
+#[derive(Default)]
+struct RecentReads {
+    fetches: Vec<(String, Instant, Vec<SourceAsset>)>,
+    metadata: Vec<(String, Instant, SourceMetadata)>,
+    gates: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
+}
+
+impl RecentReads {
+    fn gate(&mut self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        // Drop gates nobody holds or waits on.
+        self.gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+        self.gates.entry(key.to_owned()).or_default().clone()
+    }
+}
+
+fn read_key(request: &SourceFetchRequest) -> String {
+    format!(
+        "{}\0{}\0{:?}",
+        request.provider_id, request.artifact_url, request.authority
+    )
+}
+
+fn recent_read<T: Clone>(reads: &[(String, Instant, T)], key: &str) -> Option<T> {
+    reads
+        .iter()
+        .rev()
+        .find(|(candidate, at, _)| candidate == key && at.elapsed() < SETUP_REUSE_WINDOW)
+        .map(|(_, _, value)| value.clone())
+}
+
+fn remember_read<T>(reads: &mut Vec<(String, Instant, T)>, key: String, value: T) {
+    reads.retain(|(candidate, at, _)| *candidate != key && at.elapsed() < SETUP_REUSE_WINDOW);
+    if reads.len() >= MAX_RECENT_READS {
+        reads.remove(0);
+    }
+    reads.push((key, Instant::now(), value));
 }
 
 impl SourceService {
@@ -444,6 +492,7 @@ impl SourceService {
             operation_timeout: Duration::from_millis(
                 configuration.limits.operation_timeout_ms.into(),
             ),
+            recent: Arc::new(std::sync::Mutex::new(RecentReads::default())),
         })
     }
 
@@ -461,7 +510,26 @@ impl SourceService {
         &self,
         request: SourceFetchRequest,
     ) -> Result<SourceImportResponse, InspectionError> {
-        let response = self.fetch_to_companion(request, None).await?;
+        self.validate_artifact_reusing(request, false).await
+    }
+
+    /// Setup validation, which may reuse a provider result from the last
+    /// [`SETUP_REUSE_WINDOW`].
+    pub async fn validate_artifact_for_setup(
+        &self,
+        request: SourceFetchRequest,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        self.validate_artifact_reusing(request, true).await
+    }
+
+    async fn validate_artifact_reusing(
+        &self,
+        request: SourceFetchRequest,
+        reuse_recent: bool,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        let response = self
+            .fetch_to_companion_hydrated_preserving(request, None, false, None, reuse_recent)
+            .await?;
         if response.entries.is_empty() {
             return Err(InspectionError::new(
                 "source_provider_contract",
@@ -476,7 +544,37 @@ impl SourceService {
         &self,
         request: SourceFetchRequest,
     ) -> Result<SourceMetadata, InspectionError> {
+        self.metadata_reusing(request, false).await
+    }
+
+    /// Setup metadata, which may reuse a result from the last
+    /// [`SETUP_REUSE_WINDOW`].
+    pub async fn metadata_for_setup(
+        &self,
+        request: SourceFetchRequest,
+    ) -> Result<SourceMetadata, InspectionError> {
+        self.metadata_reusing(request, true).await
+    }
+
+    async fn metadata_reusing(
+        &self,
+        request: SourceFetchRequest,
+        reuse_recent: bool,
+    ) -> Result<SourceMetadata, InspectionError> {
         validate_request(&request)?;
+        let key = read_key(&request);
+        if reuse_recent
+            && let Some(metadata) = recent_read(
+                &self
+                    .recent
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .metadata,
+                &key,
+            )
+        {
+            return Ok(metadata);
+        }
         let provider = self
             .providers
             .iter()
@@ -518,6 +616,15 @@ impl SourceService {
                 "source metadata contains invalid title, branch, URL, or commit text",
             ));
         }
+        remember_read(
+            &mut self
+                .recent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .metadata,
+            key,
+            metadata.clone(),
+        );
         Ok(metadata)
     }
 
@@ -634,6 +741,7 @@ impl SourceService {
             companion,
             hydrate_references,
             cached.original_url.as_deref(),
+            false,
         )
         .await
     }
@@ -674,8 +782,64 @@ impl SourceService {
         request: SourceFetchRequest,
         companion: Option<(&Dir, &str)>,
     ) -> Result<SourceImportResponse, InspectionError> {
-        self.fetch_to_companion_hydrated_preserving(request, companion, false, None)
+        self.fetch_to_companion_hydrated_preserving(request, companion, false, None, false)
             .await
+    }
+
+    /// Setup import into a companion, which may reuse a provider result from
+    /// the last [`SETUP_REUSE_WINDOW`].
+    pub async fn fetch_to_companion_for_setup(
+        &self,
+        request: SourceFetchRequest,
+        companion: Option<(&Dir, &str)>,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        self.fetch_to_companion_hydrated_preserving(request, companion, false, None, true)
+            .await
+    }
+
+    /// Read an artifact for a setup that is about to start, without the
+    /// import lock or the cache. The result only serves later setup reads.
+    pub async fn prefetch_for_setup(&self, request: SourceFetchRequest) {
+        if validate_request(&request).is_err() {
+            return;
+        }
+        let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id() == request.provider_id)
+            .cloned()
+        else {
+            return;
+        };
+        let key = read_key(&request);
+        let gate = self
+            .recent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .gate(&key);
+        let _gate = gate.lock().await;
+        let recent = recent_read(
+            &self
+                .recent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .fetches,
+            &key,
+        );
+        if recent.is_some() {
+            return;
+        }
+        if let Ok(Ok(assets)) = timeout(self.operation_timeout, provider.fetch(&request)).await {
+            remember_read(
+                &mut self
+                    .recent
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .fetches,
+                key,
+                assets,
+            );
+        }
     }
 
     pub async fn fetch_to_companion_hydrated(
@@ -684,8 +848,14 @@ impl SourceService {
         companion: Option<(&Dir, &str)>,
         hydrate_references: bool,
     ) -> Result<SourceImportResponse, InspectionError> {
-        self.fetch_to_companion_hydrated_preserving(request, companion, hydrate_references, None)
-            .await
+        self.fetch_to_companion_hydrated_preserving(
+            request,
+            companion,
+            hydrate_references,
+            None,
+            false,
+        )
+        .await
     }
 
     async fn fetch_to_companion_hydrated_preserving(
@@ -694,6 +864,7 @@ impl SourceService {
         companion: Option<(&Dir, &str)>,
         hydrate_references: bool,
         preserved_original_url: Option<&str>,
+        reuse_recent: bool,
     ) -> Result<SourceImportResponse, InspectionError> {
         validate_request(&request)?;
         // One nonblocking durable lease spans fetch, cache selection and
@@ -725,14 +896,52 @@ impl SourceService {
         } else {
             self.operation_timeout
         };
-        let primary = timeout(deadline_budget, provider.fetch(&request))
-            .await
-            .map_err(|_| {
-                InspectionError::new(
-                    "source_fetch_timeout",
-                    "source import exceeded the configured operation deadline",
+        let key = read_key(&request);
+        let gate = reuse_recent.then(|| {
+            self.recent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .gate(&key)
+        });
+        let _gate = match &gate {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
+        };
+        let reused = reuse_recent
+            .then(|| {
+                recent_read(
+                    &self
+                        .recent
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .fetches,
+                    &key,
                 )
-            })??;
+            })
+            .flatten();
+        let primary = match reused {
+            Some(assets) => assets,
+            None => {
+                let assets = timeout(deadline_budget, provider.fetch(&request))
+                    .await
+                    .map_err(|_| {
+                        InspectionError::new(
+                            "source_fetch_timeout",
+                            "source import exceeded the configured operation deadline",
+                        )
+                    })??;
+                remember_read(
+                    &mut self
+                        .recent
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .fetches,
+                    key,
+                    assets.clone(),
+                );
+                assets
+            }
+        };
         if hydrate_references
             && (primary.len() > hydration::HYDRATION_MAX_ASSETS
                 || primary.iter().map(|asset| asset.body.len()).sum::<usize>()
@@ -1764,6 +1973,47 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn a_setup_start_reuses_the_background_prefetch() {
+        let (service, shared, root) = service(asset("prefetched"));
+        service.prefetch_for_setup(request()).await;
+        *shared.lock().expect("asset") = asset("later");
+        let started = service
+            .fetch_to_companion_for_setup(request(), None)
+            .await
+            .expect("start");
+        let prefetched = service.fetch(request()).await.expect("import");
+        // The start used the prefetched body; an import asks the provider.
+        assert_ne!(
+            started.entries[0].content_hash,
+            prefetched.entries[0].content_hash
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn setup_reuses_a_recent_provider_result_but_imports_ask_again() {
+        let (service, shared, root) = service(asset("first"));
+        let planned = service
+            .validate_artifact_for_setup(request())
+            .await
+            .expect("plan");
+        *shared.lock().expect("asset") = asset("second");
+        let started = service
+            .fetch_to_companion_for_setup(request(), None)
+            .await
+            .expect("start");
+        assert_eq!(
+            started.entries[0].content_hash,
+            planned.entries[0].content_hash
+        );
+        let imported = service.fetch(request()).await.expect("import");
+        assert_ne!(
+            imported.entries[0].content_hash,
+            planned.entries[0].content_hash
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
     #[tokio::test]
     async fn refresh_moves_only_the_current_pointer() {
         let (service, shared, root) = service(asset("first"));

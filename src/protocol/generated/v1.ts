@@ -223,7 +223,11 @@ export type SpaceSummary = { id: string, label: string, number: number, tab_coun
 
 export type TabSummary = { id: string, space_id: string, label: string, number: number, pane_count: number, focused: boolean, };
 
-export type PaneSummary = { id: string, terminal_id: string, space_id: string, tab_id: string, title: string | null, focused: boolean, agent: string | null, agent_status: string, revision: number, };
+export type PaneSummary = { id: string, terminal_id: string, space_id: string, tab_id: string, title: string | null, focused: boolean, agent: string | null, agent_status: string, revision: number,
+/**
+ * The folder the pane is working in, when Herdr reports one.
+ */
+cwd?: string, };
 
 export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, focused: boolean, state_change_seq: number, };
 

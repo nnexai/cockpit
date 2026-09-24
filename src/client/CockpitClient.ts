@@ -454,7 +454,8 @@ function isPaneSummary(value: unknown): value is PaneSummary {
     isBoolean(value.focused) &&
     isNullableString(value.agent) &&
     isString(value.agent_status) &&
-    isU64(value.revision)
+    isU64(value.revision) &&
+    (value.cwd === undefined || isString(value.cwd))
   );
 }
 function isLayoutRect(value: unknown): value is LayoutRect {

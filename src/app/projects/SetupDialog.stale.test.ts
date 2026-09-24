@@ -15,6 +15,7 @@ const other = { ...repository, repository_id: "other", name: "Other", root: "/re
 const repositories: RepositoryListResponse = { repositories: [repository, other], diagnostics: [] };
 const client: SetupClient = {
   repositories: async () => repositories,
+  sessionSnapshot: async () => { throw new Error("snapshot should not run"); },
   resolveWorkspaceDefaults: async () => { throw new Error("lookup should not run"); },
   planWorkspace: async () => { throw new Error("plan should not run"); },
   startWorkspace: async () => { throw new Error("start should not run"); },

@@ -230,25 +230,39 @@ impl ProjectService {
                         &artifact.provider_id,
                     )
                     .await?;
-                    let validated = sources
-                        .validate_artifact(SourceFetchRequest {
-                            provider_id: artifact.provider_id.clone(),
-                            artifact_url: artifact.original_url.clone(),
-                            authority: authority.clone(),
-                        })
-                        .await?;
-                    artifact.canonical_url =
-                        reviewed_artifact_url(artifact, &validated)?.to_owned();
+                    let request = SourceFetchRequest {
+                        provider_id: artifact.provider_id.clone(),
+                        artifact_url: artifact.original_url.clone(),
+                        authority: authority.clone(),
+                    };
+                    // The small metadata read (usually reused from the
+                    // defaults lookup) proves the artifact exists; the full
+                    // read runs in the background and the start preflight
+                    // waits for it before anything is created.
+                    let metadata = match sources.metadata_for_setup(request.clone()).await {
+                        Ok(metadata) => Some(metadata),
+                        Err(error) if error.code == "source_metadata_unsupported" => None,
+                        Err(error) => return Err(error),
+                    };
+                    match metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.source_url.clone())
+                    {
+                        // The provider named the canonical URL the full read
+                        // will report, so the full read can wait.
+                        Some(url) => {
+                            artifact.canonical_url = url;
+                            let prefetch = Arc::clone(sources);
+                            tokio::spawn(async move { prefetch.prefetch_for_setup(request).await });
+                        }
+                        None => {
+                            let validated = sources.validate_artifact_for_setup(request).await?;
+                            artifact.canonical_url =
+                                reviewed_artifact_url(artifact, &validated)?.to_owned();
+                        }
+                    }
                     if artifact.kind == "review" {
-                        source_metadata = Some(
-                            sources
-                                .metadata(SourceFetchRequest {
-                                    provider_id: artifact.provider_id.clone(),
-                                    artifact_url: artifact.canonical_url.clone(),
-                                    authority,
-                                })
-                                .await?,
-                        );
+                        source_metadata = metadata;
                     }
                 }
                 if let Some(primary) = artifact.as_ref() {
@@ -501,7 +515,7 @@ impl ProjectService {
             )
             .await?;
             let validated = sources
-                .validate_artifact(SourceFetchRequest {
+                .validate_artifact_for_setup(SourceFetchRequest {
                     provider_id: artifact.provider_id.clone(),
                     artifact_url: artifact.original_url.clone(),
                     authority,
@@ -1646,7 +1660,7 @@ impl ProjectService {
             )
             .await?;
             let validated = sources
-                .validate_artifact(SourceFetchRequest {
+                .validate_artifact_for_setup(SourceFetchRequest {
                     provider_id: artifact.provider_id.clone(),
                     artifact_url: artifact.original_url.clone(),
                     authority: authority.clone(),
@@ -1660,7 +1674,7 @@ impl ProjectService {
             }
             if artifact.kind == "review" {
                 let metadata = sources
-                    .metadata(SourceFetchRequest {
+                    .metadata_for_setup(SourceFetchRequest {
                         provider_id: artifact.provider_id.clone(),
                         artifact_url: artifact.canonical_url.clone(),
                         authority,
@@ -2056,7 +2070,7 @@ impl ProjectService {
                 let (_, companion_root) =
                     prepare_root(Path::new(&plan.companion_path), "companion")?;
                 let response = sources
-                    .fetch_to_companion(
+                    .fetch_to_companion_for_setup(
                         SourceFetchRequest {
                             provider_id: artifact.provider_id.clone(),
                             artifact_url: artifact.original_url.clone(),
@@ -2094,7 +2108,7 @@ impl ProjectService {
                     )
                     .await?;
                     let response = sources
-                        .fetch_to_companion(
+                        .fetch_to_companion_for_setup(
                             SourceFetchRequest {
                                 provider_id: linked.provider_id.clone(),
                                 artifact_url: linked.original_url.clone(),

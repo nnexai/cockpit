@@ -282,3 +282,8 @@ No task was silently waived or called externally blocked merely for lacking proo
 
 - 2026-09-24, found while planning the remaining work at the user's request. WEB-05's last note (OBS-042) released and queued it, but its status still said `in_progress` with owner Main, so its four locks made FLOW-01, WEB-04, WEB-06 and WEB-08 look lock-waiting. LATER-JIRA said `deferred` although the user had explicitly asked for Jira support and it shipped in `e6709202b0b3f0eb5541913665d7b34e62510566`.
 - Correction: WEB-05 is `queued` and unowned. LATER-JIRA is activated by the user, stays `required: false`, and adds no campaign dependency. `campaign.py` now accepts a non-required task outside `deferred` only when its notes record the user activation. GitHub #6 stays partial until LATER-GHPR is also delivered or the user changes its scope.
+
+### OBS-050 — MR setup read the whole MR three times; plain-folder Spaces never preselected
+
+- 2026-09-24, from the SETUP-link-first limitations. An MR setup waited 17.4 s after Enter, mostly for three full GitLab reads of the same MR. Herdr's snapshot carries each pane's folder, but Cockpit dropped it, so only worktree Spaces preselected a repository. Owner FLOW-01 (criterion 1).
+- Repair: setup reuses provider results for two minutes; the plan uses metadata and reads the full MR in the background; panes carry their folder and the dialog preselects the containing repository. Paste to ready went from about 26 s to 9.2 s. See the second increment in `runs/run-20260920-a3e9b950/SETUP-link-first.md`.

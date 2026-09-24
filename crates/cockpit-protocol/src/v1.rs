@@ -126,6 +126,10 @@ pub struct PaneSummary {
     pub agent_status: String,
     #[ts(type = "number")]
     pub revision: u64,
+    /// The folder the pane is working in, when Herdr reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<String>,
 }
 
 /// A summary of an agent attached to a pane.

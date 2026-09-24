@@ -29,7 +29,7 @@ import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest
 import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
 import { dispatchFileNavigation, rankFuzzyMatches } from "./input/fileNavigation";
 import { TerminalPane } from "./TerminalPane";
-import { SetupDialog } from "./projects/SetupDialog";
+import { SetupDialog, setupParentFor } from "./projects/SetupDialog";
 import { TeardownDialog } from "./projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
@@ -860,11 +860,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const snapshot = state.snapshot;
   const spaces = snapshot?.spaces ?? [];
   const selectedSpace = byId(spaces, selection.spaceId);
-  const setupParent = selectedSpace?.git ? {
-    label: selectedSpace.label,
-    repositoryKey: selectedSpace.git.repository_key,
-    checkoutPath: selectedSpace.git.checkout_path,
-  } : null;
+  const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
   const allTabs = snapshot?.tabs ?? [];
   const tabs = tabsForSpace(allTabs, selection.spaceId);
   const selectedTab = byId(tabs, selection.tabId);
@@ -1543,7 +1539,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
     {commandsOpen ? <CommandOverlay actions={commandActions.map((action) => ({ ...action, run: () => { setCommandsOpen(false); action.run(); } }))} statusContent={commandStatus} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
-    {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
+    {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
     {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}

@@ -906,6 +906,7 @@ async fn pane_topology_event_refreshes_scoped_subscriptions_without_false_discon
             agent: None,
             agent_status: "idle".into(),
             revision: 0,
+            cwd: None,
         }],
         layouts: Vec::new(),
         agents: Vec::new(),

@@ -114,6 +114,20 @@ fn optional_string(
     }
 }
 
+/// The foreground program's folder, else the shell's. Only a bounded
+/// absolute path is kept; it is a setup hint, never an authority.
+fn pane_folder(
+    object: &serde_json::Map<String, Value>,
+    context: &str,
+) -> Result<Option<String>, InspectionError> {
+    let foreground = optional_string(object, "foreground_cwd", context)?;
+    let shell = optional_string(object, "cwd", context)?;
+    Ok(foreground
+        .into_iter()
+        .chain(shell)
+        .find(|path| path.starts_with('/') && path.len() <= 4096))
+}
+
 fn required_u32(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -284,6 +298,7 @@ fn parse_snapshot(
                 agent: optional_string(object, "agent", &context)?,
                 agent_status: required_string(object, "agent_status", &context)?,
                 revision,
+                cwd: pane_folder(object, &context)?,
             })
         })
         .collect::<Result<Vec<_>, InspectionError>>()?;
@@ -2230,6 +2245,7 @@ mod tests {
                     agent: None,
                     agent_status: "idle".into(),
                     revision: 0,
+                    cwd: None,
                 })
                 .collect(),
             layouts: Vec::new(),
@@ -2241,6 +2257,7 @@ mod tests {
         let mut raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
         raw["result"]["snapshot"]["agents"][0]["agent"] = Value::Null;
         raw["result"]["snapshot"]["agents"][0]["display_agent"] = json!("assistant");
+
         raw["result"]["snapshot"]["agents"][0]["name"] = json!("assistant");
         let pending = parse_snapshot(raw.clone(), "default").expect("unidentified agent is schema-valid");
         assert!(pending.agents.is_empty());
@@ -2256,7 +2273,6 @@ mod tests {
         assert_eq!(identified.agents[0].name, "assistant");
         assert_eq!(identified.agents[0].pane_id, "pane-a");
     }
-
 
     #[test]
     fn session_subscriptions_keep_state_events_but_exclude_terminal_scrollback() {
@@ -2931,6 +2947,22 @@ mod tests {
         let git = parse_snapshot_worktree(workspace.as_object().unwrap()).unwrap();
         assert_eq!(git.branch.as_deref(), Some("feature/demo"));
         assert!(git.is_linked_worktree);
+    }
+
+    #[test]
+    fn pane_folder_prefers_the_foreground_program_and_ignores_relative_paths() {
+        let folder = |pane: Value| pane_folder(pane.as_object().unwrap(), "pane").unwrap();
+        assert_eq!(
+            folder(json!({"cwd": "/work", "foreground_cwd": "/work/app"})).as_deref(),
+            Some("/work/app")
+        );
+        assert_eq!(
+            folder(json!({"cwd": "/work", "foreground_cwd": null})).as_deref(),
+            Some("/work")
+        );
+        assert_eq!(folder(json!({"cwd": "work"})), None);
+        assert_eq!(folder(json!({})), None);
+        assert!(pane_folder(json!({"cwd": 7}).as_object().unwrap(), "pane").is_err());
     }
 
     #[test]

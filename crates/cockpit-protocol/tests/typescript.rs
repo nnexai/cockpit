@@ -130,6 +130,7 @@ fn session_dtos_use_exact_snake_case_wire_fields() {
             agent: Some("builder".to_owned()),
             agent_status: "running".to_owned(),
             revision: 7,
+            cwd: None,
         }],
         layouts: vec![TabLayout {
             space_id: "space-1".to_owned(),

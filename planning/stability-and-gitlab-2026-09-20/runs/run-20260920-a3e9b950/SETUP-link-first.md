@@ -80,3 +80,38 @@ A single `glab api` MR read takes 1.1 s and `jira issue view --raw` takes 0.4 s.
 - The root was removed.
 - The `csetup` browser session was closed. Other browser sessions (`pol`, `review`, `v2`) are not owned by this run and were left open.
 - The remote MR and Jira item are retained as fixtures.
+
+# Faster MR setup and pane-folder preselection (2026-09-24, second increment)
+
+**Why.** Follow-up to the limitations above, taken on the user's instruction to work through the remaining items. An MR setup took 17.4 s after Enter because GitLab was asked for the whole MR three times (plan, check before start, import). A Space opened on a plain folder did not preselect its repository.
+
+**Change.**
+- Setup may reuse a provider result from the last two minutes; explicit Context import and refresh still always ask the provider.
+- When metadata names the canonical URL (GitLab, Jira), the plan uses metadata and reads the full artifact in the background. The check before start waits for that read, so a failing full read still stops setup before anything is created.
+- Cockpit keeps each pane's current folder from Herdr's snapshot (`foreground_cwd`, else `cwd`).
+- With no Space checkout, the dialog preselects the innermost repository containing the focused pane's folder, re-read from a fresh snapshot each time it opens. It follows the Space only while the repository is still its own guess.
+
+**Fixtures.** Same `setup_fixture.py` as above.
+- Preselection run: `/tmp/csetup-z3z31idk`, Herdr `csetup3c0dfdbe` (PIDs 575867/575900), gateway `127.0.0.1:60071`, browser session `cspeed`.
+- Timing run on the final build: `/tmp/csetup-xjxsi_un`, Herdr `csetupb3b9a893` (PIDs 665653/665737), gateway `127.0.0.1:41747`, browser session `cspeed2`.
+
+| Step | Observed |
+| --- | --- |
+| Plain-folder Space; pane in `repos/integration/docs/deep`, then `repos/source`, then `repos/integration`; open the dialog after each | Repository `integration`, `source`, `integration`. The first attempt kept `source` every time; two causes were fixed: the form kept its first guess, and the live snapshot never saw the folder change. |
+| Choose `source` in the dialog, close, reopen with the pane still in `integration` | `source` kept. |
+| Paste MR !2 link (earlier build: reuse only) | Summary after 8.2 s; Create to closed 1.6 s (was 17.4 s). |
+| Paste MR !2 link (final build) | Summary after **4.5 s** with MR !2, "Also import SCRUM-5" and repository `integration` (`SETUP-fast-mr-summary.png`). |
+| Enter immediately | Closed after 4.1 s: the start waited for the background read. **9.2 s** from paste to a ready Space, against about 26 s before. Both MR and SCRUM-5 are in the companion (`SETUP-fast-mr-created.png`). |
+| Paste SCRUM-5, repository `sou`, Enter; Enter again | Summary 2.3 s; ready 1.8 s later; worktree `cockpit/source/SCRUM-5`. |
+
+**Checks.**
+- `cargo test --workspace --exclude cockpit-tauri`: 325 passed. New tests cover setup reuse, prefetch reuse and pane folder parsing.
+- `cargo check -p cockpit-tauri` passes. The protocol export `--check` is clean.
+- `bun run test`: 245 passed, including 3 new preselection tests.
+- rustfmt was applied to my hunks only; `sources.rs` and `cli.rs` were not rustfmt-clean at HEAD, and that unrelated formatting was left alone.
+
+**Not covered.**
+- A real full read that fails after metadata succeeds; covered by design (the check before start re-reads) but not reproduced against GitLab.
+- Native (Tauri) dialog.
+
+**Cleanup.** Both fixtures stopped with Herdr and gateway exit 0, their PIDs gone, ports 60071 and 41747 released, roots removed, browser sessions `cspeed` and `cspeed2` closed. The other browser sessions (`pol`, `review`, `v2`) are not owned by this run and were left open.

@@ -201,6 +201,7 @@ fn snapshot(session_id: &str) -> SessionSnapshotResponse {
             agent: None,
             agent_status: "idle".into(),
             revision: 1,
+            cwd: None,
         }],
         layouts: vec![TabLayout {
             space_id: "space-1".into(),
