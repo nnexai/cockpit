@@ -28,7 +28,9 @@ export type BrowserFeedbackRequest = { target: BrowserTarget, };
 
 export type BrowserFeedbackAckRequest = { target: BrowserTarget, ids: Array<string>, };
 
-export type BrowserFeedbackLookup = { browser: BrowserResponse, feedback: BrowserFeedbackResponse, drafts: BrowserViewDraftInventory | null, };
+export type BrowserFeedbackDeliveryStatus = { capture_id: string, operation_id: string, selected_ids: Array<string>, state: CommentPasteState, message: string, };
+
+export type BrowserFeedbackLookup = { browser: BrowserResponse, feedback: BrowserFeedbackResponse, deliveries: Array<BrowserFeedbackDeliveryStatus>, drafts: BrowserViewDraftInventory | null, };
 
 export type BrowserFeedbackImageRequest = { target: BrowserTarget, capture_id: string, };
 

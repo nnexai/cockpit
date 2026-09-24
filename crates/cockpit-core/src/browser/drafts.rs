@@ -1293,9 +1293,12 @@ impl BrowserService {
                 message: "No browser association exists for this Space".into(),
             },
         };
+        let feedback = self.feedback.list(&key)?;
+        let deliveries = self.feedback.list_delivery_statuses(&key, &feedback.captures)?;
         Ok(BrowserFeedbackLookup {
             browser,
-            feedback: self.feedback.list(&key)?,
+            feedback,
+            deliveries,
             drafts: Some(self.draft_store()?.list(&key)?),
         })
     }

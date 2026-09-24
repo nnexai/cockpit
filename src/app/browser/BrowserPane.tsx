@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
-import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedbackSendResponse, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest } from "../../protocol/generated/v1";
+import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedbackDeliveryStatus, BrowserFeedbackSendResponse, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
 import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, validateFrameDescriptor } from "./framePresenter";
 import { createBrowserTransform } from "./transform";
@@ -79,9 +79,18 @@ type CaptureIdentity = {
   noteText: string;
   notesOpen: boolean;
 };
+type SavedDelivery = {
+  capture_id: string;
+  ids: string[];
+  operation_id: string;
+  state: DeliveryState;
+  message: string;
+  blocked: boolean;
+  hasReceipt: boolean;
+};
 const MAX_INPUT_JOBS = 128;
 const deliveryOperationId = (captureId: string): string => `browser-feedback-${captureId}`;
-type DeliveryState = "pending" | "outcome_unknown" | "rejected";
+type DeliveryState = BrowserFeedbackDeliveryStatus["state"];
 const COLORS = ["#d62828", "#1769aa", "#2a9d55", "#c27803", "#7c3aed"] as const;
 const TOLERANCE = 1.5;
 const annotationIconPaths = {
@@ -207,6 +216,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const elementIntentRef = useRef<ElementInspectionIntent | null>(null);
   const pendingElementClientPointRef = useRef<{ clientX: number; clientY: number; targetId: string; documentGeneration: number; viewportRevision: number } | null>(null);
   const inspectRequestRef = useRef(0);
+  const hoverInspectTimerRef = useRef<number | null>(null);
+  const hoverInspectPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const selectingElementRef = useRef(false);
   const urlEditing = useRef(false);
   const errorRef = useRef(false);
   const clientRef = useRef(clientId ?? newId("cockpit-browser-view"));
@@ -231,7 +243,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const [pendingCapture, setPendingCapture] = useState<BrowserViewPendingCapture | null>(null);
   const [deliveryState, setDeliveryState] = useState<DeliveryState | null>(null);
   const [deliveryDuplicateRisk, setDeliveryDuplicateRisk] = useState(false);
+  const [savedDeliveries, setSavedDeliveries] = useState<SavedDelivery[]>([]);
+  const [selectedDeliveryCaptureId, setSelectedDeliveryCaptureId] = useState<string | null>(null);
   const [draft, setDraft] = useState<BrowserViewDraftState | null>(null);
+  const selectedDeliveryCaptureIdRef = useRef<string | null>(selectedDeliveryCaptureId);
+  selectedDeliveryCaptureIdRef.current = selectedDeliveryCaptureId;
   const [tool, setTool] = useState<Tool>("browse");
   const [color, setColor] = useState<string>(COLORS[0]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -273,12 +289,22 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (current && current.draft_id === next.draft_id && next.revision < current.revision) return;
     draftRef.current = next; associationOwner.draft = next; setDraft(next);
     setSelectedId((selected) => selected && !next.annotations.some((annotation) => annotation.id === selected) ? null : selected);
+    const editingId = noteIdRef.current;
+    if (editingId && !next.annotations.some((annotation) => annotation.id === editingId)) {
+      noteIdRef.current = null;
+      noteValueRef.current = "";
+      editorDirtyRef.current = false;
+      setNoteId(null);
+      setNoteValue("");
+      setNoteEditorDismissed(false);
+    }
     const editor = next.editor;
     if (!editorDirtyRef.current) {
       const selectedAnnotation = editor.note_annotation_id ?? editor.selected_annotation_id;
-      setSelectedId((selected) => selected ?? selectedAnnotation);
-      setNoteId(selectedAnnotation);
-      setNoteValue((editor.note_text ?? next.annotations.find((annotation) => annotation.id === selectedAnnotation)?.comment ?? "").slice(0, 4000));
+      const liveSelected = selectedAnnotation && next.annotations.some((annotation) => annotation.id === selectedAnnotation) ? selectedAnnotation : null;
+      setSelectedId((value) => value ?? liveSelected);
+      setNoteId(liveSelected);
+      setNoteValue(liveSelected ? (editor.note_text ?? next.annotations.find((annotation) => annotation.id === liveSelected)?.comment ?? "").slice(0, 4000) : "");
       setNotesOpen(Boolean(editor.notes_open));
     } else {
       const localEditor = { note_annotation_id: noteIdRef.current, note_text: noteValueRef.current.slice(0, 4000) };
@@ -563,6 +589,56 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const draftId = currentDraft?.draft_id ?? null;
     await command({ type: "draft", context: documentContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
   }, [associationOwner, command, setPendingCaptureState]);
+  const feedbackLookupRequestRef = useRef(0);
+  const refreshSavedFeedback = useCallback(async (owner = associationOwner): Promise<void> => {
+    const request = ++feedbackLookupRequestRef.current;
+    try {
+      const lookup = await client.browserFeedback({ target: owner.target });
+      if (request !== feedbackLookupRequestRef.current || associationOwnerRef.current !== owner || owner.sealed) return;
+      const receipts = new Map<string, BrowserFeedbackDeliveryStatus>();
+      for (const receipt of lookup.deliveries) receipts.set(receipt.capture_id, receipt);
+      const stillPending = new Set(lookup.feedback.captures.flatMap((capture) => capture.pending_ids));
+      const next = lookup.feedback.captures
+        .filter((capture) => capture.pending_ids.length > 0)
+        .map((capture): SavedDelivery => {
+          const receipt = receipts.get(capture.id);
+          const selected = receipt ? receipt.selected_ids : capture.pending_ids;
+          const blocked = Boolean(receipt && (selected.length === 0 || selected.some((id) => !stillPending.has(id))));
+          return {
+            capture_id: capture.id,
+            ids: [...selected],
+            operation_id: receipt?.operation_id ?? deliveryOperationId(capture.id),
+            state: receipt?.state ?? "pending",
+            message: blocked ? "Saved receipt IDs no longer match pending feedback; do not retry this operation." : receipt?.message ?? "Saved feedback is waiting for an explicit retry.",
+            blocked,
+            hasReceipt: Boolean(receipt),
+          };
+        })
+        .sort((left, right) => left.capture_id.localeCompare(right.capture_id));
+      setSavedDeliveries(next);
+      const selectedId = selectedDeliveryCaptureIdRef.current && next.some((item) => item.capture_id === selectedDeliveryCaptureIdRef.current)
+        ? selectedDeliveryCaptureIdRef.current : next[0]?.capture_id ?? null;
+      setSelectedDeliveryCaptureId(selectedId);
+      const selected = next.find((item) => item.capture_id === selectedId);
+      if (selected) {
+        pendingDeliveryIdsRef.current = [...selected.ids];
+        pendingDeliveryOperationRef.current = selected.operation_id;
+        pendingDeliveryIdentityRef.current = null;
+        setDeliveryState(selected.state);
+        setDeliveryDuplicateRisk(false);
+      } else {
+        pendingDeliveryIdsRef.current = null;
+        pendingDeliveryOperationRef.current = null;
+        pendingDeliveryIdentityRef.current = null;
+        setDeliveryState(null);
+        setDeliveryDuplicateRisk(false);
+      }
+    } catch (error) {
+      if (request === feedbackLookupRequestRef.current && associationOwnerRef.current === owner && !owner.sealed) {
+        setMessage(`Could not refresh saved browser feedback: ${errorMessage(error)}`);
+      }
+    }
+  }, [associationOwner, client]);
   const queueDraftMutation = useCallback(<T,>(run: () => Promise<T>): Promise<T> => {
     const next = associationOwner.mutationTail.catch(() => undefined).then(run);
     associationOwner.mutationTail = next.then(() => undefined, () => undefined);
@@ -649,7 +725,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (editorDirtyRef.current) throw new Error("A newer browser editor change is still saving; retry Close.");
     }
     if (associationOwner.pendingAnnotationMutations.length > 0) throw new Error("Annotation changes are not acknowledged; retry the annotation action before closing.");
-    if (pendingDeliveryIdsRef.current) throw new Error("Annotation delivery is pending; retry Send annotations before closing.");
+    if (pendingCaptureRef.current) throw new Error("A browser capture is not durably saved; retry or discard it before closing.");
   }, [persistEditor, associationOwner]);
   const [editorTick, setEditorTick] = useState(0);
   useEffect(() => {
@@ -689,6 +765,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (closed) return;
       closed = true;
       if (editorDirtyRef.current && draftRef.current) void persistEditor().catch(() => undefined);
+      if (hoverInspectTimerRef.current !== null) window.clearTimeout(hoverInspectTimerRef.current);
+      hoverInspectTimerRef.current = null;
+      hoverInspectPointRef.current = null;
+      selectingElementRef.current = false;
+      ++inspectRequestRef.current;
+      elementIntentRef.current = null;
       controller.abort();
       ++inputGenerationRef.current;
       inputJobsRef.current = [];
@@ -732,7 +814,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setSnapshot(null);
       setDraft(null);
       setPendingCapture(null);
-      setDeliveryState(null);
+      setSavedDeliveries([]);
+      setSelectedDeliveryCaptureId(null);
+      selectedDeliveryCaptureIdRef.current = null;
       setDeliveryDuplicateRisk(false);
       setSelectedId(null);
       setNoteId(null);
@@ -748,7 +832,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (closed) return;
       if (incoming.type === "attached") {
         if (identityRef.current) return;
-        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(openDraft); return;
+        identityRef.current = { id: incoming.metadata.view_id, epoch: incoming.metadata.stream_epoch }; cursor = incoming.metadata.metadata_sequence; inputSequence.current = incoming.snapshot.control.next_input_sequence; applySnapshot(incoming.snapshot); setStatus(statusFor(incoming.snapshot)); queueMicrotask(() => { void openDraft(); void refreshSavedFeedback(); }); return;
       }
       const identity = identityRef.current;
       if (!identity || incoming.metadata.view_id !== identity.id || incoming.metadata.stream_epoch !== identity.epoch) return;
@@ -782,6 +866,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "navigation_changed": {
           next = { ...previous, navigation: incoming.navigation };
           if (incoming.navigation?.loading) invalidateInteractionFrame();
+          else if (previous.navigation?.url !== incoming.navigation?.url) {
+            setMessage((current) => current?.includes("browser URL has an unsupported or unsafe scheme") ? null : current);
+          }
           break;
         }
         case "viewport_changed": {
@@ -857,11 +944,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     void client.openBrowserView(request, event, (packet) => presenter?.push(packet), (error) => { if (!closed) { setStatus("error"); setMessage(errorMessage(error)); } }, controller.signal).then((opened) => {
       stream = opened;
       if (closed) opened.close();
-      else { streamRef.current = opened; void openDraft(); }
+      else { streamRef.current = opened; void openDraft(); void refreshSavedFeedback(); }
     }).catch((error: unknown) => { if (!closed && !controller.signal.aborted) { setStatus("error"); setMessage(errorMessage(error)); } });
     return close;
   // Browser-only is local layout state; it must not revoke the live frame stream.
-  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
+  }, [applySnapshot, associationChanged, associationOwner, clearPresentedFrame, client, clientId, frameMatchesCurrent, invalidateInteractionFrame, openDraft, paneViewport, persistEditor, refreshSavedFeedback, releaseRemotePointer, retireDraftsFor, retry, target.endpoint_path, target.pane_id, target.session_id, target.space_id, visible]);
   useEffect(() => {
     if (!liveInputEnabled) {
       ++inputGenerationRef.current;
@@ -1176,12 +1263,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setMessage("Element inspection is waiting for a confirmed browser frame.");
       return null;
     }
-    const pointerSampleSequence = current.cursor
-      && current.cursor.target_id === inspected.target_id
-      && current.cursor.document_generation === inspected.document_generation
-      && current.cursor.viewport_revision === inspected.viewport_revision
-      ? current.cursor.pointer_sample_sequence
-      : null;
+    // The local pointer is measured against the painted frame. A remote
+    // cursor sample may advance independently while inspection is in flight.
+    const pointerSampleSequence = null;
     const intent: ElementInspectionIntent = {
       point: { x: point.x, y: point.y },
       location: inspected,
@@ -1322,17 +1406,14 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     event.preventDefault();
     const documentPoint = pointFor(event);
     if (tool === "element") {
-      const current = snapshotRef.current;
-      if (current?.document && current.viewport && current.displayed_target_id) {
-        const accepted = frameRef.current;
-        if (!accepted || !frameMatchesCurrent(accepted)) {
-          pendingElementClientPointRef.current = { clientX: event.clientX, clientY: event.clientY, targetId: current.displayed_target_id, documentGeneration: current.document.document_generation, viewportRevision: current.viewport.viewport_revision };
-          setMessage("Element inspection is waiting for a confirmed browser frame.");
-        } else {
-          const point = viewportPointFor(event);
-          if (point) void inspect(point);
-        }
-      } else setMessage("Element inspection is unavailable until a page and frame are ready.");
+      selectingElementRef.current = true;
+      if (hoverInspectTimerRef.current !== null) window.clearTimeout(hoverInspectTimerRef.current);
+      hoverInspectTimerRef.current = null;
+      ++inspectRequestRef.current;
+      hoverInspectPointRef.current = null;
+      elementIntentRef.current = null;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.currentTarget.focus({ preventScroll: true });
       return;
     }
     if (!documentPoint) return;
@@ -1347,7 +1428,19 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (tool === "browse") { remotePointer(event, "move"); return; }
     const active = gestureRef.current;
     if (active?.pointerId === event.pointerId) { const point = pointFor(event); if (point) { const next = { ...active, points: [...active.points, point] }; gestureRef.current = next; setGesture(next); } }
-    else if (tool === "element") { const point = viewportPointFor(event); if (point) void inspect(point); }
+    else if (tool === "element" && !selectingElementRef.current) {
+      hoverInspectPointRef.current = { clientX: event.clientX, clientY: event.clientY };
+      if (hoverInspectTimerRef.current === null) {
+        hoverInspectTimerRef.current = window.setTimeout(() => {
+          hoverInspectTimerRef.current = null;
+          const sample = hoverInspectPointRef.current;
+          if (!selectingElementRef.current && sample) {
+            const point = viewportPointFor(sample);
+            if (point) void inspect(point);
+          }
+        }, 40);
+      }
+    }
   };
   const finishGesture = (event: PointerEvent<HTMLDivElement>, cancelled: boolean): void => {
     const active = gestureRef.current; gestureRef.current = null; setGesture(null); if (!active || cancelled) return;
@@ -1360,19 +1453,25 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (isLocalBrowserChrome(event.target)) return;
     if (tool === "browse") { remotePointer(event, "up"); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); return; }
     if (tool === "element") {
+      if (hoverInspectTimerRef.current !== null) window.clearTimeout(hoverInspectTimerRef.current);
+      hoverInspectTimerRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       const current = snapshotRef.current;
+      hoverInspectPointRef.current = null;
       const accepted = frameRef.current;
       if (!current?.document || !current.viewport || !current.displayed_target_id) {
+        selectingElementRef.current = false;
         setMessage("Element inspection is unavailable until a page and frame are ready.");
         return;
       }
       if (!accepted || !frameMatchesCurrent(accepted)) {
+        selectingElementRef.current = false;
         pendingElementClientPointRef.current = { clientX: event.clientX, clientY: event.clientY, targetId: current.displayed_target_id, documentGeneration: current.document.document_generation, viewportRevision: current.viewport.viewport_revision };
         setMessage("Element inspection is waiting for a confirmed browser frame.");
         return;
       }
       const point = viewportPointFor(event);
-      if (!point) return;
+      if (!point) { selectingElementRef.current = false; return; }
       void inspect(point).then((result) => {
         const latest = snapshotRef.current;
         if (result?.freshness === "fresh" && result.inspectable && result.evidence && result.bounds && latest?.document && latest.viewport
@@ -1388,7 +1487,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           };
           void persist({ id: annotationId(), kind: "element", color, points: [{ x: bounds.x, y: bounds.y }], bounds, evidence: result.evidence, comment: null });
         } else if (result) setMessage(result.limitation ?? "The selected element is not fresh or accessible; select it again.");
-      });
+      }).finally(() => { selectingElementRef.current = false; });
       return;
     }
     finishGesture(event, false);
@@ -1396,6 +1495,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const onPointerCancel = (event: PointerEvent<HTMLDivElement>): void => {
     if (isLocalBrowserChrome(event.target)) return;
     if (tool === "browse") { remotePointer(event, "cancel"); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); return; }
+    if (tool === "element") {
+      selectingElementRef.current = false;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      return;
+    }
     finishGesture(event, true);
   };
   const onWheel = (event: WheelEvent<HTMLDivElement>): void => {
@@ -1488,6 +1592,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const navigation = (action: "back" | "forward" | "reload" | "stop" | "navigate", address?: string): void => {
     if (!liveInputEnabledRef.current) return;
     const value = action === "navigate" ? { type: "navigate" as const, url: navigationUrl(address ?? "") } : { type: action };
+    if (hoverInspectTimerRef.current !== null) window.clearTimeout(hoverInspectTimerRef.current);
+    hoverInspectTimerRef.current = null;
+    ++inspectRequestRef.current;
+    elementIntentRef.current = null;
     const attempt = ++navigationRequestRef.current;
     if (value.type === "navigate") setUrl(snapshotRef.current?.navigation?.url ?? "");
     urlEditing.current = false;
@@ -1615,68 +1723,205 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   const deliverAnnotations = async (ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean): Promise<boolean> => {
     if (!onFeedback) { errorRef.current = true; setStatus("error"); setMessage("Annotation delivery is unavailable."); return false; }
+    const updateReceipt = (state: DeliveryState, message: string) => setSavedDeliveries((current) => current.map((item) => item.operation_id === operationId ? { ...item, state, message, hasReceipt: true } : item));
     setDeliveryState("pending");
+    updateReceipt("pending", "Feedback delivery is pending.");
     try {
       const response = await onFeedback(ids, operationId, acknowledgeDuplicateRisk);
       if (response.operation_id !== operationId) {
         errorRef.current = true;
         setDeliveryState("outcome_unknown");
+        updateReceipt("outcome_unknown", "Feedback delivery returned a different operation identity; inspect the saved receipt before retrying.");
         setStatus("error");
         setMessage("Feedback delivery returned a different operation identity; inspect the saved receipt before retrying.");
         return false;
       }
       if (response.state === "accepted") {
         errorRef.current = false;
-        setDeliveryState(null);
+        setDeliveryState("accepted");
+        updateReceipt("accepted", response.message);
         setDeliveryDuplicateRisk(false);
         setStatus("ready");
         setMessage(response.message);
         return true;
       }
       errorRef.current = true;
-      setDeliveryState(response.state === "outcome_unknown" ? "outcome_unknown" : "rejected");
+      const state = response.state === "outcome_unknown" ? "outcome_unknown" : "rejected";
+      setDeliveryState(state);
+      updateReceipt(state, response.message);
       setStatus("error");
       setMessage(response.message);
     } catch (error) {
       errorRef.current = true;
+      const reason = `Could not confirm annotation delivery; the original operation was retained: ${errorMessage(error)}`;
       setDeliveryState("outcome_unknown");
+      updateReceipt("outcome_unknown", reason);
       setStatus("error");
-      setMessage(`Could not confirm annotation delivery; the original operation was retained: ${errorMessage(error)}`);
+      setMessage(reason);
     }
     return false;
   };
-  const finishCaptureDelivery = async (identity: CaptureIdentity | null): Promise<void> => {
-    pendingDeliveryIdsRef.current = null;
-    pendingDeliveryIdentityRef.current = null;
-    pendingDeliveryOperationRef.current = null;
-    setDeliveryState(null);
-    setDeliveryDuplicateRisk(false);
-    if (!identity) {
-      setMessage("Annotations sent; the original draft identity was unavailable, so newer browser work was retained.");
-      return;
+  const finishCaptureDelivery = async (identity: CaptureIdentity | null, ids: string[], operationId: string, captureId: string): Promise<void> => {
+    const owner = identity?.owner ?? associationOwner;
+    if (pendingDeliveryOperationRef.current === operationId) {
+      pendingDeliveryIdsRef.current = null;
+      pendingDeliveryIdentityRef.current = null;
+      pendingDeliveryOperationRef.current = null;
+      setDeliveryState(null);
+      setDeliveryDuplicateRisk(false);
     }
-    const owner = associationOwnerRef.current;
-    const currentDraft = draftRef.current;
+    let acknowledgementFailed = false;
+    try {
+      if (ids.length > 0) await client.acknowledgeBrowserFeedback({ target: owner.target, ids });
+    } catch (error) {
+      acknowledgementFailed = true;
+      setMessage(`Feedback was accepted, but its saved receipt could not be acknowledged: ${errorMessage(error)}`);
+    }
+    if (associationOwnerRef.current !== owner || owner.sealed) return;
+    await openDraft();
+    await refreshSavedFeedback(owner);
+    if (!acknowledgementFailed && identity && (owner.draft?.draft_id !== identity.draftId || owner.draft.revision !== identity.draftRevision)) {
+      setMessage(`Feedback for saved capture ${captureId} was acknowledged; the authoritative browser draft was refreshed.`);
+    }
+  };
+  const rememberSavedDelivery = (captureId: string, ids: string[], operationId: string, identity: CaptureIdentity | null): void => {
+    const item: SavedDelivery = { capture_id: captureId, ids: [...ids], operation_id: operationId, state: "pending", message: "Saved feedback is ready for explicit delivery.", blocked: false, hasReceipt: false };
+    setSavedDeliveries((current) => [...current.filter((delivery) => delivery.capture_id !== captureId), item].sort((left, right) => left.capture_id.localeCompare(right.capture_id)));
+    selectedDeliveryCaptureIdRef.current = captureId;
+    setSelectedDeliveryCaptureId(captureId);
+    pendingDeliveryIdsRef.current = [...ids];
+    pendingDeliveryIdentityRef.current = identity;
+    pendingDeliveryOperationRef.current = operationId;
+    setDeliveryState("pending");
+  };
+  const quarantineConsumedDraft = (identity: CaptureIdentity | null): void => {
+    if (!identity || associationOwnerRef.current !== identity.owner || identity.owner.sealed) return;
+    const current = draftRef.current;
     const editorUnchanged = identity.owner.editorGeneration === identity.editorGeneration
       && identity.owner.noteId === identity.noteId
       && identity.owner.noteText.slice(0, 4000) === identity.noteText
       && identity.owner.notesOpen === identity.notesOpen;
-    const exactCapture = owner === identity.owner && !identity.owner.sealed
-      && currentDraft?.draft_id === identity.draftId
-      && currentDraft.revision === identity.draftRevision
-      && editorUnchanged;
-    if (!exactCapture) {
-      setMessage("Annotations sent; newer browser draft work was retained.");
-      return;
-    }
-    identity.owner.draft = null;
+    if (current?.draft_id !== identity.draftId || current.revision !== identity.draftRevision || !editorUnchanged) return;
     draftRef.current = null;
-    draftRequestRef.current += 1;
+    identity.owner.draft = null;
+    identity.owner.localDraftRevision = null;
+    identity.owner.noteId = null;
+    identity.owner.noteText = "";
+    identity.owner.notesOpen = false;
+    editorDirtyRef.current = false;
+    noteIdRef.current = null;
+    noteValueRef.current = "";
     setDraft(null);
     setSelectedId(null);
     setNoteId(null);
     setNoteValue("");
+  };
+  const retrySavedDelivery = async (captureId: string): Promise<void> => {
+    const saved = savedDeliveries.find((item) => item.capture_id === captureId);
+    if (!saved || saved.blocked) {
+      setMessage("Saved receipt identity cannot be reconciled to pending feedback; no retry was sent.");
+      return;
+    }
+    const owner = associationOwner;
+    let ids = [...saved.ids];
+    let operationId = saved.operation_id;
+    let nextOperation = false;
+    try {
+      const lookup = await client.browserFeedback({ target: owner.target });
+      if (associationOwnerRef.current !== owner || owner.sealed) return;
+      const capture = lookup.feedback.captures.find((item) => item.id === captureId);
+      const receipt = lookup.deliveries.find((item) => item.capture_id === captureId);
+      const pendingIds = new Set(lookup.feedback.captures.flatMap((item) => item.pending_ids));
+      if (receipt) {
+        if (receipt.operation_id !== saved.operation_id || JSON.stringify(receipt.selected_ids) !== JSON.stringify(saved.ids)
+          || receipt.selected_ids.length === 0 || receipt.selected_ids.some((id) => !pendingIds.has(id))) {
+          setMessage("Saved receipt identity changed or its selected IDs are no longer pending; no retry was sent.");
+          await refreshSavedFeedback(owner);
+          return;
+        }
+        ids = [...receipt.selected_ids];
+        if (receipt.state === "outcome_unknown" || receipt.state === "pending") {
+          selectSavedDelivery(captureId);
+          setDeliveryState(receipt.state);
+          setMessage("The saved operation is still unresolved. No paste was replayed; review the receipt or explicitly acknowledge duplicate risk.");
+          await refreshSavedFeedback(owner);
+          return;
+        }
+        if (receipt.state === "accepted") {
+          await client.acknowledgeBrowserFeedback({ target: owner.target, ids });
+          await openDraft();
+          await refreshSavedFeedback(owner);
+          return;
+        }
+        nextOperation = true;
+        operationId = newId("browser-feedback");
+      } else {
+        if (saved.hasReceipt || !capture || saved.ids.length === 0 || saved.ids.some((id) => !pendingIds.has(id))) {
+          setMessage("The saved operation receipt is unavailable or its IDs are no longer pending; no retry was sent.");
+          await refreshSavedFeedback(owner);
+          return;
+        }
+      }
+    } catch (error) {
+      setMessage(`Could not reconcile saved feedback before retry: ${errorMessage(error)}`);
+      return;
+    }
+    selectedDeliveryCaptureIdRef.current = captureId;
+    setSelectedDeliveryCaptureId(captureId);
+    pendingDeliveryIdsRef.current = [...ids];
+    pendingDeliveryIdentityRef.current = null;
+    pendingDeliveryOperationRef.current = operationId;
+    setDeliveryState("pending");
+    if (nextOperation) {
+      setSavedDeliveries((current) => current.map((item) => item.capture_id === captureId
+        ? { ...item, operation_id: operationId, state: "pending", message: "Retrying rejected saved feedback with a new operation.", hasReceipt: false } : item));
+    }
+    if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(null, ids, operationId, captureId);
+  };
+  const selectSavedDelivery = (captureId: string): void => {
+    const saved = savedDeliveries.find((item) => item.capture_id === captureId);
+    if (!saved) return;
+    selectedDeliveryCaptureIdRef.current = captureId;
+    setSelectedDeliveryCaptureId(captureId);
+    pendingDeliveryIdsRef.current = [...saved.ids];
+    pendingDeliveryOperationRef.current = saved.operation_id;
+    pendingDeliveryIdentityRef.current = null;
+    setDeliveryState(saved.state);
+    setDeliveryDuplicateRisk(false);
+  };
+  const resolveDuplicateRisk = async (): Promise<void> => {
+    const captureId = selectedDeliveryCaptureIdRef.current;
+    const saved = savedDeliveries.find((item) => item.capture_id === captureId);
+    if (!saved || saved.state !== "outcome_unknown" || saved.blocked || !deliveryDuplicateRisk) return;
+    const owner = associationOwner;
+    const original = await client.browserFeedback({ target: owner.target });
+    if (associationOwnerRef.current !== owner || owner.sealed) return;
+    const capture = original.feedback.captures.find((item) => item.id === saved.capture_id);
+    const receipt = original.deliveries.find((item) => item.capture_id === saved.capture_id);
+    const pendingIds = new Set(original.feedback.captures.flatMap((item) => item.pending_ids));
+    if (!capture || !receipt || receipt.operation_id !== saved.operation_id || receipt.state !== "outcome_unknown"
+      || JSON.stringify(receipt.selected_ids) !== JSON.stringify(saved.ids)
+      || receipt.selected_ids.length === 0 || receipt.selected_ids.some((id) => !pendingIds.has(id))) {
+      setMessage("Saved receipt identity changed or its selected IDs are no longer pending; no new operation was sent.");
+      await refreshSavedFeedback(owner);
+      return;
+    }
+    const operationId = newId("browser-feedback");
+    setSavedDeliveries((current) => current.map((item) => item.capture_id === saved.capture_id
+      ? { ...item, operation_id: operationId, state: "pending", message: "Retrying after explicit duplicate-risk acknowledgement." } : item));
+    pendingDeliveryIdsRef.current = [...receipt.selected_ids];
+    pendingDeliveryOperationRef.current = operationId;
+    pendingDeliveryIdentityRef.current = null;
+    setDeliveryState("pending");
+    setDeliveryDuplicateRisk(false);
+    if (await deliverAnnotations(receipt.selected_ids, operationId, true)) await finishCaptureDelivery(null, receipt.selected_ids, operationId, saved.capture_id);
+  };
+  const acknowledgeSavedDelivery = async (captureId: string): Promise<void> => {
+    const saved = savedDeliveries.find((item) => item.capture_id === captureId);
+    if (!saved || saved.state !== "accepted" || saved.blocked) return;
+    await client.acknowledgeBrowserFeedback({ target: associationOwner.target, ids: saved.ids });
     await openDraft();
+    await refreshSavedFeedback();
   };
   const recoverPendingCapture = async (action: "retry_pending" | "discard_pending"): Promise<BrowserViewCommandOutcome | null> => {
     try {
@@ -1695,16 +1940,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     pendingDeliveryOperationRef.current = null;
     setDeliveryState(null);
     setDeliveryDuplicateRisk(false);
+    setPendingCaptureState(null);
     await openDraft();
-  };
-  const resolveDuplicateRisk = async (): Promise<void> => {
-    const ids = pendingDeliveryIdsRef.current;
-    if (!ids || !pendingDeliveryOperationRef.current) return;
-    const operationId = newId("browser-feedback");
-    pendingDeliveryOperationRef.current = operationId;
-    setDeliveryDuplicateRisk(false);
-    const identity = pendingDeliveryIdentityRef.current;
-    if (await deliverAnnotations(ids, operationId, true)) await finishCaptureDelivery(identity);
+    await refreshSavedFeedback();
   };
   const captureImpl = async (captureAsShown: boolean): Promise<void> => {
     const captureOwner = associationOwner;
@@ -1720,32 +1958,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     } : null;
     const pending = pendingCaptureRef.current;
     const current = snapshotRef.current;
-    const deliveryIds = pendingDeliveryIdsRef.current;
-    if (deliveryIds) {
-      const deliveryIdentity = pendingDeliveryIdentityRef.current ?? captureIdentity;
-      let operationId = pendingDeliveryOperationRef.current;
-      if (!operationId) {
-        setDeliveryState("outcome_unknown");
-        setStatus("error");
-        setMessage("The retained feedback operation identity is unavailable; resync the saved receipt before retrying.");
-        return;
-      }
-      if (deliveryState === "rejected") {
-        operationId = newId("browser-feedback");
-        pendingDeliveryOperationRef.current = operationId;
-        setDeliveryDuplicateRisk(false);
-      }
-      if (await deliverAnnotations(deliveryIds, operationId, false)) await finishCaptureDelivery(deliveryIdentity);
-      return;
-    }
     if (pending) {
       const retried = await recoverPendingCapture("retry_pending");
       if (retried?.type === "capture" && retried.capture.state === "saved") {
         setPendingCaptureState(null);
         const ids = [...retried.capture.saved.annotation_ids];
-        pendingDeliveryIdsRef.current = ids;
         const operationId = pendingDeliveryOperationRef.current ?? deliveryOperationId(retried.capture.saved.capture_id);
-        pendingDeliveryOperationRef.current = operationId;
         const deliveryIdentity = pendingDeliveryIdentityRef.current ?? {
           owner: captureOwner,
           draftId: pending.draft_id,
@@ -1755,8 +1973,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           noteText: captureOwner.noteText.slice(0, 4000),
           notesOpen: captureOwner.notesOpen,
         };
-        pendingDeliveryIdentityRef.current = deliveryIdentity;
-        if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(deliveryIdentity);
+        rememberSavedDelivery(retried.capture.saved.capture_id, ids, operationId, deliveryIdentity);
+        quarantineConsumedDraft(deliveryIdentity);
+        await openDraft();
+        if (associationOwnerRef.current !== captureOwner || captureOwner.sealed) return;
+        if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(deliveryIdentity, ids, operationId, retried.capture.saved.capture_id);
       }
       if (retried?.type === "capture" && retried.capture.state === "pending") {
         setPendingCaptureState(retried.capture.pending);
@@ -1823,11 +2044,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       });
       if (saved?.type === "capture" && saved.capture.state === "saved") {
         const ids = [...saved.capture.saved.annotation_ids];
-        pendingDeliveryIdsRef.current = ids;
-        pendingDeliveryIdentityRef.current = captureIdentity;
         const operationId = deliveryOperationId(saved.capture.saved.capture_id);
-        pendingDeliveryOperationRef.current = operationId;
-        if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(captureIdentity);
+        rememberSavedDelivery(saved.capture.saved.capture_id, ids, operationId, captureIdentity);
+        quarantineConsumedDraft(captureIdentity);
+        await openDraft();
+        if (associationOwnerRef.current !== captureOwner || captureOwner.sealed) return;
+        if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(captureIdentity, ids, operationId, saved.capture.saved.capture_id);
       }
     } catch (error) {
       setStatus("error"); setMessage(`Could not capture browser image: ${errorMessage(error)}`);
@@ -1873,6 +2095,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   };
   const selectAnnotation = (annotation: BrowserViewDraftAnnotation): void => {
+    if (!draftRef.current?.annotations.some((candidate) => candidate.id === annotation.id)) return;
     const select = () => {
       setSelectedId(annotation.id);
       if (noteId !== annotation.id) {
@@ -1989,10 +2212,19 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       <button type="button" disabled={!draft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => { if (event.ctrlKey) void discardDraft(); else if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
       <button type="button" disabled={!selectedAnnotation} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={() => { if (!selectedAnnotation) return; if (noteId !== selectedAnnotation.id) setNoteValue(selectedAnnotation.comment ?? ""); setNoteId(selectedAnnotation.id); setNoteEditorDismissed(false); markEditorDirty(); }}><AnnotationIcon name="notes" /></button>
       {pendingCapture ? <><span className="browser-capture-pending" role="status">Pending capture · retry sending or discard it</span><button type="button" aria-label="Discard pending capture" title="Discard pending capture" onClick={() => void discardPendingCapture()}><AnnotationIcon name="remove" /></button></> : null}
-      {pendingDeliveryIdsRef.current && deliveryState ? <div className="browser-capture-pending" role="status">
-        <span>{deliveryState === "outcome_unknown" ? "Feedback delivery outcome is unknown; inspect before retrying." : deliveryState === "rejected" ? "Feedback delivery was rejected; retry the same saved capture." : "Feedback delivery is pending."}</span>
-        {deliveryState === "outcome_unknown" ? <label><input type="checkbox" checked={deliveryDuplicateRisk} onChange={(event) => setDeliveryDuplicateRisk(event.target.checked)} /> I checked the destination; retry may duplicate feedback.</label> : null}
-        {deliveryState === "outcome_unknown" ? <button type="button" disabled={!deliveryDuplicateRisk} onClick={() => void resolveDuplicateRisk()}>Resolve and retry</button> : null}
+      {savedDeliveries.length > 0 ? <div className="browser-capture-pending" aria-label="Saved feedback recovery">
+        {savedDeliveries.map((item, index) => {
+          const selected = selectedDeliveryCaptureId === item.capture_id;
+          const stateLabel = item.state === "outcome_unknown" ? "Outcome unknown" : item.state === "rejected" ? "Rejected" : item.state === "accepted" ? "Accepted" : "Pending";
+          return <div key={item.capture_id}>
+            <button type="button" aria-pressed={selected} aria-label={`Select saved capture ${index + 1}`} onClick={() => selectSavedDelivery(item.capture_id)}>Saved capture {index + 1} · {stateLabel}</button>
+            <span role="status">{item.message}</span>
+            {item.state === "outcome_unknown" && selected && !item.blocked ? <label><input type="checkbox" checked={deliveryDuplicateRisk} onChange={(event) => setDeliveryDuplicateRisk(event.target.checked)} /> I checked the destination; a new operation may duplicate feedback.</label> : null}
+            {item.state === "outcome_unknown" && selected && !item.blocked ? <button type="button" disabled={!deliveryDuplicateRisk} onClick={() => void resolveDuplicateRisk()}>Resolve and retry</button> : null}
+            {item.state === "accepted" ? <button type="button" disabled={item.blocked} onClick={() => void acknowledgeSavedDelivery(item.capture_id)}>Acknowledge saved receipt</button> : null}
+            {item.state !== "accepted" && item.state !== "outcome_unknown" ? <button type="button" disabled={item.blocked} aria-label={`Retry saved capture ${index + 1}`} onClick={() => void retrySavedDelivery(item.capture_id)}>Retry saved feedback</button> : null}
+          </div>;
+        })}
       </div> : null}
       {associationOwner.pendingAnnotationMutations.length > 0 ? <><span className="browser-capture-pending" role="status">Retained annotation changes need review; unknown delivery is not replayed automatically.</span><button type="button" aria-label="Retry retained annotation changes" title="Retry retained annotation changes" onClick={() => void retryAnnotationMutations()}>Retry saves</button><button type="button" aria-label="Discard retained annotation changes" title="Discard retained annotation changes" onClick={() => void discardAnnotationMutations()}>Discard retry intent</button></> : null}
       <button type="button" className="browser-send-annotations" disabled={pendingCapture ? false : !draft || !frame || annotations.length === 0} aria-label={pendingCapture ? "Retry pending capture" : "Send annotations"} title={pendingCapture ? "Retry pending capture" : "Send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /></button>

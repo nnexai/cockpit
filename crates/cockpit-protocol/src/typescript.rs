@@ -1,8 +1,8 @@
 use crate::browser::{
     BrowserAction, BrowserAssociation, BrowserConnectionState, BrowserFeedbackAckRequest,
-    BrowserFeedbackImage, BrowserFeedbackImageRequest, BrowserFeedbackLookup,
-    BrowserFeedbackRequest, BrowserFeedbackSendRequest, BrowserFeedbackSendResponse,
-    BrowserRequest, BrowserResponse, BrowserTarget,
+    BrowserFeedbackDeliveryStatus, BrowserFeedbackImage, BrowserFeedbackImageRequest,
+    BrowserFeedbackLookup, BrowserFeedbackRequest, BrowserFeedbackSendRequest,
+    BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse, BrowserTarget,
 };
 use crate::browser_view::{
     BrowserViewBlocker, BrowserViewBlockerKind, BrowserViewCapabilities, BrowserViewCapability,
@@ -121,6 +121,7 @@ pub fn render_v1() -> String {
         BrowserResponse::decl(&config),
         BrowserFeedbackRequest::decl(&config),
         BrowserFeedbackAckRequest::decl(&config),
+        BrowserFeedbackDeliveryStatus::decl(&config),
         BrowserFeedbackLookup::decl(&config),
         BrowserFeedbackImageRequest::decl(&config),
         BrowserFeedbackImage::decl(&config),

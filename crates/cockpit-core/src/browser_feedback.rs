@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -12,6 +12,7 @@ use cockpit_protocol::browser_feedback::{
     BrowserFeedbackAck, BrowserFeedbackCapture, BrowserFeedbackResponse, BrowserPageEvidence,
     BrowserPoint, BrowserRect, BrowserViewport,
 };
+use cockpit_protocol::browser::BrowserFeedbackDeliveryStatus;
 use cockpit_protocol::comment_paste::{CommentPasteState, CommentPasteTarget};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -723,6 +724,128 @@ impl BrowserFeedbackStore {
             .to_string_lossy()
             .into_owned()
     }
+    pub(crate) fn list_delivery_statuses(
+        &self,
+        association_key: &str,
+        captures: &[BrowserFeedbackCapture],
+    ) -> Result<Vec<BrowserFeedbackDeliveryStatus>, InspectionError> {
+        validate_association_key(association_key)?;
+        if captures.len() > MAX_PENDING_CAPTURES {
+            return Err(InspectionError::new(
+                "browser_feedback_bounded",
+                "association exceeded its pending capture limit",
+            ));
+        }
+        if captures
+            .iter()
+            .any(|capture| capture.context.association_key != association_key)
+        {
+            return Err(InspectionError::new(
+                "browser_feedback_corrupt",
+                "pending captures contain a different association",
+            ));
+        }
+
+        let mut capture_by_annotation = HashMap::new();
+        for (index, capture) in captures.iter().enumerate() {
+            for id in &capture.pending_ids {
+                if capture_by_annotation.insert(id.as_str(), index).is_some() {
+                    return Err(InspectionError::new(
+                        "browser_feedback_corrupt",
+                        "pending annotation IDs are not unique within an association",
+                    ));
+                }
+            }
+        }
+        let mut selected: Vec<Option<(u8, u64, String, BrowserFeedbackDeliveryStatus)>> =
+            vec![None; captures.len()];
+
+        let _guard = self.lock_mutation()?;
+        let feedback = self.feedback_dir()?;
+        for (index, entry) in feedback
+            .entries()
+            .map_err(|error| InspectionError::new("browser_feedback_read", error.to_string()))?
+            .enumerate()
+        {
+            if index >= MAX_ENTRIES {
+                return Err(InspectionError::new(
+                    "browser_feedback_bounded",
+                    "feedback directory exceeded its entry limit",
+                ));
+            }
+            let entry = entry.map_err(|error| {
+                InspectionError::new("browser_feedback_read", error.to_string())
+            })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(operation_id) = name
+                .strip_prefix("delivery-")
+                .and_then(|value| value.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            validate_operation_id(operation_id)?;
+            let file_type = entry.file_type().map_err(|error| {
+                InspectionError::new("browser_feedback_read", error.to_string())
+            })?;
+            if file_type.is_symlink() || !file_type.is_file() {
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "delivery receipt is not a regular file",
+                ));
+            }
+            let receipt: BrowserDeliveryReceipt =
+                read_json_bounded(&feedback, name, MAX_DELIVERY_BYTES)?;
+            validate_delivery(&receipt)?;
+            if receipt.operation_id != operation_id {
+                return Err(InspectionError::new(
+                    "browser_feedback_corrupt",
+                    "delivery receipt identity is invalid",
+                ));
+            }
+            if receipt.association_key != association_key {
+                continue;
+            }
+
+            let priority = u8::from(matches!(
+                receipt.state,
+                CommentPasteState::Pending | CommentPasteState::OutcomeUnknown
+            ));
+            for id in &receipt.selected_ids {
+                let Some(&capture_index) = capture_by_annotation.get(id.as_str()) else {
+                    continue;
+                };
+                let current = &selected[capture_index];
+                let is_newer = current.as_ref().map_or(true, |(current_priority, updated_at, op, _)| {
+                    priority > *current_priority
+                        || (priority == *current_priority
+                            && (receipt.updated_at > *updated_at
+                                || (receipt.updated_at == *updated_at
+                                    && receipt.operation_id.as_str() > op.as_str())))
+                });
+                if is_newer {
+                    selected[capture_index] = Some((
+                        priority,
+                        receipt.updated_at,
+                        receipt.operation_id.clone(),
+                        BrowserFeedbackDeliveryStatus {
+                            capture_id: captures[capture_index].id.clone(),
+                            operation_id: receipt.operation_id.clone(),
+                            selected_ids: receipt.selected_ids.clone(),
+                            state: receipt.state,
+                            message: receipt.message.clone(),
+                        },
+                    ));
+                }
+            }
+        }
+        Ok(selected
+            .into_iter()
+            .flatten()
+            .map(|(_, _, _, status)| status)
+            .collect())
+    }
+
     pub(crate) fn has_delivery_overlap(
         &self,
         association_key: &str,
@@ -1294,6 +1417,128 @@ mod tests {
         assert!(validate_display_text("Heading\n\nParagraph\tvalue", "element text", 128).is_ok());
         assert!(validate_display_text("escape\u{1b}[2J", "element text", 128).is_err());
     }
+
+    #[test]
+    fn delivery_status_prefers_unknown_and_stays_association_scoped() {
+        let root =
+            std::env::temp_dir().join(format!("cockpit-feedback-lookup-{}", Uuid::new_v4()));
+        let store =
+            BrowserFeedbackStore::new(root.clone(), BrowserFeedbackOptions::default()).unwrap();
+        let key = "0123456789abcdef01234567";
+        let other_key = "fedcba9876543210fedcba98";
+        let annotation_id = Uuid::new_v4().to_string();
+        let unknown_operation = Uuid::new_v4().to_string();
+        let rejected_operation = Uuid::new_v4().to_string();
+        let foreign_operation = Uuid::new_v4().to_string();
+        let target = CommentPasteTarget {
+            endpoint_identity: "disposable-endpoint".into(),
+            session_id: "disposable-session".into(),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t1".into(),
+            pane_id: "w1:p1".into(),
+            terminal_id: "disposable-terminal".into(),
+            agent_label: "omp".into(),
+            agent_fingerprint: "disposable-agent".into(),
+        };
+        let receipt = |operation_id: String,
+                       association_key: &str,
+                       state: CommentPasteState,
+                       created_at: u64,
+                       target: Option<CommentPasteTarget>| {
+            BrowserDeliveryReceipt {
+                operation_id,
+                association_key: association_key.into(),
+                selected_ids: vec![annotation_id.clone()],
+                state,
+                target,
+                acknowledged_ids: vec![],
+                message: format!("{state:?}"),
+                created_at,
+                updated_at: created_at,
+            }
+        };
+        let feedback = store.feedback_dir().unwrap();
+        for record in [
+            receipt(
+                unknown_operation.clone(),
+                key,
+                CommentPasteState::OutcomeUnknown,
+                10,
+                Some(target.clone()),
+            ),
+            receipt(
+                rejected_operation.clone(),
+                key,
+                CommentPasteState::Rejected,
+                20,
+                None,
+            ),
+            receipt(
+                foreign_operation,
+                other_key,
+                CommentPasteState::OutcomeUnknown,
+                30,
+                Some(target),
+            ),
+        ] {
+            atomic_write_json(
+                &feedback,
+                &delivery_record_name(&record.operation_id),
+                &record,
+            )
+            .unwrap();
+        }
+        let capture = BrowserFeedbackCapture {
+            id: Uuid::new_v4().to_string(),
+            context: BrowserCaptureContext {
+                association_key: key.into(),
+                session_id: "session".into(),
+                space_id: "space".into(),
+                space_label: "Space".into(),
+                playwright_session: "playwright".into(),
+                working_directory: "/workspace".into(),
+                invocation: "test".into(),
+                browser_instance: Uuid::new_v4().to_string(),
+                inline_provenance: None,
+            },
+            page: BrowserPageEvidence {
+                url: "https://example.test".into(),
+                title: "Test".into(),
+                tab_id: None,
+                document_id: "document".into(),
+                captured_at: "now".into(),
+                viewport: BrowserViewport {
+                    width: 1.0,
+                    height: 1.0,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    device_pixel_ratio: 1.0,
+                    visual_scale: 1.0,
+                },
+                image_width: 1,
+                image_height: 1,
+            },
+            annotations: vec![],
+            pending_ids: vec![annotation_id.clone()],
+            image_path: String::new(),
+        };
+
+        let first = store
+            .list_delivery_statuses(key, std::slice::from_ref(&capture))
+            .unwrap();
+        let second = store
+            .list_delivery_statuses(key, std::slice::from_ref(&capture))
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].capture_id, capture.id);
+        assert_eq!(first[0].operation_id, unknown_operation);
+        assert_eq!(first[0].selected_ids, vec![annotation_id]);
+        assert_eq!(first[0].state, CommentPasteState::OutcomeUnknown);
+        assert_eq!(first[0].message, "OutcomeUnknown");
+    }
+
     #[test]
     fn unknown_delivery_survives_acknowledgement_and_retention() {
         let root =

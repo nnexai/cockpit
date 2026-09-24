@@ -79,11 +79,24 @@ pub struct BrowserFeedbackAckRequest {
     pub ids: Vec<String>,
 }
 
+/// Durable delivery outcome for one pending saved capture. Lookup never retries paste.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserFeedbackDeliveryStatus {
+    pub capture_id: String,
+    pub operation_id: String,
+    pub selected_ids: Vec<String>,
+    pub state: crate::comment_paste::CommentPasteState,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserFeedbackLookup {
     pub browser: BrowserResponse,
     pub feedback: crate::browser_feedback::BrowserFeedbackResponse,
+    #[serde(default)]
+    pub deliveries: Vec<BrowserFeedbackDeliveryStatus>,
     #[serde(default)]
     pub drafts: Option<crate::browser_view::BrowserViewDraftInventory>,
 }

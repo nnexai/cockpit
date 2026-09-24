@@ -13,6 +13,7 @@ import type {
   BrowserTarget,
   BrowserFeedbackRequest,
   BrowserFeedbackAckRequest,
+  BrowserFeedbackDeliveryStatus,
   BrowserFeedbackLookup,
   BrowserFeedbackImageRequest,
   BrowserFeedbackImage,
@@ -1373,11 +1374,29 @@ export function parseBrowserFeedbackSendRequest(value: unknown): BrowserFeedback
     || value.operation_id.length === 0 || !isBoolean(value.acknowledge_duplicate_risk)) return malformed("Browser feedback send request is malformed");
   return { target: parseBrowserTarget(value.target), ids: value.ids, operation_id: value.operation_id, acknowledge_duplicate_risk: value.acknowledge_duplicate_risk };
 }
+function parseBrowserFeedbackDeliveryStatus(value: unknown): BrowserFeedbackDeliveryStatus {
+  if (!isRecord(value) || !isString(value.capture_id) || value.capture_id.length === 0
+    || !isString(value.operation_id) || value.operation_id.length === 0
+    || !Array.isArray(value.selected_ids) || value.selected_ids.length > 64
+    || !value.selected_ids.every((id) => isString(id) && id.length > 0)
+    || !isString(value.state) || !(["pending", "accepted", "rejected", "outcome_unknown"] as readonly string[]).includes(value.state)
+    || !isString(value.message) || value.message.length > 4096) return malformed("Browser feedback delivery status is malformed");
+  return {
+    capture_id: value.capture_id,
+    operation_id: value.operation_id,
+    selected_ids: value.selected_ids,
+    state: value.state as BrowserFeedbackDeliveryStatus["state"],
+    message: value.message,
+  };
+}
 export function parseBrowserFeedbackLookup(value: unknown): BrowserFeedbackLookup {
   if (!isRecord(value)) return malformed("Browser feedback lookup is malformed");
+  const deliveries = value.deliveries === undefined ? [] : value.deliveries;
+  if (!Array.isArray(deliveries) || deliveries.length > 64) return malformed("Browser feedback deliveries are malformed");
   return {
     browser: parseBrowserResponse(value.browser),
     feedback: parseBrowserFeedbackResponse(value.feedback),
+    deliveries: deliveries.map(parseBrowserFeedbackDeliveryStatus),
     drafts: value.drafts === null || value.drafts === undefined ? null : parseBrowserViewDraftInventory(value.drafts),
   };
 }
