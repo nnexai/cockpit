@@ -1,0 +1,1208 @@
+{
+  "session": "native-1f9f400dc7aa",
+  "space": "Native browser df367e8a",
+  "fixture_url": "http://127.0.0.1:36503/",
+  "root": "/tmp/cnative-wbafz0q6",
+  "failure": "RuntimeError: OBS-041 safely stopped after return: BrowserPane absent, Show browser view unavailable, only Close browser and Retry/Discard recovery controls; no risky action invoked",
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Live browser view",
+      "alerts": [],
+      "body": "                                               \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nLive browser view\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                              ",
+      "painted": true,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 188.46875,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      },
+      "surfaceCss": {
+        "height": 188.46875,
+        "width": 674
+      }
+    },
+    "native_only_surface": {
+      "pane": {
+        "css": {
+          "height": "331.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 331.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 331,
+          "width": 674
+        }
+      },
+      "canvas": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      },
+      "surface": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "hidden"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      }
+    },
+    "first_canvas_viewport": {
+      "dpr": 2,
+      "height": 835,
+      "width": 676
+    },
+    "native_canvas": {
+      "width": 1348,
+      "left": 1,
+      "heightCss": 188.46875,
+      "widthCss": 674,
+      "top": 645.53125,
+      "height": 376
+    },
+    "fixture_first_paint": {
+      "innerWidth": 674,
+      "innerHeight": 188,
+      "dpr": 2,
+      "scrollY": 0,
+      "nestedScrollTop": 0,
+      "nestedWheelY": null,
+      "ready": "complete",
+      "heading": "Native browser acceptance",
+      "headingWidth": 650,
+      "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+      "status": "waiting for routed native pointer",
+      "started": false,
+      "scrollStart": null,
+      "scrollFinish": null,
+      "received_at": 156221.130099352
+    },
+    "bitmap_density": {
+      "bitmap_width_per_css": 2.0,
+      "bitmap_height_per_css": 1.995025700547173
+    },
+    "splitter_moved": false
+  },
+  "paints": {},
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 2519699,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 2519663,
+      "returncode": 0
+    },
+    {
+      "name": "gateway",
+      "pid": 2519637,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 2519595,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "socketWrapped": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:36503/"
+  },
+  "screenshots": {
+    "first_paint_before_gesture": "/tmp/cnative-wbafz0q6/native-first.png",
+    "annotation_acknowledged": "/tmp/cnative-wbafz0q6/native-annotation.png",
+    "note_acknowledged": "/tmp/cnative-wbafz0q6/native-annotation-note.png"
+  },
+  "annotation": {
+    "gesture": {
+      "x": 101,
+      "y": 680.53125,
+      "transient_region_visible": 1
+    },
+    "ui": {
+      "marks": 1,
+      "status": "Live browser view",
+      "retained": false,
+      "notes": null
+    },
+    "inventory": [
+      {
+        "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+        "revision": 2,
+        "annotations": [
+          {
+            "id": "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a",
+            "kind": "region",
+            "bounds": {
+              "x": 100.0,
+              "y": 34.912949759575525,
+              "width": 120.0,
+              "height": 54.86320676504725
+            }
+          }
+        ]
+      }
+    ],
+    "saved_note": {
+      "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+      "revision": 3,
+      "annotation_id": "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a",
+      "comment": "Native note native-1f9f400dc7aa"
+    }
+  },
+  "obs041_original_draft": {
+    "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+    "revision": 3,
+    "annotation_id": "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a",
+    "comment": "Native note native-1f9f400dc7aa"
+  },
+  "obs041_feedback_before_edit": {
+    "feedback": {
+      "captures": [
+        {
+          "page": {
+            "title": "Native scroll fixture",
+            "captured_at": "2026-09-24T02:07:57.013Z",
+            "url": "http://127.0.0.1:36503/",
+            "viewport": {
+              "visual_scale": 1,
+              "width": 674,
+              "scroll_x": 0,
+              "scroll_y": 0,
+              "height": 188,
+              "device_pixel_ratio": 2
+            },
+            "image_height": 188,
+            "document_id": "484C394A88EEC0B70085277A7E64A80C",
+            "image_width": 674
+          },
+          "image_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/artifacts/capture-47464af2-9f6a-4073-839f-64b1a99f51fb.png",
+          "context": {
+            "browser_instance": "pid=2520230:start=32361431:receipt=ad909cd5f4072f1fa300845b72a16eadaeea0899bb1d4bff83267049c7157a49",
+            "session_id": "native-1f9f400dc7aa",
+            "space_id": "w1",
+            "invocation": "cd -- '/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68' && 'playwright-cli' -s='cockpit-ae3a2ffd3e3e73fececdec68' <command>",
+            "association_key": "ae3a2ffd3e3e73fececdec68",
+            "space_label": "Native browser df367e8a",
+            "playwright_session": "cockpit-ae3a2ffd3e3e73fececdec68",
+            "working_directory": "/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68",
+            "inline_provenance": {
+              "target_id": "484C394A88EEC0B70085277A7E64A80C",
+              "frame_id": "484C394A88EEC0B70085277A7E64A80C",
+              "stream_epoch": 1,
+              "pixel_captured_at_micros": 1790215676127352,
+              "document_generation": 1790215675493,
+              "capture_as_shown": false,
+              "frame_sequence": 12,
+              "frame_generation": 1790215675493,
+              "viewport_revision": 1
+            }
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "kind": "region",
+              "element": null,
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a",
+              "comment": "Native note native-1f9f400dc7aa"
+            }
+          ],
+          "id": "47464af2-9f6a-4073-839f-64b1a99f51fb",
+          "pending_ids": [
+            "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a"
+          ]
+        }
+      ],
+      "pending_count": 1,
+      "retention_seconds": 3600
+    },
+    "browser": {
+      "association": {
+        "opened_tab": null,
+        "invocation": "cd -- '/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68' && 'playwright-cli' -s='cockpit-ae3a2ffd3e3e73fececdec68' <command>",
+        "association_key": "ae3a2ffd3e3e73fececdec68",
+        "space_label": "Native browser df367e8a",
+        "profile_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/profiles/ae3a2ffd3e3e73fececdec68",
+        "incarnation": "pid=2520230:start=32361431:receipt=ad909cd5f4072f1fa300845b72a16eadaeea0899bb1d4bff83267049c7157a49",
+        "session_id": "native-1f9f400dc7aa",
+        "space_id": "w1",
+        "owner_id": "b0bf3a80-9895-43f7-add2-d7093146445f",
+        "connection": "open",
+        "playwright_session": "cockpit-ae3a2ffd3e3e73fececdec68",
+        "working_directory": "/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68"
+      },
+      "connection": "open",
+      "message": "browser is open"
+    },
+    "drafts": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "revision": 5,
+          "freshness": "fresh",
+          "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+          "document_generation": 1790215675493,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_capture_initial": {
+    "capture_id": "47464af2-9f6a-4073-839f-64b1a99f51fb",
+    "pending_ids": [
+      "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a"
+    ],
+    "comment": "Native note native-1f9f400dc7aa",
+    "image_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/artifacts/capture-47464af2-9f6a-4073-839f-64b1a99f51fb.png",
+    "image_sha256": "40caab3626db80c03f5298d2167f2958682f39ffc9dcebac0f414e611aad8cf0",
+    "image_bytes": 52192,
+    "page": {
+      "title": "Native scroll fixture",
+      "captured_at": "2026-09-24T02:07:57.013Z",
+      "url": "http://127.0.0.1:36503/",
+      "viewport": {
+        "visual_scale": 1,
+        "width": 674,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "height": 188,
+        "device_pixel_ratio": 2
+      },
+      "image_height": 188,
+      "document_id": "484C394A88EEC0B70085277A7E64A80C",
+      "image_width": 674
+    },
+    "provenance": {
+      "target_id": "484C394A88EEC0B70085277A7E64A80C",
+      "frame_id": "484C394A88EEC0B70085277A7E64A80C",
+      "stream_epoch": 1,
+      "pixel_captured_at_micros": 1790215676127352,
+      "document_generation": 1790215675493,
+      "capture_as_shown": false,
+      "frame_sequence": 12,
+      "frame_generation": 1790215675493,
+      "viewport_revision": 1
+    }
+  },
+  "obs041_inventory_before_edit": {
+    "type": "draft_inventory",
+    "inventory": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "revision": 5,
+          "freshness": "fresh",
+          "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+          "document_generation": 1790215675493,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_old_mark_select": {
+    "mark": {
+      "x": 161,
+      "height": 45.66156005859375,
+      "width": 120,
+      "y": 729.4194030761719
+    },
+    "surface": true
+  },
+  "obs041_edit_button_before": {
+    "disabled": false,
+    "selected": 1,
+    "exists": true
+  },
+  "obs041_edit_attempt": {
+    "attempted": true,
+    "before": "Native note native-1f9f400dc7aa",
+    "entered": "Native note native-1f9f400dc7aa revised",
+    "ui_after_save": {
+      "status": "Live browser view",
+      "pending": "Feedback delivery was rejected; retry the same saved capture.\n",
+      "editor": true
+    }
+  },
+  "obs041_inventory_after_edit": {
+    "type": "draft_inventory",
+    "inventory": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "revision": 5,
+          "freshness": "fresh",
+          "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+          "document_generation": 1790215675493,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_feedback_after_edit": {
+    "feedback": {
+      "captures": [
+        {
+          "page": {
+            "title": "Native scroll fixture",
+            "captured_at": "2026-09-24T02:07:57.013Z",
+            "url": "http://127.0.0.1:36503/",
+            "viewport": {
+              "visual_scale": 1,
+              "width": 674,
+              "scroll_x": 0,
+              "scroll_y": 0,
+              "height": 188,
+              "device_pixel_ratio": 2
+            },
+            "image_height": 188,
+            "document_id": "484C394A88EEC0B70085277A7E64A80C",
+            "image_width": 674
+          },
+          "image_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/artifacts/capture-47464af2-9f6a-4073-839f-64b1a99f51fb.png",
+          "context": {
+            "browser_instance": "pid=2520230:start=32361431:receipt=ad909cd5f4072f1fa300845b72a16eadaeea0899bb1d4bff83267049c7157a49",
+            "session_id": "native-1f9f400dc7aa",
+            "space_id": "w1",
+            "invocation": "cd -- '/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68' && 'playwright-cli' -s='cockpit-ae3a2ffd3e3e73fececdec68' <command>",
+            "association_key": "ae3a2ffd3e3e73fececdec68",
+            "space_label": "Native browser df367e8a",
+            "playwright_session": "cockpit-ae3a2ffd3e3e73fececdec68",
+            "working_directory": "/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68",
+            "inline_provenance": {
+              "target_id": "484C394A88EEC0B70085277A7E64A80C",
+              "frame_id": "484C394A88EEC0B70085277A7E64A80C",
+              "stream_epoch": 1,
+              "pixel_captured_at_micros": 1790215676127352,
+              "document_generation": 1790215675493,
+              "capture_as_shown": false,
+              "frame_sequence": 12,
+              "frame_generation": 1790215675493,
+              "viewport_revision": 1
+            }
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "kind": "region",
+              "element": null,
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a",
+              "comment": "Native note native-1f9f400dc7aa"
+            }
+          ],
+          "id": "47464af2-9f6a-4073-839f-64b1a99f51fb",
+          "pending_ids": [
+            "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a"
+          ]
+        }
+      ],
+      "pending_count": 1,
+      "retention_seconds": 3600
+    },
+    "browser": {
+      "association": {
+        "opened_tab": null,
+        "invocation": "cd -- '/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68' && 'playwright-cli' -s='cockpit-ae3a2ffd3e3e73fececdec68' <command>",
+        "association_key": "ae3a2ffd3e3e73fececdec68",
+        "space_label": "Native browser df367e8a",
+        "profile_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/profiles/ae3a2ffd3e3e73fececdec68",
+        "incarnation": "pid=2520230:start=32361431:receipt=ad909cd5f4072f1fa300845b72a16eadaeea0899bb1d4bff83267049c7157a49",
+        "session_id": "native-1f9f400dc7aa",
+        "space_id": "w1",
+        "owner_id": "b0bf3a80-9895-43f7-add2-d7093146445f",
+        "connection": "open",
+        "playwright_session": "cockpit-ae3a2ffd3e3e73fececdec68",
+        "working_directory": "/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68"
+      },
+      "connection": "open",
+      "message": "browser is open"
+    },
+    "drafts": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "revision": 5,
+          "freshness": "fresh",
+          "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+          "document_generation": 1790215675493,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_image_after_edit_sha256": "40caab3626db80c03f5298d2167f2958682f39ffc9dcebac0f414e611aad8cf0",
+  "obs041_image_unchanged_after_edit": true,
+  "obs041_second_space": {
+    "label": "OBS041 remount 37b20a4c",
+    "space_id": "w2",
+    "cwd": "/tmp/cnative-wbafz0q6/second-space",
+    "creation": "private Herdr workspace in owned session; selected via Cockpit UI"
+  },
+  "obs041_browser_before_show": {
+    "browserToggle": [
+      {
+        "title": "Native browser df367e8a",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "title": "Close browser",
+        "label": "Close browser",
+        "disabled": false
+      }
+    ],
+    "nav": false,
+    "recovery": "                   \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nReview retained browser work\nRetry retained work\nDiscard retry intent"
+  },
+  "obs041_show_command_error": "Timed out waiting for enabled native Commands row Show browser view",
+  "obs041_closed_non_destructive_command_palette": true,
+  "obs041_recovery_guard": {
+    "browserToggle": [
+      {
+        "title": "Native browser df367e8a",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "title": "Close browser",
+        "label": "Close browser",
+        "disabled": false
+      }
+    ],
+    "recoveryButtons": [
+      {
+        "label": "Close browser",
+        "disabled": false,
+        "text": ""
+      },
+      {
+        "label": null,
+        "disabled": false,
+        "text": "Retry retained work"
+      },
+      {
+        "label": null,
+        "disabled": false,
+        "text": "Discard retry intent"
+      }
+    ],
+    "text": "                   \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nReview retained browser work\nRetry retained work\nDiscard retry intent"
+  },
+  "obs041_remount_guard_screen": "WEB-05-OBS041-native-remount-guard.png",
+  "obs041_feedback_after_return": {
+    "feedback": {
+      "captures": [
+        {
+          "page": {
+            "title": "Native scroll fixture",
+            "captured_at": "2026-09-24T02:07:57.013Z",
+            "url": "http://127.0.0.1:36503/",
+            "viewport": {
+              "visual_scale": 1,
+              "width": 674,
+              "scroll_x": 0,
+              "scroll_y": 0,
+              "height": 188,
+              "device_pixel_ratio": 2
+            },
+            "image_height": 188,
+            "document_id": "484C394A88EEC0B70085277A7E64A80C",
+            "image_width": 674
+          },
+          "image_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/artifacts/capture-47464af2-9f6a-4073-839f-64b1a99f51fb.png",
+          "context": {
+            "browser_instance": "pid=2520230:start=32361431:receipt=ad909cd5f4072f1fa300845b72a16eadaeea0899bb1d4bff83267049c7157a49",
+            "session_id": "native-1f9f400dc7aa",
+            "space_id": "w1",
+            "invocation": "cd -- '/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68' && 'playwright-cli' -s='cockpit-ae3a2ffd3e3e73fececdec68' <command>",
+            "association_key": "ae3a2ffd3e3e73fececdec68",
+            "space_label": "Native browser df367e8a",
+            "playwright_session": "cockpit-ae3a2ffd3e3e73fececdec68",
+            "working_directory": "/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68",
+            "inline_provenance": {
+              "target_id": "484C394A88EEC0B70085277A7E64A80C",
+              "frame_id": "484C394A88EEC0B70085277A7E64A80C",
+              "stream_epoch": 1,
+              "pixel_captured_at_micros": 1790215676127352,
+              "document_generation": 1790215675493,
+              "capture_as_shown": false,
+              "frame_sequence": 12,
+              "frame_generation": 1790215675493,
+              "viewport_revision": 1
+            }
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "kind": "region",
+              "element": null,
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a",
+              "comment": "Native note native-1f9f400dc7aa"
+            }
+          ],
+          "id": "47464af2-9f6a-4073-839f-64b1a99f51fb",
+          "pending_ids": [
+            "a887f2c7-a4d3-4b68-91da-3ea2bc360a9a"
+          ]
+        }
+      ],
+      "pending_count": 1,
+      "retention_seconds": 3600
+    },
+    "browser": {
+      "association": {
+        "opened_tab": null,
+        "invocation": "cd -- '/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68' && 'playwright-cli' -s='cockpit-ae3a2ffd3e3e73fececdec68' <command>",
+        "association_key": "ae3a2ffd3e3e73fececdec68",
+        "space_label": "Native browser df367e8a",
+        "profile_path": "/tmp/cnative-wbafz0q6/cockpit-state/browser/profiles/ae3a2ffd3e3e73fececdec68",
+        "incarnation": "pid=2520230:start=32361431:receipt=ad909cd5f4072f1fa300845b72a16eadaeea0899bb1d4bff83267049c7157a49",
+        "session_id": "native-1f9f400dc7aa",
+        "space_id": "w1",
+        "owner_id": "b0bf3a80-9895-43f7-add2-d7093146445f",
+        "connection": "open",
+        "playwright_session": "cockpit-ae3a2ffd3e3e73fececdec68",
+        "working_directory": "/tmp/cnative-wbafz0q6/cockpit-state/browser/workspaces/ae3a2ffd3e3e73fececdec68"
+      },
+      "connection": "open",
+      "message": "browser is open"
+    },
+    "drafts": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "revision": 5,
+          "freshness": "fresh",
+          "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+          "document_generation": 1790215675493,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_image_after_return_sha256": "40caab3626db80c03f5298d2167f2958682f39ffc9dcebac0f414e611aad8cf0",
+  "obs041_image_unchanged_after_return": true,
+  "obs041_recovery_after_return": {
+    "type": "draft_inventory",
+    "inventory": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "revision": 5,
+          "freshness": "fresh",
+          "draft_id": "8f3fc11c-9b93-4456-8740-8d8801f58528",
+          "document_generation": 1790215675493,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_no_auto_retry_after_return": {
+    "pending_count": 1,
+    "capture_ids": [
+      "47464af2-9f6a-4073-839f-64b1a99f51fb"
+    ],
+    "same_capture": true
+  },
+  "ok": false,
+  "failure_screenshot": "/tmp/cnative-wbafz0q6/native-failure.png",
+  "navigation_diagnostics": {
+    "status": null,
+    "alerts": [],
+    "field": null,
+    "javascriptErrors": [],
+    "tabs": [],
+    "submits": [
+      {
+        "value": "http://127.0.0.1:36503/",
+        "defaultPrevented": true
+      }
+    ],
+    "fixture_report_count": 4,
+    "browser_trace": {
+      "frames": [
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3365,
+          "image_width": 674,
+          "frame_sequence": 1,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3530.0000000000005,
+          "image_width": 1348,
+          "frame_sequence": 2,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3544,
+          "image_width": 674,
+          "frame_sequence": 3,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3714,
+          "image_width": 1348,
+          "frame_sequence": 4,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3730,
+          "image_width": 1348,
+          "frame_sequence": 5,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3748,
+          "image_width": 674,
+          "frame_sequence": 6,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3763,
+          "image_width": 674,
+          "frame_sequence": 7,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3908,
+          "image_width": 1348,
+          "frame_sequence": 8,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3944,
+          "image_width": 674,
+          "frame_sequence": 9,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 4091,
+          "image_width": 674,
+          "frame_sequence": 10,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 4097,
+          "image_width": 674,
+          "frame_sequence": 11,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 4295,
+          "image_width": 674,
+          "frame_sequence": 12,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6110,
+          "image_width": 674,
+          "frame_sequence": 13,
+          "viewport_revision": 2
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6250,
+          "image_width": 674,
+          "frame_sequence": 14,
+          "viewport_revision": 2
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 118,
+          "image_height": 118,
+          "time": 6278.000000000001,
+          "image_width": 674,
+          "frame_sequence": 15,
+          "viewport_revision": 3
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 118,
+          "image_height": 118,
+          "time": 6416,
+          "image_width": 674,
+          "frame_sequence": 16,
+          "viewport_revision": 3
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 118,
+          "image_height": 118,
+          "time": 6428,
+          "image_width": 674,
+          "frame_sequence": 17,
+          "viewport_revision": 3
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 118,
+          "image_height": 118,
+          "time": 6568.000000000001,
+          "image_width": 674,
+          "frame_sequence": 18,
+          "viewport_revision": 3
+        },
+        {
+          "target_id": "484C394A88EEC0B70085277A7E64A80C",
+          "viewport_css_width": 674,
+          "viewport_css_height": 118,
+          "image_height": 118,
+          "time": 6578,
+          "image_width": 674,
+          "frame_sequence": 19,
+          "viewport_revision": 3
+        }
+      ],
+      "started": 453,
+      "sockets": 1,
+      "events": [
+        {
+          "type": "attached",
+          "time": 3363,
+          "viewport": {
+            "viewport_revision": 1,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 188,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "document_changed",
+          "time": 3674,
+          "viewport": null
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6082,
+          "viewport": {
+            "viewport_revision": 2,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6257.000000000001,
+          "viewport": {
+            "viewport_revision": 3,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 118,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        }
+      ]
+    }
+  },
+  "owner_processes": {
+    "gateway": [
+      {
+        "pid": 2519637,
+        "comm": "cockpit",
+        "start_ticks": 32361218
+      }
+    ],
+    "webdriver": [
+      {
+        "pid": 2519699,
+        "comm": "WebKitWebDriver",
+        "start_ticks": 32361248
+      },
+      {
+        "pid": 2519704,
+        "comm": "cockpit-tauri",
+        "start_ticks": 32361259
+      },
+      {
+        "pid": 2519772,
+        "comm": "WebKitWebProces",
+        "start_ticks": 32361273
+      },
+      {
+        "pid": 2519744,
+        "comm": "WebKitNetworkPr",
+        "start_ticks": 32361268
+      }
+    ]
+  },
+  "fixture_reports": {
+    "count": 4,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 156221.130099352
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 156,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 156223.555841619
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 118,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 156223.736128264
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 118,
+        "dpr": 1,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 156225.11845313
+      }
+    ]
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 145
+  },
+  "evidence_files": [
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-failure.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-remount-guard.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-second-space.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-after-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-feedback-after-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-before-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-feedback-before-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-annotation-note.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-annotation.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-first.png"
+  ],
+  "obs041_screen_before_edit_path": "screenshots saved under WEB-05-OBS041-native-*",
+  "obs041_screen_after_edit_path": "screenshots saved under WEB-05-OBS041-native-*",
+  "obs041_second_space_screen_path": "screenshots saved under WEB-05-OBS041-native-*",
+  "private_root_removed_after_evidence": true,
+  "harness_root": "/tmp/cnative-wbafz0q6",
+  "exploratory_run_disposition": {
+    "attempt1": {
+      "diagnosis": "Harness-only KeyError annotation_id after note Save; no product failure",
+      "raw_evidence": "removed as redundant harness failure"
+    },
+    "attempt2": {
+      "diagnosis": "Transient region appeared during pointer gesture, but after pointerup UI had 0 marks and authoritative inventory stayed revision 1 with no annotations",
+      "raw_evidence": "retained because it records a distinct native annotation-loss failure"
+    },
+    "attempt4": {
+      "diagnosis": "First-paint canvas bitmap density was 1.0 per CSS pixel while DPR was 2 (width ratio 1.0; height ratio 0.9975)",
+      "raw_evidence": "retained as distinct renderer/DPR failure"
+    },
+    "attempt5": {
+      "diagnosis": "Capture persisted, but editing the old painted annotation failed with \u201cDraft changed; recover the latest revision before editing\u201d; no save/close succeeded",
+      "raw_evidence": "retained as distinct native edit/save failure"
+    },
+    "attempt7": {
+      "diagnosis": "Capture preparation/send did not persist; UI reported \u201cDraft changed before capture\u201d and no pending capture was observed",
+      "raw_evidence": "retained as distinct capture rejection"
+    },
+    "attempt3": {
+      "diagnosis": "Positive same-annotation-ID edit persisted from draft revision 4 to 6 while frozen capture remained unchanged",
+      "retained_files": [
+        "WEB-05-OBS041-native-attempt3-result.json",
+        "WEB-05-OBS041-native-attempt3-before-edit.png",
+        "WEB-05-OBS041-native-attempt3-after-edit.png",
+        "WEB-05-OBS041-native-attempt3-feedback-before-edit.png",
+        "WEB-05-OBS041-native-attempt3-feedback-after-edit.png"
+      ]
+    }
+  },
+  "retained_distinct_failure_files": [
+    "WEB-05-OBS041-native-attempt2-result.json and attempt2 first/failure screenshots",
+    "WEB-05-OBS041-native-attempt4-result.json and attempt4 first/failure screenshots",
+    "WEB-05-OBS041-native-attempt5-result.json and capture/edit/switch screenshots",
+    "WEB-05-OBS041-native-attempt7-result.json and capture/annotation/failure screenshots"
+  ],
+  "attempt1_and_redundant_attempt3_images_removed": true
+}

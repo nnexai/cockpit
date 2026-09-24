@@ -1,0 +1,253 @@
+{
+  "result": "OBS-041 browser diagnosis: frozen saved capture is intact, but post-capture note editing does not become a durable editable draft; UI retains a local retry intent and Space switch/remount does not restore BrowserPane/mark/editor.",
+  "baseline": "083fc7da5b9acd2e02b393838aed6758b8754cdb",
+  "surface": "Fresh private Cockpit gateway in managed Chromium",
+  "resources": {
+    "session": "polish-_t0imugi",
+    "space_initial": "Polish sample (w1)",
+    "space_created": "sample (private second Space)",
+    "gateway": "http://127.0.0.1:39589",
+    "fixture": "http://127.0.0.1:36021/",
+    "home": "/tmp/web05-obs041-browser-home-20260924",
+    "root": "/tmp/cpol-_t0imugi",
+    "xdg_cache": "/tmp/web05-obs041-browser-home-20260924/cache",
+    "xdg_data": "/tmp/web05-obs041-browser-home-20260924/data",
+    "xdg_runtime": "/tmp/web05-obs041-browser-home-20260924/runtime"
+  },
+  "target": {
+    "session_id": "polish-_t0imugi",
+    "space_id": "w1",
+    "pane_id": null,
+    "endpoint_path": null
+  },
+  "capture": {
+    "id": "cde8806a-e1b6-4346-b5fb-5e63d28c0699",
+    "annotation_id": "80cd3d04-a237-420a-b9da-fdcf8d26202c",
+    "pending_ids": [
+      "80cd3d04-a237-420a-b9da-fdcf8d26202c"
+    ],
+    "pending_count": 1,
+    "original_comment": "OBS041 frozen note before edit: GOLD target.",
+    "page": {
+      "url": "http://127.0.0.1:36021/",
+      "title": "OBS041 Browser Fixture",
+      "target_id": "A7DDAC36BB9D1A59B8C8BA767EDB9BF6",
+      "document_generation": 1790214602306,
+      "frame_id": "A7DDAC36BB9D1A59B8C8BA767EDB9BF6",
+      "stream_epoch": 1,
+      "frame_sequence": 17,
+      "viewport_revision": 1,
+      "viewport": {
+        "width": 408,
+        "height": 682,
+        "dpr": 1.25
+      }
+    },
+    "png": {
+      "artifact": "WEB-05-OBS041-browser-initial-capture.png",
+      "bytes": 103852,
+      "sha256": "7c1bfecc237db140f77fca34ae0d4aca3f75f63eda6e9a5e3f8383f6311722c6",
+      "width": 408,
+      "height": 682,
+      "image_endpoint_status": 200
+    }
+  },
+  "before_send": {
+    "draft_id": "5a599bfc-5634-460b-ac14-af6d2568035d",
+    "revision": 4,
+    "annotations": 1
+  },
+  "no_recipient": {
+    "visible_status": "no eligible agent target is available in this Space",
+    "delivery_rejection_visible": true,
+    "inbox_empty": true,
+    "feedback_lookup_status": 200,
+    "image_status": 200,
+    "acknowledged": false
+  },
+  "selected_mark_edit_attempt": {
+    "action": "Selected the painted SVG Region mark using Cockpit Select tool and clicked the actual mark; note editor opened with original note text.",
+    "pre_action_capture_id": "cde8806a-e1b6-4346-b5fb-5e63d28c0699",
+    "pre_action_sha256": "7c1bfecc237db140f77fca34ae0d4aca3f75f63eda6e9a5e3f8383f6311722c6",
+    "editor_initial_text": "OBS041 frozen note before edit: GOLD target.",
+    "edit_text": "OBS041 edited after capture: durable draft check.",
+    "save_button_clicked": true,
+    "post_save_ui": {
+      "toolbar_status": "Live browser view",
+      "message": "Retained annotation changes need review; unknown delivery is not replayed automatically.",
+      "editor_still_open_with_text": "OBS041 edited after capture: durable draft check.",
+      "rendered_comment_still_original": "OBS041 frozen note before edit: GOLD target."
+    },
+    "authoritative_after_save": {
+      "lookup_http": 200,
+      "image_http": 200,
+      "capture_id": "cde8806a-e1b6-4346-b5fb-5e63d28c0699",
+      "pending_count": 1,
+      "pending_ids": [
+        "80cd3d04-a237-420a-b9da-fdcf8d26202c"
+      ],
+      "frozen_note": "OBS041 frozen note before edit: GOLD target.",
+      "sha256": "7c1bfecc237db140f77fca34ae0d4aca3f75f63eda6e9a5e3f8383f6311722c6",
+      "draft_id": "5a599bfc-5634-460b-ac14-af6d2568035d",
+      "revision": 5,
+      "annotation_count": 0
+    },
+    "interpretation": "No success was shown and no edited annotation appeared in authoritative recovery; original note remains only in frozen capture. No retry or discard of retained mutation was clicked."
+  },
+  "space_switch": {
+    "method": "Actual Cockpit Commands → New Space, then actual Space selector back to Polish sample.",
+    "second_space_selected": true,
+    "second_space_visible_recovery": "Review retained browser work; buttons Retry retained work and Discard retry intent.",
+    "return_space_selected": true,
+    "after_return": {
+      "browser_pane_count": 0,
+      "browser_status": null,
+      "page_address": null,
+      "painted_mark": null,
+      "editor": null,
+      "send_affordance": [],
+      "recovery_banner": "                         \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \n                                                      \nReview retained browser work\nRetry retained work\nDiscard retry intent",
+      "available_retry_control": "Retry retained work",
+      "destructive_control": "Discard retry intent"
+    },
+    "open_browser_command_attempted": true,
+    "after_open_attempt": {
+      "browser_pane_count": 0,
+      "browser_status": null,
+      "page_address": null,
+      "mark": null,
+      "editor": null,
+      "send": []
+    },
+    "safe_stop": "BrowserPane remained absent after returning and attempting Open browser for Space; Show browser view was disabled. Did not click Retry, Discard, Retry retained work, Close browser, acknowledge, or send again."
+  },
+  "post_space_capture_integrity": {
+    "lookup_statuses": [
+      200,
+      200,
+      200
+    ],
+    "image_statuses": [
+      200,
+      200,
+      200
+    ],
+    "same_capture_id": true,
+    "pending_count": 1,
+    "pending_ids": [
+      "80cd3d04-a237-420a-b9da-fdcf8d26202c"
+    ],
+    "comment": "OBS041 frozen note before edit: GOLD target.",
+    "sha256s": [
+      "7c1bfecc237db140f77fca34ae0d4aca3f75f63eda6e9a5e3f8383f6311722c6",
+      "7c1bfecc237db140f77fca34ae0d4aca3f75f63eda6e9a5e3f8383f6311722c6",
+      "7c1bfecc237db140f77fca34ae0d4aca3f75f63eda6e9a5e3f8383f6311722c6"
+    ],
+    "unchanged": true,
+    "editable_draft_after_return": {
+      "revision": 5,
+      "annotations": 0
+    },
+    "no_ack_or_send": true
+  },
+  "gateway_requests": [
+    {
+      "seq": 191,
+      "method": "POST",
+      "path": "/api/v1/browser/view/command",
+      "status": 200,
+      "failure": null,
+      "requestBytes": 715,
+      "responseBytes": 257
+    },
+    {
+      "seq": 192,
+      "method": "POST",
+      "path": "/api/v1/browser/drafts/recovery",
+      "status": 400,
+      "failure": null,
+      "requestBytes": 531,
+      "responseBytes": 103
+    },
+    {
+      "seq": 193,
+      "method": "POST",
+      "path": "/api/v1/browser/drafts/recovery",
+      "status": 400,
+      "failure": null,
+      "requestBytes": 416,
+      "responseBytes": 103
+    },
+    {
+      "seq": 194,
+      "method": "POST",
+      "path": "/api/v1/browser/view/command",
+      "status": 200,
+      "failure": null,
+      "requestBytes": 351,
+      "responseBytes": 181
+    },
+    {
+      "seq": 232,
+      "method": "POST",
+      "path": "/api/v1/browser/view/command",
+      "status": 200,
+      "failure": null,
+      "requestBytes": 345,
+      "responseBytes": 563
+    },
+    {
+      "seq": 233,
+      "method": "POST",
+      "path": "/api/v1/browser/view/command",
+      "status": null,
+      "failure": "net::ERR_ABORTED",
+      "requestBytes": 429,
+      "responseBytes": null
+    },
+    {
+      "seq": 235,
+      "method": "POST",
+      "path": "/api/v1/browser/view/command",
+      "status": 200,
+      "failure": null,
+      "requestBytes": 145,
+      "responseBytes": 163
+    },
+    {
+      "seq": 237,
+      "method": "POST",
+      "path": "/api/v1/browser/drafts/recovery",
+      "status": 400,
+      "failure": null,
+      "requestBytes": 416,
+      "responseBytes": 103
+    },
+    {
+      "seq": 239,
+      "method": "POST",
+      "path": "/api/v1/browser/drafts/recovery",
+      "status": 400,
+      "failure": null,
+      "requestBytes": 416,
+      "responseBytes": 103
+    },
+    {
+      "seq": 253,
+      "method": "POST",
+      "path": "/api/v1/browser/drafts/recovery",
+      "status": 400,
+      "failure": null,
+      "requestBytes": 416,
+      "responseBytes": 103
+    }
+  ],
+  "screenshots": [
+    "WEB-05-OBS041-browser-no-agent.webp",
+    "WEB-05-OBS041-browser-mark-editor.webp",
+    "WEB-05-OBS041-browser-edit-save.webp",
+    "WEB-05-OBS041-browser-second-space.webp",
+    "WEB-05-OBS041-browser-return-recovery.webp"
+  ],
+  "cleanup": "Stopped only private Herdr/gateway/fixture services; closed the owned managed Chromium tab; removed only /tmp/cpol-_t0imugi and /tmp/web05-obs041-browser-home-20260924. All OBS-041 evidence artifacts remain in the run directory."
+}

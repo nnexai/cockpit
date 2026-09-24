@@ -1,0 +1,402 @@
+{
+  "session": "native-5b8ef9e56aa5",
+  "space": "Native browser 88e79e65",
+  "fixture_url": "http://127.0.0.1:44615/",
+  "root": "/tmp/cnative-t1wqkny5",
+  "failure": "RuntimeError: native annotation save was not acknowledged by UI and store: {'gesture': {'x': 101, 'y': 680.53125, 'transient_region_visible': 1}, 'ui': {'marks': 0, 'status': 'Live browser view', 'retained': False, 'notes': None}, 'inventory': [{'draft_id': 'ad62b9bd-c198-46db-8f4d-2363e50f2780', 'revision': 1, 'annotations': []}]}",
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Live browser view",
+      "alerts": [],
+      "body": "                                               \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nLive browser view\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                              ",
+      "painted": true,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 188.46875,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      },
+      "surfaceCss": {
+        "height": 188.46875,
+        "width": 674
+      }
+    },
+    "native_only_surface": {
+      "pane": {
+        "css": {
+          "height": "331.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 331.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 331,
+          "width": 674
+        }
+      },
+      "canvas": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      },
+      "surface": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "hidden"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      }
+    },
+    "first_canvas_viewport": {
+      "dpr": 2,
+      "height": 835,
+      "width": 676
+    },
+    "native_canvas": {
+      "width": 1348,
+      "left": 1,
+      "heightCss": 188.46875,
+      "widthCss": 674,
+      "top": 645.53125,
+      "height": 376
+    },
+    "fixture_first_paint": {
+      "innerWidth": 674,
+      "innerHeight": 188,
+      "dpr": 2,
+      "scrollY": 0,
+      "nestedScrollTop": 0,
+      "nestedWheelY": null,
+      "ready": "complete",
+      "heading": "Native browser acceptance",
+      "headingWidth": 650,
+      "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+      "status": "waiting for routed native pointer",
+      "started": false,
+      "scrollStart": null,
+      "scrollFinish": null,
+      "received_at": 155722.437224032
+    },
+    "bitmap_density": {
+      "bitmap_width_per_css": 2.0,
+      "bitmap_height_per_css": 1.995025700547173
+    },
+    "splitter_moved": false
+  },
+  "paints": {},
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 2490482,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 2490448,
+      "returncode": 0
+    },
+    {
+      "name": "gateway",
+      "pid": 2490424,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 2490387,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "socketWrapped": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:44615/"
+  },
+  "screenshots": {
+    "first_paint_before_gesture": "/tmp/cnative-t1wqkny5/native-first.png"
+  },
+  "annotation_wait_error": "Timed out waiting for native region acknowledgement",
+  "annotation": {
+    "gesture": {
+      "x": 101,
+      "y": 680.53125,
+      "transient_region_visible": 1
+    },
+    "ui": {
+      "marks": 0,
+      "status": "Live browser view",
+      "retained": false,
+      "notes": null
+    },
+    "inventory": [
+      {
+        "draft_id": "ad62b9bd-c198-46db-8f4d-2363e50f2780",
+        "revision": 1,
+        "annotations": []
+      }
+    ]
+  },
+  "ok": false,
+  "failure_screenshot": "/tmp/cnative-t1wqkny5/native-failure.png",
+  "navigation_diagnostics": {
+    "status": "Live browser view",
+    "alerts": [],
+    "field": "http://127.0.0.1:44615/",
+    "javascriptErrors": [],
+    "tabs": [
+      {
+        "title": "Native scroll fixture",
+        "url": "http://127.0.0.1:44615/"
+      }
+    ],
+    "submits": [
+      {
+        "value": "http://127.0.0.1:44615/",
+        "defaultPrevented": true
+      }
+    ],
+    "fixture_report_count": 1,
+    "browser_trace": {
+      "frames": [
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3367,
+          "image_width": 674,
+          "frame_sequence": 1,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3517,
+          "image_width": 674,
+          "frame_sequence": 2,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3528,
+          "image_width": 674,
+          "frame_sequence": 3,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3708,
+          "image_width": 1348,
+          "frame_sequence": 4,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3885.0000000000005,
+          "image_width": 674,
+          "frame_sequence": 5,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3894,
+          "image_width": 674,
+          "frame_sequence": 6,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "27CE7E2176033A3EE19896128D015680",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 4038.0000000000005,
+          "image_width": 1348,
+          "frame_sequence": 7,
+          "viewport_revision": 1
+        }
+      ],
+      "started": 462,
+      "sockets": 1,
+      "events": [
+        {
+          "type": "attached",
+          "time": 3366,
+          "viewport": {
+            "viewport_revision": 1,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 188,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "document_changed",
+          "time": 3671.0000000000005,
+          "viewport": null
+        }
+      ]
+    }
+  },
+  "owner_processes": {
+    "gateway": [
+      {
+        "pid": 2490424,
+        "comm": "cockpit",
+        "start_ticks": 32311348
+      }
+    ],
+    "webdriver": [
+      {
+        "pid": 2490482,
+        "comm": "WebKitWebDriver",
+        "start_ticks": 32311378
+      },
+      {
+        "pid": 2490489,
+        "comm": "cockpit-tauri",
+        "start_ticks": 32311389
+      },
+      {
+        "pid": 2490553,
+        "comm": "WebKitWebProces",
+        "start_ticks": 32311403
+      },
+      {
+        "pid": 2490526,
+        "comm": "WebKitNetworkPr",
+        "start_ticks": 32311397
+      }
+    ]
+  },
+  "fixture_reports": {
+    "count": 1,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 155722.437224032
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 155722.437224032
+      }
+    ]
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 117
+  },
+  "evidence_files": [
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-failure.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-first.png"
+  ],
+  "private_root_removed_after_evidence": false,
+  "harness_root": "/tmp/cnative-t1wqkny5"
+}

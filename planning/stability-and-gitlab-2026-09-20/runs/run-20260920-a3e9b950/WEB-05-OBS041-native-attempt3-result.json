@@ -1,0 +1,1454 @@
+{
+  "session": "native-8254c81bb9f4",
+  "space": "Native browser 896cec48",
+  "fixture_url": "http://127.0.0.1:37383/",
+  "root": "/tmp/cnative-2ggyl3_a",
+  "failure": "RuntimeError: Timed out waiting for BrowserPane remounted after returning",
+  "geometries": {
+    "outer_requested": {
+      "width": 1392,
+      "height": 835,
+      "dpr": 2
+    },
+    "compositor_logical_width": 708,
+    "outer_last_observed": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "outer": {
+      "width": 676,
+      "height": 835,
+      "dpr": 2
+    },
+    "first_canvas_last_observed": {
+      "status": "Live browser view",
+      "alerts": [],
+      "body": "                                               \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                                                                    \nBrowser\nLive browser view\n\nNative scroll fixture\n\u00d7\n+\n\u2190\n\u2192\n\u21bb\n\n\n\n\n\n\n\n\n\n\n",
+      "viewport": {
+        "dpr": 2,
+        "height": 835,
+        "width": 676
+      },
+      "surface": true,
+      "commandOpen": false,
+      "bodyStart": "\n\n1\n\n\nCommands\n\nPane 1\n\n\nsh-5.3$                                                             \n                                                                    \n                                                                    \n                                                                    \n                                                                    \n                              ",
+      "painted": true,
+      "canvas": {
+        "width": 1348,
+        "left": 1,
+        "heightCss": 188.46875,
+        "widthCss": 674,
+        "top": 645.53125,
+        "height": 376
+      },
+      "surfaceCss": {
+        "height": 188.46875,
+        "width": 674
+      }
+    },
+    "native_only_surface": {
+      "pane": {
+        "css": {
+          "height": "331.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 331.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 331,
+          "width": 674
+        }
+      },
+      "canvas": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "visible"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      },
+      "surface": {
+        "css": {
+          "height": "188.46875px",
+          "objectFit": "fill",
+          "width": "674px",
+          "overflow": "hidden"
+        },
+        "rect": {
+          "height": 188.46875,
+          "width": 674
+        },
+        "client": {
+          "height": 188,
+          "width": 674
+        }
+      }
+    },
+    "first_canvas_viewport": {
+      "dpr": 2,
+      "height": 835,
+      "width": 676
+    },
+    "native_canvas": {
+      "width": 1348,
+      "left": 1,
+      "heightCss": 188.46875,
+      "widthCss": 674,
+      "top": 645.53125,
+      "height": 376
+    },
+    "fixture_first_paint": {
+      "innerWidth": 674,
+      "innerHeight": 188,
+      "dpr": 2,
+      "scrollY": 0,
+      "nestedScrollTop": 0,
+      "nestedWheelY": null,
+      "ready": "complete",
+      "heading": "Native browser acceptance",
+      "headingWidth": 650,
+      "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+      "status": "waiting for routed native pointer",
+      "started": false,
+      "scrollStart": null,
+      "scrollFinish": null,
+      "received_at": 155826.318489793
+    },
+    "bitmap_density": {
+      "bitmap_width_per_css": 2.0,
+      "bitmap_height_per_css": 1.995025700547173
+    },
+    "splitter_moved": false
+  },
+  "paints": {},
+  "cleanup": [
+    {
+      "name": "built-frontend-http-server",
+      "stopped": true
+    },
+    {
+      "name": "webdriver",
+      "pid": 2496626,
+      "returncode": -15
+    },
+    {
+      "name": "compositor",
+      "pid": 2496592,
+      "returncode": 0
+    },
+    {
+      "name": "gateway",
+      "pid": 2496567,
+      "returncode": 0
+    },
+    {
+      "name": "herdr",
+      "pid": 2496533,
+      "returncode": 0
+    },
+    {
+      "name": "fixture-http-server",
+      "stopped": true
+    }
+  ],
+  "space_id": "w1",
+  "association_open_source": "native",
+  "native_only_trace_install": {
+    "socketWrapped": true
+  },
+  "navigation_input": {
+    "method": "focused-input-insertText",
+    "field_after_render": "http://127.0.0.1:37383/"
+  },
+  "screenshots": {
+    "first_paint_before_gesture": "/tmp/cnative-2ggyl3_a/native-first.png",
+    "annotation_acknowledged": "/tmp/cnative-2ggyl3_a/native-annotation.png",
+    "note_acknowledged": "/tmp/cnative-2ggyl3_a/native-annotation-note.png"
+  },
+  "annotation": {
+    "gesture": {
+      "x": 101,
+      "y": 680.53125,
+      "transient_region_visible": 1
+    },
+    "ui": {
+      "marks": 1,
+      "status": "Live browser view",
+      "retained": false,
+      "notes": null
+    },
+    "inventory": [
+      {
+        "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+        "revision": 2,
+        "annotations": [
+          {
+            "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+            "kind": "region",
+            "bounds": {
+              "x": 100.0,
+              "y": 34.912949759575525,
+              "width": 120.0,
+              "height": 54.86320676504725
+            }
+          }
+        ]
+      }
+    ],
+    "saved_note": {
+      "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+      "revision": 3,
+      "annotation_id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+      "comment": "Native note native-8254c81bb9f4"
+    }
+  },
+  "obs041_original_draft": {
+    "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+    "revision": 3,
+    "annotation_id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+    "comment": "Native note native-8254c81bb9f4"
+  },
+  "obs041_feedback_before_edit": {
+    "feedback": {
+      "captures": [
+        {
+          "page": {
+            "title": "Native scroll fixture",
+            "captured_at": "2026-09-24T02:01:22.170Z",
+            "url": "http://127.0.0.1:37383/",
+            "viewport": {
+              "visual_scale": 1,
+              "width": 674,
+              "scroll_x": 0,
+              "scroll_y": 0,
+              "height": 188,
+              "device_pixel_ratio": 2
+            },
+            "image_height": 376,
+            "document_id": "E94558DEDB542C73CC5765B673AC6FE2",
+            "image_width": 1348
+          },
+          "image_path": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/artifacts/capture-15516c80-5a81-47a6-a8c5-d47675c7eac7.png",
+          "context": {
+            "browser_instance": "pid=2497144:start=32321959:receipt=d9b20917a4915ee8f271e38c83cca070b94633438d655edc879d412b9e6f8a9d",
+            "session_id": "native-8254c81bb9f4",
+            "space_id": "w1",
+            "invocation": "cd -- '/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb' && 'playwright-cli' -s='cockpit-9fd4554328f1d3101ff47dfb' <command>",
+            "association_key": "9fd4554328f1d3101ff47dfb",
+            "space_label": "Native browser 896cec48",
+            "playwright_session": "cockpit-9fd4554328f1d3101ff47dfb",
+            "working_directory": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb",
+            "inline_provenance": {
+              "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+              "frame_id": "E94558DEDB542C73CC5765B673AC6FE2",
+              "stream_epoch": 1,
+              "pixel_captured_at_micros": 70800,
+              "document_generation": 1790215280681,
+              "capture_as_shown": false,
+              "frame_sequence": 4,
+              "frame_generation": 1790215280681,
+              "viewport_revision": 1
+            }
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 199.99999999999997,
+                "height": 109.7264135300945,
+                "width": 240.00000000000003,
+                "y": 69.82589951915105
+              },
+              "color": "#d62828",
+              "kind": "region",
+              "element": null,
+              "points": [
+                {
+                  "x": 199.99999999999997,
+                  "y": 69.82589951915105
+                },
+                {
+                  "x": 440,
+                  "y": 179.55231304924556
+                }
+              ],
+              "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+              "comment": "Native note native-8254c81bb9f4"
+            }
+          ],
+          "id": "15516c80-5a81-47a6-a8c5-d47675c7eac7",
+          "pending_ids": [
+            "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353"
+          ]
+        }
+      ],
+      "pending_count": 1,
+      "retention_seconds": 3600
+    },
+    "browser": {
+      "association": {
+        "opened_tab": null,
+        "invocation": "cd -- '/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb' && 'playwright-cli' -s='cockpit-9fd4554328f1d3101ff47dfb' <command>",
+        "association_key": "9fd4554328f1d3101ff47dfb",
+        "space_label": "Native browser 896cec48",
+        "profile_path": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/profiles/9fd4554328f1d3101ff47dfb",
+        "incarnation": "pid=2497144:start=32321959:receipt=d9b20917a4915ee8f271e38c83cca070b94633438d655edc879d412b9e6f8a9d",
+        "session_id": "native-8254c81bb9f4",
+        "space_id": "w1",
+        "owner_id": "0d3447af-2c8e-4857-b6ed-1324756d65cc",
+        "connection": "open",
+        "playwright_session": "cockpit-9fd4554328f1d3101ff47dfb",
+        "working_directory": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb"
+      },
+      "connection": "open",
+      "message": "browser is open"
+    },
+    "drafts": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "revision": 4,
+          "freshness": "fresh",
+          "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+          "document_generation": 1790215280681,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "evidence": null,
+              "kind": "region",
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+              "comment": "Native note native-8254c81bb9f4"
+            }
+          ],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_capture_initial": {
+    "capture_id": "15516c80-5a81-47a6-a8c5-d47675c7eac7",
+    "pending_ids": [
+      "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353"
+    ],
+    "comment": "Native note native-8254c81bb9f4",
+    "image_path": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/artifacts/capture-15516c80-5a81-47a6-a8c5-d47675c7eac7.png",
+    "image_sha256": "5b71186e4e76c2b9bd44451cc93b7b6ea96bc235c37b885a1fa98929a85f0b23",
+    "image_bytes": 121431,
+    "page": {
+      "title": "Native scroll fixture",
+      "captured_at": "2026-09-24T02:01:22.170Z",
+      "url": "http://127.0.0.1:37383/",
+      "viewport": {
+        "visual_scale": 1,
+        "width": 674,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "height": 188,
+        "device_pixel_ratio": 2
+      },
+      "image_height": 376,
+      "document_id": "E94558DEDB542C73CC5765B673AC6FE2",
+      "image_width": 1348
+    },
+    "provenance": {
+      "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+      "frame_id": "E94558DEDB542C73CC5765B673AC6FE2",
+      "stream_epoch": 1,
+      "pixel_captured_at_micros": 70800,
+      "document_generation": 1790215280681,
+      "capture_as_shown": false,
+      "frame_sequence": 4,
+      "frame_generation": 1790215280681,
+      "viewport_revision": 1
+    }
+  },
+  "obs041_inventory_before_edit": {
+    "type": "draft_inventory",
+    "inventory": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "revision": 4,
+          "freshness": "fresh",
+          "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+          "document_generation": 1790215280681,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "evidence": null,
+              "kind": "region",
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+              "comment": "Native note native-8254c81bb9f4"
+            }
+          ],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_old_mark_select": {
+    "mark": {
+      "x": 161,
+      "height": 55.02801513671875,
+      "width": 120,
+      "y": 740.0631408691406
+    },
+    "surface": true
+  },
+  "obs041_edit_button_before": {
+    "disabled": false,
+    "selected": 1,
+    "exists": true
+  },
+  "obs041_edit_attempt": {
+    "attempted": true,
+    "before": "Native note native-8254c81bb9f4",
+    "entered": "Native note native-8254c81bb9f4 revised",
+    "ui_after_save": {
+      "status": "Live browser view",
+      "pending": "Feedback delivery was rejected; retry the same saved capture.\n",
+      "editor": false
+    }
+  },
+  "obs041_inventory_after_edit": {
+    "type": "draft_inventory",
+    "inventory": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "revision": 6,
+          "freshness": "fresh",
+          "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+          "document_generation": 1790215280681,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "evidence": null,
+              "kind": "region",
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+              "comment": "Native note native-8254c81bb9f4 revised"
+            }
+          ],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_feedback_after_edit": {
+    "feedback": {
+      "captures": [
+        {
+          "page": {
+            "title": "Native scroll fixture",
+            "captured_at": "2026-09-24T02:01:22.170Z",
+            "url": "http://127.0.0.1:37383/",
+            "viewport": {
+              "visual_scale": 1,
+              "width": 674,
+              "scroll_x": 0,
+              "scroll_y": 0,
+              "height": 188,
+              "device_pixel_ratio": 2
+            },
+            "image_height": 376,
+            "document_id": "E94558DEDB542C73CC5765B673AC6FE2",
+            "image_width": 1348
+          },
+          "image_path": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/artifacts/capture-15516c80-5a81-47a6-a8c5-d47675c7eac7.png",
+          "context": {
+            "browser_instance": "pid=2497144:start=32321959:receipt=d9b20917a4915ee8f271e38c83cca070b94633438d655edc879d412b9e6f8a9d",
+            "session_id": "native-8254c81bb9f4",
+            "space_id": "w1",
+            "invocation": "cd -- '/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb' && 'playwright-cli' -s='cockpit-9fd4554328f1d3101ff47dfb' <command>",
+            "association_key": "9fd4554328f1d3101ff47dfb",
+            "space_label": "Native browser 896cec48",
+            "playwright_session": "cockpit-9fd4554328f1d3101ff47dfb",
+            "working_directory": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb",
+            "inline_provenance": {
+              "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+              "frame_id": "E94558DEDB542C73CC5765B673AC6FE2",
+              "stream_epoch": 1,
+              "pixel_captured_at_micros": 70800,
+              "document_generation": 1790215280681,
+              "capture_as_shown": false,
+              "frame_sequence": 4,
+              "frame_generation": 1790215280681,
+              "viewport_revision": 1
+            }
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 199.99999999999997,
+                "height": 109.7264135300945,
+                "width": 240.00000000000003,
+                "y": 69.82589951915105
+              },
+              "color": "#d62828",
+              "kind": "region",
+              "element": null,
+              "points": [
+                {
+                  "x": 199.99999999999997,
+                  "y": 69.82589951915105
+                },
+                {
+                  "x": 440,
+                  "y": 179.55231304924556
+                }
+              ],
+              "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+              "comment": "Native note native-8254c81bb9f4"
+            }
+          ],
+          "id": "15516c80-5a81-47a6-a8c5-d47675c7eac7",
+          "pending_ids": [
+            "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353"
+          ]
+        }
+      ],
+      "pending_count": 1,
+      "retention_seconds": 3600
+    },
+    "browser": {
+      "association": {
+        "opened_tab": null,
+        "invocation": "cd -- '/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb' && 'playwright-cli' -s='cockpit-9fd4554328f1d3101ff47dfb' <command>",
+        "association_key": "9fd4554328f1d3101ff47dfb",
+        "space_label": "Native browser 896cec48",
+        "profile_path": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/profiles/9fd4554328f1d3101ff47dfb",
+        "incarnation": "pid=2497144:start=32321959:receipt=d9b20917a4915ee8f271e38c83cca070b94633438d655edc879d412b9e6f8a9d",
+        "session_id": "native-8254c81bb9f4",
+        "space_id": "w1",
+        "owner_id": "0d3447af-2c8e-4857-b6ed-1324756d65cc",
+        "connection": "open",
+        "playwright_session": "cockpit-9fd4554328f1d3101ff47dfb",
+        "working_directory": "/tmp/cnative-2ggyl3_a/cockpit-state/browser/workspaces/9fd4554328f1d3101ff47dfb"
+      },
+      "connection": "open",
+      "message": "browser is open"
+    },
+    "drafts": {
+      "pending_capture": null,
+      "active_draft_limit": 8,
+      "drafts": [
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "revision": 6,
+          "freshness": "fresh",
+          "draft_id": "d42c4bdc-9a6d-4aa0-8d28-bc6a5877705a",
+          "document_generation": 1790215280681,
+          "editor": {
+            "selected_annotation_id": null,
+            "note_annotation_id": null,
+            "notes_open": false,
+            "note_text": ""
+          },
+          "annotations": [
+            {
+              "bounds": {
+                "x": 100,
+                "height": 54.86320676504725,
+                "width": 120,
+                "y": 34.912949759575525
+              },
+              "color": "#d62828",
+              "evidence": null,
+              "kind": "region",
+              "points": [
+                {
+                  "x": 100,
+                  "y": 34.912949759575525
+                },
+                {
+                  "x": 220,
+                  "y": 89.77615652462278
+                }
+              ],
+              "id": "c6d7cb7f-1dd7-48e1-b64c-a7d4ea4d3353",
+              "comment": "Native note native-8254c81bb9f4 revised"
+            }
+          ],
+          "stale": false
+        }
+      ]
+    }
+  },
+  "obs041_image_after_edit_sha256": "5b71186e4e76c2b9bd44451cc93b7b6ea96bc235c37b885a1fa98929a85f0b23",
+  "obs041_image_unchanged_after_edit": true,
+  "obs041_second_space": {
+    "label": "OBS041 remount 408c2eba",
+    "space_id": "w2",
+    "cwd": "/tmp/cnative-2ggyl3_a/second-space",
+    "creation": "private Herdr workspace in owned session; selected via Cockpit UI"
+  },
+  "ok": false,
+  "failure_screenshot": "/tmp/cnative-2ggyl3_a/native-failure.png",
+  "navigation_diagnostics": {
+    "status": null,
+    "alerts": [],
+    "field": null,
+    "javascriptErrors": [],
+    "tabs": [],
+    "submits": [
+      {
+        "value": "http://127.0.0.1:37383/",
+        "defaultPrevented": true
+      }
+    ],
+    "fixture_report_count": 7,
+    "browser_trace": {
+      "frames": [
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 2851,
+          "image_width": 674,
+          "frame_sequence": 1,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3005,
+          "image_width": 1348,
+          "frame_sequence": 2,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 188,
+          "time": 3023,
+          "image_width": 674,
+          "frame_sequence": 3,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 188,
+          "image_height": 376,
+          "time": 3206,
+          "image_width": 1348,
+          "frame_sequence": 4,
+          "viewport_revision": 1
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5664,
+          "image_width": 674,
+          "frame_sequence": 5,
+          "viewport_revision": 2
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5674,
+          "image_width": 674,
+          "frame_sequence": 6,
+          "viewport_revision": 2
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5811,
+          "image_width": 674,
+          "frame_sequence": 7,
+          "viewport_revision": 2
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5823,
+          "image_width": 674,
+          "frame_sequence": 8,
+          "viewport_revision": 2
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5925,
+          "image_width": 674,
+          "frame_sequence": 9,
+          "viewport_revision": 3
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5939,
+          "image_width": 674,
+          "frame_sequence": 10,
+          "viewport_revision": 4
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5957,
+          "image_width": 674,
+          "frame_sequence": 11,
+          "viewport_revision": 5
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5972,
+          "image_width": 674,
+          "frame_sequence": 12,
+          "viewport_revision": 6
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 5988,
+          "image_width": 674,
+          "frame_sequence": 13,
+          "viewport_revision": 7
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6006,
+          "image_width": 674,
+          "frame_sequence": 14,
+          "viewport_revision": 8
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6022,
+          "image_width": 674,
+          "frame_sequence": 15,
+          "viewport_revision": 9
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6039,
+          "image_width": 674,
+          "frame_sequence": 16,
+          "viewport_revision": 10
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6055,
+          "image_width": 674,
+          "frame_sequence": 17,
+          "viewport_revision": 11
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6072,
+          "image_width": 674,
+          "frame_sequence": 18,
+          "viewport_revision": 12
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6089,
+          "image_width": 674,
+          "frame_sequence": 19,
+          "viewport_revision": 13
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6106,
+          "image_width": 674,
+          "frame_sequence": 20,
+          "viewport_revision": 14
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6124.000000000001,
+          "image_width": 674,
+          "frame_sequence": 21,
+          "viewport_revision": 15
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6140.000000000001,
+          "image_width": 674,
+          "frame_sequence": 22,
+          "viewport_revision": 16
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6156,
+          "image_width": 674,
+          "frame_sequence": 23,
+          "viewport_revision": 17
+        },
+        {
+          "target_id": "E94558DEDB542C73CC5765B673AC6FE2",
+          "viewport_css_width": 674,
+          "viewport_css_height": 156,
+          "image_height": 156,
+          "time": 6173,
+          "image_width": 674,
+          "frame_sequence": 24,
+          "viewport_revision": 18
+        }
+      ],
+      "started": 365,
+      "sockets": 1,
+      "events": [
+        {
+          "type": "attached",
+          "time": 2850,
+          "viewport": {
+            "viewport_revision": 1,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 188,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "document_changed",
+          "time": 3173,
+          "viewport": null
+        },
+        {
+          "type": "viewport_changed",
+          "time": 5523,
+          "viewport": {
+            "viewport_revision": 2,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 0,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 5925,
+          "viewport": {
+            "viewport_revision": 3,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 4,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 5939,
+          "viewport": {
+            "viewport_revision": 4,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 15,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 5956,
+          "viewport": {
+            "viewport_revision": 5,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 26,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 5973,
+          "viewport": {
+            "viewport_revision": 6,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 37,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 5989,
+          "viewport": {
+            "viewport_revision": 7,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 48,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6005,
+          "viewport": {
+            "viewport_revision": 8,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 59,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6023,
+          "viewport": {
+            "viewport_revision": 9,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 69,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6039,
+          "viewport": {
+            "viewport_revision": 10,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 80,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6056,
+          "viewport": {
+            "viewport_revision": 11,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 91,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6073,
+          "viewport": {
+            "viewport_revision": 12,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 102,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6089,
+          "viewport": {
+            "viewport_revision": 13,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 113,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6106,
+          "viewport": {
+            "viewport_revision": 14,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 124,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6125,
+          "viewport": {
+            "viewport_revision": 15,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 134,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6139,
+          "viewport": {
+            "viewport_revision": 16,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 145,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6156,
+          "viewport": {
+            "viewport_revision": 17,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 156,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6173,
+          "viewport": {
+            "viewport_revision": 18,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 167,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6190,
+          "viewport": {
+            "viewport_revision": 19,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 178,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6206,
+          "viewport": {
+            "viewport_revision": 20,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 189,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6221,
+          "viewport": {
+            "viewport_revision": 21,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 199,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6239,
+          "viewport": {
+            "viewport_revision": 22,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 210,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        },
+        {
+          "type": "viewport_changed",
+          "time": 6256,
+          "viewport": {
+            "viewport_revision": 23,
+            "visual_offset_x": 0,
+            "visual_scale": 1,
+            "scroll_x": 0,
+            "page_scale": 1,
+            "scroll_y": 221,
+            "css_height": 156,
+            "device_pixel_ratio": 2,
+            "visual_offset_y": 0,
+            "geometry_fresh": true,
+            "css_width": 674
+          }
+        }
+      ]
+    }
+  },
+  "owner_processes": {
+    "gateway": [
+      {
+        "pid": 2496567,
+        "comm": "cockpit",
+        "start_ticks": 32321787
+      }
+    ],
+    "webdriver": [
+      {
+        "pid": 2496626,
+        "comm": "WebKitWebDriver",
+        "start_ticks": 32321818
+      },
+      {
+        "pid": 2496633,
+        "comm": "cockpit-tauri",
+        "start_ticks": 32321828
+      },
+      {
+        "pid": 2496709,
+        "comm": "WebKitWebProces",
+        "start_ticks": 32321843
+      },
+      {
+        "pid": 2496679,
+        "comm": "WebKitNetworkPr",
+        "start_ticks": 32321837
+      }
+    ]
+  },
+  "fixture_reports": {
+    "count": 7,
+    "first": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 155826.318489793
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 156,
+        "dpr": 2,
+        "scrollY": 0,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "waiting for routed native pointer",
+        "started": false,
+        "scrollStart": null,
+        "scrollFinish": null,
+        "received_at": 155828.683693917
+      }
+    ],
+    "last": [
+      {
+        "innerWidth": 674,
+        "innerHeight": 156,
+        "dpr": 1,
+        "scrollY": 3900,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scroll complete",
+        "started": true,
+        "scrollStart": 2777.300000011921,
+        "scrollFinish": 8784.5,
+        "received_at": 155835.202220205
+      },
+      {
+        "innerWidth": 674,
+        "innerHeight": 188,
+        "dpr": 1,
+        "scrollY": 3900,
+        "nestedScrollTop": 0,
+        "nestedWheelY": null,
+        "ready": "complete",
+        "heading": "Native browser acceptance",
+        "headingWidth": 650,
+        "contentText": "This fixture must fill the entire browser viewport without doubled CSS width.",
+        "status": "scroll complete",
+        "started": true,
+        "scrollStart": 2777.300000011921,
+        "scrollFinish": 8784.5,
+        "received_at": 155835.214637957
+      }
+    ]
+  },
+  "activity": {
+    "webdriver_commands_including_polling": 198
+  },
+  "evidence_files": [
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-failure.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-second-space.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-after-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-feedback-after-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-before-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-feedback-before-edit.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-annotation-note.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-annotation.png",
+    "/home/nnex/dev/prj/cockpit/planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/WEB-05-OBS041-native-first.png"
+  ],
+  "obs041_screen_before_edit_path": "screenshots saved under WEB-05-OBS041-native-*",
+  "obs041_screen_after_edit_path": "screenshots saved under WEB-05-OBS041-native-*",
+  "obs041_second_space_screen_path": "screenshots saved under WEB-05-OBS041-native-*",
+  "private_root_removed_after_evidence": false,
+  "harness_root": "/tmp/cnative-2ggyl3_a"
+}
