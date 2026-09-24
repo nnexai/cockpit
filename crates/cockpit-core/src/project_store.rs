@@ -221,6 +221,38 @@ impl ProjectStore {
         Ok(operation)
     }
 
+    /// Delete a plan that was never started. Such a record owns no Herdr or
+    /// filesystem resource. Returns false, and keeps the record, when it has
+    /// started, changed, or is being executed by another host.
+    pub fn discard_unstarted_plan(&self, operation_id: &str) -> Result<bool, InspectionError> {
+        use cockpit_protocol::projects::{WorkspaceOperationState, WorkspaceOperationStep};
+        validate_operation_id(operation_id)?;
+        let Some(_lease) = self.try_acquire_execution_lease(operation_id)? else {
+            return Ok(false);
+        };
+        let lock = self.acquire_lock(operation_id)?;
+        let stored: StoredOperation = read_json(&self.root_dir, &record_name(operation_id))?;
+        let operation = stored.operation;
+        if operation.state != WorkspaceOperationState::Planned
+            || operation.step != WorkspaceOperationStep::Planned
+            || operation.sequence != 0
+        {
+            return Ok(false);
+        }
+        self.root_dir
+            .remove_file(record_name(operation_id))
+            .map_err(io_error("state_write"))?;
+        drop(lock);
+        for name in [lease_name(operation_id), format!(".{operation_id}.lock")] {
+            match self.root_dir.remove_file(&name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(map_io(error, "state_write")),
+            }
+        }
+        Ok(true)
+    }
+
     pub fn load(&self, operation_id: &str) -> Result<WorkspaceOperation, InspectionError> {
         validate_operation_id(operation_id)?;
         let _lock = self.acquire_lock(operation_id)?;
@@ -1367,6 +1399,7 @@ mod tests {
             label: "Task".to_owned(),
             focus: false,
             artifact: None,
+            linked_artifacts: Vec::new(),
             effects: vec!["create".to_owned()],
             warnings: vec![],
         }
@@ -1417,6 +1450,52 @@ mod tests {
             serde_json::to_vec(&value).expect("serialize legacy operation"),
         )
         .expect("write legacy operation");
+    }
+
+    #[test]
+    fn only_a_never_started_plan_is_discarded_with_its_lock_files() {
+        let root = temp_root("discard-unstarted");
+        let store = ProjectStore::new(&root).expect("store");
+        let unstarted = Uuid::new_v4().to_string();
+        let started = Uuid::new_v4().to_string();
+        store.persist_plan(plan(&unstarted)).expect("persist plan");
+        store.persist_plan(plan(&started)).expect("persist plan");
+        store
+            .update(&started, None, |operation| {
+                operation.step = cockpit_protocol::projects::WorkspaceOperationStep::Validated;
+                operation.state = WorkspaceOperationState::Running;
+                Ok(())
+            })
+            .expect("start");
+
+        assert!(store.discard_unstarted_plan(&unstarted).expect("discard"));
+        assert!(
+            !store
+                .discard_unstarted_plan(&started)
+                .expect("keep started")
+        );
+        let remaining: Vec<String> = fs::read_dir(&root)
+            .expect("read root")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8")
+            })
+            .filter(|name| name.contains(&unstarted))
+            .collect();
+        assert!(remaining.is_empty(), "{remaining:?}");
+        assert_eq!(
+            store
+                .list()
+                .expect("list")
+                .iter()
+                .map(|operation| operation.operation_id.clone())
+                .collect::<Vec<_>>(),
+            vec![started]
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

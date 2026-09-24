@@ -597,6 +597,9 @@ pub fn resolve_artifact(
     if is_github_executable(&provider.executable) {
         return resolve_github_artifact(provider, &base, &parsed, original_url);
     }
+    if is_jira_executable(&provider.executable) {
+        return resolve_jira_artifact(provider, &base, &parsed, original_url);
+    }
     let relative = parsed
         .path()
         .strip_prefix(base.path().trim_end_matches('/'))
@@ -895,6 +898,140 @@ fn resolve_github_artifact(
     })
 }
 
+pub fn is_jira_executable(executable: &str) -> bool {
+    Path::new(executable)
+        .file_name()
+        .is_some_and(|name| name == "jira")
+}
+
+/// Jira work items belong to a Jira project, not to a Git remote, so their
+/// source authority is the configured site rather than the checkout origin.
+pub fn provider_is_repository_independent(
+    configuration: &ProjectConfiguration,
+    provider_id: &str,
+) -> bool {
+    configuration
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .is_some_and(|provider| is_jira_executable(&provider.executable))
+}
+
+/// A Jira issue key: an uppercase project key, a dash and a positive number.
+pub fn is_jira_key(value: &str) -> bool {
+    let Some((project, number)) = value.split_once('-') else {
+        return false;
+    };
+    let mut project_bytes = project.bytes();
+    project.len() <= 32
+        && project_bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_uppercase())
+        && project_bytes
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        && project.len() >= 2
+        && (1..=9).contains(&number.len())
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+        && !number.starts_with('0')
+}
+
+/// The canonical browse URL for a Jira key on a configured site.
+pub fn jira_artifact(
+    provider: &ProjectProvider,
+    key: &str,
+    original_url: &str,
+) -> Result<ProjectArtifact, InspectionError> {
+    if !is_jira_key(key) {
+        return Err(InspectionError::new(
+            "unsupported_artifact",
+            "Jira work item key is malformed",
+        ));
+    }
+    let base = Url::parse(&provider.base_url).map_err(|_| {
+        InspectionError::new(
+            "invalid_provider_base_url",
+            "configured provider URL is invalid",
+        )
+    })?;
+    let canonical_url = format!("{}/browse/{key}", base.as_str().trim_end_matches('/'));
+    Ok(ProjectArtifact {
+        provider_id: provider.id.clone(),
+        kind: "issue".into(),
+        canonical_id: key.to_owned(),
+        original_url: original_url.into(),
+        canonical_url,
+    })
+}
+
+/// Resolve a Jira URL for one configured site, rejecting other hosts.
+pub fn resolve_jira_url(
+    provider: &ProjectProvider,
+    original_url: &str,
+) -> Result<ProjectArtifact, InspectionError> {
+    let parsed = Url::parse(original_url).map_err(|_| {
+        InspectionError::new(
+            "invalid_artifact_url",
+            "Jira URL must be an absolute HTTP(S) URL",
+        )
+    })?;
+    if original_url.len() > 8192
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !provider_matches(&parsed, &provider.base_url)
+    {
+        return Err(InspectionError::new(
+            "source_identity_mismatch",
+            "Jira URL does not belong to the configured Jira site",
+        ));
+    }
+    let base = Url::parse(&provider.base_url).map_err(|_| {
+        InspectionError::new(
+            "invalid_provider_base_url",
+            "configured provider URL is invalid",
+        )
+    })?;
+    resolve_jira_artifact(provider, &base, &parsed, original_url)
+}
+
+fn resolve_jira_artifact(
+    provider: &ProjectProvider,
+    base: &Url,
+    parsed: &Url,
+    original_url: &str,
+) -> Result<ProjectArtifact, InspectionError> {
+    if !matches!(base.scheme(), "http" | "https")
+        || base.query().is_some()
+        || base.fragment().is_some()
+    {
+        return Err(InspectionError::new(
+            "invalid_provider_base_url",
+            "Jira provider base URL must be a plain HTTP(S) site URL",
+        ));
+    }
+    let relative = parsed
+        .path()
+        .strip_prefix(base.path().trim_end_matches('/'))
+        .unwrap_or(parsed.path())
+        .trim_matches('/');
+    let pieces: Vec<&str> = relative.split('/').collect();
+    // Board and backlog views name the open work item in `selectedIssue`.
+    let selected = parsed
+        .query_pairs()
+        .find(|(name, _)| name == "selectedIssue")
+        .map(|(_, value)| value.into_owned());
+    let key = match (pieces.as_slice(), selected) {
+        (["browse", key], _) => (*key).to_owned(),
+        (_, Some(key)) => key,
+        _ => {
+            return Err(InspectionError::new(
+                "unsupported_artifact",
+                "Jira URL must open a work item (…/browse/KEY-123)",
+            ));
+        }
+    };
+    jira_artifact(provider, &key, original_url)
+}
+
 fn provider_matches(url: &Url, configured: &str) -> bool {
     let Ok(base) = Url::parse(configured) else {
         return false;
@@ -1175,5 +1312,66 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "invalid_provider_base_url");
+    }
+
+    fn jira_config() -> ProjectConfiguration {
+        let mut config = config();
+        config.providers = vec![ProjectProvider {
+            id: "jira".into(),
+            base_url: "https://team.atlassian.test".into(),
+            executable: "/usr/bin/jira".into(),
+            login: None,
+        }];
+        config
+    }
+
+    #[test]
+    fn jira_browse_and_board_urls_resolve_to_the_work_item_key() {
+        let config = jira_config();
+        for url in [
+            "https://team.atlassian.test/browse/SCRUM-5",
+            "https://team.atlassian.test/jira/software/projects/SCRUM/boards/1?selectedIssue=SCRUM-5",
+        ] {
+            let artifact = resolve_artifact(&config, url).unwrap();
+            assert_eq!(artifact.provider_id, "jira");
+            assert_eq!(artifact.kind, "issue");
+            assert_eq!(artifact.canonical_id, "SCRUM-5");
+            assert_eq!(
+                artifact.canonical_url,
+                "https://team.atlassian.test/browse/SCRUM-5"
+            );
+            assert_eq!(artifact.original_url, url);
+        }
+        assert!(super::provider_is_repository_independent(&config, "jira"));
+        assert!(!super::provider_is_repository_independent(
+            &super::tests::config(),
+            "gitea"
+        ));
+    }
+
+    #[test]
+    fn jira_urls_without_a_valid_key_or_from_another_site_are_rejected() {
+        let config = jira_config();
+        for url in [
+            "https://team.atlassian.test/browse/scrum-5",
+            "https://team.atlassian.test/browse/SCRUM-05",
+            "https://team.atlassian.test/jira/software/projects/SCRUM/boards/1",
+        ] {
+            assert_eq!(
+                resolve_artifact(&config, url).unwrap_err().code,
+                "unsupported_artifact",
+                "{url}"
+            );
+        }
+        let provider = &config.providers[0];
+        assert_eq!(
+            super::resolve_jira_url(provider, "https://other.atlassian.test/browse/SCRUM-5")
+                .unwrap_err()
+                .code,
+            "source_identity_mismatch"
+        );
+        assert!(super::is_jira_key("AB_1-42"));
+        assert!(!super::is_jira_key("A-1"));
+        assert!(!super::is_jira_key("SCRUM-"));
     }
 }

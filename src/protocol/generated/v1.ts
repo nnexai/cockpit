@@ -293,17 +293,35 @@ export type RepositoryListResponse = { repositories: Array<RepositoryCandidate>,
 
 export type WorkspaceDefaultsRequest = { artifact_url: string, repository_id: string | null, };
 
-export type WorkspaceDefaults = { artifact: ProjectArtifact, repositories: Array<RepositoryCandidate>, repository_id: string | null, branch: string | null, label: string | null, checkout_path: string | null, };
+export type LinkedArtifact = { artifact: ProjectArtifact, title: string | null,
+/**
+ * Why an explicitly linked item could not be read.
+ */
+error: string | null, };
+
+export type WorkspaceDefaults = { artifact: ProjectArtifact, repositories: Array<RepositoryCandidate>, repository_id: string | null, branch: string | null, label: string | null, checkout_path: string | null,
+/**
+ * The artifact's title, when the provider could be read.
+ */
+title: string | null,
+/**
+ * Work items the artifact links to, such as a Jira key in an MR.
+ */
+linked_artifacts: Array<LinkedArtifact>, };
 
 export type WorkspaceSetupMode = "create" | "open";
 
 export type WorkspaceCheckoutOwnership = "owned_worktree" | "borrowed_directory";
 
-export type WorkspaceSetupRequest = { "operation": "create", repository_id: string, branch: string | null, base_ref: string | null, checkout_path: string | null, label: string | null, task_name: string | null, artifact_url: string | null, focus: boolean, } | { "operation": "open", path: string, label: string | null, task_name: string | null, focus: boolean, };
+export type WorkspaceSetupRequest = { "operation": "create", repository_id: string, branch: string | null, base_ref: string | null, checkout_path: string | null, label: string | null, task_name: string | null, artifact_url: string | null,
+/**
+ * Work items linked from the artifact that setup also imports.
+ */
+linked_artifact_urls: Array<string>, focus: boolean, } | { "operation": "open", path: string, label: string | null, task_name: string | null, focus: boolean, };
 
 export type ProjectArtifact = { provider_id: string, kind: string, canonical_id: string, original_url: string, canonical_url: string, };
 
-export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate | null, mode: WorkspaceSetupMode, ownership: WorkspaceCheckoutOwnership, branch: string | null, base: string | null, checkout_path: string, companion_path: string, companion_id: string, companion_created_by_operation: boolean, label: string, focus: boolean, artifact: ProjectArtifact | null, effects: Array<string>, warnings: Array<string>, };
+export type WorkspaceSetupPlan = { operation_id: string, generation: number, endpoint_identity: string, session_id: string, repository: RepositoryCandidate | null, mode: WorkspaceSetupMode, ownership: WorkspaceCheckoutOwnership, branch: string | null, base: string | null, checkout_path: string, companion_path: string, companion_id: string, companion_created_by_operation: boolean, label: string, focus: boolean, artifact: ProjectArtifact | null, linked_artifacts: Array<ProjectArtifact>, effects: Array<string>, warnings: Array<string>, };
 
 export type WorkspaceOperationRequest = { operation_id: string, expected_generation: number, };
 

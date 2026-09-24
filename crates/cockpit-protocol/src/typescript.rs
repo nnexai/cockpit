@@ -5,26 +5,25 @@ use crate::browser::{
     BrowserFeedbackSendResponse, BrowserRequest, BrowserResponse, BrowserTarget,
 };
 use crate::browser_view::{
-    BrowserViewBlocker, BrowserViewBlockerKind, BrowserViewCapabilities, BrowserViewCapability,
-    BrowserViewCaptureCommand, BrowserViewClipboardCommand, BrowserViewCommand,
-    BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse,
-    BrowserViewCompositionInput, BrowserViewCompositionKind, BrowserViewControlState,
-    BrowserViewControlStatus, BrowserViewCursor, BrowserViewCursorState, BrowserViewDialogCommand,
-    BrowserViewDocumentCommandContext, BrowserViewDocumentState, BrowserViewDownloadCommand,
-    BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest, BrowserViewCaptureOutcome,
-    BrowserViewDraftAnnotation, BrowserViewDraftCommand,
+    BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest, BrowserViewBlocker,
+    BrowserViewBlockerKind, BrowserViewCapabilities, BrowserViewCapability,
+    BrowserViewCaptureCommand, BrowserViewCaptureOutcome, BrowserViewClipboardCommand,
+    BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewCommandRequest,
+    BrowserViewCommandResponse, BrowserViewCompositionInput, BrowserViewCompositionKind,
+    BrowserViewControlState, BrowserViewControlStatus, BrowserViewCursor, BrowserViewCursorState,
+    BrowserViewDialogCommand, BrowserViewDocumentCommandContext, BrowserViewDocumentState,
+    BrowserViewDownloadCommand, BrowserViewDraftAnnotation, BrowserViewDraftCommand,
     BrowserViewDraftEditorState, BrowserViewDraftInventory, BrowserViewDraftState,
-    BrowserViewEvent, BrowserViewPendingCapture,
-    BrowserViewEventMetadata, BrowserViewFileCommand, BrowserViewFocusState,
+    BrowserViewEvent, BrowserViewEventMetadata, BrowserViewFileCommand, BrowserViewFocusState,
     BrowserViewFrameDescriptor, BrowserViewFrameEnvelopeV2, BrowserViewFrameGrant,
     BrowserViewIdentity, BrowserViewInspectCommand, BrowserViewInspectResult,
     BrowserViewInspectionFreshness, BrowserViewKeyKind, BrowserViewKeyboardInput,
     BrowserViewLocation, BrowserViewNavigationCommand, BrowserViewNavigationState,
-    BrowserViewOpenRequest, BrowserViewPermissionCommand, BrowserViewPermissionDecision,
-    BrowserViewPointerButton, BrowserViewPointerInput, BrowserViewPointerKind,
-    BrowserViewPresentation, BrowserViewSnapshot, BrowserViewTabCommand, BrowserViewTargetKind,
-    BrowserViewTargetSummary, BrowserViewTextInput, BrowserViewViewportRequest,
-    BrowserViewViewportState, BrowserViewWheelInput,
+    BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPermissionCommand,
+    BrowserViewPermissionDecision, BrowserViewPointerButton, BrowserViewPointerInput,
+    BrowserViewPointerKind, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewTabCommand,
+    BrowserViewTargetKind, BrowserViewTargetSummary, BrowserViewTextInput,
+    BrowserViewViewportRequest, BrowserViewViewportState, BrowserViewWheelInput,
 };
 
 use crate::browser_feedback::{
@@ -80,7 +79,7 @@ use crate::context::{
     ContextSplitDirection, DetectionConfidence, ExtensionKind, PanePresentation,
     ReviewLaunchRequest,
 };
-use crate::project_defaults::{WorkspaceDefaults, WorkspaceDefaultsRequest};
+use crate::project_defaults::{LinkedArtifact, WorkspaceDefaults, WorkspaceDefaultsRequest};
 use crate::projects::{
     ProjectArtifact, ProjectConfiguration, ProjectDiagnostic, ProjectLimits, ProjectProvider,
     RepositoryCandidate, RepositoryListResponse, WorkspaceCheckoutOwnership, WorkspaceOperation,
@@ -241,6 +240,7 @@ pub fn render_v1() -> String {
         ProjectDiagnostic::decl(&config),
         RepositoryListResponse::decl(&config),
         WorkspaceDefaultsRequest::decl(&config),
+        LinkedArtifact::decl(&config),
         WorkspaceDefaults::decl(&config),
         WorkspaceSetupMode::decl(&config),
         WorkspaceCheckoutOwnership::decl(&config),

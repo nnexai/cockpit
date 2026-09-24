@@ -9,6 +9,7 @@ use cockpit_protocol::sources::SourceCapability;
 
 pub mod github;
 pub mod gitlab;
+pub mod jira;
 pub mod tea;
 
 fn glab_executable(executable: &str) -> bool {
@@ -38,6 +39,11 @@ pub fn configured_providers(
             } else if glab_executable(&provider.executable) {
                 Some(
                     gitlab::GitlabSourceProvider::configured(configuration, &provider.id)
+                        .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                )
+            } else if jira::executable(&provider.executable) {
+                Some(
+                    jira::JiraSourceProvider::configured(configuration, &provider.id)
                         .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
                 )
             } else if github::executable(&provider.executable) {

@@ -51,6 +51,29 @@ pub struct ProjectService {
     shutting_down: AtomicBool,
     cancelled: Mutex<HashSet<String>>,
     workers: Mutex<HashSet<String>>,
+    last_plan_prune: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// A plan the user did not start within this time is stale: starting it
+/// asks for a fresh plan, and the unstarted record is deleted.
+const PLAN_TTL_MS: u128 = 60 * 60 * 1000;
+const PLAN_PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+fn plan_expired(operation: &WorkspaceOperation) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    operation
+        .updated_at
+        .parse::<u128>()
+        .is_ok_and(|updated| now.saturating_sub(updated) > PLAN_TTL_MS)
+}
+
+fn unstarted(operation: &WorkspaceOperation) -> bool {
+    operation.state == WorkspaceOperationState::Planned
+        && operation.step == WorkspaceOperationStep::Planned
+        && operation.sequence == 0
 }
 
 struct FreshTeardownEvidence {
@@ -96,7 +119,31 @@ impl ProjectService {
             shutting_down: AtomicBool::new(false),
             cancelled: Mutex::new(HashSet::new()),
             workers: Mutex::new(HashSet::new()),
+            last_plan_prune: std::sync::Mutex::new(None),
         })
+    }
+
+    /// The setup form plans as the user types, so expired unstarted plans
+    /// are removed now and then instead of accumulating.
+    fn prune_expired_plans(&self) {
+        {
+            let mut last = self
+                .last_plan_prune
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if last.is_some_and(|last| last.elapsed() < PLAN_PRUNE_INTERVAL) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let Ok(operations) = self.store.list() else {
+            return;
+        };
+        for operation in operations {
+            if unstarted(&operation) && plan_expired(&operation) {
+                let _ = self.store.discard_unstarted_plan(&operation.operation_id);
+            }
+        }
     }
 
     pub fn configuration(&self) -> ProjectConfiguration {
@@ -121,8 +168,10 @@ impl ProjectService {
     ) -> Result<WorkspaceSetupPlan, InspectionError> {
         validate_session(session)?;
         validate_setup_request(request)?;
+        self.prune_expired_plans();
         let catalog = RepositoryCatalog::new(self.configuration.clone());
         let operation_id = Uuid::new_v4().to_string();
+        let mut linked_artifacts = Vec::new();
         let (
             repository,
             mode,
@@ -145,6 +194,7 @@ impl ProjectService {
                 label,
                 task_name,
                 artifact_url,
+                linked_artifact_urls,
                 focus,
             } => {
                 let repository = catalog.resolve(repository_id).await?;
@@ -200,6 +250,11 @@ impl ProjectService {
                                 .await?,
                         );
                     }
+                }
+                if let Some(primary) = artifact.as_ref() {
+                    linked_artifacts = self
+                        .validate_linked_artifacts(&repository, primary, linked_artifact_urls)
+                        .await?;
                 }
                 let source_base = if artifact
                     .as_ref()
@@ -293,9 +348,12 @@ impl ProjectService {
                     }
                     None => source_base,
                 };
-                let label = label.clone().unwrap_or_else(|| {
-                    task_name.clone().unwrap_or_else(|| repository.name.clone())
-                });
+                // A Space named after its branch stays recognizable next to
+                // other task Spaces of the same repository.
+                let label = label
+                    .clone()
+                    .or_else(|| task_name.clone())
+                    .unwrap_or_else(|| branch.clone());
                 validate_text(&label, "label", 256)?;
                 (
                     Some(repository),
@@ -379,6 +437,12 @@ impl ProjectService {
             effects.push("Hydrate the selected source into the companion Context".to_owned());
             effects.push("Record the selected artifact in the companion manifest".to_owned());
         }
+        for linked in &linked_artifacts {
+            effects.push(format!(
+                "Import linked {} into the companion Context",
+                linked.canonical_id
+            ));
+        }
         let plan = WorkspaceSetupPlan {
             operation_id,
             generation: 1,
@@ -396,11 +460,63 @@ impl ProjectService {
             label,
             focus,
             artifact,
+            linked_artifacts,
             effects,
             warnings: Vec::new(),
         };
         self.store.persist_plan(plan.clone())?;
         Ok(plan)
+    }
+
+    /// Resolve and read each linked work item so a missing or unreadable one
+    /// is reported before setup starts, not after the worktree exists.
+    async fn validate_linked_artifacts(
+        &self,
+        repository: &RepositoryCandidate,
+        primary: &ProjectArtifact,
+        urls: &[String],
+    ) -> Result<Vec<ProjectArtifact>, InspectionError> {
+        let mut linked: Vec<ProjectArtifact> = Vec::new();
+        for url in urls {
+            let mut artifact = repositories::resolve_artifact(&self.configuration, url)?;
+            if (artifact.provider_id == primary.provider_id
+                && artifact.canonical_id == primary.canonical_id)
+                || linked.iter().any(|known| {
+                    known.provider_id == artifact.provider_id
+                        && known.canonical_id == artifact.canonical_id
+                })
+            {
+                continue;
+            }
+            let sources = self.sources.as_ref().ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_unsupported",
+                    "source validation is not configured in this host",
+                )
+            })?;
+            let authority = source_authority_for_checkout(
+                &self.configuration,
+                Path::new(&repository.checkout_path),
+                &artifact.provider_id,
+            )
+            .await?;
+            let validated = sources
+                .validate_artifact(SourceFetchRequest {
+                    provider_id: artifact.provider_id.clone(),
+                    artifact_url: artifact.original_url.clone(),
+                    authority,
+                })
+                .await
+                .map_err(|error| {
+                    InspectionError::new(
+                        error.code,
+                        format!("linked {}: {}", artifact.canonical_id, error.message),
+                    )
+                })?;
+            artifact.canonical_url = reviewed_artifact_url(&artifact, &validated)?.to_owned();
+            linked.push(artifact);
+        }
+        Ok(linked)
     }
 
     pub async fn start(
@@ -429,6 +545,12 @@ impl ProjectService {
             return Err(InspectionError::new(
                 "invalid_operation_state",
                 "only a planned operation can start",
+            ));
+        }
+        if plan_expired(&operation) {
+            return Err(InspectionError::new(
+                "stale_plan",
+                "this setup plan expired; review a fresh plan before starting",
             ));
         }
         // Re-check the reviewed authority and effects before taking the
@@ -1961,6 +2083,48 @@ impl ProjectService {
                         "source provider returned no primary artifact",
                     ));
                 }
+                let checkout = &repository
+                    .expect("artifact plans require a repository")
+                    .checkout_path;
+                for linked in &plan.linked_artifacts {
+                    let authority = source_authority_for_checkout(
+                        &self.configuration,
+                        Path::new(checkout),
+                        &linked.provider_id,
+                    )
+                    .await?;
+                    let response = sources
+                        .fetch_to_companion(
+                            SourceFetchRequest {
+                                provider_id: linked.provider_id.clone(),
+                                artifact_url: linked.original_url.clone(),
+                                authority,
+                            },
+                            Some((&companion_root, companion_id)),
+                        )
+                        .await
+                        .map_err(|error| {
+                            InspectionError::new(
+                                error.code,
+                                format!("linked {}: {}", linked.canonical_id, error.message),
+                            )
+                        })?;
+                    if response.entries.iter().any(|entry| {
+                        matches!(
+                            entry.status,
+                            cockpit_protocol::sources::SourceMaterializationStatus::Conflict
+                                | cockpit_protocol::sources::SourceMaterializationStatus::Failed
+                        )
+                    }) {
+                        return Err(InspectionError::new(
+                            "source_sync_conflict",
+                            format!(
+                                "linked {} preserved companion edits and needs retry",
+                                linked.canonical_id
+                            ),
+                        ));
+                    }
+                }
                 Ok::<(), InspectionError>(())
             }
             .await;
@@ -2160,6 +2324,14 @@ fn pending_unknown(operation: &WorkspaceOperation) -> bool {
 
 fn recover_startup(store: &ProjectStore) -> Result<(), InspectionError> {
     for operation in store.list()? {
+        // A plan that never started owns nothing and was not abandoned: keep
+        // a recent one for its dialog and delete an expired one.
+        if unstarted(&operation) {
+            if plan_expired(&operation) {
+                store.discard_unstarted_plan(&operation.operation_id)?;
+            }
+            continue;
+        }
         if matches!(
             operation.state,
             WorkspaceOperationState::Completed
@@ -2471,6 +2643,8 @@ fn stable_companion_root_id(
     Ok(format!("companion-{encoded}"))
 }
 
+const MAX_LINKED_ARTIFACT_URLS: usize = 4;
+
 fn validate_setup_request(request: &WorkspaceSetupRequest) -> Result<(), InspectionError> {
     match request {
         WorkspaceSetupRequest::Create {
@@ -2481,9 +2655,21 @@ fn validate_setup_request(request: &WorkspaceSetupRequest) -> Result<(), Inspect
             label,
             task_name,
             artifact_url,
+            linked_artifact_urls,
             ..
         } => {
             validate_text(repository_id, "repository_id", 256)?;
+            if linked_artifact_urls.len() > MAX_LINKED_ARTIFACT_URLS
+                || (!linked_artifact_urls.is_empty() && artifact_url.is_none())
+            {
+                return Err(InspectionError::new(
+                    "invalid_request",
+                    "linked work items need a primary artifact and are limited to four",
+                ));
+            }
+            for url in linked_artifact_urls {
+                validate_text(url, "linked_artifact_urls", 2048)?;
+            }
             for (value, field, max) in [
                 (branch.as_deref(), "branch", 256),
                 (base_ref.as_deref(), "base_ref", 256),

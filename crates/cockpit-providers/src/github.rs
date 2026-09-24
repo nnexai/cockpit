@@ -361,6 +361,7 @@ impl SourceProvider for GithubSourceProvider {
             source_branch: None,
             source_url: None,
             source_commit: None,
+            description: None,
         })
     }
 

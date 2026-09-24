@@ -487,6 +487,7 @@ mod tests {
                 label: "Task".to_owned(),
                 focus: true,
                 artifact: None,
+                linked_artifacts: Vec::new(),
                 effects: Vec::new(),
                 warnings: Vec::new(),
             },

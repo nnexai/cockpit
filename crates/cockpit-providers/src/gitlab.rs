@@ -1671,6 +1671,7 @@ impl SourceProvider for GitlabSourceProvider {
                 source_branch: Some(source_branch),
                 source_url: Some(review.web_url),
                 source_commit: Some(source_commit),
+                description: Some(bounded_description(review.description)),
             });
         }
         let identity = self.request_identity(request)?;
@@ -1682,6 +1683,7 @@ impl SourceProvider for GitlabSourceProvider {
             source_branch: None,
             source_url: Some(issue.web_url),
             source_commit: None,
+            description: None,
         })
     }
 
@@ -1695,6 +1697,20 @@ impl SourceProvider for GitlabSourceProvider {
             Ok(vec![self.fetch_inner(request).await?])
         }
     }
+}
+
+/// Linked work items are found in the first part of a description; a very
+/// long one is cut at a character boundary rather than rejected.
+fn bounded_description(mut description: String) -> String {
+    const MAX_DESCRIPTION_BYTES: usize = 64 * 1024;
+    if description.len() > MAX_DESCRIPTION_BYTES {
+        let mut end = MAX_DESCRIPTION_BYTES;
+        while !description.is_char_boundary(end) {
+            end -= 1;
+        }
+        description.truncate(end);
+    }
+    description
 }
 
 #[cfg(test)]

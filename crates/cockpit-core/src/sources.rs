@@ -37,6 +37,7 @@ const INDEX_NAME: &str = "source-current.json";
 const LOCK_NAME: &str = ".source-current.lock";
 const IMPORT_LOCK_NAME: &str = ".source-import.lock";
 const HYDRATION_REPORT_PREFIX: &str = "source-hydration-";
+const MAX_METADATA_DESCRIPTION_BYTES: usize = 256 * 1024;
 const MAX_HYDRATION_REPORT_BYTES: usize = 64 * 1024;
 const MAX_HYDRATION_REPORT_DIAGNOSTIC_TEXT: usize = 512;
 
@@ -91,15 +92,22 @@ pub struct SourceMetadata {
     pub source_branch: Option<String>,
     pub source_url: Option<String>,
     pub source_commit: Option<String>,
+    /// Bounded description text, read only to find linked work items.
+    pub description: Option<String>,
 }
 
 /// Derive source authority from the primary checkout's origin without trusting
-/// caller-supplied repository or provider identity.
+/// caller-supplied repository or provider identity. Repository-independent
+/// providers (Jira) are scoped to their configured site instead; they carry no
+/// owner or repository.
 pub(crate) async fn source_authority_for_checkout(
     configuration: &ProjectConfiguration,
     checkout: &Path,
     provider_id: &str,
 ) -> Result<SourceAuthority, InspectionError> {
+    if crate::repositories::provider_is_repository_independent(configuration, provider_id) {
+        return site_authority(configuration, provider_id);
+    }
     let mut command = Command::new("git");
     command
         .current_dir(checkout)
@@ -154,6 +162,32 @@ pub(crate) async fn source_authority_for_checkout(
         origin_base_path: instance.base_path,
         owner,
         repository,
+    })
+}
+
+/// Authority for a provider whose work items are not tied to a Git remote.
+pub(crate) fn site_authority(
+    configuration: &ProjectConfiguration,
+    provider_id: &str,
+) -> Result<SourceAuthority, InspectionError> {
+    let provider = configuration
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_provider_unsupported",
+                "selected source provider is not configured",
+            )
+        })?;
+    let instance = normalized_provider_instance(&provider.base_url)?;
+    Ok(SourceAuthority {
+        provider_instance: instance.render(),
+        origin_host: instance.host,
+        origin_port: instance.port,
+        origin_base_path: instance.base_path,
+        owner: String::new(),
+        repository: String::new(),
     })
 }
 
@@ -473,6 +507,10 @@ impl SourceService {
                 .source_url
                 .as_deref()
                 .is_some_and(|url| !bounded_text(url, MAX_URL_BYTES))
+            || metadata
+                .description
+                .as_deref()
+                .is_some_and(|description| description.len() > MAX_METADATA_DESCRIPTION_BYTES)
             || !valid_commit
         {
             return Err(InspectionError::new(
@@ -1336,8 +1374,9 @@ fn validate_request(request: &SourceFetchRequest) -> Result<(), InspectionError>
         || !bounded_text(&request.authority.origin_host, 256)
         || (!request.authority.origin_base_path.is_empty()
             && !bounded_text(&request.authority.origin_base_path, 512))
-        || !bounded_text(&request.authority.owner, 256)
-        || !bounded_text(&request.authority.repository, 256)
+        || !(request.authority.owner.is_empty() && request.authority.repository.is_empty()
+            || bounded_text(&request.authority.owner, 256)
+                && bounded_text(&request.authority.repository, 256))
     {
         return Err(InspectionError::new(
             "source_authority_invalid",

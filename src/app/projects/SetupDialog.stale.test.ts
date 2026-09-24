@@ -2,31 +2,18 @@
 
 import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectConfiguration, RepositoryListResponse, WorkspaceDefaults, WorkspaceOperation, WorkspaceSetupPlan } from "../../protocol/generated/v1";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RepositoryListResponse, WorkspaceDefaults, WorkspaceOperation, WorkspaceSetupPlan, WorkspaceSetupRequest } from "../../protocol/generated/v1";
 import { operationSnapshotIsNewer, operationStatusMessage, SetupDialog, type SetupClient } from "./SetupDialog";
 
 function operation(generation: number, sequence: number): WorkspaceOperation {
   return { generation, sequence } as WorkspaceOperation;
 }
 
-const configuration: ProjectConfiguration = {
-  version: 1,
-  repository_roots: ["/repositories"],
-  worktree_root: "/worktrees",
-  companion_root: "/companions",
-  state_root: "/state",
-  branch_template: "{task}",
-  checkout_template: "{task}",
-  providers: [],
-  limits: { catalog_depth: 4, catalog_entries: 100, git_timeout_ms: 1_000, git_output_bytes: 1_000, operation_timeout_ms: 1_000, context_preview_bytes: 1_000, context_preview_lines: 100, context_directory_entries: 100, context_tree_depth: 4 },
-  origins: {},
-};
-
 const repository = { repository_id: "repository", name: "Repository", root: "/repositories/repository", checkout_path: "/repositories/repository", common_dir: "/repositories/repository/.git", branch: "main", is_linked_worktree: false, is_detached: false, provenance: "configured" };
-const repositories: RepositoryListResponse = { repositories: [repository], diagnostics: [] };
+const other = { ...repository, repository_id: "other", name: "Other", root: "/repositories/other", checkout_path: "/repositories/other", common_dir: "/repositories/other/.git" };
+const repositories: RepositoryListResponse = { repositories: [repository, other], diagnostics: [] };
 const client: SetupClient = {
-  projectConfiguration: async () => configuration,
   repositories: async () => repositories,
   resolveWorkspaceDefaults: async () => { throw new Error("lookup should not run"); },
   planWorkspace: async () => { throw new Error("plan should not run"); },
@@ -43,6 +30,7 @@ let emitTerminalUpdate: (() => void) | null = null;
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => {
   act(() => root?.unmount());
   root = null;
@@ -52,8 +40,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function settle(): Promise<void> {
+async function settle(ms = 0): Promise<void> {
   await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -64,22 +53,39 @@ function writeInput(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => { resolve = next; });
-  return { promise, resolve };
+function key(target: Element, name: string): void {
+  target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
 }
 
-function sourceDefaults(branch: string, canonicalId: string): WorkspaceDefaults {
-  return { artifact: { provider_id: "github", kind: "issue", canonical_id: canonicalId, original_url: `https://github.com/nnexai/${canonicalId.replace("#", "/issues/")}`, canonical_url: `https://github.com/nnexai/${canonicalId.replace("#", "/issues/")}` }, repositories: [repository], repository_id: repository.repository_id, branch, label: branch, checkout_path: null };
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => { resolve = next; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function sourceDefaults(branch: string, canonicalId: string, extra: Partial<WorkspaceDefaults> = {}): WorkspaceDefaults {
+  const url = `https://gitlab.test/acme/${canonicalId.replace("!", "/-/merge_requests/")}`;
+  return { artifact: { provider_id: "gitlab", kind: "review", canonical_id: canonicalId, original_url: url, canonical_url: url }, repositories: [repository], repository_id: repository.repository_id, branch, label: branch, checkout_path: null, title: "Fix login", linked_artifacts: [], ...extra };
 }
 
 function openPlan(): WorkspaceSetupPlan {
-  return { operation_id: "operation-1", generation: 1, endpoint_identity: "endpoint-1", session_id: "session-1", repository: null, mode: "open", ownership: "borrowed_directory", branch: null, base: null, checkout_path: "/tmp/borrowed", companion_path: "/companions/operation-1", companion_id: "operation-1", companion_created_by_operation: true, label: "borrowed", focus: true, artifact: null, effects: [], warnings: [] };
+  return { operation_id: "operation-1", generation: 1, endpoint_identity: "endpoint-1", session_id: "session-1", repository: null, mode: "open", ownership: "borrowed_directory", branch: null, base: null, checkout_path: "/tmp/borrowed", companion_path: "/companions/operation-1", companion_id: "operation-1", companion_created_by_operation: true, label: "borrowed", focus: true, artifact: null, linked_artifacts: [], effects: [], warnings: [] };
 }
 
-function createPlan(): WorkspaceSetupPlan {
-  return { ...openPlan(), repository, mode: "create", ownership: "owned_worktree", branch: "task", checkout_path: "/worktrees/task" };
+function createPlan(overrides: Partial<WorkspaceSetupPlan> = {}): WorkspaceSetupPlan {
+  return { ...openPlan(), repository, mode: "create", ownership: "owned_worktree", branch: "task", checkout_path: "/worktrees/task", ...overrides };
+}
+
+/** Plans echo the request, one fresh operation per call. */
+function planner() {
+  let count = 0;
+  return vi.fn(async (_session: string, request: WorkspaceSetupRequest) => {
+    count += 1;
+    if (request.operation === "open") return { ...openPlan(), operation_id: `operation-${count}`, checkout_path: request.path };
+    const chosen = request.repository_id === other.repository_id ? other : repository;
+    return createPlan({ operation_id: `operation-${count}`, repository: chosen, branch: request.branch ?? "task", artifact: request.artifact_url ? sourceDefaults("task", "acme/app!7").artifact : null });
+  });
 }
 
 function workspaceOperation(plan: WorkspaceSetupPlan, state: WorkspaceOperation["state"]): WorkspaceOperation {
@@ -103,30 +109,28 @@ function workspaceOperation(plan: WorkspaceSetupPlan, state: WorkspaceOperation[
   };
 }
 
-function SetupDialogHarness() {
+function Harness({ dialogClient, onCompleted = () => undefined, parent = true }: { dialogClient: SetupClient; onCompleted?: (operation: WorkspaceOperation) => void; parent?: boolean }) {
   const [open, setOpen] = useState(true);
   const [, setTerminalRevision] = useState(1);
   emitTerminalUpdate = () => setTerminalRevision((value) => value + 1);
-  return createElement(SetupDialog, { client, sessionId: "session-1", open, onClose: () => setOpen(false), onCompleted: () => undefined });
-}
-
-function ReopenHarness({ dialogClient }: { dialogClient: SetupClient }) {
-  const [open, setOpen] = useState(true);
   return createElement("div", undefined,
     createElement("button", { type: "button", onClick: () => setOpen(true) }, "Reopen setup"),
-    createElement(SetupDialog, { client: dialogClient, sessionId: "session-1", open, onClose: () => setOpen(false), onCompleted: () => undefined }),
+    createElement(SetupDialog, { client: dialogClient, sessionId: "session-1", open, selectedParent: parent ? { label: "Repository", repositoryKey: repository.common_dir, checkoutPath: repository.checkout_path } : null, onClose: () => setOpen(false), onCompleted }),
   );
 }
 
-async function renderDialog(dialogClient: SetupClient = client): Promise<void> {
+async function renderDialog(dialogClient: SetupClient = client, options: { onCompleted?: (operation: WorkspaceOperation) => void; parent?: boolean } = {}): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
   await act(async () => {
     root = createRoot(container!);
-    root.render(createElement(SetupDialog, { client: dialogClient, sessionId: "session-1", open: true, onClose: () => undefined, onCompleted: () => undefined }));
+    root.render(createElement(Harness, { dialogClient, ...options }));
   });
   await settle();
 }
+
+const $ = <T extends Element = HTMLInputElement>(selector: string) => container!.querySelector<T>(selector as never) as T | null;
+const button = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent === label);
 
 describe("SetupDialog", () => {
   it("accepts a newer generation and sequence, but rejects stale or duplicate snapshots", () => {
@@ -137,241 +141,192 @@ describe("SetupDialog", () => {
     expect(operationSnapshotIsNewer(current, operation(3, 99))).toBe(false);
   });
 
-  it("describes Context checkpoints and source retry", () => {
-    expect(operationStatusMessage({ state: "running", step: "context_preparing", error: null })).toContain("Preparing Context");
-    expect(operationStatusMessage({ state: "running", step: "context_ready", error: null })).toContain("Context is ready");
+  it("names the current step and source retry in plain words", () => {
+    expect(operationStatusMessage({ state: "running", step: "herdr_requested", error: null })).toBe("Creating the worktree and Space…");
+    expect(operationStatusMessage({ state: "running", step: "context_preparing", error: null })).toBe("Preparing Context…");
     expect(operationStatusMessage({ state: "partial", step: "context_preparing", error: { code: "source_provider_unsupported", message: "provider is unavailable" } })).toContain("Retry the source step");
   });
 
-  it("keeps the typed branch focused across unrelated rerenders", async () => {
-    container = document.createElement("div");
-    document.body.append(container);
-    await act(async () => {
-      root = createRoot(container!);
-      root.render(createElement(SetupDialogHarness));
-    });
-    await settle();
+  it("starts with the link focused and the parent Space's repository chosen", async () => {
+    await renderDialog({ ...client, planWorkspace: planner() });
+    expect(document.activeElement).toBe($("#setup-artifact-url"));
+    expect($("#setup-repository")!.value).toBe("Repository");
+    expect($("#setup-repository-results")).toBeNull();
+  });
 
-    const branch = container.querySelector<HTMLInputElement>("#setup-branch")!;
+  it("keeps the typed branch focused across unrelated rerenders", async () => {
+    await renderDialog({ ...client, planWorkspace: planner() });
+    const branch = $("#setup-branch")!;
     branch.focus();
     act(() => emitTerminalUpdate?.());
     expect(document.activeElement).toBe(branch);
-    writeInput(branch, "retain-focus");
-    await settle();
+    await act(async () => writeInput(branch, "retain-focus"));
+    await settle(400);
     expect(document.activeElement).toBe(branch);
     expect(branch.value).toBe("retain-focus");
   });
-  it("selects a repository through subsequence search and requires explicit approval", async () => {
-    const planWorkspace = vi.fn(async () => createPlan());
-    const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
-    await renderDialog({ ...client, planWorkspace, startWorkspace });
 
-    const repositoryInput = container!.querySelector<HTMLInputElement>("#setup-repository")!;
-    await act(async () => { repositoryInput.focus(); writeInput(repositoryInput, "rps"); });
-    expect([...container!.querySelectorAll(".setup-repository mark")].map((mark) => mark.textContent).join("")).toBe("Rps");
-    await act(async () => { repositoryInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
-    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
-    await act(async () => { review.click(); await Promise.resolve(); });
-    expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "repository" }));
-    expect(startWorkspace).not.toHaveBeenCalled();
-    const approve = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Start setup")!;
-    await act(async () => { approve.click(); await Promise.resolve(); });
-    expect(startWorkspace).toHaveBeenCalledTimes(1);
-  });
-  it("opens repository matches as a focused overlay without adding form height", async () => {
-    await renderDialog();
-    const input = container!.querySelector<HTMLInputElement>("#setup-repository")!;
-    expect(container!.querySelector("#setup-repository-results")).toBeNull();
-    expect(container!.querySelector("#setup-branch")).not.toBeNull();
-
+  it("picks the best fuzzy match on Enter, shows it and closes the list", async () => {
+    await renderDialog({ ...client, planWorkspace: planner() }, { parent: false });
+    const input = $("#setup-repository")!;
     act(() => input.focus());
-    expect(container!.querySelector("#setup-repository-results")).not.toBeNull();
-    expect(container!.querySelector("#setup-branch")).not.toBeNull();
-
-    act(() => input.blur());
-    expect(container!.querySelector("#setup-repository-results")).toBeNull();
-  });
-  it("keeps a source-selected nested repository active in the picker", async () => {
-    vi.useFakeTimers();
-    const nestedRepository = { ...repository, repository_id: "nested", name: "Nested Repository", root: "/repositories/nested", checkout_path: "/repositories/nested", common_dir: "/repositories/nested/.git" };
-    const repositoryResponse: RepositoryListResponse = { repositories: [repository, nestedRepository], diagnostics: [] };
-    const planWorkspace = vi.fn(async () => ({ ...createPlan(), repository: nestedRepository }));
-    const startWorkspace = vi.fn(async () => workspaceOperation({ ...createPlan(), repository: nestedRepository }, "completed"));
-    const dialogClient: SetupClient = {
-      ...client,
-      repositories: async () => repositoryResponse,
-      resolveWorkspaceDefaults: async () => ({ ...sourceDefaults("main", "cockpit#5"), repositories: repositoryResponse.repositories, repository_id: nestedRepository.repository_id }),
-      planWorkspace,
-      startWorkspace,
-    };
-    try {
-      await renderDialog(dialogClient);
-      const source = container!.querySelector<HTMLInputElement>("#setup-artifact-url")!;
-      await act(async () => {
-        writeInput(source, "https://github.com/nnexai/cockpit/issues/5");
-        await vi.advanceTimersByTimeAsync(300);
-      });
-      await settle();
-      const input = container!.querySelector<HTMLInputElement>("#setup-repository")!;
-      act(() => input.focus());
-      const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
-      await act(async () => { review.click(); await Promise.resolve(); });
-      expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ repository_id: "nested" }));
-    } finally {
-      vi.useRealTimers();
-    }
+    await act(async () => writeInput(input, "oth"));
+    expect([...container!.querySelectorAll("#setup-repository-results mark")].map((mark) => mark.textContent).join("")).toBe("Oth");
+    await act(async () => key(input, "Enter"));
+    expect($("#setup-repository-results")).toBeNull();
+    expect(input.value).toBe("Other");
   });
 
+  it("chooses a highlighted match with the arrows and closes the list on Escape without closing setup", async () => {
+    await renderDialog({ ...client, planWorkspace: planner() });
+    const input = $("#setup-repository")!;
+    act(() => input.focus());
+    await act(async () => key(input, "ArrowDown"));
+    expect($("#setup-repository-results")).not.toBeNull();
+    await act(async () => key(input, "ArrowDown"));
+    await act(async () => key(input, "Enter"));
+    expect(input.value).toBe("Other");
+    await act(async () => writeInput(input, "rep"));
+    await act(async () => key(input, "Escape"));
+    expect($("#setup-repository-results")).toBeNull();
+    expect(input.value).toBe("Other");
+    expect($("[role='dialog']")).not.toBeNull();
+  });
 
-  it("ignores a late source lookup and preserves manual branch edits", async () => {
-    vi.useFakeTimers();
+  it("prepares the setup while typing and starts exactly that plan with one click", async () => {
+    const planWorkspace = planner();
+    const startWorkspace = vi.fn(async (_session: string, request: { operation_id: string }) => workspaceOperation(createPlan({ operation_id: request.operation_id }), "running"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace, workspaceOperation: vi.fn(() => new Promise<WorkspaceOperation>(() => undefined)) });
+    await act(async () => writeInput($("#setup-branch")!, "feature"));
+    await settle(400);
+    expect(planWorkspace).toHaveBeenCalledTimes(1);
+    expect(container!.textContent).toContain("New worktree feature");
+    await act(async () => button("Create Space")!.click());
+    await settle();
+    expect(startWorkspace).toHaveBeenCalledTimes(1);
+    expect(startWorkspace).toHaveBeenCalledWith("session-1", { operation_id: "operation-1", expected_generation: 1 });
+    expect(planWorkspace).toHaveBeenCalledTimes(1);
+    expect($("#setup-branch")!.disabled).toBe(true);
+  });
+
+  it("waits for the plan of the latest input when Enter comes before it", async () => {
+    const planWorkspace = planner();
+    const startWorkspace = vi.fn(async (_session: string, request: { operation_id: string }) => workspaceOperation(createPlan({ operation_id: request.operation_id }), "running"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace, workspaceOperation: vi.fn(() => new Promise<WorkspaceOperation>(() => undefined)) });
+    await settle(400);
+    const branch = $("#setup-branch")!;
+    await act(async () => writeInput(branch, "changed"));
+    await act(async () => key(branch, "Enter"));
+    expect(startWorkspace).not.toHaveBeenCalled();
+    await settle(400);
+    expect(startWorkspace).toHaveBeenCalledTimes(1);
+    const started = startWorkspace.mock.calls[0][1].operation_id;
+    const lastPlan = await planWorkspace.mock.results.at(-1)!.value;
+    expect(started).toBe(lastPlan.operation_id);
+    expect(planWorkspace.mock.calls.at(-1)![1]).toMatchObject({ branch: "changed" });
+  });
+
+  it("ignores a late link lookup and preserves manual branch edits", async () => {
     const first = deferred<WorkspaceDefaults>();
     const second = deferred<WorkspaceDefaults>();
-    const resolveWorkspaceDefaults = vi.fn()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const dialogClient: SetupClient = { ...client, resolveWorkspaceDefaults };
-    await renderDialog(dialogClient);
-
-    const source = container!.querySelector<HTMLInputElement>("#setup-artifact-url")!;
-    const branch = container!.querySelector<HTMLInputElement>("#setup-branch")!;
-    await act(async () => { writeInput(source, "https://github.com/nnexai/cockpit/issues/4"); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    const resolveWorkspaceDefaults = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    await renderDialog({ ...client, resolveWorkspaceDefaults, planWorkspace: planner() });
+    const source = $("#setup-artifact-url")!;
+    const branch = $("#setup-branch")!;
+    await act(async () => writeInput(source, "https://gitlab.test/acme/app/-/merge_requests/4"));
+    await settle(300);
     await act(async () => {
       writeInput(branch, "manual-branch");
-      writeInput(source, "https://github.com/nnexai/cockpit/issues/5");
+      writeInput(source, "https://gitlab.test/acme/app/-/merge_requests/5");
     });
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
-
-    await act(async () => { second.resolve(sourceDefaults("new-branch", "cockpit#5")); await Promise.resolve(); });
+    await settle(300);
+    await act(async () => { second.resolve(sourceDefaults("new-branch", "acme/app!5")); await Promise.resolve(); });
     expect(branch.value).toBe("manual-branch");
-    await act(async () => { first.resolve(sourceDefaults("old-branch", "cockpit#4")); await Promise.resolve(); });
+    await act(async () => { first.resolve(sourceDefaults("old-branch", "acme/app!4")); await Promise.resolve(); });
     expect(branch.value).toBe("manual-branch");
-    expect(container!.textContent).toContain("cockpit#5");
+    expect(container!.textContent).toContain("MR !5 · Fix login");
   });
 
-  it("opens an exact path without repository, source, or branch inputs", async () => {
-    const planWorkspace = vi.fn(async () => openPlan());
-    const startWorkspace = vi.fn(async () => workspaceOperation(openPlan(), "completed"));
-    const dialogClient: SetupClient = { ...client, planWorkspace, startWorkspace };
-    await renderDialog(dialogClient);
-
-    const existing = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Existing directory"))!;
-    act(() => existing.click());
-    await settle();
-    expect(container!.querySelector("#setup-repository")).toBeNull();
-    expect(container!.querySelector("#setup-artifact-url")).toBeNull();
-    expect(container!.querySelector("#setup-branch")).toBeNull();
-    const path = container!.querySelector<HTMLInputElement>("#setup-checkout")!;
-    writeInput(path, "/tmp/borrowed");
-    await settle();
-    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
-    await act(async () => { review.click(); await Promise.resolve(); });
-    expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ operation: "open", path: "/tmp/borrowed" }));
-    expect(startWorkspace).not.toHaveBeenCalled();
-  });
-  it("does not reuse an opened directory as a worktree destination", async () => {
-    const planWorkspace = vi.fn(async () => createPlan());
-    const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
-    const dialogClient: SetupClient = { ...client, planWorkspace, startWorkspace };
-    await renderDialog(dialogClient);
-
-    const buttons = () => [...container!.querySelectorAll<HTMLButtonElement>("button")];
-    act(() => buttons().find((button) => button.textContent?.includes("Existing directory"))?.click());
-    await settle();
-    await act(async () => { writeInput(container!.querySelector<HTMLInputElement>("#setup-checkout")!, "/tmp/borrowed"); });
-
-    act(() => buttons().find((button) => button.textContent?.includes("New worktree"))?.click());
-    await settle();
-    act(() => buttons().find((button) => button.textContent?.includes("Existing directory"))?.click());
-    await settle();
-    expect(container!.querySelector<HTMLInputElement>("#setup-checkout")?.value).toBe("/tmp/borrowed");
-
-    act(() => buttons().find((button) => button.textContent?.includes("New worktree"))?.click());
-    await settle();
-    const review = buttons().find((button) => button.textContent === "Review setup")!;
-    await act(async () => { review.click(); await Promise.resolve(); });
-    expect(planWorkspace).toHaveBeenCalledWith("session-1", expect.objectContaining({ operation: "create", checkout_path: null }));
+  it("imports a linked work item unless it is unticked", async () => {
+    const linked = { artifact: { provider_id: "jira", kind: "issue", canonical_id: "SCRUM-5", original_url: "https://jira.test/browse/SCRUM-5", canonical_url: "https://jira.test/browse/SCRUM-5" }, title: "Login times out", error: null };
+    const planWorkspace = planner();
+    await renderDialog({ ...client, planWorkspace, resolveWorkspaceDefaults: async () => sourceDefaults("fix", "acme/app!7", { linked_artifacts: [linked] }) });
+    await act(async () => writeInput($("#setup-artifact-url")!, "https://gitlab.test/acme/app/-/merge_requests/7"));
+    await settle(300);
+    await settle(400);
+    expect(container!.textContent).toContain("Also import SCRUM-5 · Login times out");
+    expect(planWorkspace.mock.calls.at(-1)![1]).toMatchObject({ artifact_url: "https://gitlab.test/acme/app/-/merge_requests/7", linked_artifact_urls: ["https://jira.test/browse/SCRUM-5"], branch: "fix" });
+    await act(async () => container!.querySelector<HTMLInputElement>(".task-setup-linked input")!.click());
+    await settle(400);
+    expect(planWorkspace.mock.calls.at(-1)![1]).toMatchObject({ linked_artifact_urls: [] });
   });
 
-  it("does not execute a plan that became stale while it was loading", async () => {
-    const planned = deferred<WorkspaceSetupPlan>();
-    const planWorkspace = vi.fn(() => planned.promise);
-    const startWorkspace = vi.fn();
-    const dialogClient: SetupClient = { ...client, planWorkspace, startWorkspace };
-    await renderDialog(dialogClient);
-
-    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
-    act(() => review.click());
-    writeInput(container!.querySelector<HTMLInputElement>("#setup-branch")!, "new-task");
-    await act(async () => { planned.resolve(createPlan()); await Promise.resolve(); });
-    expect(startWorkspace).not.toHaveBeenCalled();
-  });
-  it("invalidates the reviewed plan when an input changes before approval", async () => {
-    const planWorkspace = vi.fn(async () => createPlan());
-    const startWorkspace = vi.fn(async () => workspaceOperation(createPlan(), "completed"));
-    await renderDialog({ ...client, planWorkspace, startWorkspace });
-
-    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
-    await act(async () => { review.click(); await Promise.resolve(); });
-    expect(container!.textContent).toContain("Reviewed setup effects");
-    await act(async () => { writeInput(container!.querySelector<HTMLInputElement>("#setup-branch")!, "deliberate-edit"); });
-    expect(container!.textContent).not.toContain("Reviewed setup effects");
-    expect(startWorkspace).not.toHaveBeenCalled();
-  });
-
-  it("returns a rejected approval to editable review using the backend operation code", async () => {
-    const failure = Object.assign(new Error("The reviewed endpoint changed"), {
-      code: "http_error", operationCode: "stale_plan",
-    });
-    const planWorkspace = vi.fn(async () => createPlan());
-    const startWorkspace = vi.fn(async () => { throw failure; });
-    await renderDialog({ ...client, planWorkspace, startWorkspace });
-    const button = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent === label)!;
-    await act(async () => { button("Review setup").click(); await Promise.resolve(); });
-    await act(async () => { button("Start setup").click(); await Promise.resolve(); });
+  it("opens an existing folder with only a path and name", async () => {
+    const planWorkspace = planner();
+    await renderDialog({ ...client, planWorkspace });
+    await act(async () => button("Open an existing folder instead")!.click());
     await settle();
+    expect($("#setup-repository")).toBeNull();
+    expect($("#setup-artifact-url")).toBeNull();
+    expect($("#setup-branch")).toBeNull();
+    await act(async () => writeInput($("#setup-checkout")!, "/tmp/borrowed"));
+    await settle(400);
+    expect(planWorkspace.mock.calls.at(-1)![1]).toEqual({ operation: "open", path: "/tmp/borrowed", label: "borrowed", task_name: null, focus: true });
+    expect(button("Open Space")).toBeDefined();
+    expect(container!.textContent).toContain("as it is; Cockpit never deletes it");
+  });
 
-    expect(container!.querySelector<HTMLInputElement>("#setup-branch")?.disabled).toBe(false);
+  it("asks for a fresh confirmation when the backend says the plan went stale", async () => {
+    const failure = Object.assign(new Error("The reviewed endpoint changed"), { code: "http_error", operationCode: "stale_plan" });
+    const planWorkspace = planner();
+    const startWorkspace = vi.fn().mockRejectedValueOnce(failure).mockImplementation(async (_session: string, request: { operation_id: string }) => workspaceOperation(createPlan({ operation_id: request.operation_id }), "running"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace, workspaceOperation: vi.fn(() => new Promise<WorkspaceOperation>(() => undefined)) });
+    await settle(400);
+    await act(async () => button("Create Space")!.click());
+    await settle(400);
     expect(container!.querySelector("[role='alert']")?.textContent).toContain(failure.message);
-    expect(button("Review setup").disabled).toBe(false);
-    await act(async () => { button("Review setup").click(); await Promise.resolve(); });
-    expect(button("Start setup").disabled).toBe(false);
+    expect($("#setup-branch")!.disabled).toBe(false);
+    expect(planWorkspace).toHaveBeenCalledTimes(2);
     expect(startWorkspace).toHaveBeenCalledTimes(1);
+    await act(async () => button("Create Space")!.click());
+    await settle();
+    expect(startWorkspace).toHaveBeenCalledTimes(2);
+    expect(startWorkspace.mock.calls[1][1]).toEqual({ operation_id: "operation-2", expected_generation: 1 });
   });
 
-
-  it("retains a failed start receipt across close and reopens it for inspection", async () => {
-    const plan = createPlan();
-    const planWorkspace = vi.fn(async () => plan);
+  it("keeps a started setup with an unknown outcome across close and reopen", async () => {
+    const planWorkspace = planner();
     const startWorkspace = vi.fn(async () => { throw new Error("connection lost"); });
     const readOperation = vi.fn()
       .mockRejectedValueOnce(new Error("status unavailable"))
-      .mockResolvedValueOnce(workspaceOperation(plan, "outcome_unknown"));
-    const dialogClient: SetupClient = { ...client, planWorkspace, startWorkspace, workspaceOperation: readOperation };
-    container = document.createElement("div");
-    document.body.append(container);
-    await act(async () => {
-      root = createRoot(container!);
-      root.render(createElement(ReopenHarness, { dialogClient }));
-    });
+      .mockResolvedValueOnce(workspaceOperation(createPlan({ operation_id: "operation-1" }), "outcome_unknown"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace, workspaceOperation: readOperation });
+    await settle(400);
+    await act(async () => button("Create Space")!.click());
     await settle();
+    expect($("#setup-branch")!.disabled).toBe(true);
+    expect(button("Check setup")).toBeDefined();
 
-    const review = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review setup")!;
-    await act(async () => { review.click(); await Promise.resolve(); });
-    const approve = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Start setup")!;
-    await act(async () => { approve.click(); await Promise.resolve(); });
+    act(() => $<HTMLButtonElement>("[aria-label='Close setup dialog']")!.click());
+    act(() => button("Reopen setup")!.click());
+    await settle(400);
+    expect(planWorkspace).toHaveBeenCalledTimes(1);
+    await act(async () => button("Check setup")!.click());
     await settle();
     expect(planWorkspace).toHaveBeenCalledTimes(1);
-    expect(container!.querySelector<HTMLInputElement>("#setup-branch")?.disabled).toBe(true);
-    expect(container!.textContent).toContain("Check operation");
+    expect(startWorkspace).toHaveBeenCalledTimes(1);
+    expect(button("Recover existing checkout")).toBeDefined();
+  });
 
-    act(() => container!.querySelector<HTMLButtonElement>("[aria-label='Close setup dialog']")?.click());
-    act(() => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Reopen setup")?.click());
+  it("closes itself once the Space is ready", async () => {
+    const planWorkspace = planner();
+    const onCompleted = vi.fn();
+    const startWorkspace = vi.fn(async (_session: string, request: { operation_id: string }) => workspaceOperation(createPlan({ operation_id: request.operation_id }), "completed"));
+    await renderDialog({ ...client, planWorkspace, startWorkspace }, { onCompleted });
+    await settle(400);
+    await act(async () => button("Create Space")!.click());
     await settle();
-    const inspect = [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Check operation")!;
-    await act(async () => { inspect.click(); await Promise.resolve(); });
-    expect(planWorkspace).toHaveBeenCalledTimes(1);
-    expect(container!.textContent).toContain("Recover existing checkout");
+    expect(onCompleted).toHaveBeenCalledTimes(1);
+    expect($("[role='dialog']")).toBeNull();
   });
 });

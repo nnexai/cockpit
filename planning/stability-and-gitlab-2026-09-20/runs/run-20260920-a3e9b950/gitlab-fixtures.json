@@ -43,5 +43,12 @@
   },
   "main_after_creation": {"protected": true, "commit": "a06239cf46b0b8262bcc2257b3883e45812a0b68"},
   "creation_notes": ["Initial issue POST without explicit JSON content type was rejected HTTP 415; corrected request succeeded once.", "All commands used installed glab authentication without token extraction or export."],
-  "state": "created_and_retained_for_acceptance"
+  "state": "created_and_retained_for_acceptance",
+  "setup_link_fixture": {
+    "authorization": "user asked on 2026-09-24 to create a test MR with glab and link Jira SCRUM-5 to it",
+    "merge_request": {"iid": 2, "url": "https://gitlab.com/nnex.ai/integration/-/merge_requests/2", "draft": true, "title": "Draft: SCRUM-5 Fix login timeout on slow networks"},
+    "branch": {"name": "cockpit-fixture/SCRUM-5-login-timeout", "commit": "8345a4664b1a38816fee6ecf61940a274c819cf7", "file": ".cockpit-fixtures/SCRUM-5-login-timeout.txt"},
+    "jira": {"site": "https://nnexai.atlassian.net", "key": "SCRUM-5", "created_by": "jira-cli on the user's request", "comments": 1},
+    "prohibited_changes": ["merge", "main/protected branch writes", "remote deletion without the user's request"]
+  }
 }

@@ -30,6 +30,7 @@ const plan = {
   focus: true,
   ownership: "owned_worktree",
   artifact: null,
+  linked_artifacts: [],
   effects: [],
   warnings: [],
 };
@@ -69,7 +70,17 @@ it("opens a directory without repository fields and rejects worktree fields on t
 });
 
 it("keeps unmatched provider defaults unselected and rejects a repository outside the returned matches", () => {
-  const defaults = { artifact: { provider_id: "github", kind: "issue", canonical_id: "acme/repo#2", original_url: "https://github.com/acme/repo/issues/2", canonical_url: "https://github.com/acme/repo/issues/2" }, repositories: [], repository_id: null, branch: null, label: null, checkout_path: null };
+  const defaults = { artifact: { provider_id: "github", kind: "issue", canonical_id: "acme/repo#2", original_url: "https://github.com/acme/repo/issues/2", canonical_url: "https://github.com/acme/repo/issues/2" }, repositories: [], repository_id: null, branch: null, label: null, checkout_path: null, title: null, linked_artifacts: [] };
   expect(parseWorkspaceDefaults(defaults)).toEqual(defaults);
   expect(() => parseWorkspaceDefaults({ ...defaults, repository_id: "unmatched" })).toThrow();
+});
+
+it("carries linked work items in defaults and worktree requests", () => {
+  const jira = { provider_id: "jira", kind: "issue", canonical_id: "SCRUM-5", original_url: "https://jira.test/browse/SCRUM-5", canonical_url: "https://jira.test/browse/SCRUM-5" };
+  const defaults = { artifact: jira, repositories: [], repository_id: null, branch: null, label: null, checkout_path: null, title: "Login", linked_artifacts: [{ artifact: jira, title: null, error: "not visible" }] };
+  expect(parseWorkspaceDefaults(defaults)).toEqual(defaults);
+  expect(() => parseWorkspaceDefaults({ ...defaults, linked_artifacts: [{ artifact: jira, title: 5, error: null }] })).toThrow();
+  const request = { operation: "create", repository_id: "repo", branch: null, base_ref: null, checkout_path: null, label: null, task_name: null, artifact_url: "https://gitlab.test/a/b/-/merge_requests/1", linked_artifact_urls: [jira.canonical_url], focus: true };
+  expect(parseWorkspaceSetupRequest(request)).toEqual(request);
+  expect(() => parseWorkspaceSetupRequest({ ...request, linked_artifact_urls: Array(5).fill(jira.canonical_url) })).toThrow();
 });

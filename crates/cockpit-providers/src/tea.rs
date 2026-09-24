@@ -642,6 +642,7 @@ impl SourceProvider for TeaSourceProvider {
                     source_branch: None,
                     source_url: None,
                     source_commit: None,
+                    description: None,
                 })
             }
             ArtifactKind::Review(index) => {
@@ -687,6 +688,7 @@ impl SourceProvider for TeaSourceProvider {
                     source_branch,
                     source_url: None,
                     source_commit: None,
+                    description: None,
                 })
             }
             ArtifactKind::Wiki(_) => Err(InspectionError::new(

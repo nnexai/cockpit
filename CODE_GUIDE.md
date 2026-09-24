@@ -58,7 +58,21 @@ executable = "tea"
 login = "my-existing-tea-login"
 ```
 
-Source import verifies the companion's primary repository origin against this configured instance before starting Tea. A missing login, unavailable adapter or unsupported artifact returns an explicit failure. Generated source files carry provenance and a last-written hash; a refresh preserves user edits. Raw frontmatter never grants overwrite permission.
+GitLab (`glab`) and Jira (`jira`, ankitpokhrel/jira-cli) use the CLI's own login:
+
+```toml
+[[providers]]
+id = "gitlab"
+base_url = "https://gitlab.com"
+executable = "glab"
+
+[[providers]]
+id = "jira"
+base_url = "https://your-site.atlassian.net"
+executable = "jira"
+```
+
+Source import verifies the companion's primary repository origin against the configured forge instance before starting its CLI. Jira work items have no repository, so they are checked against the configured site instead. A missing login, unavailable adapter or unsupported artifact returns an explicit failure. Generated source files carry provenance and a last-written hash; a refresh preserves user edits. Raw frontmatter never grants overwrite permission.
 
 ## Boundaries worth preserving
 

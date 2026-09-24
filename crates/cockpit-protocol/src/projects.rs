@@ -91,6 +91,9 @@ pub enum WorkspaceSetupRequest {
         label: Option<String>,
         task_name: Option<String>,
         artifact_url: Option<String>,
+        /// Work items linked from the artifact that setup also imports.
+        #[serde(default)]
+        linked_artifact_urls: Vec<String>,
         focus: bool,
     },
     Open {
@@ -144,6 +147,8 @@ pub struct WorkspaceSetupPlan {
     pub label: String,
     pub focus: bool,
     pub artifact: Option<ProjectArtifact>,
+    #[serde(default)]
+    pub linked_artifacts: Vec<ProjectArtifact>,
     pub effects: Vec<String>,
     pub warnings: Vec<String>,
 }
