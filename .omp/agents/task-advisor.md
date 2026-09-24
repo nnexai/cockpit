@@ -1,7 +1,7 @@
 ---
-name: astra-advisor
-description: Read-only Astra second opinion for a Luna runner's bounded technical question.
-model: "openai-codex/gpt-6-astra:medium"
+name: task-advisor
+description: Read-only gpt-6-sol second opinion for a Luna runner's bounded technical question.
+model: "openai-codex/gpt-6-sol:medium"
 thinking-level: medium
 tools: read, grep, glob, hub
 spawns: []
