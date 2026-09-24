@@ -471,6 +471,7 @@ def main():
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
     parser.add_argument("--annotation", action="store_true", help="also exercise native region and note save, then basket clear or explicit agent-fixture paste")
     parser.add_argument("--agent-fixture", type=Path, help="with --annotation, use this explicit disposable agent-like receiver binary for native paste proof")
+    parser.add_argument("--element-boundary", action="store_true", help="check nested-scroll refusal and valid DOM Element selection in the private native browser")
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
     parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
@@ -1023,6 +1024,37 @@ def main():
             lambda: (lambda rgb: rgb if rgb[1] >= 100 and rgb[0] < 80 and rgb[2] < 130 else None)(
                 webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame');return [...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3)})()")),
             "completed scroll marker painted on native canvas", 3, [("WebKitWebDriver", driver_process)])
+        if args.element_boundary:
+            webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Element\"]');if(!b)throw Error('Element tool unavailable');b.click();const s=document.querySelector('.browser-surface');s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;s.releasePointerCapture=()=>{};return true})()")
+            wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-element')"),
+                       "native Element tool ownership", 3)
+            nested_point = webdriver.execute("(()=>{const r=document.querySelector('canvas.browser-frame').getBoundingClientRect();return {x:r.left+100,y:r.top+110}})()")
+            webdriver.execute("(()=>{const s=document.querySelector('.browser-surface'),r=document.querySelector('canvas.browser-frame').getBoundingClientRect();for(const [type,buttons] of [['pointermove',0],['pointerdown',1],['pointerup',0]])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:28,pointerType:'mouse',clientX:r.left+100,clientY:r.top+110,button:0,buttons}));return true})()")
+            limitation = "Element inspection cannot anchor a nested scrolling or clipped element; use Region instead"
+            wait_until(lambda: webdriver.execute("document.querySelector('[role=\"alert\"]')?.textContent===" + json.dumps(limitation)
+                       + " && document.querySelectorAll('.browser-annotation-element').length===0"),
+                       "native nested-scroll refusal without a phantom mark", 5)
+            rejected_image = root / "native-element-nested-refused.png"
+            rejected_image.write_bytes(base64.b64decode(webdriver.request("GET", webdriver.path("/screenshot"))["value"]))
+            webdriver.execute("(()=>{const s=document.querySelector('.browser-surface'),r=document.querySelector('canvas.browser-frame').getBoundingClientRect();s.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,cancelable:true,pointerId:29,pointerType:'mouse',clientX:r.left+100,clientY:r.top+25,button:0,buttons:0}));return true})()")
+            wait_until(lambda: webdriver.execute("!!document.querySelector('.browser-element-hover') && !document.querySelector('[role=\"alert\"]')"),
+                       "native valid DOM hover clears stale nested limitation", 5)
+            webdriver.execute("(()=>{const s=document.querySelector('.browser-surface'),r=document.querySelector('canvas.browser-frame').getBoundingClientRect();for(const [type,buttons] of [['pointerdown',1],['pointerup',0]])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:29,pointerType:'mouse',clientX:r.left+100,clientY:r.top+25,button:0,buttons}));return true})()")
+            def element_saved():
+                listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                    {"target": action["target"], "action": {"type": "list"}})
+                return next((mark for draft in listing.get("inventory", {}).get("drafts", [])
+                    for mark in draft.get("annotations", []) if mark.get("kind") == "element"
+                    and mark.get("evidence", {}).get("tag") == "h1"), None)
+            mark = wait_until(element_saved, "native valid h1 element evidence persisted", 5)
+            wait_until(lambda: webdriver.execute("document.querySelectorAll('.browser-annotation-element').length===1"),
+                       "native selected h1 mark painted", 5)
+            selected_image = root / "native-element-h1-selected.png"
+            selected_image.write_bytes(base64.b64decode(webdriver.request("GET", webdriver.path("/screenshot"))["value"]))
+            result["element_boundary"] = {"nested_pointer": nested_point, "limitation": limitation,
+                "native_nested_screenshot": str(rejected_image), "valid_evidence": mark["evidence"],
+                "annotation_id": mark["id"], "bounds": mark["bounds"],
+                "native_element_screenshot": str(selected_image), "pointer_transport": "separated DOM PointerEvents, not native OS input"}
         if args.hidden_scroll_smoke:
             page_before = webdriver.execute("document.querySelector('input[aria-label=\"Page URL\"]')?.value")
             if page_before != fixture_url:

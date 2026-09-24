@@ -1321,10 +1321,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setMessage("Element inspection became stale; select the element again.");
       return null;
     }
-    if (inspectionNoticeRef.current) {
+    if (inspectionNoticeRef.current && result.inspectable && result.freshness === "fresh") {
       const notice = inspectionNoticeRef.current;
       inspectionNoticeRef.current = null;
       setMessage((current) => current === notice ? null : current);
+      setAnnotationNotice((current) => current === notice ? null : current);
       setStatus((current) => current === "unsupported" ? "ready" : current);
     }
     setInspection(result);
@@ -1433,6 +1434,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     event.preventDefault();
     const documentPoint = pointFor(event);
     if (tool === "element") {
+      setAnnotationNotice(null);
       selectingElementRef.current = true;
       if (hoverInspectTimerRef.current !== null) window.clearTimeout(hoverInspectTimerRef.current);
       hoverInspectTimerRef.current = null;
@@ -1536,7 +1538,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
             y: result.bounds.y + latest.viewport.scroll_y,
           };
           void persist({ id: annotationId(), kind: "element", color, points: [{ x: bounds.x, y: bounds.y }], bounds, evidence: result.evidence, comment: null });
-        } else if (result) setMessage(result.limitation ?? "The selected element is not fresh or accessible; select it again.");
+        } else if (result) {
+          const notice = result.limitation ?? "The selected element is not fresh or accessible; select it again.";
+          inspectionNoticeRef.current = notice;
+          setMessage(notice);
+          setAnnotationNotice(notice);
+        }
       }).finally(() => { selectingElementRef.current = false; });
       return;
     }

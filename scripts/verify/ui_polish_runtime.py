@@ -76,8 +76,8 @@ def start():
     (root / "runtime.json").write_text(json.dumps(ledger, indent=2))
     env = environment(root)
     launch(root, "fixture", [sys.executable, "-u", "-c",
-        "from http.server import HTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; "
-        "server=HTTPServer(('127.0.0.1',0),partial(SimpleHTTPRequestHandler,directory=sys.argv[1])); "
+        "from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; "
+        "server=ThreadingHTTPServer(('127.0.0.1',0),partial(SimpleHTTPRequestHandler,directory=sys.argv[1])); "
         "print(server.server_port,flush=True); server.serve_forever()", str(root / "www")], env)
     for _ in range(50):
         lines = (root / "fixture.log").read_text().splitlines()

@@ -2297,6 +2297,16 @@ async function command(request) {
         if (tag === 'canvas') {
           return { kind: 'unsupported', limitation: 'Canvas content has no inspectable inner DOM element' };
         }
+        // A page-scroll descriptor cannot track clipping or independently moving
+        // descendants of a nested overflow container. Do not save a box that
+        // would paint over unrelated visible content after that container scrolls.
+        for (let ancestor = e; ancestor && ancestor !== document.body && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor);
+          if ((/(auto|scroll|hidden|clip)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth + 1)
+            || (/(auto|scroll|hidden|clip)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1)) {
+            return { kind: 'unsupported', limitation: 'Element inspection cannot anchor a nested scrolling or clipped element; use Region instead' };
+          }
+        }
         const r = e.getBoundingClientRect();
         const finiteRect = [r.x, r.y, r.width, r.height].every(Number.isFinite)
           && r.width >= 0 && r.height >= 0
