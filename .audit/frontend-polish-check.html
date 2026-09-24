@@ -181,7 +181,7 @@ ol.next li, ul li { margin: 4px 0; }
 </div>
 
 <h2>Follow-up pass (2026-09-24)</h2>
-<p>Everything below was done in the working tree (not committed) and checked in the browser against a fresh isolated fixture. Typecheck passes, and 233 unit tests pass, including 2 new ones.</p>
+<p>Committed as <code>587f94b</code>. Everything below was checked in the browser against a fresh isolated fixture. Typecheck passes, and 233 unit tests pass, including 2 new ones.</p>
 <div class="table-wrap"><table>
 <tr><th>Item</th><th>Status</th><th>What changed</th></tr>
 <tr><td>R1 checkbox</td><td><span class="pill ok">fixed</span></td><td>Checkbox is 13px wide again, with its label on one line. With no provider configured, the checkbox is hidden and the empty text no longer points to a missing "Import source" control.</td></tr>
@@ -202,14 +202,33 @@ ol.next li, ul li { margin: 4px 0; }
 <figure><img src="polish-check/44-review-staged.png" alt="Review empty comparison after follow-up"><figcaption>After: empty Review shows "Comments"; the pane breadcrumb reads together.</figcaption></figure>
 <figure><img src="polish-check/48-narrow.png" alt="1024 wide layout"><figcaption>At 1024px wide: Send stays on its row. The Review toolbar still clips when narrow (not addressed).</figcaption></figure>
 </div>
-<p><b>Still open:</b></p>
+<h2>Second follow-up pass (2026-09-24)</h2>
+<p>The items left open above, done one at a time with one commit each. Every item was checked in the browser against an isolated fixture (<code>polish-*</code> sessions only). Typecheck passes, all 239 frontend tests pass, and all Rust workspace tests except Tauri pass (<code>cockpit-tauri</code> passes <code>cargo check</code>).</p>
+<div class="table-wrap"><table>
+<tr><th>Commit</th><th>Item</th><th>What changed</th></tr>
+<tr><td><code>96ddf3a</code></td><td>Active tab</td><td>The active tab is filled with the solid accent colour and dark text, as in Herdr. Its hover and focus ring are adjusted so they stay visible on the fill.</td></tr>
+<tr><td><code>5526cbe</code></td><td>"switch session..."</td><td>The command and the chooser heading are now "Switch session…" and "Switch session", matching the other commands and dialog titles.</td></tr>
+<tr><td><code>758f67d</code></td><td>Hygiene</td><td>The app icon is served as the favicon, so the <code>/favicon.ico</code> 404 is gone. The comments heading uses <code>--font-size-base</code> instead of 16px.</td></tr>
+<tr><td><code>30ecf1d</code></td><td>Q10 / Q9</td><td>An empty Context root shows "Empty" in the tree and a "No files here yet" message with an Open Resources button. "Import local snapshot" now sits right under the sources instead of at the bottom of the panel. New unit test.</td></tr>
+<tr><td><code>03764bb</code></td><td>Q7 commands</td><td>The highlight and the arrow keys follow the order the rows are displayed in. The highlight moves only when the pointer actually moves. Hover uses a lighter fill than the active row. A disabled row shows only the part of the reason that applies to that command, on one line, with the full reason in the tooltip. New tests.</td></tr>
+<tr><td><code>15421b1</code></td><td>Review toolbar</td><td>Below 520px wide, Files shows only its icon and count, and the comparison select can shrink. Below 380px the toolbar wraps onto a second row instead of pushing Refresh out of view. Nothing clips at any pane width from 300px to 520px.</td></tr>
+<tr><td><code>2ff4b8f</code></td><td>#8 scales</td><td>Radii use four tokens: small 3px, control 4px, panel 6px (dialogs and menus that used 5, 6 or 8px) and pill. Every z-index is a named layer. I checked in the browser that the relative order is unchanged; only the comment sheet moved, from 19 to 20.</td></tr>
+<tr><td><code>22f2efb</code></td><td>Ahead/behind</td><td>New <code>GET /api/v1/sessions/{id}/space-git</code> route and Tauri command. Cockpit runs Git (hooks and global config disabled, output and time limited) only on the checkout paths in Herdr's snapshot. The sidebar polls it every 15s while the page is visible and shows <code>main ↑4</code>, plus <code>↓N</code> when the branch is behind. A new commit showed up on the next poll with no Herdr event. Recorded in DECISIONS.md. Tests with real Git fixtures.</td></tr>
+<tr><td><code>f0cd934</code></td><td>#10 BrowserPane</td><td>Split into <code>browserPaneModel.ts</code> (pure types and helpers), <code>AnnotationControls.tsx</code> (tool icons and colour picker) and <code>BrowserChrome.tsx</code> (tab strip, navigation bar, saved-feedback list and annotation layer, all without state). Stream, input, draft and delivery logic stays in <code>BrowserPane.tsx</code>, now 2,194 lines, down from 2,425. Checked live: tabs, navigation, drawing a region, selecting and the element hover.</td></tr>
+</table></div>
+<div class="grid2">
+<figure><img src="polish-check/60-tab-solid.png" alt="Solid active tab"><figcaption>Active tab filled like Herdr's.</figcaption></figure>
+<figure><img src="polish-check/64-ahead.png" alt="Space with ahead count"><figcaption><code>main ↑3</code> on the parent Space, read from Git.</figcaption></figure>
+<figure><img src="polish-check/61-context-empty.png" alt="Empty Context root"><figcaption>An empty Context root now explains itself and links to Resources.</figcaption></figure>
+<figure><img src="polish-check/62-commands.png" alt="Commands palette"><figcaption>Disabled rows show a short reason; hover is lighter than the active row.</figcaption></figure>
+<figure><img src="polish-check/63-review-narrow.png" alt="Narrow Review toolbar"><figcaption>A narrow Review pane: the toolbar wraps, with Refresh visible.</figcaption></figure>
+<figure><img src="polish-check/65-browser-split.png" alt="Browser pane after the split"><figcaption>The browser pane after the split, with a region annotation.</figcaption></figure>
+</div>
+<p><b>Remaining observations:</b></p>
 <ul>
-<li>Ahead/behind count (needs backend work).</li>
-<li>#8 radius and z-index scale.</li>
-<li>#10 splitting <code>BrowserPane.tsx</code>.</li>
-<li>Q10 empty Context file tree.</li>
-<li>The Review toolbar clips at narrow widths.</li>
-<li>The "switch session..." command is lowercase. It isn't Herdr wording, but the chooser's heading matches it, so it's left as is.</li>
+<li><b>Setup progress stall (intermittent).</b> In one of four runs, the New Space dialog stayed at "companion ready · running". The operation file said <code>completed</code>, and the backend finished 1.3s after it started. Three later runs reached "completed" normally, and all their operation polls returned 200 in under 15ms. Generation and sequence increase together on every store write, so a stale snapshot outranking <code>completed</code> is ruled out. Not fixed: it needs a reproduction first.</li>
+<li><b>Herdr places "new" and "menu" at the bottom of the spaces list.</b> Cockpit keeps its + in the section heading. This is a deliberate difference, left unchanged.</li>
+<li>Agent rows and state glyphs still haven't been seen live, because the fixture runs no agents.</li>
 </ul>
 
 <h2>Original suggested follow-up instructions</h2>
