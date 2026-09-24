@@ -601,7 +601,16 @@ function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; muta
   })}</div>;
 }
 
-type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser"; disabled?: boolean; reason?: string; run: () => void };
+type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
+
+/** Picks the clause of a renderer diagnostic chain that explains one action, e.g. "Requires a safe source pane directory". */
+export function rendererReasonFor(kind: RendererActionDefinition["kind"], reason: string): string | undefined {
+  const prefix = kind === "review" ? "Open Review " : kind === "files" ? "Open files " : "Open Context ";
+  const clause = reason.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  if (!clause) return undefined;
+  const rest = clause.slice(prefix.length);
+  return rest.charAt(0).toLocaleUpperCase() + rest.slice(1);
+}
 type RendererActionDefinition = { id: string; label: string; direction: "right" | "down"; kind: "review" | "files" | "context" };
 
 const rendererActionDefinitions: RendererActionDefinition[] = [
@@ -651,7 +660,12 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const ranked = normalized
     ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
-  const filtered = normalized || showAll ? ranked : primaryIds.flatMap((id) => ranked.filter((action) => action.id === id));
+  const groups = ["Navigate", "Space", "Tab", "Pane", "Browser"] as const;
+  // Rows render grouped, so keep `filtered` in that order for the highlight and arrow keys. With a query, groups follow their best match.
+  const groupOrder: readonly CommandAction["group"][] = normalized ? [...new Set(ranked.map((action) => action.group))] : groups;
+  const filtered = normalized || showAll
+    ? groupOrder.flatMap((group) => ranked.filter((action) => action.group === group))
+    : primaryIds.flatMap((id) => ranked.filter((action) => action.id === id));
   useEffect(() => setActive((current) => Math.min(current, Math.max(0, filtered.length - 1))), [filtered.length]);
   useEffect(() => { searchRef.current?.focus(); }, []);
   useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [active, normalized]);
@@ -659,17 +673,16 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     const action = filtered[active];
     if (action && !action.disabled) action.run();
   };
-  const groups = ["Navigate", "Space", "Tab", "Pane", "Browser"] as const;
   return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={ref} className="command-overlay" role="dialog" aria-modal="true" aria-labelledby="commands-title" onKeyDown={(event) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => filtered.length === 0 ? 0 : (current + (event.key === "ArrowDown" ? 1 : filtered.length - 1)) % filtered.length); return; }
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
-  }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groups.map((group) => {
+  }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groupOrder.map((group) => {
     const groupActions = !normalized && !showAll ? (group === "Navigate" ? filtered : []) : filtered.filter((action) => action.group === group);
     if (groupActions.length === 0) return null;
     return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => {
       const index = filtered.indexOf(action);
-      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseEnter={() => setActive(index)} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>;
+      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>;
     })}</section>;
   })}</div><footer className="command-footer"><span>↑↓ navigate · Enter choose · Esc close</span><button type="button" onClick={() => { setShowAll((value) => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
 }
@@ -1451,8 +1464,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
     ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
       const capability = kind === "review" ? selectedRenderer?.presentation.can_open_review : kind === "files" ? selectedRenderer?.presentation.can_open_files : selectedRenderer?.presentation.can_open_context;
-      const reason = selectedRenderer?.presentation.reason ?? (kind === "context" ? "Context requires a configured companion directory" : "Select a pane with a configured repository");
-      return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability, reason, run: () => { if (selection.paneId) void renderers.open(selection.paneId, direction, kind === "context" ? undefined : kind); } };
+      const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a pane with a configured repository";
+      const detail = selectedRenderer?.presentation.reason;
+      const reason = detail ? rendererReasonFor(kind, detail) ?? fallback : fallback;
+      return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability, reason, reasonDetail: detail, run: () => { if (selection.paneId) void renderers.open(selection.paneId, direction, kind === "context" ? undefined : kind); } };
     }),
   ];
   const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;

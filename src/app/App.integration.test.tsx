@@ -364,6 +364,10 @@ describe("mounted App mutation and session ordering", () => {
 
     expect(button("Open Review right").disabled).toBe(false);
     click(button("All commands"));
+    const rows = [...container.querySelectorAll(".command-row")];
+    expect(container.querySelector(".command-row.is-active")).toBe(rows[0]);
+    act(() => container.querySelector(".command-overlay")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect(container.querySelector(".command-row.is-active")).toBe(rows[1]);
     expect(button("Open Review below").disabled).toBe(false);
     click(button("Open Review right"));
     await settle();

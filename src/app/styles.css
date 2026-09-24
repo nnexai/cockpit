@@ -2004,7 +2004,11 @@ summary:focus-visible {
   cursor: pointer;
 }
 
-.command-row:hover,
+.command-row:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 .command-row:focus-visible,
 .command-row.is-active {
   background: var(--surface-selected);
@@ -2023,9 +2027,12 @@ summary:focus-visible {
 }
 
 .command-row-label small {
-  overflow-wrap: anywhere;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
 }
 
 .command-row kbd {
