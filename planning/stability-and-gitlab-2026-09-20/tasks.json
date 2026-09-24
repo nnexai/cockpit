@@ -221,38 +221,27 @@
         7
       ],
       "brief": "tasks/FLOW-01.md",
-      "status": "blocked",
+      "status": "queued",
       "owner": null,
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [
-        "Representative browser and Linux-native Context comment/paste path, browser borrowed/dirty teardown, and browser Review staged/unstaged/untracked/branch plus changed-source refresh passed. OBS-025 pre-ack resize path was repaired and browser/Linux-native first-attach split smoke passed; the original rejected command was not traced. Native borrowed/dirty and Review parity, larger Review/source/media/mermaid/search breadth, save/paste response-loss reconciliation and full process/session restart remain unexecuted; FLOW-01 is not complete."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
         "runs/run-20260920-a3e9b950/FLOW-01.md",
-        "runs/run-20260920-a3e9b950/FLOW-01-review-stale-red.json",
-        "runs/run-20260920-a3e9b950/FLOW-01-review-stale-green.json",
-        "runs/run-20260920-a3e9b950/FLOW-01-review-native-red.json"
+        "runs/run-20260920-a3e9b950/FLOW-01-OBS039-green.json"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
         "5800d5b45822b9aea5e5bfc731c7e84678b0b040",
-        "dbe0f57d9a2ccba717dcb1c0f5cdefaf62da70fd",
-        "31a8768f71c71ca12bb589b96a3e819669ce2142",
-        "3a42c46620c41726c974a8439b3dea61f427e47d",
-        "d9276f12276728209bda71b5c1b760114c2c76cb",
-        "1f433ff7b236f667b11c0cb305fdaf90031b9a18"
+        "e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c"
       ],
       "notes": [
         "OBS-015 consolidated batch accepted in AUTORUN.md. BatchWorkflows owns non-browser workflow implementation, preserving returned Context/Review/terminal fixes and delivered setup/source contracts. No validation during writing; delegated integrated verification follows all writers.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
         "2026-09-23 isolated browser/Herdr slice: reviewed companion snapshot, saved line comment, stale-source refusal without dispatch, explicit re-preparation, exact real Pi input without Enter, and browser reload persistence passed; FLOW-01 remains blocked on native and broader matrices.",
-        "2026-09-23 isolated Linux-native Tauri/WebKit and Herdr session native-flow-add14802e3ef verified changed-source rejection with no dispatched draft, explicit stale-excerpt override, accepted bracketed paste without Enter to real Pi, saved-batch/Pi draft after WebView reload, and clean owned teardown. Three native screenshots plus both durable receipt JSONs are in FLOW-01.md; all fixture services and root were removed.",
-        "2026-09-23 isolated browser gateway/Herdr session flowborrowed8f8875fc verified ordinary plain and Git-nested directories as borrowed and non-removable, preserved source bytes on close, refused dirty linked worktree removal while file and manifest survived, and removed only the subsequently clean Cockpit-owned child after fresh preview and typed challenge. Browser and Herdr hierarchy matched; seven screenshots, IDs and hashes in FLOW-01.md; fixture stopped and removed. Native borrowed/dirty parity and the wider FLOW matrix remain unexecuted.",
-        "2026-09-23 private Review fixture flowreview8f88949c: browser All local changes, separate staged/unstaged overlap, untracked and explicit main branch diffs rendered exact markers; edited untracked source refresh kept selection and replaced stale line. Private Reviewr TUI showed same changed paths. Initial adjacent terminal reported attach pending until explicit Retry restored shell; OBS-025 tracks first-attach repair. Eight browser captures and clean owned teardown in FLOW-01.md; fixture removed.",
-        "2026-09-23 OBS-025: red-capable pending-ownership regression caught premature viewport resize; gated initial and xterm resize until Herdr owned/observing, focused 22/22 and build passed. Private browser Reviewr split, three reattaches, physical divider drag and 1024x640 minimum showed fish plus Review diff without attach error; private Linux Tauri/WebKit showed the same shell/diff and three reattaches. Four screenshots and cleanup details in FLOW-01.md; larger FLOW-01 remains blocked.",
-        "2026-09-23 Review line/file browser regression: prose edit on changed staged source returned false-current for both drafts before fix; now source-state refresh before commit returns both changed with immutable old anchors, focused red/green test and real browser reload pass (1f433ff7b236f667b11c0cb305fdaf90031b9a18). Actual native WebKit Review edit did not pass (WebDriver invalid session); broader FLOW-01 native/restart/borrowed criteria remain blocked."
+        "OBS-039: committed e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c removed duplicate global Pane, retained Commands/local pane actions, exercised a real split and invalid rename in private Chromium, reconciled Herdr order/input ownership, and verified native WebKit menu; FLOW-01 Review/native workflow gates remain open.",
+        "OBS-042 queued: native parity, Review scopes, borrowed/dirty lifecycle and failure retention remain unexecuted. No unavailable external prerequisite; prior owner released locks at a safe checkpoint."
       ]
     },
     {
@@ -576,16 +565,16 @@
         10
       ],
       "brief": "tasks/WEB-04.md",
-      "status": "blocked",
+      "status": "queued",
       "owner": null,
-      "started_at": null,
+      "started_at": "2026-09-24T03:00:18Z",
       "completed_at": null,
-      "blockers": [
-        "OBS-024 passed repeated native synthetic and browser physical nested/outer wheel routing with a painted native frame after each gesture; exact remote DOM wheel delta still differs at DPR 2 and 1.25. WEB-04 remains blocked: native OS input, horizontal/trackpad, keyboard/IME/clipboard, terminal handoff, multi-client ownership, blockers, repeated reconnect and cleanup acceptance are incomplete. OBS-027 adds a browser DPR1.25 post-navigation physical click misroute: visually Hash generated Page two reload; exact CDP coordinate mode requires disposable browser/native proof. OBS-027 exact fixture events now prove a 1.25× remote pointer coordinate drift after full navigation, reset by physical internal splitter resize. A same-viewport metrics-reapply candidate corrected browser DPR1.25 pointer twice but native DPR2 painted 0 frames during 6.0073 seconds of remote scrolling; it was reverted. Diagnose native descriptor admission and failure-safe capture before another fix; retain the full WEB-04 input/ownership matrix."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
         "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md",
+        "runs/run-20260920-a3e9b950/OBS-020-BROWSER-GEOMETRY.md",
+        "runs/run-20260920-a3e9b950/WEB-04-native-chrome-density-unstable.json",
         "runs/run-20260920-a3e9b950/WEB-04.md"
       ],
       "commits": [
@@ -593,8 +582,8 @@
         "e5bf1cd531375ec09054db8857d1bf68512cc7e7",
         "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9",
         "d3afde761108df45877ecf634b96c0337ce60377",
-        "7ba976920b42097820f397269f4b8a28ce362311",
-        "89ddfa86c96e0342bfac47974aba5abb8b7742e5"
+        "e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c",
+        "413ec15ba3b4a07086e0d5b5b53f6ca69719acfc"
       ],
       "notes": [
         "OBS-015 batch: UI input/navigation/ownership belongs to BatchBrowserUI, helper input/leases to BatchBrowserRuntime, adapters to BatchBrowserHost. File-disjoint contracts in AUTORUN.md govern shared-lock groups; wire interfaces remain fixed. Verification follows integration.",
@@ -602,9 +591,12 @@
         "OBS-019: Main implemented the confirmed Linux/browser scroll recovery repair; macOS-specific execution and acceptance are excluded by the user.",
         "OBS-019: Main is handling the shared browser-ui lock; the scroll recovery repair is under focused verification.",
         "OBS-019: wheel input is retained through matching-frame recovery; adjacent compatible deltas accumulate, a shared two-second deadline prevents queue starvation, and input-generation changes cancel stale work. Focused tests and production build pass. Actual browser gateway acceptance remains required.",
+        "OBS-020: Linux-native 2× helper-routed pointer and wheel input remained aligned across pane expansion and full-document navigation; resize produced a fresh frame without further page activity. See OBS-020-BROWSER-GEOMETRY.md; this proves only that geometry increment, not broad WEB-04 acceptance.",
         "OBS-024: repeatable nested and outer wheel fixture passed browser/native painted positions; calibrated host/remote DPR wheel delta discrepancy stays assigned to WEB-04 and does not close its physical native/input matrix.",
-        "2026-09-23 OBS-026: private real Chromium browser gateway reproduced stale selected title after full-document history; helper now sends identity-guarded asynchronous selected-title event after load. Real page-two, Back, Forward, 302 redirect, reload and hash page events matched painted Cockpit URL and selected title; file:///etc/passwd was rejected visibly with URL and page unchanged and Retry restored Live view. Reviewed final nonblocking title-value guard and recorded red/green screenshots, reports and cleanup in WEB-04.md. OBS-027 new browser DPR1.25 pointer after a full navigation clicked visually Hash but fixture loaded Page two instead; A04/A09 physical click/native input matrix remains open. No WEB-04 completion claim.",
-        "2026-09-23 OBS-027 follow-up: 89ddfa86c96e0342bfac47974aba5abb8b7742e5 records raw browser pointer events before/after the main loader, native first/final screenshots, and a rejected/reverted metrics-reapply candidate. Real browser events/paint passed at DPR1.25; native remote scroll reached 3900 but actual WebKit canvas paints remained 0 in 6.0073s, below the >15 FPS gate. Reviewer identified capture-not-restarted override-error path. WEB-04 still blocked, product source and binary restored to title-only baseline; all disposable services cleaned."
+        "OBS-038 integrated tab close moved inside browser tab in e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c; browser/native hit targets painted, but selected/background close matrix remains. A separate native run observed alternating CSS 674x188 and DPR2 1348x376 bitmaps at one viewport revision; WEB-04 density/input gates remain open.",
+        "OBS-042 queued: native frame fit and remaining A04-A12 input, ownership and blocker cases require execution; no external resource prevents work.",
+        "OBS-042: decoded raster-generation diagnostics prove newer CSS-density frames must not be dropped; DPR2 settled-frame acceptance remains red. Lifecycle/readiness subrepair and diagnostic harness committed in 413ec15ba3b4a07086e0d5b5b53f6ca69719acfc after focused 6/6 tests, build, actual isolated browser navigation/click/Close and private native one-helper observations. Owner released at a clean checkpoint; A04-A12 browser/native and TUI handoff acceptance remain open.",
+        "OBS-043 supersedes DPR2 as an unconditional first/settled/full-time gate: attempt sharp frames but accept lower-resolution streaming to preserve newer content, animations and input responsiveness. Chromium/CDP is the frame producer; WebKit is the Linux-native consumer. WEB-04 returns to queued with clean released locks, not done; A04-A12, native interaction and stable fit/performance evidence remain open while the coordinating session updates its contract files."
       ]
     },
     {
@@ -629,26 +621,43 @@
         11
       ],
       "brief": "tasks/WEB-05.md",
-      "status": "blocked",
-      "owner": null,
-      "started_at": null,
+      "status": "in_progress",
+      "owner": "Main",
+      "started_at": "2026-09-24T01:06:26Z",
       "completed_at": null,
-      "blockers": [
-        "OBS-023 resolved the persisted-but-unacknowledged Linux-native annotation save with real Tauri response and browser/native proof. Broader capture/draft/paste, feedback lookup/ack, concurrency/capacity, iframe and failure-retention acceptance remains unexecuted."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
-        "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md"
+        "runs/run-20260920-a3e9b950/OBS-019-BROWSER-REPAIR.md",
+        "runs/run-20260920-a3e9b950/WEB-05.md",
+        "runs/run-20260920-a3e9b950/WEB-05-OBS034-038-green.json",
+        "runs/run-20260920-a3e9b950/WEB-05-native-navigation-green.json",
+        "runs/run-20260920-a3e9b950/WEB-05-capture-browser-evidence.json",
+        "runs/run-20260920-a3e9b950/WEB-05-capture-native-result.json",
+        "runs/run-20260920-a3e9b950/WEB-05-OBS041-browser-evidence.json",
+        "runs/run-20260920-a3e9b950/WEB-05-OBS041-native-result.json",
+        "runs/run-20260920-a3e9b950/WEB-05-OBS041-native-attempt3-result.json"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
-        "c4c53fc52652fed083b1eac340e404cd657bcc9a"
+        "c4c53fc52652fed083b1eac340e404cd657bcc9a",
+        "e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c",
+        "825405527bc42fc1bed287007b669bd3b53f0bbe",
+        "083fc7da5b9acd2e02b393838aed6758b8754cdb",
+        "9cc51f8d8c48284a8a4000ab0405170bcc5c9549",
+        "0b0578498327b0038928f5bb323cc5414a6d95f8"
       ],
       "notes": [
         "OBS-015 batch: BrowserUI owns capture/draft/feedback interaction and stable send operation identity; BrowserRuntime owns frame-bound geometry; BrowserHost owns durable browser delivery. BatchWorkflows alone owns generic comment-paste implementation; its API is unchanged.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
         "OBS-019: Linux-native annotation acknowledgement was unresolved pending actual Tauri response proof; macOS-specific execution and acceptance are excluded by the user.",
-        "OBS-023: accepted native draft revision 2 rounded one-ULP coordinates; strict JSON comparison falsely retained a retry intent. Tolerant coordinate-only comparison now acknowledges the same mark and exact note in isolated WebKit and Chromium runs; full WEB-05 matrix is still open."
+        "OBS-023: accepted native draft revision 2 rounded one-ULP coordinates; strict JSON comparison falsely retained a retry intent. Tolerant coordinate-only comparison now acknowledges the same mark and exact note in isolated WebKit and Chromium runs; full WEB-05 matrix is still open.",
+        "OBS-034-038: e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c proved mark-adjacent editor, Delete ownership, same-document basket CAS, compact Send and tab X in private Chromium and native WebKit. WEB-05 original A14-A21/A24, native keyboard/bulk, uncertain feedback/send and quiet-navigation matrix remain open; Main retains the browser task for the next bounded increment.",
+        "825405527bc42fc1bed287007b669bd3b53f0bbe proves the A18/OBS-030 native page-scoped subset: rejected URL and same-document hash retain the old note/draft; A→B→Back shows independent painted pages, no old marks/notices and an absent old Tauri draft ID. Separate WEB-04 OBS-040 stale action status, WEB-04/06 bitmap density and other WEB-05 A14-A21/A24 remain open.",
+        "083fc7da5b9acd2e02b393838aed6758b8754cdb proves one-viewport browser/native real PNG composition with page pixels/mark/note and no chrome, non-consuming repeated feedback lookup, and an actionable no-recipient saved-capture rejection retaining exact pending bytes/metadata. OBS-041 records the zero-annotation editable draft versus still-painted overlay; hide/reopen/editability and other A14-A21/A24 criteria remain open under Main's WEB-05 locks.",
+        "9cc51f8d8c48284a8a4000ab0405170bcc5c9549 records private Chromium/native OBS-041 action and remount diagnosis: a consumed mark accepted a note editor but could not save, and local feedback/mutation refs stranded the BrowserPane behind handoff Retry/Discard after Space return while exact frozen pending capture persisted. A separate native run retained a legitimately newer editable note on the same annotation ID without changing the immutable pending capture. Read-only lookup and truthful recovery repair are accepted in WEB-05.md; WEB-05 is not complete.",
+        "0b0578498327b0038928f5bb323cc5414a6d95f8 repairs saved-feedback association and Element selection; actual Chromium mark/save/reopen passed. The one native DPR2 density failure stopped before native annotation proof. Main retains WEB-05 ownership; all remaining matrix criteria stay open.",
+        "OBS-042: Main safely released WEB-05 locks after committed product/evidence, closed owned browser/native fixtures and left no partial product edit. WEB-05 is queued until the native frame-density repair unblocks its real-surface acceptance."
       ]
     },
     {
@@ -671,39 +680,27 @@
         9
       ],
       "brief": "tasks/WEB-06.md",
-      "status": "blocked",
+      "status": "queued",
       "owner": null,
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [
-        "Linux-native hide/show and opening are not accepted: one historical 335s/90s candidate showed 57.87 painted FPS and zero hidden paints, but repeated rebuilt runs either had no first canvas or a 978\u00d71234 bitmap stretched into 674\u00d71234 CSS at requested DPR2; a hidden-scroll probe observed the live page switch to 1348\u00d7376 DPR1 and Show fail. Disposable instrumentation recorded two helper PIDs CDP-attaching the same page. Reverted unverified helper/host fixes; a same-association single-flight attempt fell to 0.82\u20131.15 FPS. WebKit content PSS rose +213.09 KiB/s while animating; hidden memory partially recovered, not an active plateau. Slow-observer, crash/reconnect, decoded-object/queue ledger, and full WEB-04 recovery remain unverified; requested 1392-pixel native width was not achieved (676 CSS pixels observed). A separate gateway-preopen-free native run navigated the real Page URL, received four 674\u00d7188 CSS/1348\u00d7376 descriptors matching the initial DPR2 fixture, yet the first canvas mismatched/transiently sized or stayed stale and the fixture later reported DPR1. Pre-opening via gateway is not required for failure; one helper/process, the DPR1 CDP actor and any UI resize request remain unproven. Native-only trace and two visual failures are in WEB-06.md; WEB-06 remains blocked. Run-owned CDP tracing confirms two distinct native helper PIDs attached the same target within 0.3s, both issuing/receiving accepted 674\u00d7188@DPR2 overrides; the fixture later became DPR1 with no DPR1 request at the instrumented helper callsite. Owner admission race is source-grounded, but neither the DPR1 writer nor a performant single-helper capture path is verified. No product repair shipped. New unchanged-product native-only control emitted at least 256 frame descriptors from EACH of two same-target helper PIDs while WebKit painted 362 frames/6.0166s=60.17 FPS. This does not clear duplicate ownership or explain one-helper 1.16 FPS; authenticated forwarding, frontend admission, hide/show, memory plateau and full WEB-04 remain open."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
+        "runs/run-20260920-a3e9b950/OBS-020-BROWSER-GEOMETRY.md",
         "runs/run-20260920-a3e9b950/WEB-06.md"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
         "f0727a4f64b86a62ac8b2e6d7141ba055feb7ed9",
         "9f758f448b081cdd78a25640f16f3395298c901d",
-        "bf165186a9a2fa4c9903e1955d3e0dfb9d3d637b",
-        "902b902b1dc00b3c6f3f964b53e4fa23ef32d25e",
-        "c8a124b2374784f1c912bf7d40a5832e486769e0",
-        "1f70ec7fd1d5073ebbe972d9f8b77e17888884f2",
-        "e549a2dc15a51e613eddc9514e718d90340eb830",
-        "d75c058f6bd1d36cc60738e985627e70c77da49a",
-        "3fe9295d6c594a22281904d98beac3b538cefe14"
+        "bf165186a9a2fa4c9903e1955d3e0dfb9d3d637b"
       ],
       "notes": [
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
-        "Two five-minute native scroll runs passed 57.86 painted FPS and zero static-idle paints; WebKit content/network PSS remained non-plateauing. Full WEB-06 lifecycle/resource acceptance remains blocked.",
-        "2026-09-23 native lifecycle diagnostic checkpoint 902b902 records actual Commands Hide/Show negative controls, duplicate-helper trace and partial retained-memory samples. No helper repair was delivered; earlier green candidate was not repeatable on the current rebuilt tree. Isolated owned processes cleaned.",
-        "2026-09-23 native-only Commands Open diagnostic bypassed gateway pre-open and verified actual WebKit URL-form navigation. Four first-frame descriptors and initial fixture agreed at 674\u00d7188@DPR2, but native presentation failed and the fixture later drifted to DPR1; frame/socket metadata and visually checked geometry/stale screenshots are retained. Process-owner and CDP override provenance is still unresolved, so no product fix or WEB-06 closure was claimed.",
-        "2026-09-23 native-only run-owned helper-copy diagnostic verified two same-target CDP device-metrics writers, eight send/result events at DPR2, live helper process IDs, later fixture DPR1, distorted first native canvas and full owned process cleanup. Raw trace/result and actual WebKit screenshot retained in WEB-06.md. Earlier serialized gate fell to 0.82\u20131.15 FPS; no unverified product gate or density special case was delivered.",
-        "2026-09-23 new private native-only run native-a9c8176f2dcb failed first canvas readiness: four same-target DPR2 descriptors arrived but Tauri showed stale black with Retry; fixture later reported DPR1. Bounded helper-copy trace confirmed two same-target PIDs, each receiving >=16 screencast frames and >=4 accepted direct screenshots. No first paint/FPS/hide-show acceptance; product unchanged. Opt-in trace generator, raw counters, WebKit failure screenshot, build identities and full fixture cleanup are in WEB-06.md; the admission race and page-DPR actor remain open.",
-        "2026-09-23 attempted admission-only keyed gate with cancellation guard after two-helper native race; one helper and a responsive DPR2 first canvas rendered. Strengthened native harness waits until canvas CSS rect equals browser surface, retaining fixture DPR/bitmap/FPS checks. Real six-second scroll produced only 7 WebKit canvas paints (1.16 FPS) despite helper >=64 screencasts and >=64 accepted screenshots; candidate Rust source was reverted and restored native/gateway binaries rebuilt. Two red WebKit screenshots, trace/result artifacts and cleanup in WEB-06.md. No throughput regression shipped; WEB-06 remains blocked.",
-        "2026-09-23 3fe9295d6c594a22281904d98beac3b538cefe14: opt-in run-owned helper copy counted per-PID CDP screencast, screenshot and frame metadata publication while actual private native WebKit canvas painted 362/6.0166s at DPR2, with sharp first frame and green final marker. Both same-target helpers published >=256 descriptors; captured counts are power-of-two lower bounds, not a delivered/painted-frame identity. Exact images, raw trace, result, unchanged source/binary identities and cleanup in WEB-06.md. Harness-only diagnostic; WEB-06 remains blocked and rejected one-helper/metrics-reapply candidates stay reverted."
+        "OBS-020 verifies the geometry-triggered fresh-frame path on Linux native at 2×; subsequent five-minute scroll runs passed 57.86 painted FPS and zero static-idle paints, but WebKit PSS remained non-plateauing. This does not provide WEB-06 queue, decode, reconnect, lifecycle cleanup, or full resource acceptance.",
+        "OBS-042 queued: WEB-04 completion gates final closure but native DPR2 first-frame density, helper/decoder/observer/reconnect lifecycle and memory plateau are actionable; prior owner released locks at a safe checkpoint."
       ]
     },
     {
@@ -763,13 +760,11 @@
         9
       ],
       "brief": "tasks/WEB-08.md",
-      "status": "blocked",
+      "status": "queued",
       "owner": null,
       "started_at": "2026-09-21T19:08:05Z",
       "completed_at": null,
-      "blockers": [
-        "Only bounded hostile Host/Origin, unauthenticated socket, observer-mutation, grant-expiry and held-pointer-release probes passed. The broader A12/A13/A15/A22/A25 hostile matrix, native page isolation/file cases and positive controls remain unexecuted. WEB-04, WEB-05 and WEB-06 completion dependencies are also open; no external platform blocker was identified."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
       ],
@@ -779,7 +774,7 @@
       "notes": [
         "OBS-015 batch repairs concrete helper/host/transport security gaps within existing boundaries, without a new security layer. Separate security review and bounded hostile/positive verification follow integration; no runtime security pass is claimed.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
-        "2026-09-23 user-requested seven-task audit in OBSERVATIONS.md (commit 1cb2443e37021ae7b7d7ee6640ef66b741b950d2) corrected the overbroad security-pass wording; only final-protocol-boundaries.json hostile subset has runtime proof. WEB-08 remains blocked on broader hostile verification and completion of WEB-04/05/06, not on an unavailable external resource."
+        "OBS-042 queued: only a bounded hostile subset passed; remaining negative cases and authorized positive controls are unexecuted. WEB-04/05/06 gate final closure, not independent safe preparation."
       ]
     },
     {
@@ -876,13 +871,11 @@
         12
       ],
       "brief": "tasks/PERF-01.md",
-      "status": "blocked",
+      "status": "queued",
       "owner": null,
       "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
-      "blockers": [
-        "100-sample latency measurement passed targeted bound; sustained resource/whole-app protocol not executed."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
       ],
@@ -890,7 +883,8 @@
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78"
       ],
       "notes": [
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "OBS-042 queued: a 100-click latency sample is not sustained whole-app acceptance; baseline measurement may start independently, final settled-code proof awaits FLOW-01/WEB-06/WEB-08."
       ]
     },
     {
@@ -917,13 +911,11 @@
         13
       ],
       "brief": "tasks/ACCEPT-01.md",
-      "status": "blocked",
+      "status": "queued",
       "owner": null,
       "started_at": "2026-09-21T21:01:14.085553Z",
       "completed_at": null,
-      "blockers": [
-        "WEB-04 broader native input/ownership and wheel delta fidelity, WEB-05 capture/delivery, FLOW-01 workflow, WEB-08 security and PERF-01 sustained resource evidence remain incomplete. OBS-023 resolved the earlier Linux-native persisted-but-unacknowledged annotation save."
-      ],
+      "blockers": [],
       "evidence": [
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md"
       ],
@@ -932,7 +924,8 @@
       ],
       "notes": [
         "OBS-008 disposition resolved on 2026-09-21: after disclosure that no pre-run copies were found, the user explicitly selected Retain current files. Leave all six integration/settings files unchanged; no further HOME writes or speculative reconstruction. Final gate still requires delivered behavior, evidence, owned commits and resource accounting.",
-        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim."
+        "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
+        "OBS-042 queued: final integration is dependency-waiting on PERF-01 and transitive unfinished workflow/browser/security work, not an unavailable external prerequisite."
       ]
     },
     {

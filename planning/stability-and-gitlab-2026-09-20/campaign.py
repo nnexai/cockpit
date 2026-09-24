@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 SHA = re.compile(r"^[0-9a-fA-F]{40}$")
-STATUSES = {"pending", "in_progress", "verifying", "blocked", "done", "deferred"}
+STATUSES = {"pending", "queued", "in_progress", "verifying", "blocked", "done", "deferred"}
 ACTIVE = {"in_progress", "verifying"}
 TOP_KEYS = {"schema_version", "campaign", "baseline_commit", "scope", "tasks"}
 TASK_KEYS = {
@@ -269,6 +269,10 @@ def validate(ledger: Path) -> tuple[dict[str, Any], Path]:
             bad(f"active task {task_id} needs owner and started_at")
         if status != "done" and task["completed_at"] is not None:
             bad(f"non-done task {task_id} cannot have completed_at")
+        if status == "queued" and owner is not None:
+            bad(f"queued task {task_id} cannot hold an owner or locks")
+        if status == "queued" and task["blockers"]:
+            bad(f"queued task {task_id} cannot have external blockers")
         if status == "blocked" and not any(item.strip() for item in task["blockers"]):
             bad(f"blocked task {task_id} needs a meaningful blocker")
         if status == "done":
@@ -358,7 +362,7 @@ def ready(board: dict[str, Any]) -> dict[str, Any]:
                 held[lock] = task["id"]
     candidates, waiting = [], []
     for task in board["tasks"]:
-        if task["status"] != "pending":
+        if task["status"] not in {"pending", "queued"}:
             continue
         waiting_on = [
             item for item in task["depends_on"] if tasks[item]["status"] != "done"

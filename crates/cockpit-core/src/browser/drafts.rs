@@ -3,24 +3,32 @@
 //! The browser helper owns live pixels. This store owns only structured marks,
 //! editor state, and the one frozen PNG that must survive a failed save.
 
-use std::{collections::HashSet, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use cockpit_protocol::{
-    browser::{BrowserConnectionState, BrowserFeedbackAckRequest, BrowserFeedbackLookup, BrowserResponse, BrowserTarget},
+    browser::{
+        BrowserConnectionState, BrowserFeedbackAckRequest, BrowserFeedbackLookup, BrowserResponse,
+        BrowserTarget,
+    },
     browser_feedback::{
         BrowserAnnotation, BrowserCaptureContext, BrowserCaptureSaved, BrowserCaptureSubmission,
         BrowserFeedbackAck, BrowserInlineCaptureProvenance,
     },
     browser_view::{
-        BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest, BrowserViewCaptureCommand,
-        BrowserViewCommandOutcome, BrowserViewDocumentCommandContext, BrowserViewFrameDescriptor,
-        BrowserViewCaptureOutcome, BrowserViewDraftAnnotation, BrowserViewDraftCommand,
-        BrowserViewDraftEditorState, BrowserViewDraftInventory, BrowserViewDraftState,
-        BrowserViewInspectionFreshness, BrowserViewPendingCapture,
-        BROWSER_VIEW_MAX_NOTE_TEXT_CODE_UNITS,
+        BROWSER_VIEW_MAX_NOTE_TEXT_CODE_UNITS, BrowserDraftRecoveryAction,
+        BrowserDraftRecoveryRequest, BrowserViewCaptureCommand, BrowserViewCaptureOutcome,
+        BrowserViewCommandOutcome, BrowserViewDocumentCommandContext, BrowserViewDraftAnnotation,
+        BrowserViewDraftCommand, BrowserViewDraftEditorState, BrowserViewDraftInventory,
+        BrowserViewDraftState, BrowserViewFrameDescriptor, BrowserViewInspectionFreshness,
+        BrowserViewPendingCapture,
     },
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -88,6 +96,8 @@ struct StoredPendingCapture {
     draft_id: String,
     draft_revision: u64,
     annotation_ids: Vec<String>,
+    #[serde(default)]
+    original_annotation_digests: Vec<String>,
     context: BrowserCaptureContext,
     submission: BrowserCaptureSubmission,
     last_error: Option<String>,
@@ -103,6 +113,8 @@ struct StoredCapturePreparation {
     draft_id: String,
     draft_revision: u64,
     annotation_ids: Vec<String>,
+    #[serde(default)]
+    original_annotation_digests: Vec<String>,
     context: BrowserCaptureContext,
 }
 enum RecoveryMutation {
@@ -144,7 +156,9 @@ impl BrowserDraftStore {
             let draft = drafts
                 .iter()
                 .find(|draft| draft.draft_id == draft_id)
-                .ok_or_else(|| InspectionError::new("browser_draft_not_found", "Draft is unavailable"))?;
+                .ok_or_else(|| {
+                    InspectionError::new("browser_draft_not_found", "Draft is unavailable")
+                })?;
             if draft.identity != stored_identity(identity) {
                 return Err(InspectionError::new(
                     "browser_draft_identity",
@@ -152,7 +166,10 @@ impl BrowserDraftStore {
                 ));
             }
             if draft.tombstoned {
-                return Err(InspectionError::new("browser_draft_tombstoned", "Draft was discarded"));
+                return Err(InspectionError::new(
+                    "browser_draft_tombstoned",
+                    "Draft was discarded",
+                ));
             }
             return Ok(public_draft(draft));
         }
@@ -161,7 +178,8 @@ impl BrowserDraftStore {
         }) {
             return Ok(public_draft(draft));
         }
-        self.retire_obsolete(&mut drafts, identity)?;
+        let referenced = self.load_capture_references()?;
+        self.compact_retired(&mut drafts, &referenced, &identity.association_key)?;
         let active = drafts.iter().filter(|draft| !draft.tombstoned).count();
         if active >= MAX_DRAFTS {
             return Err(InspectionError::new(
@@ -189,45 +207,34 @@ impl BrowserDraftStore {
         self.write_draft(&stored)?;
         Ok(public_draft(&stored))
     }
-    fn retire_obsolete(
-        &self,
-        drafts: &mut Vec<StoredDraft>,
-        identity: &BrowserDraftIdentity,
-    ) -> Result<(), InspectionError> {
-        let referenced = self.load_capture_references()?;
-        let stored = stored_identity(identity);
-        for draft in drafts.iter_mut().filter(|draft| {
-            !draft.tombstoned
-                && !draft.stale
-                && draft.identity.association_key == stored.association_key
-                && draft.identity != stored
-        }) {
-            // A navigation, reload, or browser incarnation change invalidates
-            // geometry but must not destroy unsent annotations or editor text.
-            draft.stale = true;
-            draft.freshness = BrowserViewInspectionFreshness::Stale;
-            draft.revision = draft.revision.saturating_add(1);
-            self.write_draft(draft)?;
-        }
-        self.compact_retired(drafts, &referenced, &stored.association_key)
-    }
 
     fn load_capture_references(&self) -> Result<HashSet<String>, InspectionError> {
         let dir = self.dir()?;
         let mut records = Vec::new();
-        for (index, entry) in dir.entries()
+        for (index, entry) in dir
+            .entries()
             .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?
             .enumerate()
         {
             if index >= MAX_ENTRIES {
-                return Err(InspectionError::new("browser_draft_bounded", "Draft directory exceeded its entry limit"));
+                return Err(InspectionError::new(
+                    "browser_draft_bounded",
+                    "Draft directory exceeded its entry limit",
+                ));
             }
-            let entry = entry.map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
+            let entry = entry
+                .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            if let Some(association_key) = name.strip_prefix("pending-").and_then(|name| name.strip_suffix(".json")) {
+            if let Some(association_key) = name
+                .strip_prefix("pending-")
+                .and_then(|name| name.strip_suffix(".json"))
+            {
                 records.push((true, association_key.to_owned()));
-            } else if let Some(association_key) = name.strip_prefix("preparation-").and_then(|name| name.strip_suffix(".json")) {
+            } else if let Some(association_key) = name
+                .strip_prefix("preparation-")
+                .and_then(|name| name.strip_suffix(".json"))
+            {
                 records.push((false, association_key.to_owned()));
             }
         }
@@ -270,8 +277,10 @@ impl BrowserDraftStore {
         Ok(())
     }
 
-
-    pub fn list(&self, association_key: &str) -> Result<BrowserViewDraftInventory, InspectionError> {
+    pub fn list(
+        &self,
+        association_key: &str,
+    ) -> Result<BrowserViewDraftInventory, InspectionError> {
         let _guard = self.lock()?;
         validate_association_key(association_key)?;
         let mut drafts: Vec<_> = self
@@ -302,25 +311,48 @@ impl BrowserDraftStore {
             InspectionError::new("browser_draft_not_found", "Draft is unavailable")
         })?;
         if draft.identity != stored_identity(identity) {
-            return Err(InspectionError::new("browser_draft_identity", "Draft belongs to another document"));
+            return Err(InspectionError::new(
+                "browser_draft_identity",
+                "Draft belongs to another document",
+            ));
         }
         if draft.tombstoned {
-            return Err(InspectionError::new("browser_draft_tombstoned", "Draft was discarded"));
+            return Err(InspectionError::new(
+                "browser_draft_tombstoned",
+                "Draft was discarded",
+            ));
         }
         if draft.revision != expected_revision {
-            return Err(InspectionError::new("browser_draft_revision", "Draft changed; recover the latest revision before editing"));
+            return Err(InspectionError::new(
+                "browser_draft_revision",
+                "Draft changed; recover the latest revision before editing",
+            ));
         }
         match command {
             BrowserViewDraftCommand::UpsertAnnotation { annotation } => {
                 validate_annotation(&annotation)?;
-                if draft.consumed_annotation_ids.iter().any(|id| id == &annotation.id) {
-                    return Err(InspectionError::new("browser_draft_consumed", "A saved or removed annotation cannot be restored by a delayed save"));
+                if draft
+                    .consumed_annotation_ids
+                    .iter()
+                    .any(|id| id == &annotation.id)
+                {
+                    return Err(InspectionError::new(
+                        "browser_draft_consumed",
+                        "A saved or removed annotation cannot be restored by a delayed save",
+                    ));
                 }
-                if let Some(current) = draft.annotations.iter_mut().find(|current| current.id == annotation.id) {
+                if let Some(current) = draft
+                    .annotations
+                    .iter_mut()
+                    .find(|current| current.id == annotation.id)
+                {
                     *current = annotation;
                 } else {
                     if draft.annotations.len() >= 64 {
-                        return Err(InspectionError::new("browser_draft_annotation_limit", "Draft has the maximum of 64 annotations"));
+                        return Err(InspectionError::new(
+                            "browser_draft_annotation_limit",
+                            "Draft has the maximum of 64 annotations",
+                        ));
                     }
                     draft.annotations.push(annotation);
                 }
@@ -328,20 +360,28 @@ impl BrowserDraftStore {
             BrowserViewDraftCommand::RemoveAnnotation { annotation_id } => {
                 validate_uuid(&annotation_id, "annotation ID")?;
                 let before = draft.annotations.len();
-                draft.annotations.retain(|annotation| annotation.id != annotation_id);
+                draft
+                    .annotations
+                    .retain(|annotation| annotation.id != annotation_id);
                 if draft.annotations.len() != before {
                     insert_consumed(&mut draft.consumed_annotation_ids, annotation_id.clone())?;
                     if draft.editor.note_annotation_id.as_deref() == Some(annotation_id.as_str()) {
                         draft.editor.note_annotation_id = None;
                         draft.editor.note_text.clear();
                     }
-                    if draft.editor.selected_annotation_id.as_deref() == Some(annotation_id.as_str()) {
+                    if draft.editor.selected_annotation_id.as_deref()
+                        == Some(annotation_id.as_str())
+                    {
                         draft.editor.selected_annotation_id = None;
                     }
                 }
             }
             BrowserViewDraftCommand::Clear => {
-                let ids: Vec<_> = draft.annotations.iter().map(|annotation| annotation.id.clone()).collect();
+                let ids: Vec<_> = draft
+                    .annotations
+                    .iter()
+                    .map(|annotation| annotation.id.clone())
+                    .collect();
                 draft.annotations.clear();
                 for id in ids {
                     insert_consumed(&mut draft.consumed_annotation_ids, id)?;
@@ -351,7 +391,11 @@ impl BrowserDraftStore {
                 draft.editor.note_text.clear();
             }
             BrowserViewDraftCommand::Discard => {
-                let ids: Vec<_> = draft.annotations.iter().map(|annotation| annotation.id.clone()).collect();
+                let ids: Vec<_> = draft
+                    .annotations
+                    .iter()
+                    .map(|annotation| annotation.id.clone())
+                    .collect();
                 for id in ids {
                     insert_consumed(&mut draft.consumed_annotation_ids, id)?;
                 }
@@ -366,7 +410,10 @@ impl BrowserDraftStore {
             | BrowserViewDraftCommand::SaveCapture { .. }
             | BrowserViewDraftCommand::RetryPending
             | BrowserViewDraftCommand::DiscardPending => {
-                return Err(InspectionError::new("browser_draft_command", "That draft command has a dedicated store operation"));
+                return Err(InspectionError::new(
+                    "browser_draft_command",
+                    "That draft command has a dedicated store operation",
+                ));
             }
         }
         draft.revision = draft.revision.saturating_add(1);
@@ -411,9 +458,14 @@ impl BrowserDraftStore {
         provenance: BrowserInlineCaptureProvenance,
     ) -> Result<BrowserViewCaptureOutcome, InspectionError> {
         let _guard = self.lock()?;
-        let prepared = self.load_preparation(&submission.association_key)?.ok_or_else(|| {
-            InspectionError::new("browser_draft_capture", "Capture was not prepared by the browser owner")
-        })?;
+        let prepared = self
+            .load_preparation(&submission.association_key)?
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "browser_draft_capture",
+                    "Capture was not prepared by the browser owner",
+                )
+            })?;
         if prepared.draft_id != draft_id
             || prepared.draft_revision != expected_revision
             || prepared.annotation_ids != annotation_ids
@@ -422,7 +474,10 @@ impl BrowserDraftStore {
             || prepared.capture_id != submission.capture_id
             || prepared.context.inline_provenance.as_ref() != Some(&provenance)
         {
-            return Err(InspectionError::new("browser_draft_capture", "Capture does not match its owner-issued preparation"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "Capture does not match its owner-issued preparation",
+            ));
         }
         self.persist_pending(&prepared, submission)?;
         self.remove_preparation(&prepared.association_key)?;
@@ -447,19 +502,39 @@ impl BrowserDraftStore {
             InspectionError::new("browser_draft_not_found", "Draft is unavailable")
         })?;
         if draft.identity != stored_identity(&capture.identity) || draft.tombstoned || draft.stale {
-            return Err(InspectionError::new("browser_draft_identity", "Capture draft is no longer current"));
+            return Err(InspectionError::new(
+                "browser_draft_identity",
+                "Capture draft is no longer current",
+            ));
         }
         if draft.revision != expected_revision {
-            return Err(InspectionError::new("browser_draft_revision", "Draft changed before capture"));
+            return Err(InspectionError::new(
+                "browser_draft_revision",
+                "Draft changed before capture",
+            ));
         }
         let selected: HashSet<_> = annotation_ids.iter().collect();
         if selected.len() != annotation_ids.len()
-            || draft.annotations.iter().filter(|annotation| selected.contains(&annotation.id)).count() != annotation_ids.len()
+            || draft
+                .annotations
+                .iter()
+                .filter(|annotation| selected.contains(&annotation.id))
+                .count()
+                != annotation_ids.len()
         {
-            return Err(InspectionError::new("browser_draft_capture", "Capture selection does not match the current draft"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "Capture selection does not match the current draft",
+            ));
         }
-        if self.load_pending(&capture.identity.association_key)?.is_some() {
-            return Err(InspectionError::new("browser_draft_pending", "Save or discard the pending capture before composing another"));
+        if self
+            .load_pending(&capture.identity.association_key)?
+            .is_some()
+        {
+            return Err(InspectionError::new(
+                "browser_draft_pending",
+                "Save or discard the pending capture before composing another",
+            ));
         }
         if let Some(existing) = self.load_preparation(&capture.identity.association_key)? {
             if existing.draft_id == draft_id
@@ -470,8 +545,22 @@ impl BrowserDraftStore {
             {
                 return Ok(());
             }
-            return Err(InspectionError::new("browser_draft_capture", "A capture is already prepared for this association"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "A capture is already prepared for this association",
+            ));
         }
+        let original_annotation_digests = annotation_ids
+            .iter()
+            .map(|id| {
+                let annotation = draft
+                    .annotations
+                    .iter()
+                    .find(|annotation| &annotation.id == id)
+                    .expect("selected annotations were validated above");
+                annotation_digest(annotation)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let prepared = StoredCapturePreparation {
             format_version: FORMAT_VERSION,
             association_key: capture.identity.association_key,
@@ -480,10 +569,15 @@ impl BrowserDraftStore {
             draft_id: draft_id.to_owned(),
             draft_revision: expected_revision,
             annotation_ids,
+            original_annotation_digests,
             context: capture.context,
         };
-        atomic_write_json(&self.dir()?, &preparation_name(&prepared.association_key), &prepared)
-            .map_err(|error| InspectionError::new("browser_draft_capture", error.to_string()))
+        atomic_write_json(
+            &self.dir()?,
+            &preparation_name(&prepared.association_key),
+            &prepared,
+        )
+        .map_err(|error| InspectionError::new("browser_draft_capture", error.to_string()))
     }
 
     pub fn retry_pending(
@@ -503,12 +597,18 @@ impl BrowserDraftStore {
         match dir.remove_file(&name) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(InspectionError::new("browser_draft_pending", error.to_string())),
+            Err(error) => Err(InspectionError::new(
+                "browser_draft_pending",
+                error.to_string(),
+            )),
         }?;
         if let Err(error) = dir.remove_file(preparation_name(association_key))
             && error.kind() != std::io::ErrorKind::NotFound
         {
-            return Err(InspectionError::new("browser_draft_pending", error.to_string()));
+            return Err(InspectionError::new(
+                "browser_draft_pending",
+                error.to_string(),
+            ));
         }
         Ok(())
     }
@@ -527,25 +627,48 @@ impl BrowserDraftStore {
             InspectionError::new("browser_draft_not_found", "Draft is unavailable")
         })?;
         if draft.identity.association_key != association_key {
-            return Err(InspectionError::new("browser_draft_identity", "Draft belongs to another browser association"));
+            return Err(InspectionError::new(
+                "browser_draft_identity",
+                "Draft belongs to another browser association",
+            ));
         }
         if draft.tombstoned {
-            return Err(InspectionError::new("browser_draft_tombstoned", "Draft was discarded"));
+            return Err(InspectionError::new(
+                "browser_draft_tombstoned",
+                "Draft was discarded",
+            ));
         }
         if draft.revision != expected_revision {
-            return Err(InspectionError::new("browser_draft_revision", "Draft changed; recover the latest revision before editing"));
+            return Err(InspectionError::new(
+                "browser_draft_revision",
+                "Draft changed; recover the latest revision before editing",
+            ));
         }
         match mutation {
             RecoveryMutation::Upsert(annotation) => {
                 validate_annotation(&annotation)?;
-                if draft.consumed_annotation_ids.iter().any(|id| id == &annotation.id) {
-                    return Err(InspectionError::new("browser_draft_consumed", "A saved or removed annotation cannot be restored by a delayed save"));
+                if draft
+                    .consumed_annotation_ids
+                    .iter()
+                    .any(|id| id == &annotation.id)
+                {
+                    return Err(InspectionError::new(
+                        "browser_draft_consumed",
+                        "A saved or removed annotation cannot be restored by a delayed save",
+                    ));
                 }
-                if let Some(current) = draft.annotations.iter_mut().find(|current| current.id == annotation.id) {
+                if let Some(current) = draft
+                    .annotations
+                    .iter_mut()
+                    .find(|current| current.id == annotation.id)
+                {
                     *current = annotation;
                 } else {
                     if draft.annotations.len() >= 64 {
-                        return Err(InspectionError::new("browser_draft_annotation_limit", "Draft has the maximum of 64 annotations"));
+                        return Err(InspectionError::new(
+                            "browser_draft_annotation_limit",
+                            "Draft has the maximum of 64 annotations",
+                        ));
                     }
                     draft.annotations.push(annotation);
                 }
@@ -553,14 +676,18 @@ impl BrowserDraftStore {
             RecoveryMutation::Remove(annotation_id) => {
                 validate_uuid(&annotation_id, "annotation ID")?;
                 let before = draft.annotations.len();
-                draft.annotations.retain(|annotation| annotation.id != annotation_id);
+                draft
+                    .annotations
+                    .retain(|annotation| annotation.id != annotation_id);
                 if draft.annotations.len() != before {
                     insert_consumed(&mut draft.consumed_annotation_ids, annotation_id.clone())?;
                     if draft.editor.note_annotation_id.as_deref() == Some(annotation_id.as_str()) {
                         draft.editor.note_annotation_id = None;
                         draft.editor.note_text.clear();
                     }
-                    if draft.editor.selected_annotation_id.as_deref() == Some(annotation_id.as_str()) {
+                    if draft.editor.selected_annotation_id.as_deref()
+                        == Some(annotation_id.as_str())
+                    {
                         draft.editor.selected_annotation_id = None;
                     }
                 }
@@ -585,13 +712,22 @@ impl BrowserDraftStore {
             InspectionError::new("browser_draft_not_found", "Draft is unavailable")
         })?;
         if draft.identity.association_key != association_key {
-            return Err(InspectionError::new("browser_draft_identity", "Draft belongs to another browser association"));
+            return Err(InspectionError::new(
+                "browser_draft_identity",
+                "Draft belongs to another browser association",
+            ));
         }
         if draft.tombstoned {
-            return Err(InspectionError::new("browser_draft_tombstoned", "Draft was discarded"));
+            return Err(InspectionError::new(
+                "browser_draft_tombstoned",
+                "Draft was discarded",
+            ));
         }
         if draft.revision != expected_revision {
-            return Err(InspectionError::new("browser_draft_revision", "Draft changed; recover the latest revision before editing"));
+            return Err(InspectionError::new(
+                "browser_draft_revision",
+                "Draft changed; recover the latest revision before editing",
+            ));
         }
         validate_editor(&editor, &draft.annotations)?;
         draft.editor = editor;
@@ -629,7 +765,6 @@ impl BrowserDraftStore {
         )
     }
 
-
     pub fn discard_draft(
         &self,
         association_key: &str,
@@ -643,26 +778,46 @@ impl BrowserDraftStore {
             InspectionError::new("browser_draft_not_found", "Draft is unavailable")
         })?;
         if draft.identity.association_key != association_key {
-            return Err(InspectionError::new("browser_draft_identity", "Draft belongs to another browser association"));
+            return Err(InspectionError::new(
+                "browser_draft_identity",
+                "Draft belongs to another browser association",
+            ));
         }
         if draft.revision != expected_revision {
-            return Err(InspectionError::new("browser_draft_revision", "Draft changed; recover the latest revision before discarding"));
+            return Err(InspectionError::new(
+                "browser_draft_revision",
+                "Draft changed; recover the latest revision before discarding",
+            ));
         }
-        if self.load_preparation(association_key)?
+        if self
+            .load_preparation(association_key)?
             .as_ref()
             .is_some_and(|prepared| prepared.draft_id == draft_id)
         {
-            return Err(InspectionError::new("browser_draft_capture", "A capture is prepared for this draft; resolve it before discarding"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "A capture is prepared for this draft; resolve it before discarding",
+            ));
         }
-        if self.load_pending(association_key)?
+        if self
+            .load_pending(association_key)?
             .as_ref()
             .is_some_and(|pending| pending.draft_id == draft_id)
         {
-            return Err(InspectionError::new("browser_draft_pending", "Save or discard this pending capture before discarding its draft"));
+            return Err(InspectionError::new(
+                "browser_draft_pending",
+                "Save or discard this pending capture before discarding its draft",
+            ));
         }
-        let ids: Vec<_> = draft.annotations.iter().map(|annotation| annotation.id.clone()).collect();
+        let ids: Vec<_> = draft
+            .annotations
+            .iter()
+            .map(|annotation| annotation.id.clone())
+            .collect();
         draft.annotations.clear();
-        for id in ids { insert_consumed(&mut draft.consumed_annotation_ids, id)?; }
+        for id in ids {
+            insert_consumed(&mut draft.consumed_annotation_ids, id)?;
+        }
         draft.editor.selected_annotation_id = None;
         draft.editor.note_annotation_id = None;
         draft.editor.note_text.clear();
@@ -676,16 +831,25 @@ impl BrowserDraftStore {
         prepared: &StoredCapturePreparation,
         submission: BrowserCaptureSubmission,
     ) -> Result<(), InspectionError> {
-        let submitted: Vec<_> = submission.annotations.iter().map(|annotation| annotation.id.clone()).collect();
+        let submitted: Vec<_> = submission
+            .annotations
+            .iter()
+            .map(|annotation| annotation.id.clone())
+            .collect();
         if submitted != prepared.annotation_ids {
-            return Err(InspectionError::new("browser_draft_capture", "Composed capture annotations do not match the selected draft marks"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "Composed capture annotations do not match the selected draft marks",
+            ));
         }
         if submission.association_key != prepared.association_key
             || submission.browser_instance != prepared.browser_incarnation
         {
-            return Err(InspectionError::new("browser_draft_capture", "Capture belongs to another browser association"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "Capture belongs to another browser association",
+            ));
         }
-        let name = pending_name(&prepared.association_key);
         if let Some(existing) = self.load_pending(&prepared.association_key)? {
             if existing.submission.capture_id == submission.capture_id
                 && existing.submission == submission
@@ -693,7 +857,10 @@ impl BrowserDraftStore {
             {
                 return Ok(());
             }
-            return Err(InspectionError::new("browser_draft_pending", "Save or discard the pending capture before composing another"));
+            return Err(InspectionError::new(
+                "browser_draft_pending",
+                "Save or discard the pending capture before composing another",
+            ));
         }
         let stored = StoredPendingCapture {
             format_version: FORMAT_VERSION,
@@ -702,6 +869,7 @@ impl BrowserDraftStore {
             draft_id: prepared.draft_id.clone(),
             draft_revision: prepared.draft_revision,
             annotation_ids: prepared.annotation_ids.clone(),
+            original_annotation_digests: prepared.original_annotation_digests.clone(),
             context: prepared.context.clone(),
             submission,
             last_error: None,
@@ -715,12 +883,17 @@ impl BrowserDraftStore {
         let Some(mut pending) = self.load_pending(association_key)? else {
             return Ok(BrowserViewCaptureOutcome::Absent);
         };
-        let saved = match self.feedback.save(pending.context.clone(), pending.submission.clone()) {
+        let saved = match self
+            .feedback
+            .save(pending.context.clone(), pending.submission.clone())
+        {
             Ok(saved) => saved,
             Err(error) => {
                 pending.last_error = Some(error.message.chars().take(1_024).collect());
                 self.write_pending(&pending)?;
-                return Ok(BrowserViewCaptureOutcome::Pending { pending: public_pending(pending) });
+                return Ok(BrowserViewCaptureOutcome::Pending {
+                    pending: public_pending(pending),
+                });
             }
         };
         self.apply_capture_receipt(&pending, &saved)?;
@@ -732,8 +905,13 @@ impl BrowserDraftStore {
         pending: &StoredPendingCapture,
         saved: &BrowserCaptureSaved,
     ) -> Result<(), InspectionError> {
-        if saved.capture_id != pending.submission.capture_id || saved.annotation_ids != pending.annotation_ids {
-            return Err(InspectionError::new("browser_draft_receipt", "Feedback store returned a mismatched capture receipt"));
+        if saved.capture_id != pending.submission.capture_id
+            || saved.annotation_ids != pending.annotation_ids
+        {
+            return Err(InspectionError::new(
+                "browser_draft_receipt",
+                "Feedback store returned a mismatched capture receipt",
+            ));
         }
         let Some(mut draft) = self.load_draft(&pending.draft_id)? else {
             return Ok(());
@@ -742,36 +920,68 @@ impl BrowserDraftStore {
             return Ok(());
         }
         let mut consumed = Vec::new();
-        for id in &pending.annotation_ids {
-            let Some(current) = draft.annotations.iter().find(|annotation| &annotation.id == id) else {
+        for (index, id) in pending.annotation_ids.iter().enumerate() {
+            let Some(current) = draft
+                .annotations
+                .iter()
+                .find(|annotation| &annotation.id == id)
+            else {
                 consumed.push(id.clone());
                 continue;
             };
-            let Some(frozen) = pending.submission.annotations.iter().find(|annotation| &annotation.id == id) else {
-                // Old or malformed pending records do not carry enough frozen
-                // data to prove that the current annotation is unchanged.
+            let Some(frozen) = pending
+                .submission
+                .annotations
+                .iter()
+                .find(|annotation| &annotation.id == id)
+            else {
                 continue;
             };
             let note_changed = draft.editor.note_annotation_id.as_deref() == Some(id.as_str())
                 && draft.editor.note_text != frozen.comment;
-            if draft_annotation_matches_capture(current, frozen) && !note_changed {
+            // The captured marks are projected into PNG pixel coordinates.
+            // Compare the original document-space mark frozen at preparation,
+            // not its transformed public submission, before consuming it.
+            let unchanged = if let Some(original) = pending.original_annotation_digests.get(index) {
+                annotation_digest(current)? == *original
+            } else if pending.original_annotation_digests.is_empty() {
+                // Older pending captures lack frozen hashes. A matching store
+                // revision proves no edit; otherwise preserve uncertain work.
+                draft.revision == pending.draft_revision
+                    || draft_annotation_matches_capture(current, frozen)
+            } else {
+                false
+            };
+            if unchanged && !note_changed {
                 consumed.push(id.clone());
             }
         }
         let selected: HashSet<String> = consumed.iter().cloned().collect();
         let before_annotations = draft.annotations.len();
-        draft.annotations.retain(|annotation| !selected.contains(&annotation.id));
+        draft
+            .annotations
+            .retain(|annotation| !selected.contains(&annotation.id));
         let mut changed = draft.annotations.len() != before_annotations;
         for id in consumed {
             let before = draft.consumed_annotation_ids.len();
             insert_consumed(&mut draft.consumed_annotation_ids, id)?;
             changed |= draft.consumed_annotation_ids.len() != before;
         }
-        if draft.editor.selected_annotation_id.as_ref().is_some_and(|id| selected.contains(id)) {
+        if draft
+            .editor
+            .selected_annotation_id
+            .as_ref()
+            .is_some_and(|id| selected.contains(id))
+        {
             draft.editor.selected_annotation_id = None;
             changed = true;
         }
-        if draft.editor.note_annotation_id.as_ref().is_some_and(|id| selected.contains(id)) {
+        if draft
+            .editor
+            .note_annotation_id
+            .as_ref()
+            .is_some_and(|id| selected.contains(id))
+        {
             draft.editor.note_annotation_id = None;
             draft.editor.note_text.clear();
             changed = true;
@@ -783,31 +993,50 @@ impl BrowserDraftStore {
         self.write_draft(&draft)
     }
 
-
     fn dir(&self) -> Result<cap_std::fs::Dir, InspectionError> {
         open_dir_nofollow_absolute(&self.root)
             .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>, InspectionError> {
-        self.mutation.lock().map_err(|_| InspectionError::new("browser_draft_lock", "Draft store lock was poisoned"))
+        self.mutation.lock().map_err(|_| {
+            InspectionError::new("browser_draft_lock", "Draft store lock was poisoned")
+        })
     }
 
     fn load_all(&self) -> Result<Vec<StoredDraft>, InspectionError> {
         let dir = self.dir()?;
         let mut drafts = Vec::new();
-        for (index, entry) in dir.entries().map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?.enumerate() {
+        for (index, entry) in dir
+            .entries()
+            .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?
+            .enumerate()
+        {
             if index >= MAX_ENTRIES {
-                return Err(InspectionError::new("browser_draft_bounded", "Draft directory exceeded its entry limit"));
+                return Err(InspectionError::new(
+                    "browser_draft_bounded",
+                    "Draft directory exceeded its entry limit",
+                ));
             }
-            let entry = entry.map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
+            let entry = entry
+                .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let Some(id) = name.strip_prefix("draft-").and_then(|name| name.strip_suffix(".json")) else { continue };
+            let Some(id) = name
+                .strip_prefix("draft-")
+                .and_then(|name| name.strip_suffix(".json"))
+            else {
+                continue;
+            };
             validate_uuid(id, "draft ID")?;
-            let type_ = entry.file_type().map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
+            let type_ = entry
+                .file_type()
+                .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))?;
             if type_.is_symlink() || !type_.is_file() {
-                return Err(InspectionError::new("unsafe_path", "Draft record is not a regular file"));
+                return Err(InspectionError::new(
+                    "unsafe_path",
+                    "Draft record is not a regular file",
+                ));
             }
             let mut draft: StoredDraft = read_json_bounded(&dir, name, MAX_DRAFT_BYTES)?;
             normalize_legacy_editor(&mut draft);
@@ -822,8 +1051,13 @@ impl BrowserDraftStore {
         let name = draft_name(draft_id);
         match dir.symlink_metadata(&name) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(InspectionError::new("browser_draft_read", error.to_string())),
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(InspectionError::new("unsafe_path", "Draft record is not a regular file")),
+            Err(error) => Err(InspectionError::new(
+                "browser_draft_read",
+                error.to_string(),
+            )),
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
+                InspectionError::new("unsafe_path", "Draft record is not a regular file"),
+            ),
             Ok(_) => {
                 let mut draft: StoredDraft = read_json_bounded(&dir, &name, MAX_DRAFT_BYTES)?;
                 normalize_legacy_editor(&mut draft);
@@ -848,19 +1082,31 @@ impl BrowserDraftStore {
         match self.dir()?.remove_file(draft_name(draft_id)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(InspectionError::new("browser_draft_write", error.to_string())),
+            Err(error) => Err(InspectionError::new(
+                "browser_draft_write",
+                error.to_string(),
+            )),
         }
     }
 
-    fn load_pending(&self, association_key: &str) -> Result<Option<StoredPendingCapture>, InspectionError> {
+    fn load_pending(
+        &self,
+        association_key: &str,
+    ) -> Result<Option<StoredPendingCapture>, InspectionError> {
         let dir = self.dir()?;
         let name = pending_name(association_key);
         match dir.symlink_metadata(&name) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(InspectionError::new("browser_draft_pending", error.to_string())),
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(InspectionError::new("unsafe_path", "Pending capture is not a regular file")),
+            Err(error) => Err(InspectionError::new(
+                "browser_draft_pending",
+                error.to_string(),
+            )),
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
+                InspectionError::new("unsafe_path", "Pending capture is not a regular file"),
+            ),
             Ok(_) => {
-                let pending: StoredPendingCapture = read_json_bounded(&dir, &name, MAX_PENDING_BYTES)?;
+                let pending: StoredPendingCapture =
+                    read_json_bounded(&dir, &name, MAX_PENDING_BYTES)?;
                 validate_pending(&pending)?;
                 Ok(Some(pending))
             }
@@ -868,19 +1114,29 @@ impl BrowserDraftStore {
     }
 
     fn remove_pending(&self, association_key: &str) -> Result<(), InspectionError> {
-        self.dir()?.remove_file(pending_name(association_key))
+        self.dir()?
+            .remove_file(pending_name(association_key))
             .map_err(|error| InspectionError::new("browser_draft_pending", error.to_string()))
     }
 
-    fn load_preparation(&self, association_key: &str) -> Result<Option<StoredCapturePreparation>, InspectionError> {
+    fn load_preparation(
+        &self,
+        association_key: &str,
+    ) -> Result<Option<StoredCapturePreparation>, InspectionError> {
         let dir = self.dir()?;
         let name = preparation_name(association_key);
         match dir.symlink_metadata(&name) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(InspectionError::new("browser_draft_capture", error.to_string())),
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(InspectionError::new("unsafe_path", "Capture preparation is not a regular file")),
+            Err(error) => Err(InspectionError::new(
+                "browser_draft_capture",
+                error.to_string(),
+            )),
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
+                InspectionError::new("unsafe_path", "Capture preparation is not a regular file"),
+            ),
             Ok(_) => {
-                let prepared: StoredCapturePreparation = read_json_bounded(&dir, &name, MAX_PREPARATION_BYTES)?;
+                let prepared: StoredCapturePreparation =
+                    read_json_bounded(&dir, &name, MAX_PREPARATION_BYTES)?;
                 validate_preparation(&prepared)?;
                 Ok(Some(prepared))
             }
@@ -888,7 +1144,8 @@ impl BrowserDraftStore {
     }
 
     fn remove_preparation(&self, association_key: &str) -> Result<(), InspectionError> {
-        self.dir()?.remove_file(preparation_name(association_key))
+        self.dir()?
+            .remove_file(preparation_name(association_key))
             .map_err(|error| InspectionError::new("browser_draft_capture", error.to_string()))
     }
 
@@ -899,8 +1156,12 @@ impl BrowserDraftStore {
             "browser_draft_capacity",
             "Pending capture exceeds its durable storage limit",
         )?;
-        atomic_write_bytes(&self.dir()?, &pending_name(&pending.association_key), &bytes)
-            .map_err(|error| InspectionError::new("browser_draft_pending", error.to_string()))
+        atomic_write_bytes(
+            &self.dir()?,
+            &pending_name(&pending.association_key),
+            &bytes,
+        )
+        .map_err(|error| InspectionError::new("browser_draft_pending", error.to_string()))
     }
 }
 
@@ -951,6 +1212,20 @@ fn public_pending(pending: StoredPendingCapture) -> BrowserViewPendingCapture {
         last_error: pending.last_error,
     }
 }
+fn annotation_digest(annotation: &BrowserViewDraftAnnotation) -> Result<String, InspectionError> {
+    let bytes = serde_json::to_vec(annotation)
+        .map_err(|error| InspectionError::new("browser_draft_capture", error.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+fn valid_annotation_digests(ids: &[String], digests: &[String]) -> bool {
+    digests.is_empty()
+        || (digests.len() == ids.len()
+            && digests.iter().all(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }))
+}
+
 fn draft_annotation_matches_capture(
     draft: &BrowserViewDraftAnnotation,
     capture: &BrowserAnnotation,
@@ -964,31 +1239,62 @@ fn draft_annotation_matches_capture(
         && draft.comment.as_deref().unwrap_or_default() == capture.comment
 }
 
-fn validate_capture_context(identity: &BrowserDraftIdentity, context: &BrowserCaptureContext) -> Result<(), InspectionError> {
-    if context.association_key != identity.association_key || context.browser_instance != identity.browser_incarnation {
-        return Err(InspectionError::new("browser_draft_context", "Capture context belongs to another browser association"));
+fn validate_capture_context(
+    identity: &BrowserDraftIdentity,
+    context: &BrowserCaptureContext,
+) -> Result<(), InspectionError> {
+    if context.association_key != identity.association_key
+        || context.browser_instance != identity.browser_incarnation
+    {
+        return Err(InspectionError::new(
+            "browser_draft_context",
+            "Capture context belongs to another browser association",
+        ));
     }
-    let provenance: &BrowserInlineCaptureProvenance = context.inline_provenance.as_ref().ok_or_else(|| {
-        InspectionError::new("browser_draft_provenance", "Inline captures require target and frame provenance")
-    })?;
-    if provenance.target_id != identity.target_id || provenance.document_generation != identity.document_generation {
-        return Err(InspectionError::new("browser_draft_provenance", "Capture provenance does not match the draft document"));
+    let provenance: &BrowserInlineCaptureProvenance =
+        context.inline_provenance.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "browser_draft_provenance",
+                "Inline captures require target and frame provenance",
+            )
+        })?;
+    if provenance.target_id != identity.target_id
+        || provenance.document_generation != identity.document_generation
+    {
+        return Err(InspectionError::new(
+            "browser_draft_provenance",
+            "Capture provenance does not match the draft document",
+        ));
     }
     validate_id(&provenance.frame_id, "frame")?;
     Ok(())
 }
 
 fn normalize_legacy_editor(draft: &mut StoredDraft) {
-    if draft.editor.selected_annotation_id.as_ref().is_some_and(|id| {
-        !draft.annotations.iter().any(|annotation| &annotation.id == id)
-    }) {
+    if draft
+        .editor
+        .selected_annotation_id
+        .as_ref()
+        .is_some_and(|id| {
+            !draft
+                .annotations
+                .iter()
+                .any(|annotation| &annotation.id == id)
+        })
+    {
         draft.editor.selected_annotation_id = None;
     }
 }
 
 fn validate_stored_draft(id: &str, draft: &StoredDraft) -> Result<(), InspectionError> {
-    if draft.format_version != FORMAT_VERSION || draft.draft_id != id || draft.annotations.len() > 64 {
-        return Err(InspectionError::new("browser_draft_corrupt", "Draft record is invalid"));
+    if draft.format_version != FORMAT_VERSION
+        || draft.draft_id != id
+        || draft.annotations.len() > 64
+    {
+        return Err(InspectionError::new(
+            "browser_draft_corrupt",
+            "Draft record is invalid",
+        ));
     }
     validate_identity(&BrowserDraftIdentity {
         association_key: draft.identity.association_key.clone(),
@@ -999,8 +1305,16 @@ fn validate_stored_draft(id: &str, draft: &StoredDraft) -> Result<(), Inspection
     let mut ids = HashSet::new();
     for annotation in &draft.annotations {
         validate_annotation(annotation)?;
-        if !ids.insert(&annotation.id) || draft.consumed_annotation_ids.iter().any(|consumed| consumed == &annotation.id) {
-            return Err(InspectionError::new("browser_draft_corrupt", "Draft annotation IDs are invalid"));
+        if !ids.insert(&annotation.id)
+            || draft
+                .consumed_annotation_ids
+                .iter()
+                .any(|consumed| consumed == &annotation.id)
+        {
+            return Err(InspectionError::new(
+                "browser_draft_corrupt",
+                "Draft annotation IDs are invalid",
+            ));
         }
     }
     validate_editor(&draft.editor, &draft.annotations)?;
@@ -1012,7 +1326,10 @@ fn validate_pending(pending: &StoredPendingCapture) -> Result<(), InspectionErro
         || pending.submission.association_key != pending.association_key
         || pending.submission.browser_instance != pending.browser_incarnation
     {
-        return Err(InspectionError::new("browser_draft_pending", "Pending capture is invalid"));
+        return Err(InspectionError::new(
+            "browser_draft_pending",
+            "Pending capture is invalid",
+        ));
     }
     validate_association_key(&pending.association_key)?;
     validate_id(&pending.browser_incarnation, "browser incarnation")?;
@@ -1020,9 +1337,22 @@ fn validate_pending(pending: &StoredPendingCapture) -> Result<(), InspectionErro
     if pending.context.association_key != pending.association_key
         || pending.context.browser_instance != pending.browser_incarnation
     {
-        return Err(InspectionError::new("browser_draft_pending", "Pending capture context is invalid"));
+        return Err(InspectionError::new(
+            "browser_draft_pending",
+            "Pending capture context is invalid",
+        ));
     }
-    validate_annotation_ids(&pending.annotation_ids)
+    validate_annotation_ids(&pending.annotation_ids)?;
+    if !valid_annotation_digests(
+        &pending.annotation_ids,
+        &pending.original_annotation_digests,
+    ) {
+        return Err(InspectionError::new(
+            "browser_draft_pending",
+            "Pending capture digests are invalid",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_preparation(prepared: &StoredCapturePreparation) -> Result<(), InspectionError> {
@@ -1030,13 +1360,26 @@ fn validate_preparation(prepared: &StoredCapturePreparation) -> Result<(), Inspe
         || prepared.context.association_key != prepared.association_key
         || prepared.context.browser_instance != prepared.browser_incarnation
     {
-        return Err(InspectionError::new("browser_draft_capture", "Capture preparation is invalid"));
+        return Err(InspectionError::new(
+            "browser_draft_capture",
+            "Capture preparation is invalid",
+        ));
     }
     validate_association_key(&prepared.association_key)?;
     validate_id(&prepared.browser_incarnation, "browser incarnation")?;
     validate_uuid(&prepared.capture_id, "capture ID")?;
     validate_uuid(&prepared.draft_id, "draft ID")?;
-    validate_annotation_ids(&prepared.annotation_ids)
+    validate_annotation_ids(&prepared.annotation_ids)?;
+    if !valid_annotation_digests(
+        &prepared.annotation_ids,
+        &prepared.original_annotation_digests,
+    ) {
+        return Err(InspectionError::new(
+            "browser_draft_capture",
+            "Capture preparation digests are invalid",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_identity(identity: &BrowserDraftIdentity) -> Result<(), InspectionError> {
@@ -1049,72 +1392,121 @@ fn validate_editor(
     editor: &BrowserViewDraftEditorState,
     annotations: &[BrowserViewDraftAnnotation],
 ) -> Result<(), InspectionError> {
-    for annotation_id in [editor.selected_annotation_id.as_ref(), editor.note_annotation_id.as_ref()]
-        .into_iter()
-        .flatten()
+    for annotation_id in [
+        editor.selected_annotation_id.as_ref(),
+        editor.note_annotation_id.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
     {
         validate_uuid(annotation_id, "editor annotation ID")?;
-        if !annotations.iter().any(|annotation| &annotation.id == annotation_id) {
-            return Err(InspectionError::new("browser_draft_editor", "The editor annotation is unavailable"));
+        if !annotations
+            .iter()
+            .any(|annotation| &annotation.id == annotation_id)
+        {
+            return Err(InspectionError::new(
+                "browser_draft_editor",
+                "The editor annotation is unavailable",
+            ));
         }
     }
     if editor.note_annotation_id.is_none() && !editor.note_text.is_empty() {
-        return Err(InspectionError::new("browser_draft_editor", "Note text requires an active annotation"));
+        return Err(InspectionError::new(
+            "browser_draft_editor",
+            "Note text requires an active annotation",
+        ));
     }
     if editor.note_text.encode_utf16().count() > BROWSER_VIEW_MAX_NOTE_TEXT_CODE_UNITS {
-        return Err(InspectionError::new("browser_draft_editor", "Note text exceeds 4000 UTF-16 code units"));
+        return Err(InspectionError::new(
+            "browser_draft_editor",
+            "Note text exceeds 4000 UTF-16 code units",
+        ));
     }
     Ok(())
 }
 fn validate_annotation(annotation: &BrowserViewDraftAnnotation) -> Result<(), InspectionError> {
     validate_uuid(&annotation.id, "annotation ID")?;
-    if annotation.points.len() > 8_192 || annotation.color.len() > 32 || annotation.comment.as_ref().is_some_and(|comment| comment.len() > 64 * 1024) {
-        return Err(InspectionError::new("browser_draft_annotation", "Draft annotation exceeds bounds"));
+    if annotation.points.len() > 8_192
+        || annotation.color.len() > 32
+        || annotation
+            .comment
+            .as_ref()
+            .is_some_and(|comment| comment.len() > 64 * 1024)
+    {
+        return Err(InspectionError::new(
+            "browser_draft_annotation",
+            "Draft annotation exceeds bounds",
+        ));
     }
     Ok(())
 }
 
 fn validate_annotation_ids(ids: &[String]) -> Result<(), InspectionError> {
     if ids.len() > 64 || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
-        return Err(InspectionError::new("browser_draft_annotation", "Annotation IDs are invalid"));
+        return Err(InspectionError::new(
+            "browser_draft_annotation",
+            "Annotation IDs are invalid",
+        ));
     }
-    for id in ids { validate_uuid(id, "annotation ID")?; }
+    for id in ids {
+        validate_uuid(id, "annotation ID")?;
+    }
     Ok(())
 }
 
 fn insert_consumed(ids: &mut Vec<String>, id: String) -> Result<(), InspectionError> {
     validate_uuid(&id, "annotation ID")?;
-    if !ids.contains(&id) { ids.push(id); }
+    if !ids.contains(&id) {
+        ids.push(id);
+    }
     if ids.len() > 512 {
-        return Err(InspectionError::new("browser_draft_consumed", "Draft consumed-ID history exceeds its bound"));
+        return Err(InspectionError::new(
+            "browser_draft_consumed",
+            "Draft consumed-ID history exceeds its bound",
+        ));
     }
     Ok(())
 }
 
 fn validate_association_key(value: &str) -> Result<(), InspectionError> {
     if value.len() != 24 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(InspectionError::new("browser_draft_association", "Association key must be 24 hexadecimal characters"));
+        return Err(InspectionError::new(
+            "browser_draft_association",
+            "Association key must be 24 hexadecimal characters",
+        ));
     }
     Ok(())
 }
 
 fn validate_uuid(value: &str, field: &str) -> Result<(), InspectionError> {
     if Uuid::parse_str(value).is_err() {
-        return Err(InspectionError::new("browser_draft_id", format!("{field} must be a UUID")));
+        return Err(InspectionError::new(
+            "browser_draft_id",
+            format!("{field} must be a UUID"),
+        ));
     }
     Ok(())
 }
 
 fn validate_id(value: &str, field: &str) -> Result<(), InspectionError> {
     if value.is_empty() || value.len() > 512 || value.contains(['/', '\\', '\0']) {
-        return Err(InspectionError::new("browser_draft_id", format!("{field} ID is invalid")));
+        return Err(InspectionError::new(
+            "browser_draft_id",
+            format!("{field} ID is invalid"),
+        ));
     }
     Ok(())
 }
 
-fn draft_name(id: &str) -> String { format!("draft-{id}.json") }
-fn pending_name(association_key: &str) -> String { format!("pending-{association_key}.json") }
-fn preparation_name(association_key: &str) -> String { format!("preparation-{association_key}.json") }
+fn draft_name(id: &str) -> String {
+    format!("draft-{id}.json")
+}
+fn pending_name(association_key: &str) -> String {
+    format!("pending-{association_key}.json")
+}
+fn preparation_name(association_key: &str) -> String {
+    format!("preparation-{association_key}.json")
+}
 
 impl BrowserService {
     /// Handles only owner-persisted annotation commands. The host forwards all
@@ -1141,7 +1533,9 @@ impl BrowserService {
             }),
             BrowserViewDraftCommand::DiscardPending => {
                 store.discard_pending(&association_key)?;
-                Ok(BrowserViewCommandOutcome::Capture { capture: BrowserViewCaptureOutcome::Absent })
+                Ok(BrowserViewCommandOutcome::Capture {
+                    capture: BrowserViewCaptureOutcome::Absent,
+                })
             }
             BrowserViewDraftCommand::SaveCapture {
                 submission,
@@ -1162,7 +1556,10 @@ impl BrowserService {
             }
             command => {
                 if context.target_id != attachment.target_id {
-                    return Err(InspectionError::new("browser_draft_target", "Draft command targets another browser tab"));
+                    return Err(InspectionError::new(
+                        "browser_draft_target",
+                        "Draft command targets another browser tab",
+                    ));
                 }
                 let identity = BrowserDraftIdentity {
                     association_key,
@@ -1171,9 +1568,11 @@ impl BrowserService {
                     document_generation: context.document_generation,
                 };
                 match command {
-                    BrowserViewDraftCommand::Open { draft_id: requested } => {
-                        Ok(BrowserViewCommandOutcome::Draft { draft: store.open(&identity, requested)? })
-                    }
+                    BrowserViewDraftCommand::Open {
+                        draft_id: requested,
+                    } => Ok(BrowserViewCommandOutcome::Draft {
+                        draft: store.open(&identity, requested)?,
+                    }),
                     command => Ok(BrowserViewCommandOutcome::Draft {
                         draft: store.mutate(
                             &identity,
@@ -1209,7 +1608,10 @@ impl BrowserService {
             || command.location.presented_frame_sequence != descriptor.frame_sequence
             || command.location.lease_generation == 0
         {
-            return Err(InspectionError::new("browser_draft_capture", "Capture preparation no longer matches the presented frame"));
+            return Err(InspectionError::new(
+                "browser_draft_capture",
+                "Capture preparation no longer matches the presented frame",
+            ));
         }
         let identity = BrowserDraftIdentity {
             association_key: receipt.association_key.clone(),
@@ -1217,7 +1619,10 @@ impl BrowserService {
             target_id: attachment.target_id.clone(),
             document_generation: descriptor.document_generation,
         };
-        let address = self.association(&receipt, cockpit_protocol::browser::BrowserConnectionState::Open);
+        let address = self.association(
+            &receipt,
+            cockpit_protocol::browser::BrowserConnectionState::Open,
+        );
         let context = BrowserCaptureContext {
             association_key: address.association_key,
             session_id: address.session_id,
@@ -1253,7 +1658,9 @@ impl BrowserService {
         &self,
         request: BrowserDraftRecoveryRequest,
     ) -> Result<BrowserViewCommandOutcome, InspectionError> {
-        request.validate().map_err(|message| InspectionError::new("browser_draft_command", message))?;
+        request
+            .validate()
+            .map_err(|message| InspectionError::new("browser_draft_command", message))?;
         let _operation = self.operation_lock.lock().await;
         let resolved = self.resolve_target(&request.target).await?;
         let association_key = super::association_key(
@@ -1271,24 +1678,50 @@ impl BrowserService {
             }),
             BrowserDraftRecoveryAction::DiscardPending => {
                 store.discard_pending(&association_key)?;
-                Ok(BrowserViewCommandOutcome::Capture { capture: BrowserViewCaptureOutcome::Absent })
-            }
-            BrowserDraftRecoveryAction::SetEditor { draft_id, expected_revision, editor } => {
-                Ok(BrowserViewCommandOutcome::Draft {
-                    draft: store.set_editor_recovery(&association_key, &draft_id, expected_revision, editor)?,
+                Ok(BrowserViewCommandOutcome::Capture {
+                    capture: BrowserViewCaptureOutcome::Absent,
                 })
             }
-            BrowserDraftRecoveryAction::UpsertAnnotation { draft_id, expected_revision, annotation } => {
-                Ok(BrowserViewCommandOutcome::Draft {
-                    draft: store.upsert_annotation_recovery(&association_key, &draft_id, expected_revision, annotation)?,
-                })
-            }
-            BrowserDraftRecoveryAction::RemoveAnnotation { draft_id, expected_revision, annotation_id } => {
-                Ok(BrowserViewCommandOutcome::Draft {
-                    draft: store.remove_annotation_recovery(&association_key, &draft_id, expected_revision, annotation_id)?,
-                })
-            }
-            BrowserDraftRecoveryAction::DiscardDraft { draft_id, expected_revision } => {
+            BrowserDraftRecoveryAction::SetEditor {
+                draft_id,
+                expected_revision,
+                editor,
+            } => Ok(BrowserViewCommandOutcome::Draft {
+                draft: store.set_editor_recovery(
+                    &association_key,
+                    &draft_id,
+                    expected_revision,
+                    editor,
+                )?,
+            }),
+            BrowserDraftRecoveryAction::UpsertAnnotation {
+                draft_id,
+                expected_revision,
+                annotation,
+            } => Ok(BrowserViewCommandOutcome::Draft {
+                draft: store.upsert_annotation_recovery(
+                    &association_key,
+                    &draft_id,
+                    expected_revision,
+                    annotation,
+                )?,
+            }),
+            BrowserDraftRecoveryAction::RemoveAnnotation {
+                draft_id,
+                expected_revision,
+                annotation_id,
+            } => Ok(BrowserViewCommandOutcome::Draft {
+                draft: store.remove_annotation_recovery(
+                    &association_key,
+                    &draft_id,
+                    expected_revision,
+                    annotation_id,
+                )?,
+            }),
+            BrowserDraftRecoveryAction::DiscardDraft {
+                draft_id,
+                expected_revision,
+            } => {
                 store.discard_draft(&association_key, &draft_id, expected_revision)?;
                 Ok(BrowserViewCommandOutcome::DraftInventory {
                     inventory: store.list(&association_key)?,
@@ -1320,7 +1753,9 @@ impl BrowserService {
             },
         };
         let feedback = self.feedback.list(&key)?;
-        let deliveries = self.feedback.list_delivery_statuses(&key, &feedback.captures)?;
+        let deliveries = self
+            .feedback
+            .list_delivery_statuses(&key, &feedback.captures)?;
         Ok(BrowserFeedbackLookup {
             browser,
             feedback,
@@ -1370,13 +1805,22 @@ impl BrowserService {
             &resolved.space_id,
         );
         if attachment.association_key != association_key {
-            return Err(InspectionError::new("browser_draft_association", "Browser view belongs to another Space association"));
+            return Err(InspectionError::new(
+                "browser_draft_association",
+                "Browser view belongs to another Space association",
+            ));
         }
         let receipt = self.load(&association_key)?.ok_or_else(|| {
-            InspectionError::new("browser_draft_association", "Browser association is unavailable")
+            InspectionError::new(
+                "browser_draft_association",
+                "Browser association is unavailable",
+            )
         })?;
         if receipt.incarnation.as_deref() != Some(attachment.browser_incarnation.as_str()) {
-            return Err(InspectionError::new("browser_draft_incarnation", "Browser view belongs to a previous browser incarnation"));
+            return Err(InspectionError::new(
+                "browser_draft_incarnation",
+                "Browser view belongs to a previous browser incarnation",
+            ));
         }
         Ok(receipt)
     }
@@ -1387,16 +1831,21 @@ fn required_draft_id(draft_id: Option<&str>) -> Result<&str, InspectionError> {
 }
 
 fn required_revision(revision: Option<u64>) -> Result<u64, InspectionError> {
-    revision.ok_or_else(|| InspectionError::new("browser_draft_command", "Expected draft revision is required"))
+    revision.ok_or_else(|| {
+        InspectionError::new(
+            "browser_draft_command",
+            "Expected draft revision is required",
+        )
+    })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser_feedback::{BrowserFeedbackOptions, BrowserFeedbackStore};
     use cockpit_protocol::browser_feedback::{
         BrowserAnnotation, BrowserAnnotationKind, BrowserCaptureSaved, BrowserPageEvidence,
-        BrowserPoint, BrowserViewport,
+        BrowserPoint, BrowserRect, BrowserViewport,
     };
-    use crate::browser_feedback::{BrowserFeedbackOptions, BrowserFeedbackStore};
 
     fn test_store() -> (BrowserDraftStore, PathBuf) {
         let root = std::env::temp_dir().join(format!("cockpit-browser-drafts-{}", Uuid::new_v4()));
@@ -1442,7 +1891,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_new_incarnation_compacts_obsolete_drafts_but_keeps_preparation_reference() {
+    fn opening_new_incarnation_preserves_unsent_work_and_compacts_empty_drafts() {
         let (store, root) = test_store();
         let association_key = "0123456789abcdef01234567";
         let other_association_key = "89abcdef0123456701234567";
@@ -1458,12 +1907,7 @@ mod tests {
                 Uuid::new_v4().to_string()
             };
             old_ids.push(draft_id.clone());
-            let old_identity = identity(
-                association_key,
-                &old_incarnation,
-                "target",
-                generation,
-            );
+            let old_identity = identity(association_key, &old_incarnation, "target", generation);
             let mut stored = draft(&old_identity, draft_id);
             if generation == 2 {
                 let annotation_id = Uuid::new_v4().to_string();
@@ -1478,6 +1922,9 @@ mod tests {
                 });
                 stored.editor.note_annotation_id = Some(annotation_id);
                 stored.editor.note_text = "unsent note".to_owned();
+            } else {
+                stored.stale = true;
+                stored.freshness = BrowserViewInspectionFreshness::Stale;
             }
             store.write_draft(&stored).unwrap();
         }
@@ -1490,6 +1937,7 @@ mod tests {
             draft_id: referenced_id.clone(),
             draft_revision: 1,
             annotation_ids: Vec::new(),
+            original_annotation_digests: Vec::new(),
             context: BrowserCaptureContext {
                 association_key: association_key.to_owned(),
                 session_id: "session".to_owned(),
@@ -1510,37 +1958,152 @@ mod tests {
         .unwrap();
 
         let other_id = Uuid::new_v4().to_string();
-        let other_identity = identity(
-            other_association_key,
-            &old_incarnation,
-            "other-target",
-            1,
-        );
+        let other_identity = identity(other_association_key, &old_incarnation, "other-target", 1);
         store
             .write_draft(&draft(&other_identity, other_id.clone()))
             .unwrap();
 
-        let current_identity = identity(
-            association_key,
-            &current_incarnation,
-            "target",
-            1,
-        );
+        let current_identity = identity(association_key, &current_incarnation, "target", 1);
         let opened = store.open(&current_identity, None).unwrap();
+        let unsent = store.load_draft(&old_ids[1]).unwrap().unwrap();
+        assert_eq!(unsent.annotations.len(), 1);
+        assert!(!unsent.stale);
+        assert_eq!(unsent.editor.note_text, "unsent note");
         assert_eq!(opened.document_generation, 1);
         assert!(store.load_preparation(association_key).unwrap().is_some());
         let referenced = store.load_draft(&referenced_id).unwrap().unwrap();
         assert!(!referenced.tombstoned);
         assert!(referenced.stale);
-        let unsent = store.load_draft(&old_ids[1]).unwrap().unwrap();
-        assert_eq!(unsent.annotations.len(), 1);
-        assert!(unsent.stale);
-        assert_eq!(unsent.editor.note_text, "unsent note");
+        assert_eq!(
+            store
+                .load_draft(&old_ids[1])
+                .unwrap()
+                .unwrap()
+                .editor
+                .note_text,
+            "unsent note"
+        );
         for draft_id in old_ids.into_iter().skip(2) {
             assert!(store.load_draft(&draft_id).unwrap().is_none());
         }
         assert!(store.load_draft(&other_id).unwrap().is_some());
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restarting_at_capacity_does_not_evict_unsubmitted_annotations() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let old_incarnation = Uuid::new_v4().to_string();
+        let mut ids = Vec::new();
+        for generation in 1..=MAX_DRAFTS as u64 {
+            let mut stored = draft(
+                &identity(key, &old_incarnation, "target", generation),
+                Uuid::new_v4().to_string(),
+            );
+            stored.annotations.push(BrowserViewDraftAnnotation {
+                id: Uuid::new_v4().to_string(),
+                kind: BrowserAnnotationKind::Region,
+                color: "#f00".to_owned(),
+                points: vec![BrowserPoint { x: 1.0, y: 1.0 }],
+                bounds: None,
+                evidence: None,
+                comment: Some("unsent".to_owned()),
+            });
+            ids.push(stored.draft_id.clone());
+            store.write_draft(&stored).unwrap();
+        }
+        let current = identity(key, &Uuid::new_v4().to_string(), "target", 1);
+        let error = store
+            .open(&current, None)
+            .expect_err("a restart cannot evict unsent work");
+        assert_eq!(error.code, "browser_draft_capacity");
+        assert_eq!(store.list(key).unwrap().drafts.len(), MAX_DRAFTS);
+        for id in ids {
+            assert_eq!(store.load_draft(&id).unwrap().unwrap().annotations.len(), 1);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn switching_targets_preserves_drafts_and_capture_authority() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let incarnation = Uuid::new_v4().to_string();
+        let a = identity(key, &incarnation, "target-a", 1);
+        let first = store.open(&a, None).unwrap();
+        let annotation = BrowserViewDraftAnnotation {
+            id: Uuid::new_v4().to_string(),
+            kind: BrowserAnnotationKind::Region,
+            color: "#f00".to_owned(),
+            points: vec![BrowserPoint { x: 1.0, y: 1.0 }],
+            bounds: None,
+            evidence: None,
+            comment: Some("unsent note".to_owned()),
+        };
+        let mut stored = store.load_draft(&first.draft_id).unwrap().unwrap();
+        stored.annotations.push(annotation.clone());
+        stored.editor.note_annotation_id = Some(annotation.id.clone());
+        stored.editor.note_text = "unsent note".to_owned();
+        store.write_draft(&stored).unwrap();
+
+        let b = identity(key, &incarnation, "target-b", 1);
+        store.open(&b, None).unwrap();
+        let reopened = store.open(&a, None).unwrap();
+        assert_eq!(reopened.draft_id, first.draft_id);
+        assert_eq!(reopened.annotations, vec![annotation.clone()]);
+        assert_eq!(reopened.editor.note_text, "unsent note");
+        let context = BrowserCaptureContext {
+            association_key: key.to_owned(),
+            session_id: "session".to_owned(),
+            space_id: "space".to_owned(),
+            space_label: "Space".to_owned(),
+            playwright_session: "playwright".to_owned(),
+            working_directory: "/tmp".to_owned(),
+            invocation: "test".to_owned(),
+            browser_instance: incarnation.clone(),
+            inline_provenance: Some(BrowserInlineCaptureProvenance {
+                target_id: a.target_id.clone(),
+                frame_id: "frame-a".to_owned(),
+                document_generation: a.document_generation,
+                frame_generation: 1,
+                stream_epoch: 1,
+                frame_sequence: 1,
+                viewport_revision: 1,
+                pixel_captured_at_micros: 1,
+                capture_as_shown: true,
+            }),
+        };
+        store
+            .prepare_capture(
+                BrowserDraftCaptureContext {
+                    identity: a.clone(),
+                    context: context.clone(),
+                },
+                &reopened.draft_id,
+                reopened.revision,
+                vec![annotation.id.clone()],
+                Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+
+        let next = identity(key, &incarnation, "target-a", 2);
+        store.mark_stale(key, &incarnation, "target-a", 2).unwrap();
+        let rejected = store
+            .prepare_capture(
+                BrowserDraftCaptureContext {
+                    identity: a,
+                    context,
+                },
+                &reopened.draft_id,
+                reopened.revision,
+                vec![annotation.id],
+                Uuid::new_v4().to_string(),
+            )
+            .expect_err("authoritative same-target navigation invalidates capture");
+        assert_eq!(rejected.code, "browser_draft_identity");
+        assert!(store.open(&next, None).unwrap().annotations.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1561,8 +2124,117 @@ mod tests {
             "target",
             7,
         );
-        let error = store.open(&foreign, Some(draft_id)).expect_err("foreign association must not recover draft");
+        let error = store
+            .open(&foreign, Some(draft_id))
+            .expect_err("foreign association must not recover draft");
         assert_eq!(error.code, "browser_draft_identity");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_client_revisions_and_consumed_ids_cannot_resurrect_removed_marks() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let owner = identity(key, &Uuid::new_v4().to_string(), "target", 1);
+        let initial = store.open(&owner, None).unwrap();
+        let mark = BrowserViewDraftAnnotation {
+            id: Uuid::new_v4().to_string(),
+            kind: BrowserAnnotationKind::Region,
+            color: "#f00".to_owned(),
+            points: vec![BrowserPoint { x: 1.0, y: 1.0 }],
+            bounds: None,
+            evidence: None,
+            comment: Some("winner".to_owned()),
+        };
+        let competing = BrowserViewDraftAnnotation {
+            id: Uuid::new_v4().to_string(),
+            comment: Some("stale competing client".to_owned()),
+            ..mark.clone()
+        };
+        let barrier = std::sync::Barrier::new(2);
+        let (left, right) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                barrier.wait();
+                store.upsert_annotation_recovery(
+                    key,
+                    &initial.draft_id,
+                    initial.revision,
+                    mark.clone(),
+                )
+            });
+            let second = scope.spawn(|| {
+                barrier.wait();
+                store.upsert_annotation_recovery(
+                    key,
+                    &initial.draft_id,
+                    initial.revision,
+                    competing.clone(),
+                )
+            });
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        let (saved, winner, loser, conflict) = match (left, right) {
+            (Ok(saved), Err(conflict)) => (saved, mark, competing, conflict),
+            (Err(conflict), Ok(saved)) => (saved, competing, mark, conflict),
+            outcome => panic!("exactly one competing edit must win: {outcome:?}"),
+        };
+        assert_eq!(conflict.code, "browser_draft_revision");
+        assert_eq!(
+            store
+                .load_draft(&initial.draft_id)
+                .unwrap()
+                .unwrap()
+                .annotations,
+            vec![winner.clone()]
+        );
+        let removed = store
+            .remove_annotation_recovery(key, &initial.draft_id, saved.revision, winner.id.clone())
+            .unwrap();
+        let resurrected = store
+            .upsert_annotation_recovery(key, &initial.draft_id, removed.revision, winner)
+            .expect_err("a delayed save cannot restore a consumed annotation");
+        assert_eq!(resurrected.code, "browser_draft_consumed");
+        store
+            .discard_draft(key, &initial.draft_id, removed.revision)
+            .unwrap();
+        let discarded = store
+            .upsert_annotation_recovery(key, &initial.draft_id, removed.revision, loser)
+            .expect_err("a discarded draft cannot accept delayed edits");
+        let context = BrowserCaptureContext {
+            association_key: key.to_owned(),
+            session_id: "session".to_owned(),
+            space_id: "space".to_owned(),
+            space_label: "Space".to_owned(),
+            playwright_session: "playwright".to_owned(),
+            working_directory: "/tmp".to_owned(),
+            invocation: "test".to_owned(),
+            browser_instance: owner.browser_incarnation.clone(),
+            inline_provenance: Some(BrowserInlineCaptureProvenance {
+                target_id: owner.target_id.clone(),
+                frame_id: "frame-target".to_owned(),
+                document_generation: owner.document_generation,
+                frame_generation: 1,
+                stream_epoch: 1,
+                frame_sequence: 1,
+                viewport_revision: 1,
+                pixel_captured_at_micros: 1,
+                capture_as_shown: true,
+            }),
+        };
+        let capture_error = store
+            .prepare_capture(
+                BrowserDraftCaptureContext {
+                    identity: owner,
+                    context,
+                },
+                &initial.draft_id,
+                removed.revision,
+                Vec::new(),
+                Uuid::new_v4().to_string(),
+            )
+            .expect_err("tombstoned drafts cannot be captured");
+        assert_eq!(capture_error.code, "browser_draft_identity");
+        assert!(store.list(key).unwrap().drafts.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1592,14 +2264,28 @@ mod tests {
             draft_id: current.draft_id.clone(),
             draft_revision: current.revision,
             annotation_ids: Vec::new(),
+            original_annotation_digests: Vec::new(),
             context,
         };
-        atomic_write_json(&store.dir().unwrap(), &preparation_name(association_key), &preparation).unwrap();
+        atomic_write_json(
+            &store.dir().unwrap(),
+            &preparation_name(association_key),
+            &preparation,
+        )
+        .unwrap();
 
-        let failure = store.discard_draft(association_key, &current.draft_id, current.revision)
+        let failure = store
+            .discard_draft(association_key, &current.draft_id, current.revision)
             .expect_err("a prepared capture still owns this draft");
         assert_eq!(failure.code, "browser_draft_capture");
-        assert!(store.list(association_key).unwrap().drafts.iter().any(|draft| draft.draft_id == current.draft_id));
+        assert!(
+            store
+                .list(association_key)
+                .unwrap()
+                .drafts
+                .iter()
+                .any(|draft| draft.draft_id == current.draft_id)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1619,6 +2305,15 @@ mod tests {
             points: vec![BrowserPoint { x: 1.0, y: 1.0 }],
             bounds: None,
             element: None,
+        };
+        let original = BrowserViewDraftAnnotation {
+            id: annotation_id.clone(),
+            kind: BrowserAnnotationKind::Region,
+            color: "#f00".to_owned(),
+            points: vec![BrowserPoint { x: 1.0, y: 1.0 }],
+            bounds: None,
+            evidence: None,
+            comment: Some("old note".to_owned()),
         };
         let mut current = draft(&owner, draft_id.clone());
         current.revision = 2;
@@ -1652,6 +2347,7 @@ mod tests {
             draft_id,
             draft_revision: 1,
             annotation_ids: vec![annotation_id.clone()],
+            original_annotation_digests: vec![annotation_digest(&original).unwrap()],
             context,
             submission: BrowserCaptureSubmission {
                 association_key: association_key.to_owned(),
@@ -1688,11 +2384,150 @@ mod tests {
         store.apply_capture_receipt(&pending, &saved).unwrap();
         let recovered = store.load_draft(&pending.draft_id).unwrap().unwrap();
         assert_eq!(recovered.annotations.len(), 1);
-        assert_eq!(recovered.annotations[0].comment.as_deref(), Some("newer annotation"));
+        assert_eq!(
+            recovered.annotations[0].comment.as_deref(),
+            Some("newer annotation")
+        );
         assert_eq!(recovered.editor.note_text, "newer note");
         assert!(recovered.consumed_annotation_ids.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn capture_receipt_consumes_only_unchanged_document_marks_at_png_density() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let incarnation = Uuid::new_v4().to_string();
+        let owner = identity(key, &incarnation, "target", 1);
+        let draft = store.open(&owner, None).unwrap();
+        let original = BrowserViewDraftAnnotation {
+            id: Uuid::new_v4().to_string(),
+            kind: BrowserAnnotationKind::Region,
+            color: "#f00".to_owned(),
+            points: vec![BrowserPoint { x: 10.0, y: 15.0 }],
+            bounds: Some(BrowserRect {
+                x: 10.0,
+                y: 15.0,
+                width: 20.0,
+                height: 5.0,
+            }),
+            evidence: None,
+            comment: Some("pinned note".to_owned()),
+        };
+        let selected = store
+            .upsert_annotation_recovery(key, &draft.draft_id, draft.revision, original.clone())
+            .unwrap();
+        let context = BrowserCaptureContext {
+            association_key: key.to_owned(),
+            session_id: "session".to_owned(),
+            space_id: "space".to_owned(),
+            space_label: "Space".to_owned(),
+            playwright_session: "playwright".to_owned(),
+            working_directory: "/tmp".to_owned(),
+            invocation: "test".to_owned(),
+            browser_instance: incarnation.clone(),
+            inline_provenance: Some(BrowserInlineCaptureProvenance {
+                target_id: owner.target_id.clone(),
+                frame_id: "frame".to_owned(),
+                document_generation: owner.document_generation,
+                frame_generation: 1,
+                stream_epoch: 1,
+                frame_sequence: 1,
+                viewport_revision: 1,
+                pixel_captured_at_micros: 1,
+                capture_as_shown: true,
+            }),
+        };
+        let capture_id = Uuid::new_v4().to_string();
+        store
+            .prepare_capture(
+                BrowserDraftCaptureContext {
+                    identity: owner,
+                    context,
+                },
+                &selected.draft_id,
+                selected.revision,
+                vec![original.id.clone()],
+                capture_id.clone(),
+            )
+            .unwrap();
+        let prepared = store.load_preparation(key).unwrap().unwrap();
+        let later = BrowserViewDraftAnnotation {
+            id: Uuid::new_v4().to_string(),
+            kind: BrowserAnnotationKind::Region,
+            color: "#0f0".to_owned(),
+            points: vec![BrowserPoint { x: 50.0, y: 60.0 }],
+            bounds: None,
+            evidence: None,
+            comment: Some("newer independent mark".to_owned()),
+        };
+        store
+            .upsert_annotation_recovery(key, &selected.draft_id, selected.revision, later.clone())
+            .unwrap();
+        let pending = StoredPendingCapture {
+            format_version: FORMAT_VERSION,
+            association_key: key.to_owned(),
+            browser_incarnation: incarnation.clone(),
+            draft_id: selected.draft_id.clone(),
+            draft_revision: selected.revision,
+            annotation_ids: vec![original.id.clone()],
+            original_annotation_digests: prepared.original_annotation_digests,
+            context: prepared.context,
+            submission: BrowserCaptureSubmission {
+                association_key: key.to_owned(),
+                browser_instance: incarnation,
+                capture_id: capture_id.clone(),
+                page: BrowserPageEvidence {
+                    url: "https://example.test".to_owned(),
+                    title: "Example".to_owned(),
+                    tab_id: None,
+                    document_id: "frame".to_owned(),
+                    captured_at: "now".to_owned(),
+                    viewport: BrowserViewport {
+                        width: 100.0,
+                        height: 100.0,
+                        scroll_x: 0.0,
+                        scroll_y: 0.0,
+                        device_pixel_ratio: 2.0,
+                        visual_scale: 1.0,
+                    },
+                    image_width: 200,
+                    image_height: 200,
+                },
+                annotations: vec![BrowserAnnotation {
+                    id: original.id.clone(),
+                    kind: original.kind,
+                    comment: "pinned note".to_owned(),
+                    color: original.color,
+                    points: vec![BrowserPoint { x: 20.0, y: 30.0 }],
+                    bounds: Some(BrowserRect {
+                        x: 20.0,
+                        y: 30.0,
+                        width: 40.0,
+                        height: 10.0,
+                    }),
+                    element: None,
+                }],
+                png_base64: "png".to_owned(),
+            },
+            last_error: None,
+        };
+        store
+            .apply_capture_receipt(
+                &pending,
+                &BrowserCaptureSaved {
+                    capture_id,
+                    annotation_ids: pending.annotation_ids.clone(),
+                    image_path: "capture.png".to_owned(),
+                    pending_count: 1,
+                },
+            )
+            .unwrap();
+        let recovered = store.load_draft(&selected.draft_id).unwrap().unwrap();
+        assert_eq!(recovered.annotations, vec![later]);
+        assert_eq!(recovered.consumed_annotation_ids, vec![original.id]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn oversized_revision_is_rejected_without_replacing_recoverable_draft() {
         let (store, root) = test_store();
@@ -1720,7 +2555,9 @@ mod tests {
             });
         }
 
-        let error = store.write_draft(&oversized).expect_err("oversized revision must not become unrecoverable");
+        let error = store
+            .write_draft(&oversized)
+            .expect_err("oversized revision must not become unrecoverable");
         assert_eq!(error.code, "browser_draft_capacity");
         let recovered = store.load_draft(&original_id).unwrap().unwrap();
         assert_eq!(recovered.revision, original.revision);
@@ -1775,6 +2612,7 @@ mod tests {
             draft_id: Uuid::new_v4().to_string(),
             draft_revision: 1,
             annotation_ids: Vec::new(),
+            original_annotation_digests: Vec::new(),
             context,
             submission,
             last_error: None,
@@ -1784,7 +2622,9 @@ mod tests {
         pending.submission.capture_id = Uuid::new_v4().to_string();
         pending.submission.png_base64 = "x".repeat(MAX_PENDING_BYTES as usize);
 
-        let error = store.write_pending(&pending).expect_err("oversized pending record must be rejected");
+        let error = store
+            .write_pending(&pending)
+            .expect_err("oversized pending record must be rejected");
         assert_eq!(error.code, "browser_draft_capacity");
         let retry = store.load_pending(association_key).unwrap().unwrap();
         assert_eq!(retry.submission.capture_id, original_capture_id);

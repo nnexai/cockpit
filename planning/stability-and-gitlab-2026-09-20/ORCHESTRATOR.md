@@ -16,10 +16,11 @@ The campaign is complete only when every required task is `done`, all required c
 
 `tasks.json` is the **only authoritative task-status ledger**. Briefs and the README do not duplicate mutable status. One orchestrator writes the ledger; workers report results but never mark themselves done.
 
-- `pending`: not claimed. Ready when all `depends_on` entries are done and no external prerequisite blocks it.
+- `pending`: never claimed. Ready when all `depends_on` entries are done and no external prerequisite blocks it.
+- `queued`: previously started, safely checkpointed and unowned; retains its historical evidence, commits and `started_at` without holding locks. It has no external blockers. `ready` lists it as a candidate only when dependencies are done and locks are free; otherwise it is waiting.
 - `in_progress`: one named worker/integration owner holds its declared locks. Set `owner` and `started_at` (UTC ISO-8601).
 - `verifying`: edits integrated; integration owner is running the focused checks and actual-surface acceptance for the bounded contract. Still holds locks.
-- `blocked`: record precise `blockers`, attempted discovery, and the next unblock action. Keep `owner` non-null while partial edits or retained resources require its locks; the readiness helper conservatively retains all declared locks. Clear `owner` only after a safe committed checkpoint/cleanup leaves no partial edits or exclusive resources; record that release in notes. A blocked task never becomes ready automatically.
+- `blocked`: an actual unavailable prerequisite or failed gate prevents the next affected action; record precise `blockers`, attempted discovery, and the next unblock action. Keep `owner` non-null while partial edits or retained resources require its locks; the readiness helper conservatively retains all declared locks. Clear `owner` only after a safe committed checkpoint/cleanup leaves no partial edits or exclusive resources; record that release in notes. A blocked task never becomes ready automatically.
 - `done`: passing evidence and actual commit hashes recorded; set `completed_at`, clear blockers, release locks.
 - `deferred`: outside required campaign scope; never auto-promote.
 
@@ -33,7 +34,7 @@ Quick inspection from repository root:
 
 ```sh
 jq -r '.tasks[] | [.id, .status, (.owner // "-"), .title] | @tsv' planning/stability-and-gitlab-2026-09-20/tasks.json
-jq -r '. as $b | .tasks[] | select(.required and .status == "pending") | select(all(.depends_on[]; . as $dep | any($b.tasks[]; .id == $dep and .status == "done"))) | [.id, (.locks | join(",")), .title] | @tsv' planning/stability-and-gitlab-2026-09-20/tasks.json
+jq -r '. as $b | .tasks[] | select(.required and (.status == "pending" or .status == "queued")) | select(all(.depends_on[]; . as $dep | any($b.tasks[]; .id == $dep and .status == "done"))) | [.id, (.locks | join(",")), .title] | @tsv' planning/stability-and-gitlab-2026-09-20/tasks.json
 ```
 
 The second command reports dependency readiness only. Check platform/fixture prerequisites and locks before dispatching. Update fields through normal reviewed file edits; do not maintain a second checkbox board.

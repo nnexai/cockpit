@@ -823,6 +823,10 @@ async function enumerateTargets(requireSelected = true) {
       title: target.title || '', url: target.url || '', order,
       opener_target_id: target.openerId || null, can_close: target.type === 'page',
     }));
+  const activeIds = new Set(state.targets.map((target) => target.target_id));
+  for (const targetId of state.documentByTarget.keys()) {
+    if (!activeIds.has(targetId)) state.documentByTarget.delete(targetId);
+  }
   const active = state.targets.find((target) => target.target_id === state.targetId);
   if (!active && requireSelected) throw new Error('attached browser target no longer exists');
   state.url = active?.url || state.url;
@@ -843,6 +847,11 @@ async function pageForTarget(targetId) {
 async function bindPage(targetId, restartScreencast = true) {
   pageBindingGeneration++;
   const previousTarget = state?.targetId;
+  if (previousTarget && state.loaderId) {
+    state.documentByTarget.set(previousTarget, {
+      loaderId: state.loaderId, generation: state.documentGeneration,
+    });
+  }
   const targetChanged = previousTarget && previousTarget !== targetId;
   if (targetChanged) await dismissPendingBlocker();
   if (restartScreencast) await stopScreencast();
@@ -857,9 +866,14 @@ async function bindPage(targetId, restartScreencast = true) {
   const selected = await pageForTarget(targetId);
   page = selected.page;
   pageCdp = selected.cdp;
+  let boundLoaderId = null;
   state.targetId = targetId;
   if (targetChanged) {
-    state.documentGeneration = nextGeneration(state.documentGeneration);
+    try { boundLoaderId = (await selected.cdp.send('Page.getFrameTree')).frameTree.frame.loaderId || null; } catch {}
+    const prior = state.documentByTarget.get(targetId);
+    state.documentGeneration = boundLoaderId && prior?.loaderId === boundLoaderId
+      ? prior.generation : nextGeneration(state.documentGeneration);
+    state.loaderId = boundLoaderId;
     state.frameGeneration = nextGeneration(state.frameGeneration);
     state.viewportRevision++;
     state.cursor = null;
@@ -878,6 +892,17 @@ async function bindPage(targetId, restartScreencast = true) {
   if (pageBindingIsCurrent(page, pageCdp, pageBindingGeneration)) state.cdpInputScale = 1;
   await updatePageState();
   await updateFrameId();
+  if (targetChanged && state.loaderId !== boundLoaderId) {
+    // The page changed again during binding. Do not reuse a prior document's
+    // annotations or capture geometry merely because its earlier loader matched.
+    state.documentGeneration = nextGeneration(state.documentGeneration);
+    resetFrameTransport();
+  }
+  if (state.loaderId) {
+    state.documentByTarget.set(targetId, {
+      loaderId: state.loaderId, generation: state.documentGeneration,
+    });
+  }
   await updateHistory();
   if (targetChanged) {
     emitEvent('document_changed', { document: documentState() });
@@ -1210,10 +1235,12 @@ function screenshotGeometryCurrent(context) {
 }
 function screenshotContextCurrent(context) {
   return screenshotGeometryCurrent(context)
-    && (!context.streamingScroll || context.frameArrivalSequence === screencastFrameArrivalSequence)
-    && (context.expectedStreamArrivalSequence === undefined
+    && (context.allowConcurrentStreamFrames || !context.streamingScroll
+      || context.frameArrivalSequence === screencastFrameArrivalSequence)
+    && (context.allowConcurrentStreamFrames || context.expectedStreamArrivalSequence === undefined
       || context.expectedStreamArrivalSequence === screencastFrameArrivalSequence)
-    && (context.expectedFrameSequence === undefined || state.frameSequence === context.expectedFrameSequence);
+    && (context.allowConcurrentStreamFrames || context.expectedFrameSequence === undefined
+      || state.frameSequence === context.expectedFrameSequence);
 }
 async function readCaptureGeometry(context, allowCorrection = true, requireStableStream = true) {
   const metrics = await context.cdp.send('Page.getLayoutMetrics');
@@ -1407,6 +1434,7 @@ function scheduleDensityRefinement(expectedPage, expectedCdp, expectedBinding) {
     expectedFrameSequence: state.frameSequence,
     expectedInputSequence: state.nextInputSequence,
     expectedStreamArrivalSequence: screencastFrameArrivalSequence,
+    allowConcurrentStreamFrames: true,
   };
   densityRefinementContext = capture;
   densityRefinementTimer = setTimeout(() => {
@@ -1839,6 +1867,9 @@ async function installPageObservers() {
       // mapping even though its emulated viewport and frame geometry persist.
       state.cdpInputScale = state.requestedDevicePixelRatio;
       state.documentGeneration = nextGeneration(state.documentGeneration);
+      state.documentByTarget.set(targetId, {
+        loaderId, generation: state.documentGeneration,
+      });
       state.frameGeneration = nextGeneration(state.frameGeneration);
       resetFrameTransport();
       void dismissPendingBlocker();
@@ -1986,6 +2017,7 @@ async function attach(message) {
     densityRepairAttempted: false, densityRepairInFlight: false, densityRepairFailed: false,
     densityRepairAttemptId: 0,
     frameId: 'main', loaderId: null, url: '', title: '', frameGrant: message.frame_grant, loading: false,
+    documentByTarget: new Map(),
     canGoBack: false, canGoForward: false, requestedUrl: null, controlled: false,
     focus: { page_focused: false, editable: false, selection_available: false, composition_active: false },
     cursor: null, pointer: null, pointerSampleSequence: 0, viewIds: new Set([message.view_id]), controllerViewId: null,

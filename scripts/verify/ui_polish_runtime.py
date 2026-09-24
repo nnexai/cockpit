@@ -18,7 +18,9 @@ REPO = Path(__file__).resolve().parents[2]
 
 def environment(root):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("HERDR_", "COCKPIT_"))}
-    env.update(XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
+    env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"),
+               XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
+               XDG_DATA_HOME=str(root / "data"),
                HERDR_CONFIG_PATH=str(root / "config/herdr/config.toml"),
                COCKPIT_CONFIG=str(root / "cockpit.toml"))
     ledger_path = root / "runtime.json"
@@ -52,7 +54,7 @@ def launch(root, name, argv, env):
 def start():
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
     session = "polish-" + root.name[5:]
-    for folder in ["config/herdr", "state", "repositories/sample", "plain/nested", "evidence", "www"]:
+    for folder in ["config/herdr", "state", "cache", "data", "repositories/sample", "plain/nested", "evidence", "www"]:
         (root / folder).mkdir(parents=True)
     (root / "config/herdr/config.toml").write_text('')
     (root / "cockpit.toml").write_text(

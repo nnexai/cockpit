@@ -75,18 +75,19 @@ section{padding:24px;height:900px;border-bottom:2px solid #678}h1{margin:0}</sty
 <script>
 const status=()=>document.querySelector('#status').textContent;
 let scrollStart=null, scrollFinish=null;
-const report=()=>fetch('/report',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({innerWidth,innerHeight,dpr:devicePixelRatio,scrollY,nestedScrollTop:document.querySelector('#nested').scrollTop,nestedWheelY:window.nestedWheelY??null,ready:document.readyState,heading:document.querySelector('h1').textContent,headingWidth:document.querySelector('h1').getBoundingClientRect().width,contentText:document.querySelector('section p').textContent,status:status(),started:scrollStart!==null,scrollStart,scrollFinish})}).catch(()=>{});
-addEventListener('load',report); addEventListener('resize',report);
+const report=(value={})=>fetch('/report',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...value,innerWidth,innerHeight,dpr:devicePixelRatio,scrollY,nestedScrollTop:document.querySelector('#nested').scrollTop,nestedWheelY:window.nestedWheelY??null,ready:document.readyState,heading:document.querySelector('h1').textContent,headingWidth:document.querySelector('h1').getBoundingClientRect().width,contentText:document.querySelector('section p').textContent,status:status(),started:scrollStart!==null,scrollStart,scrollFinish})}).catch(()=>{});
+addEventListener('load',()=>report()); addEventListener('resize',()=>report());
 let reportTimer;
-addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(report,100)},{passive:true});
+addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(()=>report(),100)},{passive:true});
 const nested=document.querySelector('#nested');
 nested.addEventListener('wheel',event=>{window.nestedWheelY=event.deltaY},{passive:true});
-nested.addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(report,100)},{passive:true});
+nested.addEventListener('scroll',()=>{clearTimeout(reportTimer);reportTimer=setTimeout(()=>report(),100)},{passive:true});
+for(const type of ['pointerdown','pointerup','click'])addEventListener(type,event=>report({kind:'pointer',type,target:event.target?.id||event.target?.tagName||null,clientX:event.clientX,clientY:event.clientY,button:event.button,pointerType:event.pointerType,isTrusted:event.isTrusted}),true);
 let started=false;
 const sustainedMs=Number(new URLSearchParams(location.search).get('sustained')||0)*1000;
 addEventListener('pointerup',()=>{if(started)return;started=true;scrollStart=performance.now();document.querySelector('#status').textContent='scrolling';report();
  const begin=scrollStart, from=scrollY, duration=sustainedMs||6000;
- const tick=now=>{const t=Math.min(1,(now-begin)/duration);scrollTo(0,sustainedMs ? 1700-700*Math.cos((now-begin)*Math.PI/4000) : from+3900*t);if(t<1)requestAnimationFrame(tick);else{scrollTo(0,3900);document.querySelector('header').style.background='#00a84b';scrollFinish=performance.now();document.querySelector('#status').textContent='scroll complete';report();if(new URLSearchParams(location.search).has('hiddenScroll')){let mutated=false;const poll=setInterval(()=>{fetch('/control').then(r=>r.json()).then(value=>{if(mutated||!value.hidden_scroll_armed)return;mutated=true;clearInterval(poll);scrollTo(0,4100);document.querySelector('header').style.background='#1645ad';document.querySelector('#status').textContent='hidden scroll complete';report();setInterval(report,500)}).catch(()=>{})},250)}}};
+ const tick=now=>{const t=Math.min(1,(now-begin)/duration);scrollTo(0,sustainedMs ? 1700-700*Math.cos((now-begin)*Math.PI/4000) : from+3900*t);if(t<1)requestAnimationFrame(tick);else{scrollTo(0,3900);document.querySelector('header').style.background='#00a84b';scrollFinish=performance.now();document.querySelector('#status').textContent='scroll complete';report();if(new URLSearchParams(location.search).has('hiddenScroll')){const poll=setInterval(()=>{fetch('/control').then(r=>r.json()).then(value=>{if(!value.hidden_scroll_armed)return;clearInterval(poll);scrollTo(0,4100);document.querySelector('header').style.background='#1645ad';document.querySelector('#status').textContent='hidden scroll complete';report();}).catch(()=>{});},50);}}};
  requestAnimationFrame(tick);
 },{once:true});
 </script>"""
@@ -463,6 +464,7 @@ def main():
     parser.add_argument("--gateway", default=str(REPO / "target/debug/cockpit"), help="Cockpit gateway executable")
     parser.add_argument("--driver", default="/usr/bin/WebKitWebDriver", help="WebKitWebDriver executable")
     parser.add_argument("--compositor", default="niri", help="Niri compositor executable")
+    parser.add_argument("--native-pointer-binary", type=Path, help="owned-compositor-only Wayland virtual pointer binary for real OS input instead of DOM dispatch")
     parser.add_argument("--driver-port", type=int, default=0)
     parser.add_argument("--width", type=int, default=1392)
     parser.add_argument("--height", type=int, default=835)
@@ -471,13 +473,16 @@ def main():
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
     parser.add_argument("--annotation", action="store_true", help="also exercise native region and note save, then basket clear or explicit agent-fixture paste")
     parser.add_argument("--agent-fixture", type=Path, help="with --annotation, use this explicit disposable agent-like receiver binary for native paste proof")
+    parser.add_argument("--no-agent-send", action="store_true", help="with --annotation, save feedback without a recipient and verify read-only recovery")
     parser.add_argument("--element-boundary", action="store_true", help="check nested-scroll refusal and valid DOM Element selection in the private native browser")
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
     parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
     parser.add_argument("--hide-resource-seconds", type=int, default=0, help="hide the browser for at least 30 seconds after sustained animation, then require the same page to repaint on show")
     parser.add_argument("--hidden-scroll-smoke", action="store_true", help="quick native hide/reopen check after the page scrolls while no view is visible")
+    parser.add_argument("--preacquire-tab-control", action="store_true", help="exercise New browser tab and wait for its lease before entering the native fixture URL")
     parser.add_argument("--native-only-open", action="store_true", help="skip gateway browser pre-open; open and navigate using only the actual native UI")
+    parser.add_argument("--trace-webkit-decode", action="store_true", help="sample run-only ImageBitmap/object-URL lifetimes across sustained, idle, hide and show phases")
     parser.add_argument("--trace-cdp-overrides", action="store_true", help="log CDP device-metrics sends from only a run-owned helper copy")
     parser.add_argument("--trace-capture-lanes", action="store_true", help="also count screencast and screenshot capture in the run-owned helper copy")
     parser.add_argument("--trace-frame-publication", action="store_true", help="also count helper frame-descriptor publication from only the run-owned helper copy")
@@ -499,6 +504,14 @@ def main():
         parser.error("--native-only-open cannot use gateway-owned draft recovery for --annotation")
     if args.agent_fixture and (not args.annotation or not args.agent_fixture.is_file() or not os.access(args.agent_fixture, os.X_OK)):
         parser.error("--agent-fixture requires --annotation and an executable run-owned receiver binary")
+    if args.native_pointer_binary and (not args.native_pointer_binary.is_file() or not os.access(args.native_pointer_binary, os.X_OK)):
+        parser.error("--native-pointer-binary must be an executable private-compositor pointer binary")
+    if args.preacquire_tab_control and not args.native_only_open:
+        parser.error("--preacquire-tab-control requires --native-only-open")
+    if args.no_agent_send and (not args.annotation or args.agent_fixture):
+        parser.error("--no-agent-send requires --annotation without --agent-fixture")
+    if args.trace_webkit_decode and not args.sustain_seconds:
+        parser.error("--trace-webkit-decode requires --sustain-seconds")
     if args.trace_cdp_overrides and not args.native_only_open:
         parser.error("--trace-cdp-overrides requires --native-only-open")
     if args.trace_capture_lanes and not args.trace_cdp_overrides:
@@ -678,10 +691,12 @@ def main():
                                          env=dict(app_env, NIRI_SOCKET=niri_socket), check=True,
                                          capture_output=True, text=True, timeout=5)
         outputs = json.loads(output_response.stdout)
-        logical_width = max((item.get("logical") or {}).get("width", 0) for item in outputs.values())
-        if logical_width < 320:
-            raise RuntimeError(f"private compositor has no usable full-width output: {outputs}")
+        logical_output = max((item.get("logical") or {} for item in outputs.values()), key=lambda item: item.get("width", 0))
+        logical_width, logical_height = logical_output.get("width", 0), logical_output.get("height", 0)
+        if logical_width < 320 or logical_height < 240:
+            raise RuntimeError(f"private compositor has no usable output: {outputs}")
         result["geometries"]["compositor_logical_width"] = logical_width
+        result["geometries"]["compositor_logical_height"] = logical_height
         last_outer, stable_outer_samples = None, 0
         def fixed_outer():
             nonlocal last_outer, stable_outer_samples
@@ -720,33 +735,75 @@ def main():
         space_selected = "(()=>{const b=[...document.querySelectorAll('button.resource-select')].find(x=>x.title===" + json.dumps(space_label) + ");return !!b?.closest('.resource-row')?.classList.contains('is-selected')})()"
         wait_until(lambda: webdriver.execute(space_selected), "unique Space selection", args.timeout,
                    [("WebKitWebDriver", driver_process)])
-        if args.native_only_open:
-            result["native_only_trace_install"] = webdriver.execute("""(()=>{
-              const trace={started:performance.now(),frames:[],tailFrames:[],frameCount:0,events:[],sockets:0};
-              window.__nativeBrowserTrace=trace;
-              const RealSocket=window.WebSocket;
-              window.WebSocket=new Proxy(RealSocket,{construct(Target,args){
-                const socket=new Target(...args);trace.sockets++;
-                socket.addEventListener('message',event=>{
-                  if(typeof event.data!=='string')return;
-                  try{
-                    const body=JSON.parse(event.data),time=performance.now();
-                    if(body.kind==='frame'){
-                      const d=body.descriptor||{},frame={time,target_id:d.target_id,frame_sequence:d.frame_sequence,
-                        viewport_revision:d.viewport_revision,viewport_css_width:d.viewport_css_width,
-                        viewport_css_height:d.viewport_css_height,image_width:d.image_width,image_height:d.image_height};
-                      trace.frameCount++;
-                      if(trace.frames.length<24)trace.frames.push(frame);
-                      trace.tailFrames.push(frame);if(trace.tailFrames.length>24)trace.tailFrames.shift();
-                    }else if(body.kind==='event'&&trace.events.length<24){
-                      const e=body.event||{};
-                      if(['attached','viewport_changed','document_changed'].includes(e.type))
-                        trace.events.push({time,type:e.type,viewport:e.viewport||e.snapshot?.viewport||null});
-                    }
-                  }catch{}
-                });return socket;
-              }});
-              return {socketWrapped:true};
+        result["native_browser_trace_install"] = webdriver.execute("""(()=>{
+          const trace={started:performance.now(),frames:[],tailFrames:[],frameCount:0,events:[],commands:[],opens:[],socketStates:[],sockets:0,snapshot:null,control:null};
+          window.__nativeBrowserTrace=trace;
+          const rememberSnapshot=s=>{if(!s)return;trace.snapshot={view_id:s.identity?.view_id||null,target_id:s.displayed_target_id||null,document_generation:s.document?.document_generation??null,viewport_revision:s.viewport?.viewport_revision??null,viewport:s.viewport||null,control:s.control||null};trace.control=s.control||trace.control;};
+          const RealSocket=window.WebSocket;
+          window.WebSocket=new Proxy(RealSocket,{construct(Target,args){
+            const socket=new Target(...args);trace.sockets++;
+            const nativeClose=socket.close.bind(socket);
+            socket.close=(...args)=>{
+              if(trace.socketStates.length<20)trace.socketStates.push({time:performance.now(),type:'client_close',stack:String(new Error().stack).slice(0,1000)});
+              return nativeClose(...args);
+            };
+            for(const type of ['open','error','close'])socket.addEventListener(type,event=>{if(trace.socketStates.length<20)trace.socketStates.push({time:performance.now(),type,code:event.code??null,reason:event.reason??null})});
+            socket.addEventListener('message',event=>{
+              if(typeof event.data!=='string')return;
+              try{
+                const body=JSON.parse(event.data),time=performance.now();
+                if(body.kind==='frame'){
+                  const d=body.descriptor||{},frame={time,target_id:d.target_id,stream_epoch:d.stream_epoch,document_generation:d.document_generation,frame_sequence:d.frame_sequence,viewport_revision:d.viewport_revision,viewport_css_width:d.viewport_css_width,viewport_css_height:d.viewport_css_height,scroll_x:d.scroll_x,scroll_y:d.scroll_y,image_width:d.image_width,image_height:d.image_height};
+                  trace.frameCount++;trace.latestFrame=frame;
+                  if(trace.frames.length<24)trace.frames.push(frame);
+                  trace.tailFrames.push(frame);if(trace.tailFrames.length>24)trace.tailFrames.shift();
+                }else if(body.kind==='event'){
+                  const e=body.event||{},time=performance.now();
+                  if(e.type==='attached')rememberSnapshot(e.snapshot);
+                  else if(e.type==='control_changed')trace.control=e.control||null;
+                  else if(e.type==='targets_changed'&&trace.snapshot)trace.snapshot.target_id=e.displayed_target_id||null;
+                  else if(e.type==='document_changed'&&trace.snapshot)trace.snapshot.document_generation=e.document?.document_generation??null;
+                  else if(e.type==='viewport_changed'&&trace.snapshot){trace.snapshot.viewport_revision=e.viewport?.viewport_revision??null;trace.snapshot.viewport=e.viewport||null;}
+                  if(trace.events.length<64&&['attached','control_changed','targets_changed','document_changed','viewport_changed','frame_descriptor','failed','closed'].includes(e.type))
+                    trace.events.push({time,type:e.type,control:e.control||null,target_id:e.displayed_target_id||e.snapshot?.displayed_target_id||null,document_generation:e.document?.document_generation??e.snapshot?.document?.document_generation??null,viewport_revision:e.viewport?.viewport_revision??e.snapshot?.viewport?.viewport_revision??null});
+                }
+              }catch{}
+            });return socket;
+          }});
+          const internals=window.__TAURI_INTERNALS__,nativeInvoke=internals?.invoke;
+          if(typeof nativeInvoke==='function')internals.invoke=function(name,args,...rest){
+            if(name==='cockpit_browser_view_open'||name==='cockpit_browser_view_subscribe'){
+              const entry={time:performance.now(),name,view_id:args?.viewId??null,stream_epoch:args?.streamEpoch??null,status:'pending'};
+              trace.opens.push(entry);
+              return nativeInvoke.call(this,name,args,...rest).then(response=>{entry.status='resolved';entry.duration_ms=performance.now()-entry.time;entry.view_id=response?.snapshot?.identity?.view_id??entry.view_id;entry.stream_id=response?.stream_id??null;return response;},error=>{entry.status='rejected';entry.duration_ms=performance.now()-entry.time;entry.error=String(error).slice(0,400);throw error;});
+            }
+            if(name!=='cockpit_browser_view_command')return nativeInvoke.call(this,name,args,...rest);
+            const cmd=args?.request?.command||{},entry={time:performance.now(),type:cmd.type,kind:cmd.input?.kind??null,viewport_revision:cmd.location?.viewport_revision??null,lease_generation:cmd.location?.lease_generation??null};
+            trace.commands.push(entry);if(trace.commands.length>40)trace.commands.shift();
+            return nativeInvoke.call(this,name,args,...rest).then(response=>{entry.status=response?.status??null;entry.code=response?.code??null;return response;},error=>{entry.error=String(error).slice(0,180);throw error;});
+          };
+          return {socketWrapped:true};
+        })()""")
+        if args.trace_webkit_decode:
+            result["webkit_decode_trace_install"] = webdriver.execute("""(()=>{
+              const counts={bitmap_created:0,bitmap_closed:0,bitmap_live:0,bitmap_high_water:0,url_created:0,url_revoked:0,url_live:0,url_high_water:0};
+              window.__webkitDecodeCounters=counts;
+              if(typeof createImageBitmap==='function'){
+                const create=window.createImageBitmap.bind(window);
+                window.createImageBitmap=async(...args)=>{
+                  const bitmap=await create(...args);counts.bitmap_created++;counts.bitmap_live++;
+                  counts.bitmap_high_water=Math.max(counts.bitmap_high_water,counts.bitmap_live);return bitmap;
+                };
+                const close=ImageBitmap.prototype.close,closed=new WeakSet();
+                ImageBitmap.prototype.close=function(...args){
+                  if(!closed.has(this)){closed.add(this);counts.bitmap_closed++;counts.bitmap_live--;}
+                  return close.apply(this,args);
+                };
+              }
+              const createUrl=URL.createObjectURL.bind(URL),revokeUrl=URL.revokeObjectURL.bind(URL),live=new Set();
+              URL.createObjectURL=(...args)=>{const url=createUrl(...args);live.add(url);counts.url_created++;counts.url_live=live.size;counts.url_high_water=Math.max(counts.url_high_water,live.size);return url;};
+              URL.revokeObjectURL=url=>{if(live.delete(url)){counts.url_revoked++;counts.url_live=live.size;}return revokeUrl(url);};
+              return {bitmap_supported:typeof createImageBitmap==='function',url_supported:true};
             })()""")
         # The toolbar's "Open browser" label is a toggle: once the preloaded
         # association arrives it changes to "Close browser". Use the stable
@@ -762,6 +819,13 @@ def main():
         if args.native_only_open:
             wait_until(lambda: webdriver.execute("(()=>!!document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]') && document.querySelector('.browser-toolbar-status')?.textContent==='Live browser view')()"),
                        "live native browser and Page URL field", args.timeout, [("WebKitWebDriver", driver_process)])
+            if args.preacquire_tab_control:
+                before_tabs = webdriver.execute("document.querySelectorAll('.browser-tab-wrap').length")
+                webdriver.execute("(()=>{document.querySelector('button[aria-label=\"New browser tab\"]').click();return true})()")
+                result["preacquired_tab_control"] = wait_until(lambda: (value if value["tabs"] > before_tabs
+                    and value["control"] == "controlled" and value["address"] == "about:blank" else None)
+                    if (value := webdriver.execute("(()=>({tabs:document.querySelectorAll('.browser-tab-wrap').length,control:window.__nativeBrowserTrace?.control?.status,address:document.querySelector('input[aria-label=\"Page URL\"]')?.value}))()")) else None,
+                    "new tab and native browser lease before URL entry", args.timeout, [("WebKitWebDriver", driver_process)])
             webdriver.execute("(()=>{const input=document.querySelector('.browser-navigation input[aria-label=\"Page URL\"]');const form=input.closest('form');window.__nativeUrlSubmits=[];form.addEventListener('submit',e=>{const value=input.value;setTimeout(()=>window.__nativeUrlSubmits.push({value,defaultPrevented:e.defaultPrevented}),0)},true);input.focus();input.select();return true})()")
             typed_with = "webdriver-actions"
             try:
@@ -897,6 +961,14 @@ def main():
             screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
             (root / "native-annotation-note.png").write_bytes(base64.b64decode(screenshot))
             result["screenshots"]["note_acknowledged"] = str(root / "native-annotation-note.png")
+            if args.agent_fixture or args.no_agent_send:
+                def editor_settled():
+                    listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                        {"target": action["target"], "action": {"type": "list"}})
+                    return next((draft for draft in listing.get("inventory", {}).get("drafts", [])
+                        if draft["draft_id"] == saved_note["draft_id"] and draft["revision"] >= saved_note["revision"]
+                        and draft["editor"]["note_annotation_id"] is None), None)
+                wait_until(editor_settled, "saved native note editor settled before capture", 5)
             if args.agent_fixture:
                 receiver = root / "codex"
                 shutil.copy2(args.agent_fixture, receiver)
@@ -913,13 +985,6 @@ def main():
                 agent = wait_until(agent_ready, "run-owned Herdr-recognized terminal agent", 5)
                 if not paste_path.exists() or paste_path.stat().st_size:
                     raise RuntimeError("the private agent receiver had input before feedback")
-                def editor_settled():
-                    listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
-                                        {"target": action["target"], "action": {"type": "list"}})
-                    return next((draft for draft in listing.get("inventory", {}).get("drafts", [])
-                        if draft["draft_id"] == saved_note["draft_id"] and draft["revision"] >= saved_note["revision"]
-                        and draft["editor"]["note_annotation_id"] is None), None)
-                wait_until(editor_settled, "saved native note editor settled before capture", 5)
                 webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Send annotations\"]');if(!b||b.disabled)throw Error('native Send unavailable');b.click();return true})()")
                 feedback_directory = root / "cockpit-state/browser/feedback"
                 selected_id = saved_note["annotations"][0]["id"]
@@ -966,6 +1031,41 @@ def main():
                     "png_width": int.from_bytes(image[16:20], "big"), "png_height": int.from_bytes(image[20:24], "big"),
                     "paste_bytes": len(pasted), "paste_sha256": hashlib.sha256(pasted).hexdigest(),
                     "bracketed_frames": 1, "trailing_enter": False, "raw_points_in_agent_payload": False}
+            elif args.no_agent_send:
+                selected_id = saved_note["annotations"][0]["id"]
+                webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Send annotations\"]');if(!b||b.disabled)throw Error('native Send unavailable');b.click();return true})()")
+                feedback_directory = root / "cockpit-state/browser/feedback"
+                def rejected_receipt():
+                    for path in feedback_directory.glob("delivery-*.json"):
+                        receipt = json.loads(path.read_text())
+                        if receipt.get("state") == "rejected" and receipt.get("selected_ids") == [selected_id]:
+                            return receipt
+                    return None
+                receipt = wait_until(rejected_receipt, "native saved feedback rejected without an agent", args.timeout)
+                capture_id = receipt["operation_id"].removeprefix("browser-feedback-")
+                capture = json.loads((feedback_directory / f"capture-{capture_id}.json").read_text())
+                image = (root / "cockpit-state/browser/artifacts" / capture["image_name"]).read_bytes()
+                if capture["pending_ids"] != [selected_id] or capture["annotations"][0]["comment"] != note_text or image[:8] != b"\x89PNG\r\n\x1a\n":
+                    raise RuntimeError("rejected native saved feedback lost its exact mark, note, or PNG")
+                inventory = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                      {"target": action["target"], "action": {"type": "list"}})
+                editable = next((draft for draft in inventory["inventory"]["drafts"]
+                                 if draft["draft_id"] == saved_note["draft_id"]), None)
+                if editable is None or editable["annotations"]:
+                    raise RuntimeError(f"native editable draft did not consume the unchanged saved mark: {editable}")
+                def recovery_visible():
+                    return webdriver.execute("(()=>({mark:document.querySelectorAll('.browser-annotation-region').length,notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),recovery:document.querySelector('[aria-label=\"Saved feedback recovery\"]')?.textContent||null,editor:!!document.querySelector('.browser-note-editor'),handoff:!!document.querySelector('.browser-recovery-strip')}))()")
+                recovered = wait_until(lambda: (state if state["mark"] == 0 and state["notes"] == "Notes 0"
+                    and state["recovery"] and "Rejected" in state["recovery"] and not state["editor"] and not state["handoff"] else None)
+                    if (state := recovery_visible()) else None, "native frozen recovery without stale editable overlay", 5)
+                screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
+                (root / "native-no-agent.png").write_bytes(base64.b64decode(screenshot))
+                result["screenshots"]["native_no_agent"] = str(root / "native-no-agent.png")
+                result["no_agent_send"] = {"capture_id": capture_id, "operation_id": receipt["operation_id"],
+                    "annotation_id": selected_id, "receipt_state": receipt["state"], "pending_ids": capture["pending_ids"],
+                    "comment": note_text, "image_sha256": hashlib.sha256(image).hexdigest(),
+                    "editable_revision": editable["revision"], "editable_annotations": editable["annotations"],
+                    "visible_recovery": recovered}
             else:
                 clear_controls = webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),basket:!!document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]'),list:!!document.querySelector('[aria-label=\"Annotation notes\"]')}))()")
                 if clear_controls != {"notes": "Notes 1", "basket": True, "list": False}:
@@ -989,6 +1089,36 @@ def main():
             webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Browse\"]');if(!b)throw Error('browse tool unavailable');b.click();return true})()")
             wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-browse')"),
                        "native browsing restored after region save", 3)
+        def native_input_state():
+            state = webdriver.execute("""(()=>{
+              const trace=window.__nativeBrowserTrace||{},frame=trace.latestFrame||null,snapshot=trace.snapshot||null;
+              const control=trace.control||snapshot?.control||null,canvas=document.querySelector('canvas.browser-frame');
+              const surface=document.querySelector('.browser-surface'),rect=canvas?.getBoundingClientRect();
+              const frameCurrent=!!frame&&!!snapshot&&frame.target_id===snapshot.target_id
+                &&frame.document_generation===snapshot.document_generation
+                &&frame.viewport_revision===snapshot.viewport_revision
+                &&Math.abs(frame.viewport_css_width-snapshot.viewport?.css_width)<=0.01
+                &&Math.abs(frame.viewport_css_height-snapshot.viewport?.css_height)<=0.01
+                &&Math.abs(frame.scroll_x-snapshot.viewport?.scroll_x)<=0.01
+                &&Math.abs(frame.scroll_y-snapshot.viewport?.scroll_y)<=0.01
+                &&canvas?.width===frame.image_width&&canvas?.height===frame.image_height;
+              const owns=!!control&&control.status==='controlled'&&control.controller_view_id===snapshot?.view_id;
+              return {live:document.querySelector('.browser-toolbar-status')?.textContent==='Live browser view',
+                status:document.querySelector('.browser-toolbar-status')?.textContent||null,
+                tool:document.querySelector('.browser-pane')?.className||null,view_id:snapshot?.view_id||null,
+                target_id:snapshot?.target_id||null,document_generation:snapshot?.document_generation??null,
+                viewport:snapshot?.viewport||null,
+                viewport_revision:snapshot?.viewport_revision??null,frame,frame_age_ms:frame?performance.now()-frame.time:null,canvas:canvas?{width:canvas.width,height:canvas.height,css_width:rect?.width,css_height:rect?.height}:null,
+                control,owns,can_take_control:!!control?.can_take_control,frame_current:frameCurrent,
+                input_ready:frameCurrent&&(owns||!!control?.can_take_control)&&!!surface};
+            })()""")
+            result["input_state_last_observed"] = state
+            return state
+        ready_state = wait_until(lambda: (state if state["input_ready"] and (state["live"] or args.no_agent_send) else None)
+                                 if (state := native_input_state()) else None,
+                                 "current native frame and eligible browser input ownership", 5,
+                                 [("WebKitWebDriver", driver_process)])
+        result["input_state_before_pointer"] = ready_state
         result["activity"] = {"webdriver_commands_including_polling": webdriver.commands,
                               "excluded_from_fps": "WebDriver/CDP requests and helper activity",
                               "paint_rate_derived_from": "CanvasRenderingContext2D.drawImage timestamps only"}
@@ -998,7 +1128,62 @@ def main():
             sample_start = time.monotonic()
             sampler = threading.Thread(target=sample_resources, args=(sample_start,), daemon=True)
             sampler.start()
-        webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect(),x=r.left+100,y=r.top+30;for(const type of ['pointerdown','pointerup'])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',clientX:x,clientY:y,button:0,buttons:type==='pointerdown'?1:0}));return {x,y}})()")
+        pointer_before = len(FixtureHandler.state["reports"])
+        if args.native_pointer_binary:
+            webdriver.execute("(()=>{window.__privatePointerEvents=[];for(const type of ['pointermove','pointerdown','pointerup','click'])document.addEventListener(type,e=>window.__privatePointerEvents.push({type,clientX:e.clientX,clientY:e.clientY,target:e.target?.className?.baseVal||e.target?.className||e.target?.tagName,isTrusted:e.isTrusted}),true);return true})()")
+            windows = subprocess.run([bins["compositor"], "msg", "-j", "windows"], env=app_env, capture_output=True, text=True, timeout=5, check=True)
+            result["native_os_windows"] = json.loads(windows.stdout)
+            point = webdriver.execute("(()=>{const r=document.querySelector('canvas.browser-frame').getBoundingClientRect();return {x:Math.round(r.left+100),y:Math.round(r.top+30)}})()")
+            pointer_args = [str(logical_width), str(logical_height)]
+            calibration = subprocess.run([str(args.native_pointer_binary), str(root), "move", str(point["x"]), str(point["y"]),
+                                          *pointer_args], env=app_env, capture_output=True, text=True, timeout=5)
+            if calibration.returncode != 0:
+                raise RuntimeError(f"private Wayland pointer calibration was not delivered: {calibration.stderr.strip()}")
+            move_events = webdriver.execute("window.__privatePointerEvents")
+            move = next((event for event in reversed(move_events) if event["type"] == "pointermove" and event["isTrusted"]), None)
+            if move is None:
+                raise RuntimeError(f"private Wayland pointer motion did not reach the owned WebKit view: {move_events}")
+            corrected = {"x": point["x"] + point["x"] - move["clientX"], "y": point["y"] + point["y"] - move["clientY"]}
+            if not (0 <= corrected["x"] < logical_width and 0 <= corrected["y"] < logical_height):
+                raise RuntimeError(f"calibrated click outside private output: {corrected}")
+            pointer_result = subprocess.run([str(args.native_pointer_binary), str(root), "click", str(corrected["x"]), str(corrected["y"]),
+                                             *pointer_args], env=app_env, capture_output=True, text=True, timeout=5)
+            result["native_os_pointer"] = {"point": point, "calibrated_output": corrected, "calibration_event": move,
+                                           "returncode": pointer_result.returncode, "stdout": pointer_result.stdout.strip(),
+                                           "stderr": pointer_result.stderr.strip()}
+            if pointer_result.returncode != 0:
+                raise RuntimeError(f"private Wayland pointer was not delivered: {result['native_os_pointer']}")
+            result["native_os_host_events"] = webdriver.execute("window.__privatePointerEvents")
+            down = next((event for event in result["native_os_host_events"] if event["type"] == "pointerdown"), None)
+            if not down or not down["isTrusted"] or abs(down["clientX"] - point["x"]) > 2 or abs(down["clientY"] - point["y"]) > 2 or "browser-frame" not in str(down["target"]):
+                raise RuntimeError(f"private OS click did not hit the live browser canvas: {result['native_os_pointer']} {result['native_os_host_events']}")
+        else:
+            webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect(),x=r.left+100,y=r.top+30;for(const type of ['pointerdown','pointerup'])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',clientX:x,clientY:y,button:0,buttons:type==='pointerdown'?1:0}));return {x,y,transport:'DOM-dispatched PointerEvents through the live BrowserPane surface; not native OS input'}})()")
+        def pointer_events_ready():
+            events = [item for item in FixtureHandler.state["reports"][pointer_before:]
+                      if item.get("kind") == "pointer" and item.get("type") in ("pointerdown", "pointerup")]
+            return events if {"pointerdown", "pointerup"} <= {item.get("type") for item in events} else None
+        try:
+            pointer_events = wait_until(pointer_events_ready, "remote fixture receiving routed pointer events", 5,
+                                        [("WebKitWebDriver", driver_process)])
+        except RuntimeError as error:
+            if args.native_pointer_binary:
+                result["native_os_host_events_after_wait"] = webdriver.execute("window.__privatePointerEvents")
+            result["routed_pointer_diagnostics"] = webdriver.execute("(()=>({commands:window.__nativeBrowserTrace?.commands||[],frame:window.__nativeBrowserTrace?.latestFrame||null,snapshot:window.__nativeBrowserTrace?.snapshot||null,control:window.__nativeBrowserTrace?.control||null,status:document.querySelector('.browser-toolbar-status')?.textContent,message:document.querySelector('.browser-delivery-complete')?.textContent||null}))()")
+            result["routed_pointer_diagnostics"]["fixture_pointer_reports"] = [
+                item for item in FixtureHandler.state["reports"][pointer_before:] if item.get("kind") == "pointer"
+            ]
+            raise RuntimeError(f"{error}; native input trace: {json.dumps(result['routed_pointer_diagnostics'])[:3000]}") from error
+        if not all(any(item.get("type") == event_type and item.get("isTrusted") is True
+                       and item.get("pointerType") == "mouse" for item in pointer_events)
+                   for event_type in ("pointerdown", "pointerup")):
+            raise RuntimeError(f"remote page did not receive trusted routed pointer down/up; input precondition was {ready_state}, events were {pointer_events}")
+        result["routed_pointer"] = {"events": pointer_events, "transport": "private Niri Wayland virtual pointer" if args.native_pointer_binary else "DOM-dispatched PointerEvents through live BrowserPane; remote page confirmed trusted CDP mouse events"}
+        owned_state = wait_until(lambda: (state if state["owns"] and state["frame_current"] else None)
+                                 if (state := native_input_state()) else None,
+                                 "browser control owner and current painted frame after routed pointer", 5,
+                                 [("WebKitWebDriver", driver_process)])
+        result["input_state_after_pointer"] = owned_state
         completed = wait_until(lambda: next((report for report in reversed(FixtureHandler.state["reports"])
             if report.get("status") == "scroll complete" and report.get("started")
             and report.get("scrollFinish") is not None and report.get("scrollY", 0) >= 3899), None),
@@ -1106,6 +1291,8 @@ def main():
                 result["hidden_scroll"]["page_reports_after_wheel"] = [item for item in FixtureHandler.state["reports"] if item["received_at"] >= hidden_at][-8:]
         if args.sustain_seconds:
             animation_end_elapsed = completed["received_at"] - sample_start
+            if args.trace_webkit_decode:
+                result.setdefault("webkit_decode_lifetime", {})["animation_end"] = webdriver.execute("window.__webkitDecodeCounters")
             time.sleep(2)
             idle_start_elapsed = time.monotonic() - sample_start
             first_idle_paint = webdriver.execute("window.__nativePaintTimes.length")
@@ -1119,6 +1306,8 @@ def main():
                 long_idle_paints = webdriver.execute("window.__nativePaintTimes.length") - first_idle_paint
                 if long_idle_paints > 2:
                     raise RuntimeError(f"static page resumed painting during idle resource observation: {long_idle_paints}")
+            if args.trace_webkit_decode:
+                result.setdefault("webkit_decode_lifetime", {})["idle_end"] = webdriver.execute("window.__webkitDecodeCounters")
             hidden_start_elapsed = None
             if args.hide_resource_seconds:
                 page_before = webdriver.execute("document.querySelector('input[aria-label=\"Page URL\"]')?.value")
@@ -1140,6 +1329,8 @@ def main():
                 result["lifecycle"] = {"page_before_hide": page_before,
                                        "hidden_paints": hidden_end_paints - hidden_start_paints,
                                        "hidden_seconds": args.hide_resource_seconds}
+                if args.trace_webkit_decode:
+                    result.setdefault("webkit_decode_lifetime", {})["hidden_end"] = webdriver.execute("window.__webkitDecodeCounters")
             sampler_stop.set()
             sampler.join(timeout=3)
             active_post_warmup = [sample for sample in resource_samples
@@ -1183,10 +1374,15 @@ def main():
                 reopened = result["lifecycle"]["reopened"]
                 result["image_quality"]["sustained_reopened"] = bitmap_density(
                     reopened["canvas_width"], reopened["canvas_height"], reopened["css_width"], reopened["css_height"], metrics["dpr"])
+                if args.trace_webkit_decode:
+                    result.setdefault("webkit_decode_lifetime", {})["reopened"] = webdriver.execute("window.__webkitDecodeCounters")
         result["paints"]["visible_final_marker_rgb"] = final_marker
         if args.nested_wheel:
             # The WebKit driver cannot send OS wheel actions on this compositor.
             # These are DOM-dispatched Cockpit surface events, then real helper/CDP page scrolls.
+            webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Browse\"]');if(!b)throw Error('Browse tool unavailable for wheel');b.click();return true})()")
+            wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-browse')"),
+                       "native Browse tool ownership before wheel input", 3)
             wheel_steps = (("nested forward", 180, 100, 180, 3900),
                            ("nested reverse", -70, 100, 110, 3900),
                            ("outer forward", 160, 166, 110, 4060),

@@ -16,7 +16,7 @@ Optional read-only progress inspection (the orchestrator may run this itself; th
 python3 planning/stability-and-gitlab-2026-09-20/campaign.py check
 ```
 
-The helper is bookkeeping only. It never launches product work, claims a task, takes a lock, changes a fixture, starts a service, or substitutes for runtime proof. `check` validates metadata and recorded completed evidence/commits; pending work is allowed. `ready` reports eligible candidates together with active, blocked, and waiting work; it is not a safe concurrent dispatch batch. `complete` additionally refuses until every required task is done. Malformed or inconsistent state fails all three commands; unfinished valid work fails only `complete`. Use `--ledger PATH` only for an isolated, disposable bookkeeping smoke; the real campaign ledger remains `planning/stability-and-gitlab-2026-09-20/tasks.json`.
+The helper is bookkeeping only. It never launches product work, claims a task, takes a lock, changes a fixture, starts a service, or substitutes for runtime proof. `check` validates metadata and recorded completed evidence/commits; pending and safely checkpointed `queued` work are allowed. `ready` reports eligible candidates together with active, blocked, and dependency/lock-waiting work; it is not a safe concurrent dispatch batch. `complete` additionally refuses until every required task is done. Malformed or inconsistent state fails all three commands; unfinished valid work fails only `complete`. Use `--ledger PATH` only for an isolated, disposable bookkeeping smoke; the real campaign ledger remains `planning/stability-and-gitlab-2026-09-20/tasks.json`.
 
 ## Goal invariants
 
