@@ -267,3 +267,13 @@ No task was silently waived or called externally blocked merely for lacking proo
 
 - 2026-09-24. The depth-first catalog walk spent the shared 1,024-entry budget inside the first large trees. On the user's configured root (read-only), setup listed 26 of 70 repositories. In the fixture, a 120k-file repository hid its sibling even with a 100,000-entry budget. Owner FLOW-01 (criterion 1).
 - Repair: a breadth-first walk that admits each checkout as soon as its parent is listed, and a default budget of 16,384. The user's root now lists all 70, with no diagnostic, in 0.64 s. See `runs/run-20260920-a3e9b950/FLOW-01-restart-and-deadlines.md`.
+
+### OBS-047 — the setup dialog could not select a repository
+
+- 2026-09-24, reported by the user. Choosing a repository left the list open and the field never showed the choice, and the two-step Review/Start form was slow for daily use. Owner FLOW-01 (criterion 1).
+- Repair: a link-first one-step dialog with a file-picker style repository field, a live plan summary and Create that starts exactly the plan for the current input. Jira work items are supported, and Jira items linked from an MR are offered as additional imports. Browser-verified against real GitLab MR !2 and Jira SCRUM-5. See `runs/run-20260920-a3e9b950/SETUP-link-first.md` and `e6709202b0b3f0eb5541913665d7b34e62510566`.
+
+### OBS-048 — startup turned never-started plans into resumable setups
+
+- 2026-09-24, found in code while designing live planning. `recover_startup` marked every `planned` record as `partial` with `resume_allowed`, so a plan the user never started appeared as an abandoned setup and resuming it would run it. Plans also never expired, and the store refuses to list beyond 4,096 entries. Owner FLOW-01.
+- Repair: plans expire after one hour, unstarted expired plans are deleted (with their lock files) at startup and periodically while planning, and startup leaves recent unstarted plans alone. Store regression test added; same commit `e6709202b0b3f0eb5541913665d7b34e62510566`.
