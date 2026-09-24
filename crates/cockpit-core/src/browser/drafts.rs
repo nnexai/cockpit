@@ -645,6 +645,18 @@ impl BrowserDraftStore {
         if draft.revision != expected_revision {
             return Err(InspectionError::new("browser_draft_revision", "Draft changed; recover the latest revision before discarding"));
         }
+        if self.load_preparation(association_key)?
+            .as_ref()
+            .is_some_and(|prepared| prepared.draft_id == draft_id)
+        {
+            return Err(InspectionError::new("browser_draft_capture", "A capture is prepared for this draft; resolve it before discarding"));
+        }
+        if self.load_pending(association_key)?
+            .as_ref()
+            .is_some_and(|pending| pending.draft_id == draft_id)
+        {
+            return Err(InspectionError::new("browser_draft_pending", "Save or discard this pending capture before discarding its draft"));
+        }
         let ids: Vec<_> = draft.annotations.iter().map(|annotation| annotation.id.clone()).collect();
         draft.annotations.clear();
         for id in ids { insert_consumed(&mut draft.consumed_annotation_ids, id)?; }
@@ -1522,6 +1534,43 @@ mod tests {
         );
         let error = store.open(&foreign, Some(draft_id)).expect_err("foreign association must not recover draft");
         assert_eq!(error.code, "browser_draft_identity");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_capture_preserves_its_draft_against_discard() {
+        let (store, root) = test_store();
+        let association_key = "0123456789abcdef01234567";
+        let browser_incarnation = Uuid::new_v4().to_string();
+        let owner = identity(association_key, &browser_incarnation, "target", 1);
+        let current = store.open(&owner, None).unwrap();
+        let context = BrowserCaptureContext {
+            association_key: association_key.to_owned(),
+            session_id: "session".to_owned(),
+            space_id: "space".to_owned(),
+            space_label: "Space".to_owned(),
+            playwright_session: "playwright".to_owned(),
+            working_directory: "/tmp".to_owned(),
+            invocation: "test".to_owned(),
+            browser_instance: browser_incarnation.clone(),
+            inline_provenance: None,
+        };
+        let preparation = StoredCapturePreparation {
+            format_version: FORMAT_VERSION,
+            association_key: association_key.to_owned(),
+            browser_incarnation,
+            capture_id: Uuid::new_v4().to_string(),
+            draft_id: current.draft_id.clone(),
+            draft_revision: current.revision,
+            annotation_ids: Vec::new(),
+            context,
+        };
+        atomic_write_json(&store.dir().unwrap(), &preparation_name(association_key), &preparation).unwrap();
+
+        let failure = store.discard_draft(association_key, &current.draft_id, current.revision)
+            .expect_err("a prepared capture still owns this draft");
+        assert_eq!(failure.code, "browser_draft_capture");
+        assert!(store.list(association_key).unwrap().drafts.iter().any(|draft| draft.draft_id == current.draft_id));
         std::fs::remove_dir_all(root).unwrap();
     }
 

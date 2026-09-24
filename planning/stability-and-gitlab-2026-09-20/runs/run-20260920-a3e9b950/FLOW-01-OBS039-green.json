@@ -1,0 +1,50 @@
+{
+  "scope": "OBS-039 local pane menu instead of duplicate top Pane menu",
+  "browser": {
+    "private_session": "uiwave-5d1ccc9377aa",
+    "viewports": [ { "width": 1568, "height": 1009, "dpr": 1.25 }, { "width": 1024, "height": 640, "dpr": 1.25 } ],
+    "final_asset": "index-ss06VAGP.js",
+    "top_actions": [ "Close browser", "Commands" ],
+    "global_pane_button": false,
+    "commands_pane_actions": [ "Rename pane Ctrl+B Shift+P", "Split pane right Ctrl+B v", "Split pane below Ctrl+B -", "Toggle pane zoom Ctrl+B z", "Close pane Ctrl+B x" ],
+    "local_rightclick_actions": [ "Expand / restore pane", "Review (unsupported, disabled)", "Files (unsupported, disabled)", "Context (unsupported, disabled)", "Rename pane", "Split right", "Split down", "Refresh renderer detection", "Move…", "Close pane" ],
+    "split_action": "Real pointer right-click of terminal pane header, Advanced, Split right; actual UI rendered two terminal panes in one selected tab.",
+    "herdr_after_split": {
+      "session_id": "uiwave-5d1ccc9377aa",
+      "focused_space_id": "w1",
+      "focused_tab_id": "w1:t1",
+      "focused_pane_id": "w1:p2",
+      "tab_ids_in_order": [ "w1:t1" ],
+      "pane_ids_in_layout_order": [ "w1:p1", "w1:p2" ],
+      "layout_rects": [ { "x": 0, "y": 0, "width": 60, "height": 40 }, { "x": 60, "y": 0, "width": 60, "height": 40 } ]
+    },
+    "terminal_input": "Actual focused p2 xterm sent terminal.input WebSocket frames for echo UIWAVE_TERMINAL_P2_PROBE and Enter; rendered command/output in p2 only, p1 unchanged, no alert.",
+    "rejected_action": {
+      "control": "Local Rename pane dialog",
+      "request_type": "pane_rename",
+      "submitted_label_bytes": 284,
+      "http_status": 400,
+      "server_code": "invalid_label",
+      "server_message": "label must be nonempty and no longer than 256 bytes",
+      "rendered_failure": "Alert with exact rejection and Retry/Resync; no pane rename or tab/pane reorder in Herdr snapshot."
+    },
+    "compact_menu_before_repair": "Advanced expansion remained at y≈58 CSS px, so Close pane was below the 640 CSS px fold.",
+    "compact_menu_after_repair": {
+      "menu_top": 20.96875,
+      "menu_bottom": 632,
+      "close_pane_top": 594,
+      "close_pane_bottom": 626,
+      "viewport_height": 640
+    },
+    "screenshots": [ "FLOW-01-OBS039-compact-rejected.webp", "FLOW-01-OBS039-compact-menu-green.webp" ]
+  },
+  "native_webkit": {
+    "private_session": "native-2edbef50c282",
+    "final_asset": "index-ss06VAGP.js",
+    "top_actions": [ "Close browser", "Commands" ],
+    "expanded_local_menu": { "top": 58, "bottom": 668, "close_pane_bottom": 662, "viewport_height": 835, "advanced_open": true },
+    "actions_present": [ "Rename pane", "Split right", "Split down", "Close pane" ],
+    "screenshot": "FLOW-01-OBS039-native-menu.png"
+  },
+  "remaining": "FLOW-01 original native Review and workflow criteria remain open; OBS-039 alone is verified."
+}

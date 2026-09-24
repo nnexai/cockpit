@@ -204,3 +204,31 @@ No task was silently waived or called externally blocked merely for lacking proo
 ### OBS-032 — native install and close must not retain an old Cockpit server
 
 - 2026-09-23, user: a `native-install` followed by starting Cockpit must run the current application/assets; closing Cockpit should leave **no Cockpit-owned service** alive, while the independent Herdr session may continue. The user suspects a stale backend may explain some observed rendering regressions; treat that as a hypothesis, not a confirmed cause. Owner NATIVE-01, WEB-06, ACCEPT-01. Trace which executable and frontend asset paths the installed launcher and runtime actually use, uniquely identify Cockpit-owned gateway/helper descendants, verify fresh native launch/close in a disposable session and ensure owned processes exit. Do not kill, modify or reinstall the user's running/installed application as a diagnostic. A source-tree build or a restarted private gateway alone is not proof of installed-app freshness.
+
+### OBS-033 — scroll recovery status is duplicated and blocks browsing
+
+- 2026-09-23, user screenshots of their installed native app at 1568×1009: Wikipedia content is too small inside the browser pane; a mouse scroll can interrupt refresh and show **“Showing last confirmed frame”** both in the browser header and again in a bottom toast, with a Retry button. The image-size failure is the already recorded OBS-028/029 acceptance, not a new confirmed root cause. The duplicate stale label and scroll interruption refine OBS-031: a recoverable frame/viewport lag must not turn a normal wheel action into two notices or freeze a valid same-page stream. Owner WEB-04/WEB-06/ACCEPT-01, with real native paint, scroll and absence of duplicate status required.
+
+### OBS-034 — annotation note editor must be local to its mark
+
+- 2026-09-23, user screenshot: after creating an inline page annotation, its note entry appears as a large framed textarea docked at the bottom of the browser pane, disconnected from the selected mark. Replace with a compact editor positioned alongside or over its selected annotation, kept within the browser surface and usable at minimum window size; do not block the page or lose typed unsaved note on recoverable repositioning. Owner WEB-05/ACCEPT-01. Verify selection, editing, save, cancel, scroll/reflow and native/browser focus against the actual painted page.
+
+### OBS-035 — Delete key should remove the selected annotation
+
+- 2026-09-23, user: allow **Delete** on a selected browser annotation to remove that mark through the existing durable draft mutation, with safe keyboard ownership. Do not hijack Delete while a textarea, input, contenteditable, terminal or composition owns the keyboard; do not delete other marks or an already sent feedback item. Owner WEB-05/ACCEPT-01. Verify current-page one-mark deletion, persisted inventory and keyboard negative cases in browser/native.
+
+### OBS-036 — basket shortcut replaces annotation list and bulk dialog
+
+- 2026-09-23, user: the separate “list all annotations” button/dialog and icon are unnecessary. A modifier-click (**Control-click**) on the normal deletion basket should clear all page annotations directly, without another confirmation dialog or list affordance. Keep ordinary basket click scoped to the selected mark, and preserve receipt/conflict safety and honest failure if the store refuses. Owner WEB-05/ACCEPT-01; verify current-document CAS update, zero visible marks/notes, and absence of bulk confirmation on actual browser/native controls.
+
+### OBS-037 — send annotations belongs in compact icon row
+
+- 2026-09-23, user screenshot: “Send annotations” is text+icon, middle-aligned with excess space against the right border while adjacent annotation actions are compact icons. Put the send action in the aligned icon toolbar with an accessible label/title and enabled/disabled state tied to current sendability; no phantom success. Owner WEB-05/ACCEPT-01. Verify layout at normal/minimum native and browser sizes and actual send/uncertain outcome.
+
+### OBS-038 — browser tab close belongs inside the tab
+
+- 2026-09-23, user: place the browser tab closing X within its tab hit area, not as an external standalone control; keep close activation distinct from selecting/dragging the tab and preserve authoritative target change. Owner WEB-04/ACCEPT-01. Verify selected and background close, accessible name, focus and no accidental tab selection in browser/native.
+
+### OBS-039 — remove duplicate top Pane menu
+
+- 2026-09-23, user: “think what should be in the commands menu and what in the panes menu”; they see no reason for a separate global Pane menu, preferring an action in **Commands** or in the **right-click menu on the pane**, not both another top menu and duplicate controls. Owner FLOW-01/ACCEPT-01 for Cockpit shell; this affects Herdr-backed pane action placement, not Herdr hierarchy authority. Existing Cockpit `TabStrip` Pane button opens the exact selected pane `ContextMenu`; Commands already lists global pane shortcuts/renderer actions, and pane-local header/right-click menu retains rename/split/zoom/move/swap/close/renderer actions. In a **run-owned** Herdr TUI session `menuobs039-rbiohm9x`, right-click on its live pane listed Rename pane, Split right, Split down, Zoom, Send right-clicks to pane, Close pane; no top Pane duplication is required to preserve the Herdr action model. Remove Cockpit's redundant Pane top button while keeping its local context/overflow and global Commands entries; preserve capability gating, mutation/focus and keyboard ownership. Verify a real pane action from the remaining surfaces with success and rejection, stable tab/pane ordering at 1568×1009 and 1024×640. This preserves the Herdr pane-local action convention, not a new authority or replacement.

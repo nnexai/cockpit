@@ -330,8 +330,16 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }, [dismissAndRestore, onDismiss, menu]);
   const [menuSize, setMenuSize] = useState({ width: 286, height: 320 });
   useLayoutEffect(() => {
-    const bounds = ref.current?.getBoundingClientRect();
-    if (bounds) setMenuSize({ width: bounds.width, height: bounds.height });
+    const root = ref.current;
+    if (!root) return;
+    const measure = () => {
+      const { width, height } = root.getBoundingClientRect();
+      setMenuSize((current) => current.width === width && current.height === height ? current : { width, height });
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(root);
+    return () => observer?.disconnect();
   }, [menu]);
   const position = contextMenuPosition(menu.x, menu.y, window.innerWidth, window.innerHeight, menuSize.width, menuSize.height);
   return <div ref={ref} className="context-menu" role="menu" aria-label={`${menu.target.kind} actions`} style={{ left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
@@ -423,18 +431,16 @@ function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]
   })}</div></section>;
 }
 
-function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, browserOpen, onEdit, onSelect, onContext, onCreate, onPaneMenu, onBrowserToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
   busy: boolean;
-  paneAvailable: boolean;
   browserOpen: boolean;
   onEdit: (id: string | null) => void;
   onSelect: (tab: Tab) => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
   onCreate: () => void;
-  onPaneMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   onBrowserToggle: () => void;
   onCommands: () => void;
   sidebarOpen: boolean;
@@ -474,11 +480,11 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, paneAvailable, browser
         : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={busy || !paneAvailable} onClick={onPaneMenu}>Pane <UiIcon name="down" /></button><button type="button" className="tab-sidebar-toggle" disabled={busy} aria-label={browserOpen ? "Close browser" : "Open browser"} title={browserOpen ? "Close browser" : "Open browser"} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-strip-action" onClick={onCommands}><UiIcon name="search" /> Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-sidebar-toggle" disabled={busy} aria-label={browserOpen ? "Close browser" : "Open browser"} title={browserOpen ? "Close browser" : "Open browser"} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
-function PaneView({ pane, label, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onMenu, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
+function PaneView({ pane, label, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
   pane: Pane;
   label: string;
   selected: boolean;
@@ -494,7 +500,6 @@ function PaneView({ pane, label, selected, paintedSelected, retained, busy, cont
   onRequestControl: () => void;
   onSelect: () => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
-  onMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   onRetryFocus: () => void;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px">;
   client: CockpitClient;
@@ -1375,13 +1380,6 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     return () => window.removeEventListener("keydown", keydown, true);
   }, [prefixActive, runCommand, modalOpen]);
   const openContext = (event: MouseEvent, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
-  const openPaneMenu = (event: MouseEvent<HTMLButtonElement>, pane: Pane) => {
-    if (mutationBusy || modalOpen) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const bounds = event.currentTarget.getBoundingClientRect();
-    setMenu({ target: { kind: "pane", id: pane.id }, x: bounds.left, y: bounds.bottom });
-  };
   const dismissMenu = useCallback(() => setMenu(null), []);
   const menuAction = (action: () => boolean | void) => { if (action() !== false) dismissMenu(); };
   const renderMenu = () => {
@@ -1475,7 +1473,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const paneFocusError = incoming && state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
     const deferTerminal = !incoming || state.sync !== "live" || snapshot?.focused_tab_id !== pane.tab_id
       || state.focusPending?.kind === "tab" || state.focusPending?.kind === "space";
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onMenu={(event) => openPaneMenu(event, pane)} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
+    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
   const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
     "--sidebar-width": `${sidebarWidth}px`,
@@ -1501,7 +1499,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} paneAvailable={Boolean(selectedPane)} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onPaneMenu={(event) => { if (selectedPane) openPaneMenu(event, selectedPane); }} onBrowserToggle={() => { if (selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open"); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={() => { if (selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open"); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="workarea-content">
         <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }}>
           {paneProjection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : paneInstances}

@@ -306,6 +306,12 @@ function click(element: HTMLElement): void {
   act(() => element.click());
 }
 
+function openLocalPaneMenu(): void {
+  const pane = container.querySelector<HTMLElement>(".pane-view:not([inert])");
+  if (!pane) throw new Error("No visible pane");
+  act(() => pane.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 24, clientY: 24 })));
+}
+
 function selectedTab(): string {
   const selected = container.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   if (!selected) throw new Error("No selected tab");
@@ -373,7 +379,7 @@ describe("mounted App mutation and session ordering", () => {
     fixture.setPanePresentation(presentation);
     vi.mocked(fixture.client.openContext).mockResolvedValue(presentation);
     await mount(fixture);
-    click(button("Pane"));
+    openLocalPaneMenu();
     expect(button("Files").disabled).toBe(false);
     expect(button("Context").disabled).toBe(true);
     click(button("Files"));
@@ -390,9 +396,8 @@ describe("mounted App mutation and session ordering", () => {
     expect(container.querySelector(".sidebar-divider")).toBeNull();
     expect(button("Commands").closest(".tab-strip")).toBeNull();
     expect(button("Commands").closest(".tab-strip-actions")).not.toBeNull();
-    expect(button("Pane").closest(".tab-strip-actions")).not.toBeNull();
-    expect(button("Pane").disabled).toBe(false);
-    click(button("Pane"));
+    expect([...container.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === "Pane")).toBe(false);
+    openLocalPaneMenu();
     expect(container.querySelector('[role="menu"][aria-label="pane actions"]')).not.toBeNull();
     click(button("Commands"));
     expect(container.querySelector(".command-overlay")).not.toBeNull();
@@ -402,9 +407,10 @@ describe("mounted App mutation and session ordering", () => {
     const fixture = new AppFixture();
     await mount(fixture);
 
-    expect(button("Pane").disabled).toBe(false);
+    openLocalPaneMenu();
+    expect(button("Split right").disabled).toBe(false);
     click(button("Create tab"));
-    expect(button("Pane").disabled).toBe(true);
+    expect(button("Split right").disabled).toBe(true);
   });
 
   it("paints the requested tab while Herdr confirms focus", async () => {
@@ -862,26 +868,26 @@ describe("mounted App mutation and session ordering", () => {
         if (!item) throw new Error(`Missing pane menu item ${label}`);
         return item;
       };
-      click(button("Pane"));
+      openLocalPaneMenu();
       expect(paneMenuItem("Show terminal view")).toBeTruthy();
       click(paneMenuItem("Show terminal view"));
-      click(button("Pane"));
+      openLocalPaneMenu();
       click(paneMenuItem("Refresh renderer detection"));
       await settle();
-      click(button("Pane"));
+      openLocalPaneMenu();
       expect(paneMenuItem("Render document")).toBeTruthy();
       click(paneMenuItem("Render document"));
 
       fixture.emitError("session-1");
       await settle();
-      click(button("Pane"));
+      openLocalPaneMenu();
       expect(paneMenuItem("Show terminal view")).toBeTruthy();
       click(paneMenuItem("Refresh renderer detection"));
       fixture.queueSnapshot("session-1", Promise.resolve(snapshot("session-1")));
       await advanceTimers(250);
       fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
       await settle();
-      click(button("Pane"));
+      openLocalPaneMenu();
       expect(paneMenuItem("Show terminal view")).toBeTruthy();
     } finally {
       vi.useRealTimers();

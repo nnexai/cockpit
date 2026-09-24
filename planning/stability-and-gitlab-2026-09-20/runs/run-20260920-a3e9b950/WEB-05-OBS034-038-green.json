@@ -1,0 +1,39 @@
+{
+  "scope": "WEB-05 OBS-034 through OBS-037, and OBS-038 browser tab X shared with WEB-04",
+  "source": {
+    "chromium_mark_proof_bundle": "index-CaIPtaML.js",
+    "final_chromium_and_native_bundle": "index-ss06VAGP.js",
+    "native_debug_binary_sha256": "d77d97f3cb1f0d9aa7d6851635602c0bd8467ff4d564f3bc2bcf7be46718e375"
+  },
+  "chromium": {
+    "private_session": "uiwave-5d1ccc9377aa",
+    "viewport": { "width": 1568, "height": 1009, "dpr": 1.25 },
+    "browser_surface": { "width": 1342, "height": 823 },
+    "fixture": "http://127.0.0.1:40703/A",
+    "middle_mark": { "left": 685, "top": 495, "right": 825, "bottom": 575 },
+    "middle_editor": { "left": 699, "top": 509, "right": 1019, "bottom": 641 },
+    "edge_mark": { "left": 1445, "top": 910, "right": 1533, "bottom": 975 },
+    "edge_editor": { "left": 1111, "top": 764, "right": 1431, "bottom": 896 },
+    "textarea_resize": "Real drag from 80 to 294 CSS px increased editor from 132 to 346 CSS px; reclamped top from 694 to 320, with Save and Close visible.",
+    "note_switch": "Unsaved B note was persisted before switching to A; both subsequent A/B selections focused the editor after pointer-up; B note painted as Final bundle keeps B note.",
+    "delete": "Selected Delete and ordinary basket click each removed only the targeted annotation through acknowledged draft writes; selected Delete left remote fixture Delete count at zero and cleared durable editor note_annotation_id. Escape returned focus to browser surface.",
+    "ordinary_basket_final_bundle": { "draft_id": "d110b741-0f57-4a04-980f-f5f2d3b9e008", "before_revision": 3, "after_revision": 5, "first_annotation_retained": "22aeb9ad-ad31-45a8-a791-780736248ecb", "second_annotation_removed": "ac17df4d-ff2a-4152-9bbd-0be0df69728e", "painted_marks_after": 1, "editor_closed": true, "alerts": [] },
+    "bulk_control_click": { "retired_draft_id": "50f5c39f-1fd8-471f-8c56-15ce300ebf4a", "new_draft_id": "475509ae-7888-4533-974f-f9ee5930eba6", "new_revision": 1, "overlay_marks_after": 0, "old_id_in_recovery_inventory": false },
+    "unowned_delete": "With no selected mark in Browse mode, physical Delete reached the remote fixture as keydown Delete targeting BODY.",
+    "tab_close": "Browser tab X measured 28 by 28 CSS px inside its tab wrapper with zero border; toolbar Send annotations was icon-only and had no separate Notes list.",
+    "screenshots": [ "WEB-05-OBS034-browser-toolbar.png", "WEB-05-OBS034-browser-middle.png", "WEB-05-OBS034-browser-edge.png", "WEB-05-OBS034-browser-resized.png", "WEB-05-OBS036-browser-single-mark.webp" ]
+  },
+  "native_webkit": {
+    "private_session": "native-2edbef50c282",
+    "frontend": "http://localhost:5173/assets/index-ss06VAGP.js",
+    "viewport": { "width": 676, "height": 835, "dpr": 2 },
+    "surface": { "left": 1, "top": 645.53125, "right": 675, "bottom": 834 },
+    "mark": { "left": 101, "top": 750.53125, "right": 219, "bottom": 814.53125 },
+    "focused_editor": { "left": 115, "top": 653.53125, "right": 435, "bottom": 785.53125 },
+    "durable_draft": { "id": "b585e7dd-a833-43cd-99d7-535013c0dba2", "marked_revision": 2, "saved_revision": 3, "saved_comment": "Native adjacent note native-2edbef50c282" },
+    "chrome": "No global Pane; Commands retained; Send icon-only; Notes list absent; tab X inside wrapper with 28 CSS px hit target and border 0.",
+    "cleanup": "Private Niri Close reaped the exact native WebKit descendants and owner socket; disposable Herdr remained live until verifier cleanup.",
+    "screenshots": [ "WEB-05-OBS034-native-editor.png", "WEB-05-OBS034-native-saved.png" ]
+  },
+  "remaining": "WEB-05 A14-A21/A24 and its quiet-navigation/feedback matrix remain open; the intermittent WEB-04/WEB-06 native DPR2 stream density is not claimed fixed."
+}

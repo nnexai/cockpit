@@ -1,0 +1,13 @@
+{
+  "scope": "Unresolved intermittent WEB-04/WEB-06 native DPR2 browser-frame density encountered during OBS-034 native chrome smoke",
+  "private_session": "native-f778ca6513b2",
+  "installed_frontend": "tauri://localhost/assets/index-CaIPtaML.js",
+  "window_css": { "width": 676, "height": 835, "dpr": 2 },
+  "browser_surface_css": { "width": 674, "height": 188.46875 },
+  "constant_viewport_revision": 1,
+  "frame_sequence_image_dimensions": [ [1,674,188], [2,1348,376], [3,674,188], [4,1348,376], [5,674,188], [6,674,188], [7,1348,376], [8,674,188], [9,1348,376], [10,674,188] ],
+  "failure": "RuntimeError: Timed out waiting for asynchronously refined physically dense native canvas",
+  "last_canvas_bitmap": { "width": 674, "height": 188 },
+  "native_process_cleanup": "Private WebKitDriver, compositor, Herdr and fixture exited or stopped; no user-owned process was touched.",
+  "subsequent_independent_result": "A new private debug/native run with final frontend index-ss06VAGP.js passed its annotation and menu smoke with first canvas 1348 by 376; this does not resolve the intermittent alternation."
+}

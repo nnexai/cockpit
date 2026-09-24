@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
 import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedbackSendResponse, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
 import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, validateFrameDescriptor } from "./framePresenter";
@@ -186,6 +186,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const releaseOverloadedInputRef = useRef<(() => void) | null>(null);
   const draftRef = useRef<BrowserViewDraftState | null>(null);
   const pendingCaptureRef = useRef<BrowserViewPendingCapture | null>(null);
+  const captureInFlightRef = useRef(false);
+  const discardInFlightRef = useRef(false);
+  const annotationDeleteKeyRef = useRef(false);
   const draftRequestRef = useRef(0);
   const editorDirtyRef = useRef(false);
   const editorPersistRef = useRef<Promise<void> | null>(null);
@@ -245,6 +248,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   noteValueRef.current = noteValue;
   const notesOpenRef = useRef(notesOpen);
   notesOpenRef.current = notesOpen;
+  const noteEditorRef = useRef<HTMLDivElement>(null);
+  const [noteEditorPosition, setNoteEditorPosition] = useState<{ left: number; top: number } | null>(null);
+  const [noteEditorDismissed, setNoteEditorDismissed] = useState(false);
   const editorRevisionRef = useRef(0);
   const markEditorDirty = useCallback(() => {
     editorRevisionRef.current += 1;
@@ -1003,6 +1009,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
             setSelectedId(annotation.id);
             setNoteId(annotation.id);
             setNoteValue((annotation.comment ?? "").slice(0, 4000));
+            setNoteEditorDismissed(false);
             editorDirtyRef.current = false;
           } else {
             setMessage("Annotation saved; newer editor work was retained.");
@@ -1073,6 +1080,16 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (!owner.retiredDraftIds.has(draftAtIntent.draft_id)) setMessage(`Annotation removal failed; retry it before closing: ${errorMessage(error)}`);
       else owner.pendingAnnotationMutations = owner.pendingAnnotationMutations.filter((candidate) => candidate.key !== mutationKey);
     });
+    if (noteIdRef.current === annotationId) {
+      noteIdRef.current = null;
+      noteValueRef.current = "";
+      owner.noteId = null;
+      owner.noteText = "";
+      setNoteId(null);
+      setNoteValue("");
+      setNoteEditorDismissed(true);
+      markEditorDirty();
+    }
     setSelectedId((selected) => selected === annotationId ? null : selected);
   };
   const retryAnnotationMutations = useCallback(async (): Promise<void> => {
@@ -1423,6 +1440,33 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       await command({ type: "keyboard", context: documentContext, input: { kind, ...key, input_sequence } });
     });
   };
+  const onSurfaceKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (annotationDeleteKeyRef.current && event.target === event.currentTarget && event.key === "Delete") {
+      if (event.repeat) { event.preventDefault(); return; }
+      // A release may have landed on other chrome. A fresh press owns a new
+      // cycle; do not suppress its down while forwarding its up to the page.
+      annotationDeleteKeyRef.current = false;
+    }
+    if (event.target === event.currentTarget && event.key === "Delete" && !event.nativeEvent.isComposing
+      && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      const selected = draftRef.current?.annotations.find((annotation) => annotation.id === selectedId);
+      if (selected) {
+        event.preventDefault();
+        annotationDeleteKeyRef.current = true;
+        removeAnnotation(selected.id);
+        return;
+      }
+    }
+    sendKey(event, "down");
+  };
+  const onSurfaceKeyUp = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (annotationDeleteKeyRef.current && event.key === "Delete") {
+      annotationDeleteKeyRef.current = false;
+      event.preventDefault();
+      return;
+    }
+    sendKey(event, "up");
+  };
   const sendComposition = (event: CompositionEvent<HTMLElement>, kind: "start" | "update" | "commit"): void => {
     if (!liveInputEnabledRef.current || tool !== "browse" || isLocalBrowserChrome(event.target)) return;
     void enqueueInput("boundary", async () => {
@@ -1451,22 +1495,88 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     setSelectedId(null);
     setInspection(null);
     gestureRef.current = null;
-    setGesture(null);
-    onInteractionFocus?.(); void releaseRemotePointer();
     void enqueueInput("boundary", async () => {
+      if (editorDirtyRef.current && draftRef.current) {
+        try {
+          await persistEditor();
+        } catch (error) {
+          setMessage(`Could not preserve browser editor changes before navigation: ${errorMessage(error)}`);
+          return;
+        }
+      }
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
       if (!documentContext) return;
       const outcome = await command({ type: "navigation", context: documentContext, command: value });
       if (!outcome && navigationRequestRef.current === attempt) setUrl(snapshotRef.current?.navigation?.url ?? "");
     });
   };
+  const dismissNoteEditor = (): void => {
+    setNoteEditorDismissed(true);
+    markEditorDirty();
+    surfaceRef.current?.focus({ preventScroll: true });
+  };
   const saveNote = (): void => {
     const editingNoteId = noteId;
     const annotation = draftRef.current?.annotations.find((candidate) => candidate.id === editingNoteId);
     if (!annotation) return;
     void persist({ ...annotation, comment: noteValue.trim() || null }).then((accepted) => {
-      if (accepted && noteId === editingNoteId) { setNoteId(null); setNoteValue(""); markEditorDirty(); }
+      if (accepted && noteIdRef.current === editingNoteId) {
+        setNoteId(null); setNoteValue(""); markEditorDirty();
+        surfaceRef.current?.focus({ preventScroll: true });
+      }
     });
+  };
+  const discardDraft = async (): Promise<void> => {
+    const current = snapshotRef.current;
+    const owner = associationOwner;
+    const draftAtIntent = owner.draft;
+    const documentContext = current ? context(current) : null;
+    if (discardInFlightRef.current || captureInFlightRef.current || pendingCaptureRef.current || pendingDeliveryIdsRef.current || deliveryState
+      || owner.pendingAnnotationMutations.length > 0 || !draftAtIntent || !documentContext) {
+      setMessage("Cannot discard the draft while capture, feedback delivery, or annotation recovery is pending.");
+      return;
+    }
+    if (draftAtIntent.target_id !== documentContext.target_id
+      || draftAtIntent.document_generation !== documentContext.document_generation) {
+      setMessage("The browser draft changed; wait for the current document draft before discarding.");
+      return;
+    }
+    discardInFlightRef.current = true;
+    try {
+      const inventory = await queueDraftMutation(async () => {
+        await client.browserDraftRecovery({
+          target: owner.target,
+          action: { type: "discard_draft", draft_id: draftAtIntent.draft_id, expected_revision: draftAtIntent.revision },
+        });
+        const listed = await client.browserDraftRecovery({ target: owner.target, action: { type: "list" } });
+        if (listed.type === "draft_inventory" && !listed.inventory.drafts.some((candidate) => candidate.draft_id === draftAtIntent.draft_id)) {
+          // Block late, already accepted draft-open responses before the next queued mutation.
+          owner.retiredDraftIds.add(draftAtIntent.draft_id);
+          draftRequestRef.current += 1;
+        }
+        return listed;
+      });
+      if (inventory.type !== "draft_inventory" || inventory.inventory.drafts.some((candidate) => candidate.draft_id === draftAtIntent.draft_id)) {
+        setMessage("The draft discard could not be confirmed; the current draft was retained.");
+        return;
+      }
+      if (associationOwnerRef.current !== owner || snapshotRef.current?.displayed_target_id !== documentContext.target_id
+        || snapshotRef.current?.document?.document_generation !== documentContext.document_generation) return;
+      owner.draft = null;
+      owner.localDraftRevision = null;
+      draftRef.current = null;
+      setDraft(null);
+      setSelectedId(null);
+      setNoteId(null);
+      setNoteValue("");
+      editorDirtyRef.current = false;
+      await openDraft();
+      setMessage("Discarded the current document draft and opened a clean draft.");
+    } catch (error) {
+      setMessage(`Could not discard the current draft: ${errorMessage(error)}`);
+    } finally {
+      discardInFlightRef.current = false;
+    }
   };
   const pngBase64 = async (annotationsToPaint: BrowserViewDraftAnnotation[], pinnedDescriptor: BrowserViewFramePacket["descriptor"]): Promise<string | null> => {
     const source = canvasRef.current;
@@ -1596,7 +1706,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const identity = pendingDeliveryIdentityRef.current;
     if (await deliverAnnotations(ids, operationId, true)) await finishCaptureDelivery(identity);
   };
-  const capture = async (captureAsShown: boolean): Promise<void> => {
+  const captureImpl = async (captureAsShown: boolean): Promise<void> => {
     const captureOwner = associationOwner;
     const captureDraft = draftRef.current;
     const captureIdentity: CaptureIdentity | null = captureDraft ? {
@@ -1723,6 +1833,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setStatus("error"); setMessage(`Could not capture browser image: ${errorMessage(error)}`);
     }
   };
+  const capture = async (captureAsShown: boolean): Promise<void> => {
+    if (captureInFlightRef.current) return;
+    captureInFlightRef.current = true;
+    try {
+      await captureImpl(captureAsShown);
+    } finally {
+      captureInFlightRef.current = false;
+    }
+  };
   captureRef.current = capture;
   useEffect(() => {
     if (!registerCloseGuard) return;
@@ -1753,14 +1872,44 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const y = (point.y - descriptor.scroll_y - descriptor.viewport_offset_y) / descriptor.viewport_css_height * descriptor.image_height;
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   };
+  const selectAnnotation = (annotation: BrowserViewDraftAnnotation): void => {
+    const select = () => {
+      setSelectedId(annotation.id);
+      if (noteId !== annotation.id) {
+        setNoteId(annotation.id);
+        setNoteValue((annotation.comment ?? "").slice(0, 4000));
+        markEditorDirty();
+      }
+      setNoteEditorDismissed(false);
+    };
+    const previous = noteId ? draftRef.current?.annotations.find((candidate) => candidate.id === noteId) : null;
+    const nextComment = noteValue.trim() || null;
+    if (noteId !== annotation.id && (editorDirtyRef.current || (previous && (previous.comment ?? null) !== nextComment))) {
+      const requestedGeneration = associationOwner.editorGeneration;
+      void (async () => {
+        try {
+          if (previous && (previous.comment ?? null) !== nextComment) {
+            if (!await persist({ ...previous, comment: nextComment })) return;
+          } else await persistEditor(requestedGeneration);
+          if (associationOwnerRef.current !== associationOwner || associationOwner.editorGeneration !== requestedGeneration
+            || associationOwner.noteId !== noteId || !draftRef.current?.annotations.some((candidate) => candidate.id === annotation.id)) return;
+          select();
+        } catch (error) {
+          setMessage(`Could not preserve the previous annotation note: ${errorMessage(error)}`);
+        }
+      })();
+      return;
+    }
+    select();
+  };
   const draw = (annotation: BrowserViewDraftAnnotation, transient = false) => {
     if (!descriptor) return null; const selected = annotation.id === selectedId; const annotationKind = kindFor(annotation);
     if (annotationKind === "region" || annotationKind === "element") {
       if (!annotation.bounds) return null; const start = imagePoint({ x: annotation.bounds.x, y: annotation.bounds.y }); const end = imagePoint({ x: annotation.bounds.x + annotation.bounds.width, y: annotation.bounds.y + annotation.bounds.height });
-      return start && end ? <rect key={annotation.id} className={`browser-annotation browser-annotation-${annotationKind}${selected ? " is-selected" : ""}${transient ? " is-transient" : ""}`} x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} stroke={annotation.color} onPointerDown={(event) => { if (tool === "select") { event.stopPropagation(); setSelectedId(annotation.id); } }} /> : null;
+      return start && end ? <rect key={annotation.id} className={`browser-annotation browser-annotation-${annotationKind}${selected ? " is-selected" : ""}${transient ? " is-transient" : ""}`} x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} stroke={annotation.color} onPointerDown={(event) => { if (tool === "select") { event.stopPropagation(); selectAnnotation(annotation); } }} /> : null;
     }
     const points = annotation.points.map(imagePoint).filter((point): point is BrowserPoint => point !== null);
-    return points.length > 1 ? <polyline key={annotation.id} className={`browser-annotation browser-annotation-freehand${selected ? " is-selected" : ""}${transient ? " is-transient" : ""}`} points={points.map((point) => `${point.x},${point.y}`).join(" ")} stroke={annotation.color} onPointerDown={(event) => { if (tool === "select") { event.stopPropagation(); setSelectedId(annotation.id); } }} /> : null;
+    return points.length > 1 ? <polyline key={annotation.id} className={`browser-annotation browser-annotation-freehand${selected ? " is-selected" : ""}${transient ? " is-transient" : ""}`} points={points.map((point) => `${point.x},${point.y}`).join(" ")} stroke={annotation.color} onPointerDown={(event) => { if (tool === "select") { event.stopPropagation(); selectAnnotation(annotation); } }} /> : null;
   };
   const drawLabel = (annotation: BrowserViewDraftAnnotation) => {
     if (!descriptor || !annotation.comment?.trim()) return null;
@@ -1772,6 +1921,47 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const inspectionBounds = inspection?.bounds && descriptor ? { ...inspection.bounds, x: inspection.bounds.x + descriptor.scroll_x, y: inspection.bounds.y + descriptor.scroll_y } : null;
   const blocker = snapshot?.blocker;
   const targetTabs = snapshot?.targets.filter((candidate) => candidate.kind === "page" || candidate.kind === "popup").sort((left, right) => left.order - right.order) ?? [];
+  const selectedAnnotation = annotations.find((annotation) => annotation.id === selectedId) ?? null;
+  const noteEditorStyle = noteEditorPosition ? { left: noteEditorPosition.left, top: noteEditorPosition.top } : undefined;
+  useLayoutEffect(() => {
+    if (!noteId || noteId !== selectedId || !descriptor) { setNoteEditorPosition(null); return; }
+    const place = () => {
+      const surface = surfaceRef.current;
+      const annotation = draftRef.current?.annotations.find((candidate) => candidate.id === selectedId);
+      const shown = frameRef.current?.descriptor;
+      if (!surface || !annotation || !shown) return;
+      const width = surface.clientWidth;
+      const height = surface.clientHeight;
+      const anchor = annotation.bounds ? { x: annotation.bounds.x, y: annotation.bounds.y } : annotation.points[0];
+      if (!anchor || !width || !height) return;
+      const x = (anchor.x - shown.scroll_x - shown.viewport_offset_x) / shown.viewport_css_width * width;
+      const y = (anchor.y - shown.scroll_y - shown.viewport_offset_y) / shown.viewport_css_height * height;
+      const editorWidth = Math.min(320, Math.max(1, width - 16));
+      const editorHeight = noteEditorRef.current?.offsetHeight || 128;
+      let left = x + 14;
+      if (left + editorWidth > width - 8) left = x - editorWidth - 14;
+      let top = y + 14;
+      if (top + editorHeight > height - 8) top = y - editorHeight - 14;
+      const nextLeft = Math.max(8, Math.min(Math.max(8, width - editorWidth - 8), left));
+      const nextTop = Math.max(8, Math.min(Math.max(8, height - editorHeight - 8), top));
+      setNoteEditorPosition((previous) => previous?.left === nextLeft && previous.top === nextTop ? previous : { left: nextLeft, top: nextTop });
+    };
+    place();
+    const observer = surfaceRef.current && typeof ResizeObserver !== "undefined" ? new ResizeObserver(place) : null;
+    if (surfaceRef.current) observer?.observe(surfaceRef.current);
+    if (noteEditorRef.current) observer?.observe(noteEditorRef.current);
+    window.addEventListener("resize", place);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", place); };
+  }, [descriptor, frame, noteId, selectedId]);
+  useEffect(() => {
+    if (!noteId || selectedId !== noteId || noteEditorDismissed) return;
+    // Pointer-down selects the mark; focus after the matching pointer-up so
+    // the SVG click cannot take focus back from the editor.
+    const frame = window.requestAnimationFrame(() => {
+      if (noteIdRef.current === noteId) noteEditorRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [noteId, selectedId, noteEditorDismissed]);
   const tabCommand = (commandValue: Extract<BrowserViewCommand, { type: "tab" }>) => {
     if (!liveInputEnabledRef.current) return;
     void releaseRemotePointer();
@@ -1788,7 +1978,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
     <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{status === "error" ? <button type="button" onClick={() => void reconnectView()}>Retry</button> : null}{presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><AnnotationIcon name="expand" /></button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><AnnotationIcon name="expand" /></button> : null}</div></header>
-    <div className="browser-tabs" role="tablist" aria-label="Browser tabs">{targetTabs.map((browserTarget) => <div key={browserTarget.target_id} className="browser-tab-wrap"><button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{browserTarget.title || browserTarget.url || "New tab"}</button>{browserTarget.can_close ? <button type="button" className="browser-tab-close" aria-label="Close browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } })}>×</button> : null}</div>)}<button type="button" className="browser-new-tab" aria-label="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}>+</button></div>
+    <div className="browser-tabs" role="tablist" aria-label="Browser tabs">{targetTabs.map((browserTarget) => { const tabName = browserTarget.title || browserTarget.url || "New tab"; return <div key={browserTarget.target_id} className="browser-tab-wrap"><button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{tabName}</button>{browserTarget.can_close ? <button type="button" className="browser-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tabName}`} onClick={(event) => { event.stopPropagation(); tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } }); }}>×</button> : null}</div>; })}<button type="button" className="browser-new-tab" aria-label="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}>+</button></div>
     <div className="browser-navigation"><button type="button" disabled={!snapshot?.navigation?.can_go_back} onClick={() => navigation("back")}>←</button><button type="button" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}>→</button><button type="button" disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}>{snapshot?.navigation?.loading ? "■" : "↻"}</button><form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}><input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" /></form></div>
     <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
       {(["browse", "select", "freehand", "element", "region"] as const).map((candidate) => {
@@ -1796,8 +1986,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         return <button key={candidate} type="button" className={tool === candidate ? "is-active" : undefined} aria-pressed={tool === candidate} aria-label={label} title={`${label} tool`} onClick={() => { setTool(candidate); gestureRef.current = null; setGesture(null); if (candidate !== "browse") onInteractionFocus?.(); }}><AnnotationIcon name={candidate} /></button>;
       })}
       <span className="browser-color-picker">{COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} title={`Use ${candidate} annotation color`} style={{ background: candidate, borderColor: candidate }} onClick={() => setColor(candidate)} />)}</span>
-      <button type="button" disabled={!selectedId} aria-label="Remove" title="Remove selected annotation" onClick={() => { if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
-      <button type="button" className="browser-annotation-notes" aria-expanded={notesOpen} aria-label={`Notes ${annotations.length}`} title={`Notes (${annotations.length})`} onClick={() => { markEditorDirty(); setNotesOpen((open) => !open); }}><AnnotationIcon name="notes" /><span className="browser-annotation-count" aria-hidden="true">{annotations.length}</span></button>
+      <button type="button" disabled={!draft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => { if (event.ctrlKey) void discardDraft(); else if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
+      <button type="button" disabled={!selectedAnnotation} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={() => { if (!selectedAnnotation) return; if (noteId !== selectedAnnotation.id) setNoteValue(selectedAnnotation.comment ?? ""); setNoteId(selectedAnnotation.id); setNoteEditorDismissed(false); markEditorDirty(); }}><AnnotationIcon name="notes" /></button>
       {pendingCapture ? <><span className="browser-capture-pending" role="status">Pending capture · retry sending or discard it</span><button type="button" aria-label="Discard pending capture" title="Discard pending capture" onClick={() => void discardPendingCapture()}><AnnotationIcon name="remove" /></button></> : null}
       {pendingDeliveryIdsRef.current && deliveryState ? <div className="browser-capture-pending" role="status">
         <span>{deliveryState === "outcome_unknown" ? "Feedback delivery outcome is unknown; inspect before retrying." : deliveryState === "rejected" ? "Feedback delivery was rejected; retry the same saved capture." : "Feedback delivery is pending."}</span>
@@ -1805,15 +1995,14 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         {deliveryState === "outcome_unknown" ? <button type="button" disabled={!deliveryDuplicateRisk} onClick={() => void resolveDuplicateRisk()}>Resolve and retry</button> : null}
       </div> : null}
       {associationOwner.pendingAnnotationMutations.length > 0 ? <><span className="browser-capture-pending" role="status">Retained annotation changes need review; unknown delivery is not replayed automatically.</span><button type="button" aria-label="Retry retained annotation changes" title="Retry retained annotation changes" onClick={() => void retryAnnotationMutations()}>Retry saves</button><button type="button" aria-label="Discard retained annotation changes" title="Discard retained annotation changes" onClick={() => void discardAnnotationMutations()}>Discard retry intent</button></> : null}
-      <button type="button" disabled={pendingCapture ? false : !draft || !frame || annotations.length === 0} aria-label="Send annotations" title={pendingCapture ? "Retry pending capture" : "Capture and send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /><span>Send annotations</span></button>
+      <button type="button" className="browser-send-annotations" disabled={pendingCapture ? false : !draft || !frame || annotations.length === 0} aria-label={pendingCapture ? "Retry pending capture" : "Send annotations"} title={pendingCapture ? "Retry pending capture" : "Send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /></button>
     </div>
-      <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={(event) => sendKey(event, "down")} onKeyUp={(event) => sendKey(event, "up")} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
+      <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={onSurfaceKeyDown} onKeyUp={onSurfaceKeyUp} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
       {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="none" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
       {frame && (status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
       {blocker ? <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => void command({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div> : null}
-      {noteId ? <div className="browser-note-editor"><textarea autoFocus value={noteValue} onChange={(event) => { markEditorDirty(); setNoteValue(event.target.value.slice(0, 4000)); }} maxLength={4000} aria-label="Annotation note" onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); saveNote(); } if (event.key === "Escape") { setNoteId(null); setNoteValue(""); markEditorDirty(); } }} /><div><button type="button" onClick={saveNote}>Save</button><button type="button" onClick={() => { setNoteId(null); setNoteValue(""); markEditorDirty(); }}>Cancel</button></div></div> : null}
+      {noteId && selectedId === noteId && !noteEditorDismissed ? <div ref={noteEditorRef} className="browser-note-editor" style={noteEditorStyle}><textarea autoFocus value={noteValue} onChange={(event) => { markEditorDirty(); setNoteValue(event.target.value.slice(0, 4000)); }} maxLength={4000} aria-label="Annotation note" onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); saveNote(); } if (event.key === "Escape") { event.preventDefault(); dismissNoteEditor(); } }} /><div><button type="button" onClick={saveNote}>Save</button><button type="button" onClick={dismissNoteEditor}>Close</button></div></div> : null}
     </div>
-    {notesOpen ? <aside className="browser-notes" aria-label="Annotation notes"><header><strong>Notes</strong><button type="button" onClick={() => { markEditorDirty(); setNotesOpen(false); }}>Close</button></header>{annotations.length === 0 ? <p>No annotations yet.</p> : <ul>{annotations.map((annotation, index) => <li key={annotation.id}><button type="button" className={selectedId === annotation.id ? "is-selected" : undefined} onClick={() => { setSelectedId(annotation.id); setNoteId(annotation.id); setNoteValue(annotation.comment ?? ""); }}>{index + 1}. {kindFor(annotation)}{annotation.comment ? ` — ${annotation.comment}` : ""}</button></li>)}</ul>}<button type="button" disabled={annotations.length === 0} onClick={() => { const current = snapshotRef.current; const documentContext = current ? context(current) : null; const currentDraft = draftRef.current; if (documentContext && currentDraft) void command({ type: "draft", context: documentContext, draft_id: currentDraft.draft_id, expected_revision: currentDraft.revision, command: { type: "clear" } }); }}>Clear annotations</button></aside> : null}
   </section>;
 }

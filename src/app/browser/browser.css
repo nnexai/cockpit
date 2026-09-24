@@ -96,7 +96,6 @@
 .browser-annotation-toolbar button,
 .browser-recovery button,
 .browser-blocker button,
-.browser-notes button,
 .browser-note-editor button {
   min-height: var(--compact-control-size);
   border: 1px solid var(--border);
@@ -122,6 +121,23 @@
 .browser-new-tab {
   width: var(--compact-control-size);
   padding: 0;
+}
+
+.browser-tab-wrap > button[aria-selected="true"] {
+  background: transparent;
+}
+
+.browser-tab-wrap > .browser-tab-close {
+  flex: 0 0 var(--compact-control-size);
+  border: 0;
+  border-radius: 0;
+  opacity: 0.7;
+}
+
+.browser-tab-wrap > .browser-tab-close:hover,
+.browser-tab-wrap > .browser-tab-close:focus-visible {
+  background: var(--surface-hover);
+  opacity: 1;
 }
 
 .browser-navigation form {
@@ -159,20 +175,8 @@
   padding: 0;
 }
 
-.browser-annotation-toolbar > button.browser-annotation-notes {
-  flex-basis: auto;
-  width: auto;
-  min-width: var(--compact-control-size);
-  gap: 3px;
-  padding-inline: 5px;
-}
-
-.browser-annotation-toolbar > button:last-child {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 9rem;
-  gap: 5px;
-  padding-inline: 8px;
+.browser-annotation-toolbar > button.browser-send-annotations {
+  margin-left: auto;
 }
 
 .browser-annotation-toolbar > button:hover:not(:disabled),
@@ -382,10 +386,14 @@
 
 .browser-note-editor {
   right: auto;
-  left: 12px;
-  width: min(20rem, calc(100% - 24px));
+  bottom: auto;
+  box-sizing: border-box;
+  width: min(20rem, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow: auto;
   flex-direction: column;
   align-items: stretch;
+  border-color: var(--border);
 }
 
 .browser-note-editor textarea {
@@ -404,53 +412,6 @@
   gap: 4px;
 }
 
-.browser-notes {
-  position: absolute;
-  z-index: 3;
-  right: 8px;
-  bottom: 8px;
-  width: min(22rem, calc(100% - 16px));
-  max-height: min(14rem, calc(100% - 16px));
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  box-shadow: 0 4px 16px #0008;
-  font-size: var(--font-size-2xs);
-}
-
-.browser-notes header,
-.browser-notes li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.browser-notes header {
-  justify-content: space-between;
-}
-
-.browser-notes ul {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0;
-  padding: 0;
-  list-style: none;
-}
-
-.browser-notes li > button:first-child {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.browser-notes .is-selected {
-  border-color: var(--focus-strong);
-}
 
 
 .browser-pane-stale .browser-toolbar-status,
