@@ -4,7 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserDraftRecoveryRequest, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftState, BrowserViewEvent, BrowserViewFrameDescriptor, BrowserViewSnapshot, BrowserViewViewportState } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, CockpitClient } from "../../client/CockpitClient";
-import { BrowserColorPicker, BrowserPane } from "./BrowserPane";
+import { BrowserColorPicker } from "./AnnotationControls";
+import { BrowserPane } from "./BrowserPane";
 
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x04, 0x01, 0x01, 0xff, 0xd9]);
 
