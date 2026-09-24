@@ -240,7 +240,8 @@
         "e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c",
         "35bb60bceb551de0a7335933248d375aa85e5cc4",
         "6cff260298eddb1764e96fc3456a59c20f605c46",
-        "e6709202b0b3f0eb5541913665d7b34e62510566"
+        "e6709202b0b3f0eb5541913665d7b34e62510566",
+        "8b726a8956a8b0b05d81d266c115f90d2904d54d"
       ],
       "notes": [
         "OBS-015 consolidated batch accepted in AUTORUN.md. BatchWorkflows owns non-browser workflow implementation, preserving returned Context/Review/terminal fixes and delivered setup/source contracts. No validation during writing; delegated integrated verification follows all writers.",
@@ -250,7 +251,8 @@
         "OBS-042 queued: native parity, Review scopes, borrowed/dirty lifecycle and failure retention remain unexecuted. No unavailable external prerequisite; prior owner released locks at a safe checkpoint.",
         "OBS-044: 35bb60bceb551de0a7335933248d375aa85e5cc4 repairs the lost-response reconciliation dead end and proves browser criteria 6/7 with real Pi agents: stale target refused, browser- and Herdr-side lost responses cause no duplicate, server-enforced duplicate-risk acknowledgement, Mark pasted without a resend. Also re-verifies that Pi start no longer raises the snapshot Recovery alert. Native parity, Herdr/gateway restart with a pending paste, provider import and criteria 1-5/8 remain open; FLOW-01 stays queued.",
         "OBS-045/OBS-046: 6cff260298eddb1764e96fc3456a59c20f605c46 proves browser gateway-crash recovery for criterion 7 (a pending paste receipt recovers to outcome_unknown with no resend; an acknowledged retry delivers exactly one copy). It also repairs two setup defects: Herdr mutations shared a 2 s deadline, so large-repository worktree setup reported a false unknown outcome; and depth-first discovery listed 26 of 70 repositories in the user's root. The delivered-then-crash branch, Herdr restart, native parity, provider import and the remaining criteria stay open; FLOW-01 stays queued.",
-        "OBS-047/OBS-048: e6709202b0b3f0eb5541913665d7b34e62510566 replaces the setup form with the user's one-step link-first dialog (fuzzy repository field, plan prepared while typing, Create starts exactly the current plan, dialog closes when ready) and adds Jira work items plus Jira items linked from an MR. Browser-verified against real GitLab MR !2 and Jira SCRUM-5: MR setup 17.4 s with both sources in Context, Jira-only setup 4.1 s. It also stops startup from turning never-started plans into resumable partial setups. Native parity and MR setup speed (three full GitLab reads) remain open; FLOW-01 stays queued."
+        "OBS-047/OBS-048: e6709202b0b3f0eb5541913665d7b34e62510566 replaces the setup form with the user's one-step link-first dialog (fuzzy repository field, plan prepared while typing, Create starts exactly the current plan, dialog closes when ready) and adds Jira work items plus Jira items linked from an MR. Browser-verified against real GitLab MR !2 and Jira SCRUM-5: MR setup 17.4 s with both sources in Context, Jira-only setup 4.1 s. It also stops startup from turning never-started plans into resumable partial setups. Native parity and MR setup speed (three full GitLab reads) remain open; FLOW-01 stays queued.",
+        "OBS-050: 8b726a89 cuts MR setup from about 26 s to 9.2 s paste-to-ready (setup reuses provider reads for two minutes; plan from metadata with a background full read) and preselects the repository from the focused pane's folder. Browser-verified against GitLab MR !2 and Jira SCRUM-5; see the second increment in SETUP-link-first.md. Native parity, delivered-then-crash paste, Herdr restart and provider import criteria remain."
       ]
     },
     {
