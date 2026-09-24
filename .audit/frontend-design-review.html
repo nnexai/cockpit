@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cockpit Frontend Review</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --text: #1a1f27; --muted: #5b6574; --border: #dde2e9;
+    --accent: #2f6fd6; --high: #c2303f; --med: #b07412; --low: #4a7a5c; --code-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0e12; --surface: #151b24; --text: #e5eaf1; --muted: #9aa7b8; --border: #2b3543;
+      --accent: #8bb9ff; --high: #ff6b78; --med: #e7b14a; --low: #57c78b; --code-bg: #1c2430;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0e12; --surface: #151b24; --text: #e5eaf1; --muted: #9aa7b8; --border: #2b3543;
+    --accent: #8bb9ff; --high: #ff6b78; --med: #e7b14a; --low: #57c78b; --code-bg: #1c2430;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "IBM Plex Sans", system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 1.8rem; margin: 0 0 4px; }
+  h2 { font-size: 1.2rem; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1rem; margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  p { margin: 0 0 10px; }
+  .meta { color: var(--muted); font-size: .9rem; margin-bottom: 20px; }
+  code { font: .85em/1.4 "IBM Plex Mono", ui-monospace, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+  .summary { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; }
+  .summary ul { margin: 6px 0 0; padding-left: 20px; }
+  .finding { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 6px; padding: 14px 18px; margin: 12px 0; }
+  .finding.high { border-left-color: var(--high); }
+  .finding.med { border-left-color: var(--med); }
+  .finding.low { border-left-color: var(--low); }
+  .tag { font-size: .7rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px solid currentColor; }
+  .high .tag { color: var(--high); } .med .tag { color: var(--med); } .low .tag { color: var(--low); }
+  .fix { color: var(--muted); font-size: .92rem; }
+  .fix strong { color: var(--text); font-weight: 600; }
+  ul.plain { padding-left: 20px; margin: 0; }
+  ul.plain li { margin: 4px 0; }
+  figure { margin: 12px 0 0; }
+  figure img { display: block; max-width: 100%; max-height: 420px; border: 1px solid var(--border); border-radius: 4px; }
+  figcaption { color: var(--muted); font-size: .82rem; margin-top: 4px; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cockpit frontend review</h1>
+  <div class="meta">Quick pass · 2026-09-24 · Based on <code>src/app/**/*.css</code> and <code>*.tsx</code>, plus recent campaign screenshots in <code>planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/</code>, and a Herdr TUI screenshot for comparison. I didn't launch the app for this review.</div>
+
+  <div class="summary">
+    <strong>Overall:</strong> The design direction is solid. The dark theme is calm and consistent, the density suits a developer tool, and the Review pane is the most polished surface. The main weakness is inconsistency at the edges. Tokens exist but many rules don't use them. The Browser pane and Context resources panel look older and cruder than the rest. Several empty or loading states are just blank space.
+    <ul>
+      <li><strong>Fix first:</strong> route font sizes and colours through tokens (#1, #2), bring the Browser pane chrome in line with the rest (#3), and redo the Context resources layout (#4).</li>
+      <li><strong>Herdr parity:</strong> Cockpit's shared parts show less than Herdr's while using more space. Bring the sidebar to Herdr's level of detail (H1), cut chrome (H2), and match status glyphs and terminal colours (H3, H4).</li>
+      <li><strong>Then:</strong> add empty states (#5), tidy the setup dialog flow (#6), and the smaller polish items.</li>
+    </ul>
+  </div>
+
+  <h2>What works well</h2>
+  <ul class="plain">
+    <li><strong>Coherent palette.</strong> Blue-grey surfaces go from <code>--app-bg</code> to <code>--surface-selected</code> in small steps, with one accent colour. Nothing clashes.</li>
+    <li><strong>Good font pairing.</strong> IBM Plex Sans and Mono are self-hosted through <code>@fontsource</code>, and <code>font-synthesis: none</code> is set.</li>
+    <li><strong>One icon system.</strong> <code>UiIcon.tsx</code> uses inline 24px stroke paths at weight 1.6. The icons look alike and stay lightweight.</li>
+    <li><strong>Keyboard basics are in place.</strong> Controls get <code>:focus-visible</code> outlines, and there are <code>prefers-reduced-motion</code> blocks. The Review and Context footers show keyboard hints (<code>C</code> comment, <code>Shift+C</code> file, <code>Alt+↑↓</code> hunk).</li>
+    <li><strong>The Review pane looks good.</strong> The file list, diff, inline comment cards with a "current" freshness tag, and file comments form a clear hierarchy.</li>
+  </ul>
+  <figure>
+    <img src="../planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/FLOW-01-review-saved.png" alt="Review pane with diff and inline comments">
+    <figcaption>The Review pane is the strongest surface and a good reference for the others.</figcaption>
+  </figure>
+
+  <h2>Findings</h2>
+
+  <div class="finding high">
+    <h3><span class="tag">High</span> 1. Most font sizes skip the type scale</h3>
+    <p><code>:root</code> defines a rem scale from <code>--font-size-2xs</code> to <code>--font-size-2xl</code>. About 85 rules use it, and about 83 rules hard-code px values: 12px ×25, 11px ×25, 10px ×14, 9px ×4, and one <code>6px</code> (<code>.connection-mark</code>, <code>styles.css:2302</code>). The 9px uppercase labels are hard to read at normal viewing distance: <code>.command-group h3</code> and <code>.document-source-kind</code> (<code>viewer.css:381</code>, the "FILE" label in Context).</p>
+    <p class="fix"><strong>Fix:</strong> replace the px literals with scale tokens. Make <code>--font-size-2xs</code> (11px) the smallest text size. If 10px is really needed, add it as a token on purpose.</p>
+  </div>
+
+  <div class="finding high">
+    <h3><span class="tag">High</span> 2. Some tokens are undefined, and the hex fallbacks have drifted</h3>
+    <p>These tokens are used but never defined: <code>--warning</code>, <code>--scrim</code>, <code>--font-mono</code> and <code>--font-sans</code>. They only work because every use has a fallback. <code>projects/setup.css</code> has around 30 hex fallbacks, and they no longer match <code>:root</code>. For example, <code>--surface, #151a22</code> vs the real <code>#161d27</code>, and <code>--surface-selected, #243144</code> vs <code>#23354c</code>. There are also about 70 other hex or rgba literals across the stylesheets.</p>
+    <p class="fix"><strong>Fix:</strong> add <code>--warning</code>, <code>--scrim</code>, <code>--font-mono</code> and <code>--font-sans</code> to <code>:root</code>, then remove the fallbacks. A lint rule that flags colour literals outside <code>:root</code> would stop this from coming back.</p>
+  </div>
+
+  <div class="finding high">
+    <h3><span class="tag">High</span> 3. The Browser pane looks like a different app</h3>
+    <ul class="plain">
+      <li>It uses text glyphs (<code>←</code> <code>→</code> <code>↻</code> <code>■</code> <code>×</code> <code>+</code>) instead of <code>UiIcon</code>, so their weight and size don't match the other icons. The back, forward and reload buttons also have no <code>aria-label</code> (<code>BrowserPane.tsx:2313</code>).</li>
+      <li>There are four rows of chrome: the pane header, tabs, the URL bar and the annotation tools. That takes about 300px before any page content appears. Other panes use one or two rows.</li>
+      <li>The header reads "Browser · Live browser view", which says the same thing twice. Other panes use "Review / Local changes".</li>
+      <li>The five full-size saturated colour swatches are the loudest thing in the app and pull attention away from the page.</li>
+    </ul>
+    <p class="fix"><strong>Fix:</strong> use <code>UiIcon</code> for all browser controls. Merge the tabs into the pane header strip. Put the URL bar and tools in one row. Replace the swatches with a single colour dot that opens a small popover.</p>
+    <figure>
+      <img src="../planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/FLOW-01-resume-native-window.png" alt="Browser pane with stacked toolbars">
+      <figcaption>Four rows of chrome. The glyph buttons look different from the rest of the icon set.</figcaption>
+    </figure>
+  </div>
+
+  <div class="finding high">
+    <h3><span class="tag">High</span> 4. The Context resources panel is hard to scan</h3>
+    <p>Raw SHA-256 revisions and 150-character content-addressed paths take up most of each entry. There are large gaps between the lines of each item. The metadata is a single dot-joined string: "glab · https://gitlab.com · issue · … : fresh, unchanged; materialized". The <em>Close</em> text button is larger than the header text and doesn't match the icon close buttons used elsewhere.</p>
+    <p class="fix"><strong>Fix:</strong> show each resource as a compact card. Put the title first, then a provider/kind badge and a freshness chip (fresh / stale / changed). Hide the hash and path behind a "details" disclosure or a copy button. Use the shared icon close button.</p>
+    <figure>
+      <img src="../planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/GLAB-resource-ui.png" alt="Context resources panel">
+      <figcaption>Hashes and paths take up most of the space. Titles and status are easy to miss.</figcaption>
+    </figure>
+  </div>
+
+  <div class="finding med">
+    <h3><span class="tag">Medium</span> 5. Empty and loading states are blank</h3>
+    <p>When there are zero changes, the Review pane shows an empty dark area with no message. "Loading comments…" appears only as small footer text. The toolbar also wraps onto two rows at about 340px width, and the Diff / Full source toggle ends up alone on the second row.</p>
+    <p class="fix"><strong>Fix:</strong> add a shared empty-state component (icon, one line, and an optional action such as "Refresh" or "Open Context"). Use it in Review, Context and the Agents inbox. Let the toolbar collapse the secondary controls into a menu instead of wrapping.</p>
+    <div class="shots">
+      <figure>
+        <img src="../planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/FLOW-01-resume-review-native.png" alt="Empty review pane">
+        <figcaption>Review with 0 files: the pane is empty and the toolbar wraps.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <div class="finding med">
+    <h3><span class="tag">Medium</span> 6. The New Space dialog is one long scroll</h3>
+    <p>The form, three disclosures, the "Reviewed setup effects" table and the Completed status all scroll together in one modal. The result appears below the fold. Long paths wrap in the middle of UUIDs.</p>
+    <p class="fix"><strong>Fix:</strong> split it into two steps, <em>Configure</em> then <em>Review &amp; create</em>. Keep the primary action and status in a sticky footer. Shorten long paths with a middle ellipsis and put the full value in a tooltip.</p>
+    <div class="shots">
+      <figure><img src="../planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/SETUP-review.png" alt="Setup dialog form"><figcaption>Form and effects table in one scroll.</figcaption></figure>
+      <figure><img src="../planning/stability-and-gitlab-2026-09-20/runs/run-20260920-a3e9b950/SETUP-result.png" alt="Setup dialog completed"><figcaption>The "Completed" status is at the very bottom.</figcaption></figure>
+    </div>
+  </div>
+
+  <div class="finding med">
+    <h3><span class="tag">Medium</span> 7. The "done" colour looks the same as the accent</h3>
+    <p><code>--done: #69a7ff</code> and <code>--accent: #8bb9ff</code> are both light blue. A "done" status is hard to tell apart from a selected or focused element.</p>
+    <p class="fix"><strong>Fix:</strong> change "done" to a different hue, such as a neutral grey-violet, or show it with a checkmark icon instead of colour alone.</p>
+  </div>
+
+  <div class="finding low">
+    <h3><span class="tag">Low</span> 8. Radii and z-index values are ad hoc</h3>
+    <p><code>--radius-control</code> exists, but there are also literal radii of 3, 4, 5, 6 and 8px. There are 15 different <code>z-index</code> values between 1 and 70, with no scale.</p>
+    <p class="fix"><strong>Fix:</strong> add <code>--radius-sm</code> and <code>--radius-lg</code>. Add a small set of layer tokens (<code>--z-sticky</code>, <code>--z-popover</code>, <code>--z-modal</code>, <code>--z-toast</code>).</p>
+  </div>
+
+  <div class="finding low">
+    <h3><span class="tag">Low</span> 9. Unnamed tabs waste width, and panes get a generic header <span style="font-weight:400;color:var(--muted)">(revised after the Herdr comparison)</span></h3>
+    <p>Tab names come from Herdr, and Herdr also shows unnamed tabs as a number, so the name "1" is not the problem. The problem is layout. <code>.tab-button</code> uses <code>width: clamp(72px, 112px, 220px)</code> (<code>styles.css:735</code>). A clamp with a fixed middle value always resolves to 112px, so "1" gets the same width as a long label. Herdr sizes each tab to fit its label. Cockpit also adds a "Pane 1" header to each terminal pane. Herdr has no pane header at all (see H2).</p>
+    <p class="fix"><strong>Fix:</strong> size tabs to their content with <code>width: auto; min-width: 40px; max-width: 220px</code>. For terminal panes, show the header only when there is real information, such as the cwd.</p>
+  </div>
+
+  <div class="finding low">
+    <h3><span class="tag">Low</span> 10. Large one-line JSX slows down UI changes</h3>
+    <p><code>BrowserPane.tsx</code> is 2,351 lines, and some of its JSX is on single lines several hundred characters long (for example, the whole tab strip at line 2312). This isn't a visual defect, but small design changes are slow and easy to get wrong.</p>
+    <p class="fix"><strong>Fix:</strong> move the toolbar, tab strip and annotation tools into small components when doing #3.</p>
+  </div>
+
+  <h2>Compared with the Herdr TUI</h2>
+  <p>Cockpit is meant to be a richer graphical client that feels like the native Herdr TUI (<code>CONTEXT.md</code> §2). I compared it against a Herdr screenshot. The two share the same structure: a spaces tree, an agents inbox, a tab strip and panes. Cockpit adds visual weight in several places while showing less information than Herdr.</p>
+  <figure>
+    <img src="herdr-tui.png" alt="Herdr TUI with spaces sidebar, agents list and tab strip">
+    <figcaption>Herdr TUI. One row of tabs, no pane headers, and every sidebar row shows its branch or agent kind.</figcaption>
+  </figure>
+
+  <div class="finding high">
+    <h3><span class="tag">High</span> H1. The sidebar shows less than Herdr does</h3>
+    <ul class="plain">
+      <li><strong>Spaces:</strong> Herdr shows the branch and ahead count (<code>main ↑14</code>) under <em>every</em> space. Cockpit shows the branch only for the selected space (<code>App.tsx:420</code>) and never shows ahead/behind counts. You have to click a space to see what state it's in.</li>
+      <li><strong>Agents:</strong> Herdr uses two compact lines per agent: <code>space · tab</code>, then the agent kind (<code>omp</code>, <code>claude</code>). Cockpit uses three lines (location, name, status text), so fewer agents fit, and the status text repeats what the glyph already shows.</li>
+    </ul>
+    <p class="fix"><strong>Fix:</strong> show the branch and ahead/behind count on every space row, using the <code>--idle</code> green for the ↑ count as Herdr does. Reduce agent rows to Herdr's two lines and keep the full status in the tooltip.</p>
+  </div>
+
+  <div class="finding high">
+    <h3><span class="tag">High</span> H2. Cockpit spends far more height on chrome</h3>
+    <p>Herdr uses one text row for tabs, with no pane headers, so content starts on line 2. Cockpit uses a 41px tab strip, then a roughly 33px header on each pane. The Browser pane adds three more rows on top of that (#3). On a laptop screen, Cockpit loses around 75px per terminal and around 300px per browser before any content appears.</p>
+    <p class="fix"><strong>Fix:</strong> set a chrome budget: at most one header row per pane, and none for plain terminals. Move pane actions such as maximise into a hover overlay or the pane's context menu. This makes #3 and #9 concrete.</p>
+  </div>
+
+  <div class="finding med">
+    <h3><span class="tag">Medium</span> H3. The status glyphs don't match Herdr's</h3>
+    <p>Herdr uses a filled dot for an active or attention state and a hollow dot for idle, and colour carries the rest of the meaning. Cockpit's <code>stateGlyph</code> (<code>App.tsx:63</code>) uses <code>◐</code> for working, <code>○</code> for idle, and <code>●</code> for both <em>blocked</em> and <em>done</em>. Blocked and done therefore differ only by colour, and done's blue is almost the same as the accent (#7). Someone moving between Herdr and Cockpit has to learn two symbol sets.</p>
+    <p class="fix"><strong>Fix:</strong> copy Herdr's glyph and colour mapping exactly, then fix the done colour so it doesn't look like the accent.</p>
+  </div>
+
+  <div class="finding med">
+    <h3><span class="tag">Medium</span> H4. Terminal colours don't follow your terminal theme</h3>
+    <p>Herdr runs in your terminal, so it uses your terminal palette: the teal background and ANSI colours in the screenshot. Cockpit's xterm theme sets only <code>background: #0c1016</code> and <code>foreground: #d8dee8</code> (<code>TerminalPane.tsx:59</code>). All 16 ANSI colours fall back to xterm.js defaults. As a result, the same agent session looks different in the two clients: different greens, different blues, and a different selection colour.</p>
+    <p class="fix"><strong>Fix:</strong> add a configurable full xterm theme with all 16 ANSI colours plus selection and cursor. Import it from the user's terminal config, or ship one preset that matches your palette. Consider deriving <code>--terminal-bg</code> and the status colours from the same values.</p>
+  </div>
+
+  <div class="finding low">
+    <h3><span class="tag">Low</span> H5. Headings and action placement differ from Herdr</h3>
+    <ul class="plain">
+      <li><strong>Headings:</strong> Herdr uses lowercase headings at body size in a muted accent colour ("spaces", "agents"). Cockpit uses 10px uppercase letter-spaced headings with counts ("SPACES 3", <code>styles.css:522</code>). They're smaller than the body text and read like a different product. Matching Herdr would also remove one of the px literals from #1.</li>
+      <li><strong>Actions:</strong> Herdr puts <em>new</em> and <em>menu</em> at the bottom of the spaces list, <em>Inbox</em> next to the agents heading, and the sidebar collapse control (<code>«</code>) at the bottom left. Cockpit puts a + in the heading, the sidebar toggle in the tab strip, and <em>Commands</em> at the top right. None of these is wrong, but matching Herdr would reduce the need to relearn positions.</li>
+      <li><strong>Active tab:</strong> Herdr shows the active tab as a filled accent block, which is easy to spot. Cockpit shows a 2px underline on a raised surface, which is easy to miss in a busy strip.</li>
+    </ul>
+  </div>
+
+  <div class="finding low">
+    <h3><span class="tag">Low</span> H6. Where Cockpit is better than Herdr</h3>
+    <p>Not everything should move toward Herdr. Cockpit's Review diff with inline comments, the Context markdown and Mermaid preview, and the setup effects table have no TUI equivalent, and they justify their extra chrome. The goal is to <em>match Herdr on the shared parts</em> (sidebar, tabs, terminal panes, status) and keep richer layouts for the parts only Cockpit has.</p>
+  </div>
+
+  <h2>Quick numbers</h2>
+  <table>
+    <tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>CSS lines (src/app)</td><td>~4,500 across 8 files; <code>styles.css</code> alone is 2,525</td></tr>
+    <tr><td>Font sizes via tokens / px literals</td><td>~85 / ~83</td></tr>
+    <tr><td>Hex / rgba literals outside <code>:root</code></td><td>~90</td></tr>
+    <tr><td>Undefined tokens used</td><td><code>--warning</code>, <code>--scrim</code>, <code>--font-mono</code>, <code>--font-sans</code></td></tr>
+    <tr><td>Distinct z-index values</td><td>15</td></tr>
+    <tr><td><code>!important</code></td><td>10 (setup 4, styles 4, context 2)</td></tr>
+    <tr><td>Themes</td><td>Dark only. That's acceptable for a personal tool, and the tokens would make adding a light theme fairly cheap later.</td></tr>
+  </table>
+</main>
+</body>
+</html>

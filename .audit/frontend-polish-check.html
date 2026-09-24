@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polish Pass Check</title>
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #fff; --text: #1b2230; --muted: #5b6577; --border: #dde2ea;
+  --ok: #17864f; --warn: #a86b00; --bad: #c2303e; --info: #2d62b8; --code: #eef1f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --surface: #151b24; --text: #e3e8ef; --muted: #98a3b4; --border: #2a3342;
+    --ok: #57c78b; --warn: #e7b14a; --bad: #ff6b78; --info: #8bb9ff; --code: #1c2330;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117; --surface: #151b24; --text: #e3e8ef; --muted: #98a3b4; --border: #2a3342;
+  --ok: #57c78b; --warn: #e7b14a; --bad: #ff6b78; --info: #8bb9ff; --code: #1c2330;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "IBM Plex Sans", system-ui, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
+h1 { font-size: 28px; margin: 0 0 4px; }
+h2 { font-size: 20px; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 16px; margin: 0 0 6px; }
+p.lead { color: var(--muted); margin: 0 0 20px; }
+code { font: 13px "IBM Plex Mono", ui-monospace, monospace; background: var(--code); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; white-space: nowrap; }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .info { color: var(--info); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin: 12px 0; }
+.card .meta { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+.card p { margin: 6px 0; }
+.id { font: 600 13px "IBM Plex Mono", monospace; color: var(--muted); margin-right: 6px; }
+figure { margin: 12px 0; }
+figure img { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; display: block; }
+figcaption { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+ol.next li, ul li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Frontend polish pass: check</h1>
+<p class="lead">This page reviews commit <code>fcc2229</code> "Polish frontend chrome, resource scanning and theme tokens" against the <a href="frontend-design-review.html">design review</a>. I ran Cockpit in the browser against an isolated Herdr fixture (<code>scripts/verify/ui_polish_runtime.py</code>, with the file-viewer and reviewr plugins added) and drove it with Playwright at 1440, 1024 and 760 px wide. I did not change any code. 2026-09-24.</p>
+
+<div class="card">
+<h3>Summary</h3>
+<ul>
+<li><b>Done well:</b> the type-scale cleanup (95 raw px font sizes down to 1), tokens (<code>--warning</code>, <code>--scrim</code>, <code>--font-*</code>), the distinct <code>--done</code> colour, and the terminal colours. Browser pane controls now have icons and aria-labels, and the colour swatches collapsed into one picker. The Context source list now has chips and a details section. The New Space dialog no longer scrolls at first open. Tabs size to their content.</li>
+<li><b>Regressions introduced:</b> 2. The Context-resources checkbox is now 588px wide, and the colour picker can't be closed with Esc or by clicking outside it.</li>
+<li><b>Not addressed at all:</b> the Herdr-alignment items H1 (sidebar density), H2 (pane header row), H3 (status glyphs) and H5 (heading style). <code>App.tsx</code> is untouched.</li>
+<li><b>Code hygiene:</b> about 100 CSS selector lines were given a stray leading space. One agent font fix has no effect because another rule overrides it. JSX indentation in <code>BrowserPane.tsx</code> is broken.</li>
+<li>Typecheck passes and all 231 unit tests pass.</li>
+</ul>
+</div>
+
+<h2>Scorecard against the original findings</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Finding</th><th>Status</th><th>Notes</th></tr>
+<tr><td>1</td><td>Font sizes skip the type scale</td><td><span class="pill ok">done</span></td><td>95 raw px sizes down to 1 (<code>comments.css:98</code> is still 16px). But everything from 9 to 12px became 11px (<code>2xs</code>): command rows and context-menu items got <i>smaller</i> (12 → 11), and the difference between headings and rows is gone.</td></tr>
+<tr><td>2</td><td>Undefined tokens / drifted fallbacks</td><td><span class="pill ok">done</span></td><td>Tokens defined on <code>:root</code>; <code>setup.css</code> fallbacks removed.</td></tr>
+<tr><td>3</td><td>Browser pane glyphs / 4 rows / swatches</td><td><span class="pill warn">partial</span></td><td>Icons and labels added; 4 rows became 3 (about 100px of controls at 1440px wide, 133px at 1024px). See Q3–Q6.</td></tr>
+<tr><td>4</td><td>Context resources hard to scan</td><td><span class="pill warn">untested</span></td><td>The chips and details code looks right, but no provider was configured in the fixture, so I couldn't render a source entry. The empty state of the same panel has new problems (R1, Q9).</td></tr>
+<tr><td>5</td><td>Blank empty states / Review toolbar wraps</td><td><span class="pill warn">partial</span></td><td>Review now says "No changes in this comparison" and its toolbar no longer wraps at 1440px wide. The Context file tree is still blank when empty (Q10).</td></tr>
+<tr><td>6</td><td>New Space dialog is one long scroll</td><td><span class="pill warn">partial</span></td><td>The first view fits. After "Review setup" it becomes a long scroll again and the <b>Start setup</b> button is off-screen (Q8).</td></tr>
+<tr><td>7</td><td><code>--done</code> ≈ <code>--accent</code></td><td><span class="pill ok">done</span></td><td><code>#ae9cdb</code>. Since H3 wasn't done, blocked and done still use the same glyph.</td></tr>
+<tr><td>8</td><td>Ad hoc radii / 15 z-index values</td><td><span class="pill bad">not done</span></td><td>New code adds <code>z-index: 1</code> and <code>5</code>, plus <code>border-radius: 999px</code>.</td></tr>
+<tr><td>9</td><td>Tab width clamp / "Pane 1" header</td><td><span class="pill warn">partial</span></td><td>Tabs size to content (40–220px). The number is left-aligned inside a 40px box (Q1). "Pane 1" header unchanged.</td></tr>
+<tr><td>10</td><td><code>BrowserPane.tsx</code> size</td><td><span class="pill bad">not done</span></td><td>Grew to about 2,390 lines.</td></tr>
+<tr><td>H1</td><td>Sidebar density (branch/ahead on every space, 2-line agents)</td><td><span class="pill bad">not done</span></td><td><code>App.tsx:420</code> still shows the branch only for the selected space.</td></tr>
+<tr><td>H2</td><td>Chrome budget (tab strip + pane header)</td><td><span class="pill bad">not done</span></td><td>Still 41px + 33px above every terminal.</td></tr>
+<tr><td>H3</td><td>Status glyphs match Herdr</td><td><span class="pill bad">not done</span></td><td><code>stateGlyph</code> (<code>App.tsx:62</code>) unchanged: blocked and done both ●.</td></tr>
+<tr><td>H4</td><td>xterm ANSI theme</td><td><span class="pill ok">done</span></td><td>16 colours, cursor and selection set; verified visually (Q12).</td></tr>
+<tr><td>H5</td><td>Heading style / action placement / active tab</td><td><span class="pill bad">not done</span></td><td>Only the size token changed; headings are still uppercase with letter spacing, and the active tab is still an underline.</td></tr>
+</table></div>
+
+<h2>Regressions</h2>
+<div class="card">
+<div class="meta"><span class="id">R1</span><span class="pill bad">regression</span> <code>context.css</code></div>
+<h3>Context resources checkbox stretches to full width</h3>
+<p>The commit deleted <code>.context-sources input[type="checkbox"] { width: auto; }</code>. The "Include linked sources" checkbox is now 588px wide: the box is centred on its own line and the label wraps below it.</p>
+</div>
+<div class="card">
+<div class="meta"><span class="id">R2</span><span class="pill bad">regression</span> <code>BrowserPane.tsx</code> <code>BrowserColorPicker</code></div>
+<h3>Colour picker can't be dismissed</h3>
+<p>The picker is now a <code>&lt;details&gt;</code> popover. Esc and clicking the page leave it open; it closes only when you pick a colour or click the swatch again. Clicking outside it also passes the click through to the live page.</p>
+</div>
+
+<div class="grid2">
+<figure><img src="polish-check/20-resources.png" alt="Context resources with stretched checkbox"><figcaption>R1 / Q9: stretched checkbox; "Use Import source above" when there is no import control; snapshot section pinned to the bottom.</figcaption></figure>
+<figure><img src="polish-check/08-colorpicker.png" alt="Colour picker popover open over the browser frame"><figcaption>R2: the popover stays open after Esc or a click outside.</figcaption></figure>
+</div>
+
+<h2>Quirks found while testing</h2>
+
+<h3 style="margin-top:20px">Tabs</h3>
+<div class="card">
+<div class="meta"><span class="id">Q1</span><span class="pill warn">visual</span> <code>styles.css</code> <code>.tab-button</code></div>
+<p>A numbered tab is 40px wide with <code>padding: 0 8px</code> and content aligned to the start, so the "1" sits at x+8 with about 26px of empty space to its right. Centre it when there's no label, or drop the minimum width to about 28px. The number is 11px next to the 19px "+" button, so it also looks higher than the "+".</p>
+</div>
+<figure><img src="polish-check/05-renamed.png" alt="Tab strip with a numbered tab and a long-label tab"><figcaption>Q1: "1" hugs the left edge of its box. A long label truncates at 220px as intended.</figcaption></figure>
+
+<h3>Browser pane</h3>
+<div class="card">
+<div class="meta"><span class="id">Q3</span><span class="pill warn">layout</span></div>
+<p>The status text "Live browser view" now takes the left of the first row, and the browser tabs are pushed right with <code>max-width: 32%</code>. At 1024px wide the tab label becomes "Poli…", which shows too little to read. The status text should be a small dot or go last, and the tabs should get the space.</p>
+</div>
+<div class="card">
+<div class="meta"><span class="id">Q4</span><span class="pill warn">layout</span></div>
+<p>At a 334px pane width the annotation toolbar wraps and the <b>Send annotations</b> button ends up alone on a fourth row. The controls take 133px of height before the page starts.</p>
+</div>
+<div class="card">
+<div class="meta"><span class="id">Q5</span><span class="pill warn">clarity</span></div>
+<p>The "Edit note" button (next to "Notes 0") and the "Send annotations" button (far right) use the same speech-bubble icon. Also, Remove is enabled when a draft exists but nothing is selected.</p>
+</div>
+<div class="card">
+<div class="meta"><span class="id">Q6</span><span class="pill info">polish</span></div>
+<p>The start page shows the internal URL <code>http://127.0.0.1:NNNN/__cockpit_browser_start__</code> in the address bar. An empty field with its placeholder would look cleaner.</p>
+</div>
+<div class="grid2">
+<figure><img src="polish-check/07-browser.png" alt="Browser pane at 1440 wide"><figcaption>Q3/Q5/Q6: status text takes the prime slot; the tab title is truncated; two identical bubble icons; internal start URL.</figcaption></figure>
+<figure><img src="polish-check/09-narrow.png" alt="Browser pane at 1024 wide"><figcaption>Q4: the Send button wraps to its own row; the tab shows as "Poli…".</figcaption></figure>
+</div>
+
+<h3>Commands palette</h3>
+<div class="card">
+<div class="meta"><span class="id">Q7</span><span class="pill info">polish</span></div>
+<p>Rows dropped from 12px to 11px, so they're now smaller than the 13px search field. "switch session..." is lowercase and uses three dots where every other row uses sentence case and "…". After clicking <b>All commands</b>, the highlight jumps to the 6th row ("Focus pane above") instead of the first. Disabled rows show a long technical reason ("pane is not a supported extension; Open Context requires a source pane at a reviewed companion checkout") at the same weight as the command itself.</p>
+</div>
+<figure><img src="polish-check/10-commands.png" alt="Commands palette"><figcaption>Q7</figcaption></figure>
+
+<h3>New Space dialog</h3>
+<div class="card">
+<div class="meta"><span class="id">Q8</span><span class="pill warn">flow</span></div>
+<p>After <b>Review setup</b>, the "Reviewed setup effects" table (UUIDs and full paths) expands inline. The dialog becomes a long scroll again and <b>Start setup</b> sits below the fold (y = 952 in a 900px viewport). After starting, the "Completed" status appears at the bottom, off-screen, and the dialog stays open with every field disabled. The footer should stay visible (make it sticky), and on success the dialog should close or scroll to the result. Smaller issues: "1 repositories"; the Cancel button turns into "Close"; initial focus goes to the × button, not the first field.</p>
+</div>
+<figure><img src="polish-check/17-after-setup2.png" alt="New Space dialog after setup completed"><figcaption>Q8: "Completed" is only just visible at the bottom edge; the footer is further down.</figcaption></figure>
+
+<h3>Context</h3>
+<div class="card">
+<div class="meta"><span class="id">Q9</span><span class="pill warn">copy/layout</span></div>
+<p>With no provider configured, the Resources panel says "No imported sources yet. Use Import source above to add one." There is no Import source control. The linked-sources checkbox is still enabled, and "Import local snapshot" is pinned to the bottom with about 580px of empty space above it.</p>
+</div>
+<div class="card">
+<div class="meta"><span class="id">Q10</span><span class="pill warn">empty state</span></div>
+<p>An empty companion shows a blank file tree and "Select a file to inspect its source." There's no file to select, so it should say the directory is empty and point to Resources.</p>
+</div>
+<figure><img src="polish-check/19-context.png" alt="Context pane with empty file tree"><figcaption>Q10. The pane header shows "Files … / Context" with the two halves at opposite ends (Q13).</figcaption></figure>
+
+<h3>Review</h3>
+<div class="card">
+<div class="meta"><span class="id">Q11</span><span class="pill bad">bug</span></div>
+<p>After switching the comparison to <b>Staged</b> (empty), the status bar shows "Loading comments…" and never changes; it still did after 5 seconds. With "All local changes" it said "0 comments". The new empty message renders in <b>mono</b> while its Refresh button is sans. It sits next to a second Refresh button in the toolbar, and the file column stays empty under "CHANGED FILES 0". The agent's hunk-header font change (<code>review.css:85</code>, mono) has no effect because <code>viewer.css:262</code> overrides it: the hunk header still renders in Plex Sans.</p>
+</div>
+<figure><img src="polish-check/13-review-empty.png" alt="Review empty comparison"><figcaption>Q11: the mono message sits next to a sans button, and "Loading comments…" never clears.</figcaption></figure>
+
+<h3>Terminal and general</h3>
+<div class="card">
+<div class="meta"><span class="id">Q12</span><span class="pill ok">works</span></div>
+<p>The ANSI colours render as specified, and <code>ls</code> and <code>git diff</code> look right. Colour 0 (<code>#1a1f29</code>) is almost invisible on the terminal background, which is common, but a slightly lighter black would help prompts that use it.</p>
+</div>
+<figure><img src="polish-check/21-ansi.png" alt="Terminal ANSI palette"><figcaption>Q12</figcaption></figure>
+<div class="card">
+<div class="meta"><span class="id">Q13</span><span class="pill info">polish</span></div>
+<p>The pane header breadcrumb splits in two: "Review" at the left and "/ Local changes" pushed to the far right, and the same for "Files … / Context". Tabs have no close button on hover, though <code>ui-design-direction.md</code> specifies one. The "Open browser" toolbar button shows only an icon, while "Commands" next to it shows only text.</p>
+</div>
+<div class="card">
+<div class="meta"><span class="id">Q14</span><span class="pill info">hygiene</span></div>
+<ul>
+<li>About 100 selector lines got a stray leading space (<code>" .connection-mark"</code> and others): 14 in <code>styles.css</code>, 51 in <code>setup.css</code>, 31 in <code>viewer.css</code> and 4 in <code>context.css</code>. This looks like leftover output from a find-and-replace script. It's harmless, but it clutters diffs.</li>
+<li><code>BrowserPane.tsx</code> around line 2372: <code>&lt;/div&gt;</code>, a blank line, then another <code>&lt;/div&gt;</code> with inconsistent indentation. The recovery and pending items inside the annotation toolbar weren't re-indented.</li>
+<li>Duplicate rules for <code>.tab-item</code> and <code>.tab-button</code> (<code>styles.css</code> ~736, ~1187, ~1706) were each edited instead of merged into one.</li>
+<li>The browser server returns 404 for <code>/favicon.ico</code>.</li>
+</ul>
+</div>
+
+<h2>Suggested follow-up instructions</h2>
+<ol class="next">
+<li><b>Fix the regressions</b>: restore <code>width:auto</code> on the checkbox (R1). Close the colour picker on Esc and on outside clicks, without passing the click to the page (R2).</li>
+<li><b>Fix the Review bug</b> Q11: "Loading comments…" never clears after switching comparison. Also remove the dead hunk-header rule, or make it win over the <code>viewer.css</code> rule.</li>
+<li><b>New Space flow</b> Q8: keep the footer visible (sticky), collapse the effects table by default, and close the dialog or focus the result on success.</li>
+<li><b>Browser toolbar</b> Q3–Q5: tabs first, status as a dot, keep Send on the first row, use a distinct send icon.</li>
+<li><b>Do the Herdr alignment work that was skipped</b> (H1, H2, H3, H5): it has the most visible impact and none of it was attempted.</li>
+<li><b>Type scale</b>: map the old 12px text to <code>xs</code> rather than <code>2xs</code> so primary rows don't shrink.</li>
+<li><b>Hygiene</b> Q14: remove the leading spaces and merge the duplicate tab rules.</li>
+</ol>
+</main>
+</body>
+</html>
