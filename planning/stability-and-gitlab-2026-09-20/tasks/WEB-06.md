@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Bound frame decode, input queues, helper/view lifecycle, and owner/observer reconnect resources under malformed input, slow consumers, crashes, and repeated hide/show. The latest eligible frame wins; stale content remains visibly marked with input blocked. Decoded images, sockets, buffers, held input, and helper processes are released by their actual owner without duplicating the browser or throttling other viewers.
+Bound frame decode, input queues, helper/view lifecycle, and owner/observer reconnect resources under malformed input, slow consumers, crashes, and repeated hide/show. The latest eligible frame wins; stale content remains visibly marked with input blocked. A current lower-density frame is not stale because of density, and a newer frame must not be held behind an older sharper image. Decoded images, sockets, buffers, held input, and helper processes are released by their actual owner without duplicating the browser or throttling other viewers. Image quality remains best effort under the canonical [ACCEPTANCE.md contract](../ACCEPTANCE.md#live-browser-image-quality).
 
 This task supplies measured A01/A03/A13/A22/A25 resource proof; current source hotspots are candidates until exercised.
 
@@ -48,6 +48,7 @@ This task supplies measured A01/A03/A13/A22/A25 resource proof; current source h
 10. After repeated hide/show and Space switches, compare live decoder/object counts, stream sockets, helper children, and browser association identities with baseline. Record any explicitly retained low-volume metadata.
 11. Verify no stale image ACK, frame credit, or pending queue entry survives detach/rebind. Cleanup must be idempotent when close and crash notifications race.
 12. Keep static idle capture quiet while metadata remains available; absence of changed JPEG bytes is not treated as a dead browser heartbeat.
+13. Exercise quiet content, continuous animation without input, hover-driven changes, scrolling, and transition back to quiet. Verify current visible content and input reactions remain live, record delivered dimensions and resource costs, and show bounded idle/resource behavior. A lower-density current frame is eligible; do not infer stale state from density or hold newer content for an older sharper image. See [ACCEPTANCE.md](../ACCEPTANCE.md#live-browser-image-quality).
 
 Measurements must name the fixture dimensions, Chromium/WebKit build, client type, warm-up period, and clock relationship. Do not turn proposed budgets into a pass without observed intervals.
 

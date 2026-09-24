@@ -1,8 +1,8 @@
-# WEB-03 — Keep resized browser frames sharp and aligned
+# WEB-03 — Keep resized browser frames current and aligned
 
 ## Outcome
 
-Ensure every controller-owned resize produces capture pixels at the accepted dimensions and a matching geometry barrier before location-sensitive input or annotation. A resized inline browser stays crisp instead of stretching an old screencast; zoom, device pixel ratio, page zoom, scroll, sticky/fixed content, and letterboxing use one frame-bound transform. A resize/control race cannot leave a pending request stranded when ownership changes.
+Ensure every controller-owned resize reconciles to the accepted CSS viewport and a matching geometry barrier before location-sensitive input or annotation. Attempt sharper capture quality when safe and affordable, but allow a lower-density current image to preserve performance; it is not stale because of density and must not be held behind an older sharper frame. Zoom, device pixel ratio, page zoom, scroll, sticky/fixed content, and letterboxing use one frame-bound transform. A resize/control race cannot leave a pending request stranded when ownership changes. The canonical live-quality and evidence contract is [ACCEPTANCE.md](../ACCEPTANCE.md#live-browser-image-quality).
 
 This task re-verifies and hardens issue #8's prior resolution against the current baseline; the historical patch and handoff are not acceptance proof.
 
@@ -34,8 +34,8 @@ This task re-verifies and hardens issue #8's prior resolution against the curren
 
 ## Acceptance
 
-1. Browser gateway resize fixture: resize from at least 800x600 to a materially different panel size; subsequent JPEG intrinsic dimensions and descriptor viewport revision match the accepted request without stretched old pixels.
-2. Linux-native Tauri: the displayed frame intrinsic dimensions, CSS painted rectangle, and descriptor geometry remain aligned after panel resize and window/device-scale changes.
+1. Browser gateway resize fixture: resize from at least 800x600 to a materially different panel size; record requested CSS content size, delivered JPEG dimensions, descriptor viewport revision, genuine raster detail and content freshness. The current frame and geometry must match the accepted request; exact pixel density is best effort, and an older sharper frame cannot replace newer content.
+2. Linux-native Tauri: record delivered frame dimensions separately from CSS painted rectangle and descriptor geometry after panel resize and window/device-scale changes; distinguish WebKit-native scaling/decode from Chromium producer behavior. Keep the frame-bound geometry aligned without requiring a particular capture density.
 3. Rapid resize burst during takeover/reconnect eventually applies the latest accepted revision, never paints a stale frame as current, and does not strand a pending resize.
 4. At controlled host zoom/DPR, page zoom, scroll, letterbox, fixed/sticky elements, and narrow presentation, a known hit target and exported annotation agree within two displayed CSS pixels; out-of-image presses are refused.
 5. Two clients at different sizes observe the same target without observer resize fights; explicit takeover resizes once and waits for the matching frame before input.
@@ -61,11 +61,11 @@ The evidence record must include:
 - resize/takeover/navigation race outcomes, including stale-frame refusal and pending-resize reconciliation;
 - separate browser-gateway and Linux-native observations, with profile/helper/frame cleanup.
 
-Do not mark a frame sharp from visual appearance alone; retain the descriptor and geometry values that made input eligible.
+Do not infer genuine raster detail from visual appearance or intrinsic dimensions alone; retain the frame descriptor, requested CSS viewport, delivered dimensions, DPR/scale semantics, and detail evidence used to assess quality and input eligibility. A current lower-density frame remains eligible when its identity and geometry barriers pass.
 
 Retain the raw descriptor values needed to reproduce the transform calculation, including scroll offsets and visual viewport scale/offset where supported.
 
-The evidence must state which dimensions are CSS viewport, screencast pixels, and painted client pixels; do not collapse them into one “resolution” field.
+The evidence must state which dimensions are CSS viewport, screencast pixels, and painted client pixels, and keep DPR/scale semantics separate; do not collapse them into one “resolution” field.
 
 ## Handoff
 

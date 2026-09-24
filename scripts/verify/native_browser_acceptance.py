@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable isolated acceptance check for native browser frame density and scrolling."""
+"""Isolated native geometry/scroll acceptance with best-effort density observations."""
 
 import argparse
 import base64
@@ -7,6 +7,7 @@ import hashlib
 import functools
 import http.server
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -432,6 +433,19 @@ async function probePhysicalSnapshotThroughput(expectedCdp, expectedBinding) {
 
 
 
+def bitmap_density(width, height, css_width, css_height, target_dpr):
+    """Measure quality separately from valid, uniformly scaled frame geometry."""
+    dimensions = (width, height, css_width, css_height, target_dpr)
+    if not all(math.isfinite(value) and value > 0 for value in dimensions):
+        raise RuntimeError(f"invalid native bitmap geometry: {dimensions}")
+    scale_x, scale_y = width / css_width, height / css_height
+    if abs(scale_x - scale_y) > .05:
+        raise RuntimeError(f"distorted native bitmap aspect ratio: {dimensions}")
+    return {"bitmap_width_per_css": scale_x, "bitmap_height_per_css": scale_y,
+            "target_dpr": target_dpr,
+            "at_target_density": abs(scale_x - target_dpr) <= .05 and abs(scale_y - target_dpr) <= .05}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", default=str(REPO / "target/debug/cockpit-tauri"), help="native Cockpit executable")
@@ -455,11 +469,10 @@ def main():
     parser.add_argument("--trace-cdp-overrides", action="store_true", help="log CDP device-metrics sends from only a run-owned helper copy")
     parser.add_argument("--trace-capture-lanes", action="store_true", help="also count screencast and screenshot capture in the run-owned helper copy")
     parser.add_argument("--trace-frame-publication", action="store_true", help="also count helper frame-descriptor publication from only the run-owned helper copy")
-    parser.add_argument("--trace-density-convergence", action="store_true", help="sample bounded native bitmap/paint convergence after the first usable image without relaxing its DPR2 gate")
-    parser.add_argument("--density-diagnostic-continue", action="store_true", help="collect post-scroll evidence after a first-frame DPR2 failure; still fail the run")
+    parser.add_argument("--trace-density-convergence", action="store_true", help="sample first and post-scroll native bitmap density; lower resolution alone is not a failure")
     parser.add_argument("--trace-no-restore-override", action="store_true", help="diagnostic helper copy omits only the post-screenshot identical CDP override; never an acceptance run")
     parser.add_argument("--trace-raster-generation", action="store_true", help="save bounded run-only JPEGs and mutate the raster after the second settled capture; never an acceptance run")
-    parser.add_argument("--trace-physical-screencast-ceiling", action="store_true", help="request physical-sized WebKit screencast JPEGs only in the run-owned helper; never an acceptance run")
+    parser.add_argument("--trace-physical-screencast-ceiling", action="store_true", help="request physical-sized Chromium screencast JPEGs only in the run-owned helper; never an acceptance run")
     parser.add_argument("--trace-snapshot-throughput", action="store_true", help="measure physical snapshot throughput under real scroll alongside native live stream; never an acceptance run")
     args = parser.parse_args()
     if args.sustain_seconds and args.sustain_seconds < 330:
@@ -480,16 +493,14 @@ def main():
         parser.error("--trace-frame-publication requires --trace-capture-lanes and --native-only-open")
     if args.trace_density_convergence and not args.trace_frame_publication:
         parser.error("--trace-density-convergence requires --trace-frame-publication")
-    if args.density_diagnostic_continue and not args.trace_density_convergence:
-        parser.error("--density-diagnostic-continue requires --trace-density-convergence")
-    if args.trace_no_restore_override and not args.density_diagnostic_continue:
-        parser.error("--trace-no-restore-override requires --density-diagnostic-continue")
-    if args.trace_raster_generation and not args.density_diagnostic_continue:
-        parser.error("--trace-raster-generation requires --density-diagnostic-continue")
-    if args.trace_physical_screencast_ceiling and not args.density_diagnostic_continue:
-        parser.error("--trace-physical-screencast-ceiling requires --density-diagnostic-continue")
-    if args.trace_snapshot_throughput and not args.density_diagnostic_continue:
-        parser.error("--trace-snapshot-throughput requires --density-diagnostic-continue")
+    if args.trace_no_restore_override and not args.trace_density_convergence:
+        parser.error("--trace-no-restore-override requires --trace-density-convergence")
+    if args.trace_raster_generation and not args.trace_density_convergence:
+        parser.error("--trace-raster-generation requires --trace-density-convergence")
+    if args.trace_physical_screencast_ceiling and not args.trace_density_convergence:
+        parser.error("--trace-physical-screencast-ceiling requires --trace-density-convergence")
+    if args.trace_snapshot_throughput and not args.trace_density_convergence:
+        parser.error("--trace-snapshot-throughput requires --trace-density-convergence")
     if not args.skip_build:
         for label, command, seconds in (
             ("frontend", ["bun", "run", "build"], 300),
@@ -529,6 +540,10 @@ def main():
     children, driver, frontend = [], None, None
     result = {"session": session, "space": space_label, "fixture_url": fixture_url, "root": str(root),
               "failure": None, "geometries": {}, "paints": {}, "cleanup": []}
+    result["image_quality"] = {
+        "policy": "best_effort", "acceptance": "not_evaluated",
+        "scope": "Density observations only; quality effort, animation and hover responsiveness require separate proof.",
+    }
     resource_samples = []
     sampler_stop = threading.Event()
     sampler = None
@@ -773,8 +788,8 @@ def main():
             and abs(report.get("innerWidth", 0) - geometry["canvas"]["widthCss"]) <= 2
             and abs(report.get("innerHeight", 0) - geometry["canvas"]["heightCss"]) <= 2), None),
             "fixture viewport report matching the first canvas paint", args.timeout, [("WebKitWebDriver", driver_process)])
-        density = {"bitmap_width_per_css": geometry["canvas"]["width"] / geometry["canvas"]["widthCss"],
-                   "bitmap_height_per_css": geometry["canvas"]["height"] / geometry["canvas"]["heightCss"]}
+        density = bitmap_density(geometry["canvas"]["width"], geometry["canvas"]["height"],
+                                 geometry["canvas"]["widthCss"], geometry["canvas"]["heightCss"], metrics["dpr"])
         result["geometries"].update({"first_canvas_viewport": geometry["viewport"],
             "native_canvas": geometry["canvas"], "fixture_first_paint": metrics,
             "bitmap_density": density, "splitter_moved": False})
@@ -806,10 +821,6 @@ def main():
             raise RuntimeError(f"fixture first-paint CSS geometry/DPR disagrees with native canvas: {metrics} vs {geometry['canvas']}")
         if metrics.get("heading") != "Native browser acceptance" or "without doubled CSS width" not in metrics.get("contentText", "") or metrics.get("headingWidth", 0) < metrics["innerWidth"] * .9:
             raise RuntimeError(f"first-paint CSS text/width report is incomplete or distorted: {metrics}")
-        if abs(density["bitmap_width_per_css"] - 2) > .05 or abs(density["bitmap_height_per_css"] - 2) > .05:
-            if not args.density_diagnostic_continue:
-                raise RuntimeError(f"distorted first paint: canvas bitmap density is not DPR2: {density}")
-            result["diagnostic_first_density_failure"] = density
         if args.annotation:
             webdriver.execute("(()=>{const s=document.querySelector('.browser-surface');if(!s)throw Error('browser surface unavailable');s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;s.releasePointerCapture=()=>{};return true})()")
             def draft_opened():
@@ -949,8 +960,8 @@ def main():
             result["hidden_scroll"]["page_reports"] = [item for item in FixtureHandler.state["reports"] if item["received_at"] >= hidden_at][-8:]
             result["hidden_scroll"]["surface"] = webdriver.execute("(()=>{const s=document.querySelector('.browser-surface'),c=document.querySelector('canvas.browser-frame'),r=s?.getBoundingClientRect();return {width:r?.width,height:r?.height,canvas_width:c?.width,canvas_height:c?.height,host_scroll_y:window.scrollY,status:document.querySelector('.browser-toolbar-status')?.textContent}})()")
             surface = result["hidden_scroll"]["surface"]
-            if not surface["width"] or not surface["height"] or abs(surface["canvas_width"] / surface["width"] - 2) > .05 or abs(surface["canvas_height"] / surface["height"] - 2) > .05:
-                raise RuntimeError(f"reopened native canvas did not retain DPR2 image density: {surface}")
+            result["image_quality"]["hidden_scroll_reopened"] = bitmap_density(
+                surface["canvas_width"], surface["canvas_height"], surface["width"], surface["height"], metrics["dpr"])
             wheel_at = time.monotonic()
             webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect();s.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:r.left+120,clientY:r.top+166,deltaX:0,deltaY:120,deltaMode:0}));return true})()")
             try:
@@ -1032,9 +1043,12 @@ def main():
                 def reopened_browser():
                     state = webdriver.execute("(()=>{const r=document.querySelector('.browser-region'),c=document.querySelector('canvas.browser-frame'),b=c?.getBoundingClientRect();return {visible:!!r&&getComputedStyle(r).display!=='none',status:document.querySelector('.browser-toolbar-status')?.textContent,url:document.querySelector('input[aria-label=\"Page URL\"]')?.value,paints:window.__nativePaintTimes.length,marker:c?[...c.getContext('2d').getImageData(4,4,1,1).data].slice(0,3):null,canvas_width:c?.width||0,canvas_height:c?.height||0,css_width:b?.width||0,css_height:b?.height||0}})()")
                     result["lifecycle"]["last_reopen_state"] = state
-                    return state if state["visible"] and state["status"] == "Live browser view" and state["url"] == fixture_url and state["paints"] > hidden_end_paints and state["marker"] and all(abs(a-b)<=8 for a,b in zip(state["marker"], final_marker)) and state["css_width"] and state["css_height"] and abs(state["canvas_width"]/state["css_width"]-2)<=.05 and abs(state["canvas_height"]/state["css_height"]-2)<=.05 else None
+                    return state if state["visible"] and state["status"] == "Live browser view" and state["url"] == fixture_url and state["paints"] > hidden_end_paints and state["marker"] and all(abs(a-b)<=8 for a,b in zip(state["marker"], final_marker)) and state["css_width"] > 0 and state["css_height"] > 0 and state["canvas_width"] > 0 and state["canvas_height"] > 0 else None
                 result["lifecycle"]["reopened"] = wait_until(reopened_browser, "same native browser page and painted marker after show",
                                                                 args.timeout, [("WebKitWebDriver", driver_process)])
+                reopened = result["lifecycle"]["reopened"]
+                result["image_quality"]["sustained_reopened"] = bitmap_density(
+                    reopened["canvas_width"], reopened["canvas_height"], reopened["css_width"], reopened["css_height"], metrics["dpr"])
         result["paints"]["visible_final_marker_rgb"] = final_marker
         if args.nested_wheel:
             # The WebKit driver cannot send OS wheel actions on this compositor.
@@ -1088,19 +1102,14 @@ def main():
             result["density_convergence"]["post_scroll"] = post_scroll
             result["density_convergence"]["post_scroll_observed_seconds"] = round(time.monotonic() - start, 3)
             settled = post_scroll[-1]
-            if not settled["css_width"] or not settled["css_height"] or (
-                abs(settled["bitmap_width"] / settled["css_width"] - metrics["dpr"]) > .05
-                or abs(settled["bitmap_height"] / settled["css_height"] - metrics["dpr"]) > .05
-            ):
-                if not args.density_diagnostic_continue:
-                    raise RuntimeError(f"native canvas lost DPR2 density after settled scroll: {settled}")
-                result["diagnostic_settled_density_failure"] = settled
+            result["image_quality"]["post_scroll"] = bitmap_density(
+                settled["bitmap_width"], settled["bitmap_height"], settled["css_width"], settled["css_height"], metrics["dpr"])
         # Preserve visual evidence from the actual native WebKit window.
         screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
         (root / "native-window.png").write_bytes(base64.b64decode(screenshot))
         result["screenshot"] = str(root / "native-window.png")
-        if result.get("diagnostic_first_density_failure") or result.get("diagnostic_settled_density_failure") or args.trace_no_restore_override or args.trace_raster_generation or args.trace_physical_screencast_ceiling or args.trace_snapshot_throughput:
-            raise RuntimeError("density diagnostic retained a DPR2 failure or used a run-only helper modification")
+        if args.trace_no_restore_override or args.trace_raster_generation or args.trace_physical_screencast_ceiling or args.trace_snapshot_throughput:
+            raise RuntimeError("capture diagnostic used a run-only helper modification; not an acceptance run")
         result["ok"] = True
     except Exception as error:
         result["failure"] = f"{type(error).__name__}: {error}"

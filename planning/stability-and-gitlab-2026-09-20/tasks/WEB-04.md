@@ -3,6 +3,7 @@
 ## Outcome
 
 Complete the supported bidirectional inline browser surface after WEB-02/03: pointer and drag release, wheel/trackpad scrolling, keyboard/text/IME, clipboard, navigation/history/targets, blockers, cursor updates, and explicit controller takeover. Browser input must not duplicate into Herdr terminals or local editors. Browser and native clients expose honest unsupported states for facilities they cannot safely implement.
+Live browser image quality is best effort: keep animation, hover reactions, scrolling, and input active rather than freezing them for sharper frames; follow the canonical current contract and scenarios in [ACCEPTANCE.md](../ACCEPTANCE.md#live-browser-image-quality).
 
 This is the broad A04–A12 increment for issue #9/#10 residual coverage, not permission to weaken Herdr authority or invent a second browser API.
 
@@ -50,6 +51,7 @@ This is the broad A04–A12 increment for issue #9/#10 residual coverage, not pe
 12. For blockers, retain the browser-local pending state while awaiting response, release unrelated input safely, and allow cancel where the underlying facility supports cancellation. Never leave a hidden native dialog holding focus.
 13. Cursor metadata is versioned by target/document/viewport/pointer sample; stationary style changes must update without a compensating pointer event.
 14. The Herdr comparison must check workbench prefix handling, modal/editor focus, browser-to-terminal return, and the absence of duplicate terminal bytes, not merely visual focus styling.
+15. In the canonical quiet, animation-without-input, hover, scroll, and return-to-quiet scenarios, verify that visible content and input reactions remain live; record delivered dimensions separately from CSS viewport/DPR and preserve geometry/input barriers. Do not require a freeze or reject a current frame on density alone. See [ACCEPTANCE.md](../ACCEPTANCE.md#live-browser-image-quality).
 
 Keep this task behavior-focused. Queue high-water, decoder cleanup, and helper restart plateau measurements belong to WEB-06, while hostile credentials/origins belong to WEB-08.
 

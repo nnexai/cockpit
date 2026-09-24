@@ -27,7 +27,7 @@ This is a requirements map, not a pass report. Results live in task evidence ref
 | Real authenticated issue and MR setup/import/refresh/recovery | GLAB-04 | — |
 | Browser hide/show preserves page/drafts; close preserves saved and recoverable unsent work | WEB-01 | WEB-05 |
 | First click and initial Element pick do not require a prior Browse gesture | WEB-02 | WEB-04 |
-| Resize/zoom/DPR sharpness and geometry/matching-frame barrier | WEB-03 | WEB-05 |
+| Best-effort live browser image quality with fresh-content and geometry barriers | WEB-03 | WEB-04, WEB-06, WEB-05 |
 | Full browser input/navigation/ownership/facility behavior | WEB-04 | WEB-08 |
 | Annotation toolbar/gesture/capture/draft/feedback/paste reliability | WEB-05 | WEB-08 |
 | Bounded frame/input/decode/process lifetimes, crash/reconnect/observer isolation | WEB-06 | PERF-01 |
@@ -73,6 +73,16 @@ The existing [A01–A25 matrix](../inline-space-browser-2026-09-13/03-delivery-a
 | A25 | No legacy extension runtime, bounded long-running resources/security | WEB-08 | WEB-06, PERF-01 |
 
 Security negative cases from that plan are WEB-08 requirements; performance protocol and figures are WEB-06/PERF-01 requirements. Browser-only success does not establish WebKit/native input/decode behavior. JPEG stream audio remains absent, not an unimplemented new feature silently added to this campaign. Unsupported file/dialog facilities must have an honest usable refusal, not fake success or invisible deadlock.
+
+## Live browser image quality
+
+This is the canonical current quality contract for WEB-03/04/06 and supersedes earlier requirements for unconditional crispness or exact DPR-matched raster density on the first frame, every frame, or settled frames. A usable first image, correct CSS viewport, and matching identity/geometry remain required. The user amendment is: “attempt to have a sharp image, allow lower resolution to keep up performance.” Existing density-only historical failures remain historical failures; this amendment does not retroactively mark old runs passed or change task status.
+
+Browser pages are live: animation continues without input, pointer motion can trigger hover changes, scrolling changes the visible content, and the page may return to quiet. Keep those behaviors live rather than freezing the page or input to obtain sharper frames. Attempt a genuine quality improvement when safe and affordable, including after activity eases, and record the opportunity and effort. There is no universal sharpness deadline, mandatory constant DPR2, or throughput threshold. A lower-density frame is eligible when it represents current content and satisfies all identity and geometry barriers; density alone never makes it stale. Never hold newer content behind an older sharper image.
+
+For quiet-page, continuous-animation-without-input, hover-change, scrolling, and return-to-quiet scenarios, record requested CSS viewport, actual DPR/scale semantics, delivered image dimensions, evidence of genuine raster detail rather than upscaling alone, visible content freshness, and whether the page's animation/pointer/scroll/input reactions remained live. Record the capture/encode/decode/resource cost and whether a safe, affordable quality opportunity was attempted. Bounded idle/resource behavior remains required; do not infer it from image sharpness or frame rate.
+
+Chromium is the screencast producer; Linux Tauri/WebKit is a native consumer with its own scaling/decode semantics. Report producer and consumer observations separately; Chromium results do not establish WebKit-native scaling or decode behavior. Keep CSS viewport, DPR, screencast pixel dimensions, and painted client dimensions distinct. This quality allowance does not weaken target/document/epoch/lease identity, accepted viewport revision, matching-frame geometry barriers, input gating, or stale-content handling. Capture-as-shown and annotations must preserve pinned PNG/annotation fidelity and must not silently upscale, rebind, or misalign evidence.
 
 ## Platform and evidence policy
 
