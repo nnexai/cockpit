@@ -608,7 +608,7 @@ describe("mounted App mutation and session ordering", () => {
 
     click(button("Create tab"));
     click(button("Commands"));
-    click(button("switch session..."));
+    click(button("Switch session…"));
     await settle();
     selectSession("session-2");
     click(button("Switch"));
@@ -693,9 +693,9 @@ describe("mounted App mutation and session ordering", () => {
     fixture.queueSessions(newer.promise);
 
     click(button("Commands"));
-    click(button("switch session..."));
+    click(button("Switch session…"));
     click(button("Commands"));
-    click(button("switch session..."));
+    click(button("Switch session…"));
     newer.resolve({ sessions: [sessions()[1]] });
     await settle();
     fixture.emitSnapshot("session-2", 1, 1, snapshot("session-2"));
@@ -835,7 +835,7 @@ describe("mounted App mutation and session ordering", () => {
       await settle();
 
       click(button("Commands"));
-      click(button("switch session..."));
+      click(button("Switch session…"));
       await settle();
       selectSession("session-2");
       click(button("Switch"));
