@@ -179,7 +179,7 @@ impl BrowserDraftStore {
             return Ok(public_draft(draft));
         }
         let referenced = self.load_capture_references()?;
-        self.compact_retired(&mut drafts, &referenced, &identity.association_key)?;
+        self.compact_retired(&mut drafts, &referenced, identity)?;
         let active = drafts.iter().filter(|draft| !draft.tombstoned).count();
         if active >= MAX_DRAFTS {
             return Err(InspectionError::new(
@@ -252,17 +252,22 @@ impl BrowserDraftStore {
         Ok(referenced)
     }
 
+    /// Remove empty drafts nobody can use again: retired ones, and ones
+    /// from an earlier browser process, whose pages are gone. An empty
+    /// draft of this process may belong to another open tab and stays.
     fn compact_retired(
         &self,
         drafts: &mut Vec<StoredDraft>,
         referenced: &HashSet<String>,
-        association_key: &str,
+        opening: &BrowserDraftIdentity,
     ) -> Result<(), InspectionError> {
         let removable: HashSet<_> = drafts
             .iter()
             .filter(|draft| {
-                (draft.tombstoned || draft.stale)
-                    && draft.identity.association_key == association_key
+                (draft.tombstoned
+                    || draft.stale
+                    || draft.identity.browser_incarnation != opening.browser_incarnation)
+                    && draft.identity.association_key == opening.association_key
                     && draft.annotations.is_empty()
                     && draft.editor.note_text.is_empty()
                     && draft.editor.note_annotation_id.is_none()
@@ -1753,9 +1758,14 @@ impl BrowserService {
             },
         };
         let feedback = self.feedback.list(&key)?;
-        let deliveries = self
+        let mut deliveries = self
             .feedback
             .list_delivery_statuses(&key, &feedback.captures)?;
+        if self.settle_interrupted_deliveries(&deliveries)? {
+            deliveries = self
+                .feedback
+                .list_delivery_statuses(&key, &feedback.captures)?;
+        }
         Ok(BrowserFeedbackLookup {
             browser,
             feedback,
@@ -2023,6 +2033,34 @@ mod tests {
         for id in ids {
             assert_eq!(store.load_draft(&id).unwrap().unwrap().annotations.len(), 1);
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_drafts_from_an_earlier_browser_do_not_fill_capacity() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let old_incarnation = Uuid::new_v4().to_string();
+        for generation in 1..=MAX_DRAFTS as u64 {
+            let stored = draft(
+                &identity(key, &old_incarnation, "target", generation),
+                Uuid::new_v4().to_string(),
+            );
+            store.write_draft(&stored).unwrap();
+        }
+        let incarnation = Uuid::new_v4().to_string();
+        let current = identity(key, &incarnation, "target", 1);
+        store
+            .open(&current, None)
+            .expect("empty drafts of a closed browser are compacted");
+        assert_eq!(store.list(key).unwrap().drafts.len(), 1);
+        // Empty drafts of the live browser (other tabs) are kept.
+        let other_tab = identity(key, &incarnation, "other", 1);
+        store.open(&other_tab, None).unwrap();
+        store
+            .open(&identity(key, &incarnation, "third", 1), None)
+            .unwrap();
+        assert_eq!(store.list(key).unwrap().drafts.len(), 3);
         std::fs::remove_dir_all(root).unwrap();
     }
 

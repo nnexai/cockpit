@@ -181,6 +181,7 @@ impl BrowserService {
                 max_store_bytes: configuration.feedback_max_store_bytes,
             },
         )?;
+        delivery::note_process_start();
         Ok(Self {
             configuration,
             root: Arc::new(root),

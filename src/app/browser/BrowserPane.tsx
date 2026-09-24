@@ -1923,7 +1923,11 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (!preparedSnapshot || !where || !preparedDraft || !beforeFrame || !preparedSnapshot.document || !preparedSnapshot.viewport) { setMessage("Wait for a confirmed frame and annotations before sending."); return; }
     try {
       const prepared = await command({ type: "capture", command: { location: where, draft_id: preparedDraft.draft_id, draft_revision: preparedDraft.revision, annotation_ids: preparedDraft.annotations.map((annotation) => annotation.id), capture_as_shown: captureAsShown } });
-      if (!prepared || prepared.type !== "capture_prepared") return;
+      if (!prepared || prepared.type !== "capture_prepared") {
+        // Another client may have changed the draft; show what is current.
+        if (associationOwnerRef.current === captureOwner && !captureOwner.sealed) await openDraft();
+        return;
+      }
       const accepted = frameRef.current;
       if (!accepted || accepted.sequence !== prepared.descriptor.frame_sequence || accepted.descriptor.target_id !== prepared.descriptor.target_id || accepted.descriptor.stream_epoch !== prepared.descriptor.stream_epoch || accepted.descriptor.document_generation !== prepared.descriptor.document_generation || accepted.descriptor.viewport_revision !== prepared.descriptor.viewport_revision) { setMessage("Capture pixels changed before composition; retry capture."); return; }
       const png = await pngBase64(preparedDraft.annotations, accepted.descriptor);
@@ -1990,6 +1994,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const capture = async (captureAsShown: boolean): Promise<void> => {
     if (captureInFlightRef.current) return;
     captureInFlightRef.current = true;
+    // An earlier paste's receipt must not read as this Send's outcome.
+    setDeliveryNotice(null);
     try {
       await captureImpl(captureAsShown);
     } finally {

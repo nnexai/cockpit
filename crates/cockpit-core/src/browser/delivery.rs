@@ -17,6 +17,27 @@ const MAX_PASTE_BYTES: usize = 64 * 1024;
 const MAX_IDS: usize = 64 * 64;
 const PASTE_PREFIX: &str = "\u{1b}[200~";
 const PASTE_SUFFIX: &str = "\u{1b}[201~";
+/// A send holds its pending receipt for a few Herdr deadlines at most.
+const PENDING_INTERRUPTED_AFTER_SECONDS: u64 = 120;
+
+/// When this process started, in Unix seconds. A pending receipt written
+/// earlier belongs to a send that can no longer finish here.
+static PROCESS_STARTED: std::sync::LazyLock<u64> = std::sync::LazyLock::new(unix_seconds);
+
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+fn pending_is_interrupted(updated_at: u64, process_started: u64, now: u64) -> bool {
+    updated_at < process_started
+        || now.saturating_sub(updated_at) > PENDING_INTERRUPTED_AFTER_SECONDS
+}
+
+pub(super) fn note_process_start() {
+    std::sync::LazyLock::force(&PROCESS_STARTED);
+}
 
 impl BrowserService {
     pub async fn feedback_image(
@@ -374,6 +395,37 @@ impl BrowserService {
         Ok(())
     }
 
+    /// Mark pending receipts whose send can no longer finish (the process
+    /// that wrote them stopped, or they outlived every Herdr deadline) as
+    /// unknown, so the user can resolve them instead of waiting forever.
+    /// Callers hold the operation lock, so no send of this process is live.
+    pub(super) fn settle_interrupted_deliveries(
+        &self,
+        statuses: &[cockpit_protocol::browser::BrowserFeedbackDeliveryStatus],
+    ) -> Result<bool, InspectionError> {
+        let now = unix_seconds();
+        let mut settled = false;
+        for status in statuses {
+            if status.state != CommentPasteState::Pending {
+                continue;
+            }
+            let Some(mut receipt) = self.feedback.load_delivery(&status.operation_id)? else {
+                continue;
+            };
+            if receipt.state == CommentPasteState::Pending
+                && pending_is_interrupted(receipt.updated_at, *PROCESS_STARTED, now)
+            {
+                receipt.state = CommentPasteState::OutcomeUnknown;
+                receipt.message =
+                    "the paste was interrupted before its outcome was recorded; check the agent before retrying"
+                        .to_owned();
+                self.feedback.save_delivery(receipt)?;
+                settled = true;
+            }
+        }
+        Ok(settled)
+    }
+
     async fn recover_delivery(
         &self,
         association: &str,
@@ -589,6 +641,17 @@ fn bounded_message(message: &str) -> String {
 mod tests {
     use super::strip_annotation_points;
     use serde_json::json;
+
+    #[test]
+    fn a_pending_receipt_is_interrupted_only_when_its_send_cannot_be_live() {
+        let started = 1_000;
+        // Written by an earlier process: that send can never finish.
+        assert!(super::pending_is_interrupted(999, started, 1_001));
+        // Written by this process moments ago: possibly another host's live send.
+        assert!(!super::pending_is_interrupted(1_000, started, 1_030));
+        // Older than every Herdr deadline.
+        assert!(super::pending_is_interrupted(1_000, started, 1_121));
+    }
 
     #[test]
     fn strip_annotation_points_preserves_feedback_metadata() {

@@ -287,3 +287,14 @@ No task was silently waived or called externally blocked merely for lacking proo
 
 - 2026-09-24, from the SETUP-link-first limitations. An MR setup waited 17.4 s after Enter, mostly for three full GitLab reads of the same MR. Herdr's snapshot carries each pane's folder, but Cockpit dropped it, so only worktree Spaces preselected a repository. Owner FLOW-01 (criterion 1).
 - Repair: setup reuses provider results for two minutes; the plan uses metadata and reads the full MR in the background; panes carry their folder and the dialog preselects the containing repository. Paste to ready went from about 26 s to 9.2 s. See the second increment in `runs/run-20260920-a3e9b950/SETUP-link-first.md`.
+
+### OBS-051 — an interrupted browser feedback paste stayed pending forever
+
+- 2026-09-24, WEB-05 A21 run. A gateway killed after writing a `pending` delivery receipt left it pending after restart. The client refuses to replay a pending operation, and the duplicate-risk path is offered only for an unknown outcome, so the saved capture could never be resolved. Owner WEB-05.
+- Repair: the feedback lookup marks pending receipts from an earlier process, or older than two minutes, as unknown. Retry then needs the explicit duplicate-risk acknowledgement and pastes exactly once. See the 2026-09-24 restart section of `runs/run-20260920-a3e9b950/WEB-05.md`.
+
+### OBS-052 — empty old drafts filled the draft limit; stale views after another client's edit
+
+- 2026-09-24, WEB-05 A24 run. Empty drafts left by closing and reopening the browser were never compacted, so the eight-draft limit blocked annotation with only four unsent drafts and no way to discard or recover them. Separately, a client whose draft another client had changed kept showing removed marks after its capture was refused, and a failed Send kept showing the previous "Pasted to …" notice. Owner WEB-05.
+- Repair: compact empty drafts from an earlier browser process; reload the authoritative draft after a refused capture; clear the previous paste notice when Send starts. Browser-verified in the same record.
+- Open, for the user: unsent notes from a page that was closed and reopened are kept but can never be shown again (see the open question in that record).
