@@ -180,3 +180,17 @@ User-directed continuation ("make a plan and go for it"). Fixture: `ui_polish_ru
 **Not covered here.** A14 native freehand, colors and edit; A15/A16 cross-origin iframe, canvas and drift; A17 other screen densities and zoom (earlier attempts could not change the browser harness's device pixel ratio); A20 wrong-Space destination move; A21 retention pruning. Native parity of these repairs is also unverified.
 
 **Cleanup.** Browser sessions `cweb05` and `cweb05b` closed; `ui_polish_runtime.py stop` ended the gateway, page fixture and Herdr (none of PIDs 713438, 713433, 799859 remain); managed Chromium and the helper exited; no process references the root; ports 46617 and 44011 released; the Herdr socket was removed. The root is retained as evidence.
+
+## Unsent notes are discarded with their page — 2026-09-24
+
+User decision: "discard - notes are meant to be temporary on browser pages." When a page opens its draft, the store now removes the association's drafts whose page is gone: those from an earlier browser process, and older documents of the same tab. Other open tabs, and drafts a prepared capture still references, are kept. Saved feedback is untouched.
+
+Fixture `/tmp/cpol-ixsrs5bc`, Herdr `polish-ixsrs5bc` (PID 809520), gateway `127.0.0.1:41887` (PID 809549), page `127.0.0.1:41829` (PID 809519), private browser session `cweb05c`.
+
+| Step | Stored drafts afterwards |
+| --- | --- |
+| Region + note, then Close and Open browser, three times | Each time exactly one draft: the new page's, with no marks. Notes 0. |
+| Region on a page, then navigate to `?next` | One draft, the new document's. |
+| Region + note, Send with no agent, Close and Open | Notes 0; "Saved capture 1 · Rejected" still offered (`WEB-05-reopen-discards-notes.png`, SHA-256 `97ac571d15959bd0f794286c08c8b8d48ed3e011bcd0b64f8f69ba28c3904210`). |
+
+Store tests updated to the new rule (`restarting_discards_the_closed_browsers_unsent_notes`, `opening_new_incarnation_discards_old_pages_but_keeps_referenced_drafts`) plus `a_new_document_in_a_tab_discards_its_previous_page_only`. `cargo test --workspace --exclude cockpit-tauri` 328 passed. Cleanup: browser session closed, fixture stopped, none of the PIDs remain, ports 41887 and 41829 released.

@@ -252,9 +252,11 @@ impl BrowserDraftStore {
         Ok(referenced)
     }
 
-    /// Remove empty drafts nobody can use again: retired ones, and ones
-    /// from an earlier browser process, whose pages are gone. An empty
-    /// draft of this process may belong to another open tab and stays.
+    /// Remove drafts whose page is gone. Browser notes are temporary: once
+    /// a browser closes or a tab shows another document, that page's
+    /// unsent notes are discarded (user decision, 2026-09-24). Retired
+    /// empty drafts go too. Drafts of other open tabs stay, and so does any
+    /// draft a capture still references.
     fn compact_retired(
         &self,
         drafts: &mut Vec<StoredDraft>,
@@ -264,13 +266,16 @@ impl BrowserDraftStore {
         let removable: HashSet<_> = drafts
             .iter()
             .filter(|draft| {
-                (draft.tombstoned
-                    || draft.stale
-                    || draft.identity.browser_incarnation != opening.browser_incarnation)
-                    && draft.identity.association_key == opening.association_key
+                let identity = &draft.identity;
+                let page_gone = identity.browser_incarnation != opening.browser_incarnation
+                    || (identity.target_id == opening.target_id
+                        && identity.document_generation != opening.document_generation);
+                let retired_empty = (draft.tombstoned || draft.stale)
                     && draft.annotations.is_empty()
                     && draft.editor.note_text.is_empty()
-                    && draft.editor.note_annotation_id.is_none()
+                    && draft.editor.note_annotation_id.is_none();
+                identity.association_key == opening.association_key
+                    && (page_gone || retired_empty)
                     && !referenced.contains(&draft.draft_id)
             })
             .map(|draft| draft.draft_id.clone())
@@ -1901,7 +1906,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_new_incarnation_preserves_unsent_work_and_compacts_empty_drafts() {
+    fn opening_new_incarnation_discards_old_pages_but_keeps_referenced_drafts() {
         let (store, root) = test_store();
         let association_key = "0123456789abcdef01234567";
         let other_association_key = "89abcdef0123456701234567";
@@ -1975,24 +1980,13 @@ mod tests {
 
         let current_identity = identity(association_key, &current_incarnation, "target", 1);
         let opened = store.open(&current_identity, None).unwrap();
-        let unsent = store.load_draft(&old_ids[1]).unwrap().unwrap();
-        assert_eq!(unsent.annotations.len(), 1);
-        assert!(!unsent.stale);
-        assert_eq!(unsent.editor.note_text, "unsent note");
+        // Notes are temporary to their page: the closed browser's go.
+        assert!(store.load_draft(&old_ids[1]).unwrap().is_none());
         assert_eq!(opened.document_generation, 1);
         assert!(store.load_preparation(association_key).unwrap().is_some());
         let referenced = store.load_draft(&referenced_id).unwrap().unwrap();
         assert!(!referenced.tombstoned);
         assert!(referenced.stale);
-        assert_eq!(
-            store
-                .load_draft(&old_ids[1])
-                .unwrap()
-                .unwrap()
-                .editor
-                .note_text,
-            "unsent note"
-        );
         for draft_id in old_ids.into_iter().skip(2) {
             assert!(store.load_draft(&draft_id).unwrap().is_none());
         }
@@ -2002,7 +1996,7 @@ mod tests {
     }
 
     #[test]
-    fn restarting_at_capacity_does_not_evict_unsubmitted_annotations() {
+    fn restarting_discards_the_closed_browsers_unsent_notes() {
         let (store, root) = test_store();
         let key = "0123456789abcdef01234567";
         let old_incarnation = Uuid::new_v4().to_string();
@@ -2025,14 +2019,45 @@ mod tests {
             store.write_draft(&stored).unwrap();
         }
         let current = identity(key, &Uuid::new_v4().to_string(), "target", 1);
-        let error = store
+        store
             .open(&current, None)
-            .expect_err("a restart cannot evict unsent work");
-        assert_eq!(error.code, "browser_draft_capacity");
-        assert_eq!(store.list(key).unwrap().drafts.len(), MAX_DRAFTS);
+            .expect("a new browser is never blocked by the closed one's notes");
+        assert_eq!(store.list(key).unwrap().drafts.len(), 1);
         for id in ids {
-            assert_eq!(store.load_draft(&id).unwrap().unwrap().annotations.len(), 1);
+            assert!(store.load_draft(&id).unwrap().is_none());
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_new_document_in_a_tab_discards_its_previous_page_only() {
+        let (store, root) = test_store();
+        let key = "0123456789abcdef01234567";
+        let incarnation = Uuid::new_v4().to_string();
+        let mut marked = |target: &str, generation: u64| {
+            let mut stored = draft(
+                &identity(key, &incarnation, target, generation),
+                Uuid::new_v4().to_string(),
+            );
+            stored.annotations.push(BrowserViewDraftAnnotation {
+                id: Uuid::new_v4().to_string(),
+                kind: BrowserAnnotationKind::Region,
+                color: "#f00".to_owned(),
+                points: vec![BrowserPoint { x: 1.0, y: 1.0 }],
+                bounds: None,
+                evidence: None,
+                comment: Some("unsent".to_owned()),
+            });
+            store.write_draft(&stored).unwrap();
+            stored.draft_id
+        };
+        let old_page = marked("tab", 1);
+        let other_tab = marked("other", 1);
+        store
+            .open(&identity(key, &incarnation, "tab", 2), None)
+            .unwrap();
+        assert!(store.load_draft(&old_page).unwrap().is_none());
+        assert!(store.load_draft(&other_tab).unwrap().is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 
