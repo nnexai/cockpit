@@ -658,7 +658,8 @@
         "083fc7da5b9acd2e02b393838aed6758b8754cdb",
         "9cc51f8d8c48284a8a4000ab0405170bcc5c9549",
         "0b0578498327b0038928f5bb323cc5414a6d95f8",
-        "36adc4e45e73aebfa7cba46e7f4aba45fc5ab9b1"
+        "36adc4e45e73aebfa7cba46e7f4aba45fc5ab9b1",
+        "7cd0ba9b1aa2c74469a3a701599314e6308cda1f"
       ],
       "notes": [
         "OBS-015 batch: BrowserUI owns capture/draft/feedback interaction and stable send operation identity; BrowserRuntime owns frame-bound geometry; BrowserHost owns durable browser delivery. BatchWorkflows alone owns generic comment-paste implementation; its API is unchanged.",
@@ -672,7 +673,8 @@
         "0b0578498327b0038928f5bb323cc5414a6d95f8 repairs saved-feedback association and Element selection; actual Chromium mark/save/reopen passed. The one native DPR2 density failure stopped before native annotation proof. Main retains WEB-05 ownership; all remaining matrix criteria stay open.",
         "OBS-042: Main safely released WEB-05 locks after committed product/evidence, closed owned browser/native fixtures and left no partial product edit. WEB-05 is queued until the native frame-density repair unblocks its real-surface acceptance.",
         "OBS-049: ledger correction — the OBS-042 release note already queued WEB-05, but status/owner still said in_progress/Main and held its four locks, which made FLOW-01/WEB-04/WEB-06/WEB-08 look lock-waiting. Status is now queued and unowned; no criterion changes.",
-        "OBS-051/OBS-052: 36adc4e4 proves A18 gateway restart (same capture ID and PNG hash, one paste, no Enter) and repairs a crash-interrupted pending receipt dead end (now unknown, retried once after explicit duplicate-risk acknowledgement), empty old drafts filling the eight-draft limit, a stale client showing removed marks, and a stale paste notice. Browser-verified; native parity unverified. Remaining: A14 native gestures, A15/A16 cross-origin iframe, canvas and drift, A17 multi-DPR/zoom, A20 wrong-Space move, A21 retention, and the user decision on unsent notes from a closed and reopened page."
+        "OBS-051/OBS-052: 36adc4e4 proves A18 gateway restart (same capture ID and PNG hash, one paste, no Enter) and repairs a crash-interrupted pending receipt dead end (now unknown, retried once after explicit duplicate-risk acknowledgement), empty old drafts filling the eight-draft limit, a stale client showing removed marks, and a stale paste notice. Browser-verified; native parity unverified. Remaining: A14 native gestures, A15/A16 cross-origin iframe, canvas and drift, A17 multi-DPR/zoom, A20 wrong-Space move, A21 retention, and the user decision on unsent notes from a closed and reopened page.",
+        "7cd0ba9b: user decision — unsent browser notes are temporary to their page; drafts of a closed browser or an earlier document in the same tab are discarded when the new page opens its draft (saved feedback kept). Browser-verified; A18's 'restart retains drafts' is now read as retaining saved captures, not page notes."
       ]
     },
     {
