@@ -230,13 +230,15 @@
         "runs/run-20260920-a3e9b950/BATCH-FINAL.md",
         "runs/run-20260920-a3e9b950/FLOW-01.md",
         "runs/run-20260920-a3e9b950/FLOW-01-OBS039-green.json",
-        "runs/run-20260920-a3e9b950/FLOW-01-paste-reconciliation.md"
+        "runs/run-20260920-a3e9b950/FLOW-01-paste-reconciliation.md",
+        "runs/run-20260920-a3e9b950/FLOW-01-restart-and-deadlines.md"
       ],
       "commits": [
         "23a6aaad08992807b276050c7cc24ed7ff6d8e78",
         "5800d5b45822b9aea5e5bfc731c7e84678b0b040",
         "e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c",
-        "35bb60bceb551de0a7335933248d375aa85e5cc4"
+        "35bb60bceb551de0a7335933248d375aa85e5cc4",
+        "6cff260298eddb1764e96fc3456a59c20f605c46"
       ],
       "notes": [
         "OBS-015 consolidated batch accepted in AUTORUN.md. BatchWorkflows owns non-browser workflow implementation, preserving returned Context/Review/terminal fixes and delivered setup/source contracts. No validation during writing; delegated integrated verification follows all writers.",
@@ -244,7 +246,8 @@
         "2026-09-23 isolated browser/Herdr slice: reviewed companion snapshot, saved line comment, stale-source refusal without dispatch, explicit re-preparation, exact real Pi input without Enter, and browser reload persistence passed; FLOW-01 remains blocked on native and broader matrices.",
         "OBS-039: committed e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c removed duplicate global Pane, retained Commands/local pane actions, exercised a real split and invalid rename in private Chromium, reconciled Herdr order/input ownership, and verified native WebKit menu; FLOW-01 Review/native workflow gates remain open.",
         "OBS-042 queued: native parity, Review scopes, borrowed/dirty lifecycle and failure retention remain unexecuted. No unavailable external prerequisite; prior owner released locks at a safe checkpoint.",
-        "OBS-044: 35bb60bceb551de0a7335933248d375aa85e5cc4 repairs the lost-response reconciliation dead end and proves browser criteria 6/7 with real Pi agents: stale target refused, browser- and Herdr-side lost responses cause no duplicate, server-enforced duplicate-risk acknowledgement, Mark pasted without a resend. Also re-verifies that Pi start no longer raises the snapshot Recovery alert. Native parity, Herdr/gateway restart with a pending paste, provider import and criteria 1-5/8 remain open; FLOW-01 stays queued."
+        "OBS-044: 35bb60bceb551de0a7335933248d375aa85e5cc4 repairs the lost-response reconciliation dead end and proves browser criteria 6/7 with real Pi agents: stale target refused, browser- and Herdr-side lost responses cause no duplicate, server-enforced duplicate-risk acknowledgement, Mark pasted without a resend. Also re-verifies that Pi start no longer raises the snapshot Recovery alert. Native parity, Herdr/gateway restart with a pending paste, provider import and criteria 1-5/8 remain open; FLOW-01 stays queued.",
+        "OBS-045/OBS-046: 6cff260298eddb1764e96fc3456a59c20f605c46 proves browser gateway-crash recovery for criterion 7 (a pending paste receipt recovers to outcome_unknown with no resend; an acknowledged retry delivers exactly one copy). It also repairs two setup defects: Herdr mutations shared a 2 s deadline, so large-repository worktree setup reported a false unknown outcome; and depth-first discovery listed 26 of 70 repositories in the user's root. The delivered-then-crash branch, Herdr restart, native parity, provider import and the remaining criteria stay open; FLOW-01 stays queued."
       ]
     },
     {
