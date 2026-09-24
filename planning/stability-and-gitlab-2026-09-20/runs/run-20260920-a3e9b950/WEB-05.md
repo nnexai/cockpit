@@ -194,3 +194,20 @@ Fixture `/tmp/cpol-ixsrs5bc`, Herdr `polish-ixsrs5bc` (PID 809520), gateway `127
 | Region + note, Send with no agent, Close and Open | Notes 0; "Saved capture 1 · Rejected" still offered (`WEB-05-reopen-discards-notes.png`, SHA-256 `97ac571d15959bd0f794286c08c8b8d48ed3e011bcd0b64f8f69ba28c3904210`). |
 
 Store tests updated to the new rule (`restarting_discards_the_closed_browsers_unsent_notes`, `opening_new_incarnation_discards_old_pages_but_keeps_referenced_drafts`) plus `a_new_document_in_a_tab_discards_its_previous_page_only`. `cargo test --workspace --exclude cockpit-tauri` 328 passed. Cleanup: browser session closed, fixture stopped, none of the PIDs remain, ports 41887 and 41829 released.
+
+## Native parity of today's repairs — 2026-09-24
+
+`native_browser_acceptance.py` runs the Linux Tauri/WebKit app in its own Niri compositor, private Herdr and gateway. The agent was the same run-owned raw-terminal receiver named `codex`. It shows as agent status `unknown` rather than `idle`, so the harness now accepts either; the check is that Herdr recognizes the agent, and Cockpit's delivery does not require idle.
+
+| Run (root) | Variant | Result |
+| --- | --- | --- |
+| `cnative-2vsz7_dh` | agent | Stopped at the harness's idle-only agent wait (before this harness change). |
+| `cnative-5c7kqwt8`, `cnative-ggskdb5q` | agent | Paste accepted: 1 bracketed frame, no Enter, no raw points, PNG 1348×524. Then **failed**: a DOM-dispatched Browse click after the paste reached no remote page (`commands: []`, pane controlled). |
+| `cnative-wakla2yr` | no agent | Passed (rejected capture retained, routed pointer delivered). |
+| `cnative-x6zkanqr`, `cnative-gxp25m8b`, `cnative-_9tfgavq` | agent | Passed end to end, including the routed click after the paste. |
+
+Final agent run `cnative-_9tfgavq`: capture `e8bf3981-e185-43b2-a720-cb5459ceff41`, operation `browser-feedback-e8bf3981-…`, accepted, 2,858 bytes, PNG 1348×524 SHA-256 `8a309564ffa7c47d4d6d7e4c0fb5e16ee5f92c609aa07a03623376faa8cffe03`, captured at DPR 2 (`WEB-05-native-agent-paste-dpr2.png`). Two agent runs produced a 674×262 PNG at the same viewport. This is the density variation OBS-043 allows, not an A17 pass across zoom and resize.
+
+**Intermittent native input after a paste (not repaired).** Two of five agent runs lost the first Browse click after the paste. A real Chromium check of the same sequence (paste, then Browse clicks with real and DOM-dispatched pointers on the fixture counter, `cpol-ikolm92a`) delivered every click, so this is native-only timing. Recorded as OBS-053 for WEB-04 input ownership.
+
+**Leftovers not owned by this run.** Eight roots from earlier native runs (`cnative-nit5l_21`, `-uq8zu8f5`, `-kxoym1f7`, `-k7duzshr`, `-hn4bck_g`, `-9vbntao8`, `-4clcg1d_`, `-e3h7dcuh`), started 00:55–02:43, still have managed Chrome and helper processes (80 chrome, 8 node). None of this run's seven native roots or the web fixture left a process. They were not stopped because their ownership is not this run's; they are evidence for WEB-06 lifecycle cleanup.

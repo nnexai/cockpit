@@ -298,3 +298,8 @@ No task was silently waived or called externally blocked merely for lacking proo
 - 2026-09-24, WEB-05 A24 run. Empty drafts left by closing and reopening the browser were never compacted, so the eight-draft limit blocked annotation with only four unsent drafts and no way to discard or recover them. Separately, a client whose draft another client had changed kept showing removed marks after its capture was refused, and a failed Send kept showing the previous "Pasted to …" notice. Owner WEB-05.
 - Repair: compact empty drafts from an earlier browser process; reload the authoritative draft after a refused capture; clear the previous paste notice when Send starts. Browser-verified in the same record.
 - Open, for the user: unsent notes from a page that was closed and reopened are kept but can never be shown again (see the open question in that record).
+
+### OBS-053 — native Browse click sometimes lost right after a feedback paste; leaked native browser helpers
+
+- 2026-09-24, WEB-05 native parity runs. In two of five native agent runs, the first DOM-dispatched Browse click after a successful paste produced no browser command although the pane held control; the other three passed, and the same sequence in Chromium always delivered. The paste moves Herdr focus to the agent pane, so a focus/ownership race is the likely area. Owner WEB-04 (input ownership). Not repaired.
+- Eight native harness roots from 00:55–02:43 on 2026-09-24 still have managed Chrome and helper processes; this run's native roots left none. Owner WEB-06 (helper lifecycle). Not stopped here because they are not this run's resources; the user may remove them.

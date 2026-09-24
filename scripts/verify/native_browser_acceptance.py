@@ -981,7 +981,7 @@ def main():
                     snapshot = herdr_request(session_socket, "session.snapshot", {})["snapshot"]
                     return next((agent for agent in snapshot["agents"]
                         if agent["pane_id"] == pane_id and agent["workspace_id"] == space_id
-                        and agent["agent"] == "codex" and agent["agent_status"] == "idle"), None)
+                        and agent["agent"] == "codex" and agent["agent_status"] in ("idle", "unknown")), None)
                 agent = wait_until(agent_ready, "run-owned Herdr-recognized terminal agent", 5)
                 if not paste_path.exists() or paste_path.stat().st_size:
                     raise RuntimeError("the private agent receiver had input before feedback")
