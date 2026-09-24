@@ -434,7 +434,11 @@
   .review-pane .review-toolbar .viewer-segmented { margin-left: auto; }
   .context-viewer .context-markdown-body { padding-inline: 20px; }
   .context-viewer .context-document-header { padding-inline: 20px; }
-  .review-pane .review-toolbar select { max-width: 125px; }
+  .review-pane .review-toolbar select { min-width: 72px; max-width: 125px; flex: 0 1 auto; }
+  .review-pane .viewer-overview-label { display: none; }
+}
+@container (max-width: 380px) {
+  .review-pane .review-toolbar { flex-wrap: wrap; overflow: visible; }
 }
 .viewer-tree-search { color: var(--text-muted); border-bottom: 1px solid var(--border); font-size: var(--font-size-2xs); }
 .viewer-tree-search > summary { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 12px; list-style: none; cursor: pointer; }
