@@ -703,10 +703,8 @@ impl BrowserDraftStore {
             submission,
             last_error: None,
         };
-        atomic_write_json(&self.dir()?, &name, &stored)
-            .map_err(|error| InspectionError::new("browser_draft_pending", error.to_string()))
+        self.write_pending(&stored)
     }
-
     fn save_pending_locked(
         &self,
         association_key: &str,
@@ -726,7 +724,6 @@ impl BrowserDraftStore {
         self.remove_pending(association_key)?;
         Ok(BrowserViewCaptureOutcome::Saved { saved })
     }
-
     fn apply_capture_receipt(
         &self,
         pending: &StoredPendingCapture,
@@ -783,6 +780,7 @@ impl BrowserDraftStore {
         self.write_draft(&draft)
     }
 
+
     fn dir(&self) -> Result<cap_std::fs::Dir, InspectionError> {
         open_dir_nofollow_absolute(&self.root)
             .map_err(|error| InspectionError::new("browser_draft_read", error.to_string()))
@@ -834,6 +832,7 @@ impl BrowserDraftStore {
 
     fn write_draft(&self, draft: &StoredDraft) -> Result<(), InspectionError> {
         validate_stored_draft(&draft.draft_id, draft)?;
+        ensure_record_size(draft, MAX_DRAFT_BYTES, "browser_draft_capacity", "Draft exceeds its durable storage limit")?;
         atomic_write_json(&self.dir()?, &draft_name(&draft.draft_id), draft)
             .map_err(|error| InspectionError::new("browser_draft_write", error.to_string()))
     }
@@ -886,10 +885,24 @@ impl BrowserDraftStore {
     }
 
     fn write_pending(&self, pending: &StoredPendingCapture) -> Result<(), InspectionError> {
+        ensure_record_size(pending, MAX_PENDING_BYTES, "browser_draft_capacity", "Pending capture exceeds its durable storage limit")?;
         atomic_write_json(&self.dir()?, &pending_name(&pending.association_key), pending)
             .map_err(|error| InspectionError::new("browser_draft_pending", error.to_string()))
     }
+}
 
+fn ensure_record_size<T: Serialize>(
+    value: &T,
+    limit: u64,
+    code: &str,
+    message: &str,
+) -> Result<(), InspectionError> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| InspectionError::new(code, error.to_string()))?;
+    if bytes.len() as u64 > limit {
+        return Err(InspectionError::new(code, message));
+    }
+    Ok(())
 }
 
 fn stored_identity(identity: &BrowserDraftIdentity) -> StoredIdentity {
@@ -1665,6 +1678,105 @@ mod tests {
         assert_eq!(recovered.annotations[0].comment.as_deref(), Some("newer annotation"));
         assert_eq!(recovered.editor.note_text, "newer note");
         assert!(recovered.consumed_annotation_ids.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn oversized_revision_is_rejected_without_replacing_recoverable_draft() {
+        let (store, root) = test_store();
+        let owner = identity(
+            "0123456789abcdef01234567",
+            &Uuid::new_v4().to_string(),
+            "target",
+            1,
+        );
+        let original_id = Uuid::new_v4().to_string();
+        let original = draft(&owner, original_id.clone());
+        store.write_draft(&original).unwrap();
+
+        let mut oversized = original.clone();
+        oversized.revision = 2;
+        for _ in 0..64 {
+            oversized.annotations.push(BrowserViewDraftAnnotation {
+                id: Uuid::new_v4().to_string(),
+                kind: BrowserAnnotationKind::Freehand,
+                color: "#123456".to_owned(),
+                points: vec![BrowserPoint { x: 1.0, y: 2.0 }; 1_024],
+                bounds: None,
+                evidence: None,
+                comment: Some("x".repeat(32 * 1024)),
+            });
+        }
+
+        let error = store.write_draft(&oversized).expect_err("oversized revision must not become unrecoverable");
+        assert_eq!(error.code, "browser_draft_capacity");
+        let recovered = store.load_draft(&original_id).unwrap().unwrap();
+        assert_eq!(recovered.revision, original.revision);
+        assert!(recovered.annotations.is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn oversized_pending_capture_does_not_replace_retryable_png() {
+        let (store, root) = test_store();
+        let association_key = "0123456789abcdef01234567";
+        let browser_incarnation = Uuid::new_v4().to_string();
+        let context = BrowserCaptureContext {
+            association_key: association_key.to_owned(),
+            session_id: "session".to_owned(),
+            space_id: "space".to_owned(),
+            space_label: "Space".to_owned(),
+            playwright_session: "playwright".to_owned(),
+            working_directory: "/tmp".to_owned(),
+            invocation: "test".to_owned(),
+            browser_instance: browser_incarnation.clone(),
+            inline_provenance: None,
+        };
+        let submission = BrowserCaptureSubmission {
+            association_key: association_key.to_owned(),
+            browser_instance: browser_incarnation.clone(),
+            capture_id: Uuid::new_v4().to_string(),
+            page: BrowserPageEvidence {
+                url: "https://example.test".to_owned(),
+                title: "Example".to_owned(),
+                tab_id: None,
+                document_id: "document".to_owned(),
+                captured_at: "now".to_owned(),
+                viewport: BrowserViewport {
+                    width: 800.0,
+                    height: 600.0,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    device_pixel_ratio: 1.0,
+                    visual_scale: 1.0,
+                },
+                image_width: 800,
+                image_height: 600,
+            },
+            annotations: Vec::new(),
+            png_base64: "exact retry bytes".to_owned(),
+        };
+        let mut pending = StoredPendingCapture {
+            format_version: FORMAT_VERSION,
+            association_key: association_key.to_owned(),
+            browser_incarnation,
+            draft_id: Uuid::new_v4().to_string(),
+            draft_revision: 1,
+            annotation_ids: Vec::new(),
+            context,
+            submission,
+            last_error: None,
+        };
+        let original_capture_id = pending.submission.capture_id.clone();
+        store.write_pending(&pending).unwrap();
+        pending.submission.capture_id = Uuid::new_v4().to_string();
+        pending.submission.png_base64 = "x".repeat(MAX_PENDING_BYTES as usize);
+
+        let error = store.write_pending(&pending).expect_err("oversized pending record must be rejected");
+        assert_eq!(error.code, "browser_draft_capacity");
+        let retry = store.load_pending(association_key).unwrap().unwrap();
+        assert_eq!(retry.submission.capture_id, original_capture_id);
+        assert_eq!(retry.submission.png_base64, "exact retry bytes");
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }

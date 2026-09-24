@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewEvent, BrowserViewFrameDescriptor, BrowserViewSnapshot, BrowserViewViewportState } from "../../protocol/generated/v1";
+import type { BrowserDraftRecoveryRequest, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftState, BrowserViewEvent, BrowserViewFrameDescriptor, BrowserViewSnapshot, BrowserViewViewportState } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, CockpitClient } from "../../client/CockpitClient";
 import { BrowserPane } from "./BrowserPane";
 
@@ -32,7 +32,7 @@ function packet(frame: BrowserViewFrameDescriptor): BrowserViewFramePacket {
   return { descriptor: frame, jpeg: jpeg.slice().buffer, ack: vi.fn(), discard: vi.fn() };
 }
 
-const accepted = (request: BrowserViewCommandRequest): BrowserViewCommandResponse => ({ status: "accepted", view_id: "view", stream_epoch: 1, request_id: request.request_id, outcome: { type: "none" } });
+const accepted = (request: BrowserViewCommandRequest, outcome: BrowserViewCommandOutcome = { type: "none" }): BrowserViewCommandResponse => ({ status: "accepted", view_id: "view", stream_epoch: 1, request_id: request.request_id, outcome });
 
 describe("BrowserPane wheel recovery", () => {
   let root: Root | null = null;
@@ -239,5 +239,168 @@ describe("BrowserPane wheel recovery", () => {
     });
     expect(client.openBrowserView).toHaveBeenCalledTimes(1);
     expect(close).not.toHaveBeenCalled();
+  });
+  it("restores a retained annotation when control changes during draft inventory", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    let emitEvent!: (event: BrowserViewEvent) => void;
+    let emitFrame!: (frame: BrowserViewFramePacket) => void;
+    let releaseInventory!: () => void;
+    const inventoryGate = new Promise<void>((resolve) => { releaseInventory = resolve; });
+    const commands: BrowserViewCommandRequest[] = [];
+    const retained: BrowserViewDraftState = {
+      draft_id: "retained", target_id: "target", document_generation: 1, revision: 3,
+      annotations: [{ id: "persisted-region", kind: "region", color: "#2a9d55", points: [{ x: 10, y: 10 }, { x: 100, y: 90 }], bounds: { x: 10, y: 10, width: 90, height: 80 }, evidence: null, comment: null }],
+      freshness: "fresh", stale: false, editor: { selected_annotation_id: null, notes_open: false, note_annotation_id: null, note_text: "" },
+    };
+    const client = {
+      openBrowserView: vi.fn(async (_request, onEvent, onFrame) => {
+        emitEvent = onEvent;
+        emitFrame = onFrame;
+        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
+        return { command: async (request: BrowserViewCommandRequest): Promise<BrowserViewCommandResponse> => {
+          commands.push(request);
+          if (request.command.type !== "draft") return accepted(request);
+          if (request.command.command.type === "list") {
+            await inventoryGate;
+            return accepted(request, { type: "draft_inventory", inventory: { drafts: [retained], active_draft_limit: 8, pending_capture: null } });
+          }
+          if (request.command.command.type === "open") return accepted(request, { type: "draft", draft: retained });
+          return accepted(request);
+        }, close: vi.fn() };
+      }),
+    } as unknown as CockpitClient;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 4, height: 3, close: vi.fn() })));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: "pane", endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(commands.some(({ command }) => command.type === "draft" && command.command.type === "list")).toBe(true);
+    await act(async () => {
+      emitFrame(packet(descriptor(1, 1, 0)));
+      emitEvent({ type: "control_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, control: { ...snapshot().control, lease_generation: 5 } });
+      releaseInventory();
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    expect(commands.filter(({ command }) => command.type === "draft" && command.command.type === "open").map(({ command }) => command.type === "draft" && command.command.type === "open" ? [command.command.draft_id, command.context.lease_generation] : null)).toEqual([["retained", 5]]);
+    expect(host.querySelector("rect.browser-annotation-region")?.getAttribute("stroke")).toBe("#2a9d55");
+  });
+  it("retires unsubmitted marks on document navigation without a stale notes list", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    let emitEvent!: (event: BrowserViewEvent) => void;
+    const oldDraft: BrowserViewDraftState = {
+      draft_id: "older-page", target_id: "target", document_generation: 1, revision: 4,
+      annotations: [{ id: "unsent-region", kind: "region", color: "#2a9d55", points: [{ x: 10, y: 10 }, { x: 100, y: 90 }], bounds: { x: 10, y: 10, width: 90, height: 80 }, evidence: null, comment: "Unsent navigation note" }],
+      freshness: "stale", stale: true, editor: { selected_annotation_id: "unsent-region", notes_open: false, note_annotation_id: "unsent-region", note_text: "Unsent navigation note" },
+    };
+    const newDraft: BrowserViewDraftState = {
+      ...oldDraft, draft_id: "new-page", document_generation: 2, revision: 1, annotations: [],
+      freshness: "fresh", stale: false, editor: { selected_annotation_id: null, notes_open: false, note_annotation_id: null, note_text: "" },
+    };
+    let storedDrafts = [oldDraft, newDraft];
+    const recovery = vi.fn(async (request: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> => {
+      if (request.action.type === "list") return { type: "draft_inventory", inventory: { drafts: storedDrafts, active_draft_limit: 8, pending_capture: null } };
+      if (request.action.type === "discard_draft" && request.action.draft_id === oldDraft.draft_id && request.action.expected_revision === oldDraft.revision) {
+        storedDrafts = [newDraft];
+        return { type: "none" };
+      }
+      throw new Error(`Unexpected recovery mutation: ${request.action.type}`);
+    });
+    const client = {
+      browserDraftRecovery: recovery,
+      openBrowserView: vi.fn(async (_request, onEvent) => {
+        emitEvent = onEvent;
+        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
+        return { command: async (request: BrowserViewCommandRequest) => {
+          if (request.command.type !== "draft") return accepted(request);
+          if (request.command.command.type === "list") return accepted(request, { type: "draft_inventory", inventory: { drafts: [oldDraft, newDraft], active_draft_limit: 8, pending_capture: null } });
+          return accepted(request, { type: "draft", draft: request.command.context.document_generation === 1 ? oldDraft : newDraft });
+        }, close: vi.fn() };
+      }),
+    } as unknown as CockpitClient;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host.querySelector(".browser-annotation-notes")?.getAttribute("aria-label")).toBe("Notes 1");
+    await act(async () => {
+      emitEvent({ type: "document_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, document: { target_id: "target", frame_id: "new-frame", document_generation: 2, frame_generation: 2 } });
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    expect(host.querySelector(".browser-annotation-notes")?.getAttribute("aria-label")).toBe("Notes 0");
+    expect(recovery.mock.calls.filter(([request]) => request.action.type === "discard_draft").map(([request]) => request.action.type === "discard_draft" ? [request.action.draft_id, request.action.expected_revision] : null)).toEqual([["older-page", 4]]);
+    expect(storedDrafts).toEqual([newDraft]);
+    expect(host.querySelector(".browser-annotation")).toBeNull();
+    expect(host.querySelector(".browser-retained-drafts")).toBeNull();
+  });
+  it("clears the acknowledged latest draft revision after a pending editor save", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    let releaseEditor!: () => void;
+    const editorGate = new Promise<void>((resolve) => { releaseEditor = resolve; });
+    const marked: BrowserViewDraftState = {
+      draft_id: "marked", target_id: "target", document_generation: 1, revision: 2,
+      annotations: [{ id: "region", kind: "region", color: "#d62828", points: [{ x: 10, y: 10 }, { x: 100, y: 90 }], bounds: { x: 10, y: 10, width: 90, height: 80 }, evidence: null, comment: "Durable note" }],
+      freshness: "fresh", stale: false, editor: { selected_annotation_id: "region", notes_open: false, note_annotation_id: "region", note_text: "Durable note" },
+    };
+    const clean = { ...marked, draft_id: "clean", revision: 1, annotations: [],
+      editor: { selected_annotation_id: null, notes_open: false, note_annotation_id: null, note_text: "" } };
+    let stored: BrowserViewDraftState[] = [marked];
+    const recovery = vi.fn(async (request: BrowserDraftRecoveryRequest): Promise<BrowserViewCommandOutcome> => {
+      if (request.action.type === "list") return { type: "draft_inventory", inventory: { drafts: stored, active_draft_limit: 8, pending_capture: null } };
+      if (request.action.type === "set_editor") {
+        await editorGate;
+        stored = [{ ...marked, revision: 3, editor: request.action.editor }];
+        return { type: "draft", draft: stored[0] };
+      }
+      if (request.action.type === "discard_draft") {
+        if (request.action.draft_id !== "marked" || request.action.expected_revision !== stored[0]?.revision) throw new Error("draft revision conflict");
+        stored = [];
+        return { type: "none" };
+      }
+      throw new Error(`Unexpected recovery mutation: ${request.action.type}`);
+    });
+    const client = {
+      browserDraftRecovery: recovery,
+      openBrowserView: vi.fn(async (_request, onEvent) => {
+        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: snapshot() });
+        return { command: async (request: BrowserViewCommandRequest) => {
+          if (request.command.type !== "draft") return accepted(request);
+          if (request.command.command.type === "list") return accepted(request, { type: "draft_inventory", inventory: { drafts: stored, active_draft_limit: 8, pending_capture: null } });
+          return accepted(request, { type: "draft", draft: stored[0] ?? clean });
+        }, close: vi.fn() };
+      }),
+    } as unknown as CockpitClient;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host.querySelector(".browser-annotation-notes")?.getAttribute("aria-label")).toBe("Notes 1");
+    await act(async () => {
+      const editor = host!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Annotation note"]')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editor, "New editor text");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(recovery.mock.calls.some(([request]) => request.action.type === "set_editor")).toBe(true));
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>('button[aria-label="Remove selected annotation or Control-click to discard draft"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+      releaseEditor();
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    await vi.waitFor(() => expect(host!.querySelector(".browser-annotation-notes")?.getAttribute("aria-label")).toBe("Notes 0"));
+    expect(recovery.mock.calls.filter(([request]) => request.action.type === "discard_draft").map(([request]) => request.action.type === "discard_draft" ? request.action.expected_revision : null)).toEqual([3]);
+    expect(stored).toEqual([]);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 });

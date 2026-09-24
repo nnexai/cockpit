@@ -175,6 +175,12 @@
   padding: 0;
 }
 
+.browser-annotation-notes {
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
 .browser-annotation-toolbar > button.browser-send-annotations {
   margin-left: auto;
 }

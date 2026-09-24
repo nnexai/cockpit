@@ -92,6 +92,7 @@ const MAX_INPUT_JOBS = 128;
 const deliveryOperationId = (captureId: string): string => `browser-feedback-${captureId}`;
 type DeliveryState = BrowserFeedbackDeliveryStatus["state"];
 const COLORS = ["#d62828", "#1769aa", "#2a9d55", "#c27803", "#7c3aed"] as const;
+const MAX_ANNOTATION_POINTS = 8_192; // Must not exceed BrowserView's draft point limit.
 const TOLERANCE = 1.5;
 const annotationIconPaths = {
   browse: "M2 1.5 14 9.5 9.2 10.6 12 14.8 10.1 16 7.3 11.8 4.5 14.8Z",
@@ -162,12 +163,17 @@ function simplify(points: BrowserPoint[]): BrowserPoint[] {
     const ratio = dx === 0 && dy === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / (dx * dx + dy * dy)));
     const x = point.x - from.x - ratio * dx; const y = point.y - from.y - ratio * dy; return x * x + y * y;
   };
-  const visit = (from: number, to: number): void => {
+  const ranges = [0, points.length - 1];
+  while (ranges.length) {
+    const to = ranges.pop()!; const from = ranges.pop()!;
     let maximum = TOLERANCE * TOLERANCE; let index = -1;
-    for (let candidate = from + 1; candidate < to; candidate += 1) { const distance = squared(points[candidate], points[from], points[to]); if (distance > maximum) { maximum = distance; index = candidate; } }
-    if (index >= 0) { kept[index] = 1; visit(from, index); visit(index, to); }
-  };
-  visit(0, points.length - 1); return points.filter((_, index) => kept[index] === 1);
+    for (let candidate = from + 1; candidate < to; candidate += 1) {
+      const distance = squared(points[candidate], points[from], points[to]);
+      if (distance > maximum) { maximum = distance; index = candidate; }
+    }
+    if (index >= 0) { kept[index] = 1; ranges.push(from, index, index, to); }
+  }
+  return points.filter((_, index) => kept[index] === 1);
 }
 function context(snapshot: BrowserViewSnapshot) {
   return snapshot.document && snapshot.displayed_target_id ? { target_id: snapshot.displayed_target_id, document_generation: snapshot.document.document_generation, lease_generation: snapshot.control.lease_generation } : null;
@@ -216,6 +222,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const elementIntentRef = useRef<ElementInspectionIntent | null>(null);
   const pendingElementClientPointRef = useRef<{ clientX: number; clientY: number; targetId: string; documentGeneration: number; viewportRevision: number } | null>(null);
   const inspectRequestRef = useRef(0);
+  const inspectionNoticeRef = useRef<string | null>(null);
   const hoverInspectTimerRef = useRef<number | null>(null);
   const hoverInspectPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const selectingElementRef = useRef(false);
@@ -236,6 +243,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const previousAssociationOwnerKeyRef = useRef<string | null>(null);
   const [status, setStatus] = useState<PaneStatus>(visible ? "loading" : "hidden");
   const [message, setMessage] = useState<string | null>(null);
+  const [annotationNotice, setAnnotationNotice] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<BrowserViewSnapshot | null>(null);
   const [frame, setFrame] = useState<{ descriptor: BrowserViewFramePacket["descriptor"]; sequence: number } | null>(null);
   const [pendingCapture, setPendingCapture] = useState<BrowserViewPendingCapture | null>(null);
@@ -391,7 +399,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     return runInputJobs();
   }, [runInputJobs]);
   const flushInput = runInputJobs;
-  const command = useCallback(async (value: BrowserViewCommand): Promise<BrowserViewCommandOutcome | null> => {
+  const command = useCallback(async (value: BrowserViewCommand, stillCurrent?: () => boolean): Promise<BrowserViewCommandOutcome | null> => {
     if (!liveInputEnabledRef.current) return null;
     const stream = streamRef.current; const identity = identityRef.current;
     if (!stream || !identity) { setMessage("Browser controls are still connecting."); return null; }
@@ -399,7 +407,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (!liveInputEnabledRef.current) return null;
       const response = await stream.command({ view_id: identity.id, stream_epoch: identity.epoch, request_id: newId("browser-command"), command: value });
       if (!liveInputEnabledRef.current) return null;
-      if (identityRef.current !== identity) return null;
+      if (identityRef.current !== identity || (stillCurrent && !stillCurrent())) return null;
       if (response.status !== "accepted") {
         if ("code" in response && response.code === "stale_input_sequence") {
           inputSequence.current = snapshotRef.current?.control.next_input_sequence ?? 1;
@@ -409,13 +417,17 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         }
         if (response.status === "stale") return null;
         if (response.status === "unsupported") {
+          const notice = `Input unsupported: ${response.message}`;
+          inspectionNoticeRef.current = value.type === "inspect" ? notice : null;
           setStatus("unsupported");
-          setMessage(`Input unsupported: ${response.message}`);
+          setMessage(notice);
         } else if (response.status === "rejected") {
+          inspectionNoticeRef.current = null;
           errorRef.current = true;
           setStatus("error");
           setMessage(`Input rejected: ${response.message}`);
         } else if (response.status === "outcome_unknown") {
+          inspectionNoticeRef.current = null;
           errorRef.current = true;
           setStatus("error");
           setMessage(`Input outcome unknown: ${response.message} Do not retry this gesture automatically; start a new gesture.`);
@@ -460,7 +472,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       errorRef.current = false;
       return response.outcome;
     } catch (error) {
-      if (identityRef.current !== identity || streamRef.current !== stream) return null;
+      if (identityRef.current !== identity || streamRef.current !== stream || (stillCurrent && !stillCurrent())) return null;
       errorRef.current = true;
       setStatus("error");
       setMessage(errorMessage(error));
@@ -581,11 +593,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const listed = await command({ type: "draft", context: documentContext, draft_id: null, expected_revision: null, command: { type: "list" } });
     if (request !== draftRequestRef.current || !listed || listed.type !== "draft_inventory") return;
     const latest = snapshotRef.current;
-    if (!latest || JSON.stringify(context(latest)) !== JSON.stringify(documentContext)) return;
+    const latestContext = latest ? context(latest) : null;
+    if (!latestContext || latestContext.target_id !== documentContext.target_id || latestContext.document_generation !== documentContext.document_generation) return;
     const currentDraft = listed.inventory.drafts.find((candidate) => candidate.target_id === documentContext.target_id && candidate.document_generation === documentContext.document_generation && !retiredDraft(associationOwner, candidate));
     setPendingCaptureState(listed.inventory.pending_capture);
     const draftId = currentDraft?.draft_id ?? null;
-    await command({ type: "draft", context: documentContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
+    await command({ type: "draft", context: latestContext, draft_id: draftId, expected_revision: null, command: { type: "open", draft_id: draftId } });
   }, [associationOwner, command, setPendingCaptureState]);
   const feedbackLookupRequestRef = useRef(0);
   const refreshSavedFeedback = useCallback(async (owner = associationOwner): Promise<void> => {
@@ -800,6 +813,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     inputJobsRef.current = [];
     inputOverloadedRef.current = false;
     setFrame(null);
+    inspectionNoticeRef.current = null;
     setInspection(null);
     setGesture(null);
     setStatus(visible ? "loading" : "hidden");
@@ -1278,7 +1292,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       pointerSampleSequence,
     };
     elementIntentRef.current = intent;
-    const outcome = await command({ type: "inspect", command: { location: intent.location, pointer_sample_sequence: intent.pointerSampleSequence, x: intent.point.x, y: intent.point.y } });
+    const outcome = await command({ type: "inspect", command: { location: intent.location, pointer_sample_sequence: intent.pointerSampleSequence, x: intent.point.x, y: intent.point.y } },
+      () => request === inspectRequestRef.current && elementIntentRef.current === intent);
     if (request !== inspectRequestRef.current || elementIntentRef.current !== intent) return null;
     elementIntentRef.current = null;
     const result = outcome?.type === "inspection" ? outcome.inspection : null;
@@ -1303,6 +1318,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setInspection(null);
       setMessage("Element inspection became stale; select the element again.");
       return null;
+    }
+    if (inspectionNoticeRef.current) {
+      const notice = inspectionNoticeRef.current;
+      inspectionNoticeRef.current = null;
+      setMessage((current) => current === notice ? null : current);
+      setStatus((current) => current === "unsupported" ? "ready" : current);
     }
     setInspection(result);
     return result;
@@ -1376,6 +1397,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   useEffect(() => {
     if (previousToolRef.current !== tool) {
       previousToolRef.current = tool;
+      const active = gestureRef.current;
+      if (active && surfaceRef.current?.hasPointerCapture(active.pointerId)) surfaceRef.current.releasePointerCapture(active.pointerId);
       gestureRef.current = null;
       setGesture(null);
       void releaseRemotePointer();
@@ -1383,6 +1406,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   }, [releaseRemotePointer, tool]);
   useEffect(() => {
     const release = () => {
+      const active = gestureRef.current;
+      if (active && surfaceRef.current?.hasPointerCapture(active.pointerId)) surfaceRef.current.releasePointerCapture(active.pointerId);
       gestureRef.current = null;
       setGesture(null);
       void releaseRemotePointer();
@@ -1420,6 +1445,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (tool === "select") return;
     const current = snapshotRef.current; const accepted = frameRef.current;
     if (!current?.document || !current.viewport || !accepted) return;
+    setAnnotationNotice(null);
     const active = { pointerId: event.pointerId, points: [documentPoint], origin: documentPoint, frame: accepted.sequence, document: current.document.document_generation, viewport: current.viewport.viewport_revision };
     gestureRef.current = active; setGesture(active); event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -1427,8 +1453,22 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     if (isLocalBrowserChrome(event.target)) return;
     if (tool === "browse") { remotePointer(event, "move"); return; }
     const active = gestureRef.current;
-    if (active?.pointerId === event.pointerId) { const point = pointFor(event); if (point) { const next = { ...active, points: [...active.points, point] }; gestureRef.current = next; setGesture(next); } }
-    else if (tool === "element" && !selectingElementRef.current) {
+    if (active?.pointerId === event.pointerId) {
+      const point = pointFor(event);
+      if (point) {
+        if (tool === "region") {
+          const next = { ...active, points: [active.origin, point] };
+          gestureRef.current = next; setGesture(next);
+        } else if (active.points.length >= MAX_ANNOTATION_POINTS - 1) {
+          gestureRef.current = null; setGesture(null);
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+          setAnnotationNotice(`Freehand annotation exceeds ${MAX_ANNOTATION_POINTS} points; the unfinished mark was cancelled. Draw a shorter stroke.`);
+        } else {
+          active.points.push(point);
+          setGesture({ ...active });
+        }
+      }
+    } else if (tool === "element" && !selectingElementRef.current) {
       hoverInspectPointRef.current = { clientX: event.clientX, clientY: event.clientY };
       if (hoverInspectTimerRef.current === null) {
         hoverInspectTimerRef.current = window.setTimeout(() => {
@@ -1446,7 +1486,15 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const active = gestureRef.current; gestureRef.current = null; setGesture(null); if (!active || cancelled) return;
     const current = snapshotRef.current; const accepted = frameRef.current; const last = pointFor(event) ?? active.points[active.points.length - 1];
     if (!current?.document || !current.viewport || !accepted || current.document.document_generation !== active.document || current.viewport.viewport_revision !== active.viewport) { setMessage("The page geometry changed while drawing; the unfinished mark was cancelled."); return; }
-    if (tool === "freehand") { const points = simplify([...active.points, last]); if (points.length > 1) persist({ id: annotationId(), kind: "freehand", color, points, bounds: null, evidence: null, comment: null }); }
+    if (tool === "freehand") {
+      if (active.points.length >= MAX_ANNOTATION_POINTS) {
+        setAnnotationNotice(`Freehand annotation exceeds ${MAX_ANNOTATION_POINTS} points; the unfinished mark was cancelled. Draw a shorter stroke.`);
+        return;
+      }
+      active.points.push(last);
+      const points = simplify(active.points);
+      if (points.length > 1) persist({ id: annotationId(), kind: "freehand", color, points, bounds: null, evidence: null, comment: null });
+    }
     if (tool === "region") { const bounds = rectFrom(active.origin, last); if (bounds.width >= 1 || bounds.height >= 1) persist({ id: annotationId(), kind: "region", color, points: [active.origin, last], bounds, evidence: null, comment: null }); }
   };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>): void => {
@@ -1491,6 +1539,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       return;
     }
     finishGesture(event, false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
   const onPointerCancel = (event: PointerEvent<HTMLDivElement>): void => {
     if (isLocalBrowserChrome(event.target)) return;
@@ -1501,6 +1550,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       return;
     }
     finishGesture(event, true);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
   const onWheel = (event: WheelEvent<HTMLDivElement>): void => {
     if (!liveInputEnabledRef.current || tool !== "browse" || isLocalBrowserChrome(event.target)) return;
@@ -1641,20 +1691,31 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     const documentContext = current ? context(current) : null;
     if (discardInFlightRef.current || captureInFlightRef.current || pendingCaptureRef.current || pendingDeliveryIdsRef.current || deliveryState
       || owner.pendingAnnotationMutations.length > 0 || !draftAtIntent || !documentContext) {
-      setMessage("Cannot discard the draft while capture, feedback delivery, or annotation recovery is pending.");
+      const notice = "Cannot discard the draft while capture, feedback delivery, or annotation recovery is pending.";
+      setMessage(notice);
+      setAnnotationNotice(notice);
       return;
     }
     if (draftAtIntent.target_id !== documentContext.target_id
       || draftAtIntent.document_generation !== documentContext.document_generation) {
-      setMessage("The browser draft changed; wait for the current document draft before discarding.");
+      const notice = "The browser draft changed; wait for the current document draft before discarding.";
+      setMessage(notice);
+      setAnnotationNotice(notice);
       return;
     }
     discardInFlightRef.current = true;
+    setAnnotationNotice(null);
     try {
       const inventory = await queueDraftMutation(async () => {
+        const latestDraft = owner.draft;
+        if (!latestDraft || latestDraft.draft_id !== draftAtIntent.draft_id
+          || latestDraft.target_id !== documentContext.target_id
+          || latestDraft.document_generation !== documentContext.document_generation) {
+          throw new Error("The browser draft changed before discard; the current draft was retained.");
+        }
         await client.browserDraftRecovery({
           target: owner.target,
-          action: { type: "discard_draft", draft_id: draftAtIntent.draft_id, expected_revision: draftAtIntent.revision },
+          action: { type: "discard_draft", draft_id: draftAtIntent.draft_id, expected_revision: latestDraft.revision },
         });
         const listed = await client.browserDraftRecovery({ target: owner.target, action: { type: "list" } });
         if (listed.type === "draft_inventory" && !listed.inventory.drafts.some((candidate) => candidate.draft_id === draftAtIntent.draft_id)) {
@@ -1665,7 +1726,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         return listed;
       });
       if (inventory.type !== "draft_inventory" || inventory.inventory.drafts.some((candidate) => candidate.draft_id === draftAtIntent.draft_id)) {
-        setMessage("The draft discard could not be confirmed; the current draft was retained.");
+        const notice = "The draft discard could not be confirmed; the current draft was retained.";
+        setMessage(notice);
+        setAnnotationNotice(notice);
         return;
       }
       if (associationOwnerRef.current !== owner || snapshotRef.current?.displayed_target_id !== documentContext.target_id
@@ -1681,7 +1744,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       await openDraft();
       setMessage("Discarded the current document draft and opened a clean draft.");
     } catch (error) {
-      setMessage(`Could not discard the current draft: ${errorMessage(error)}`);
+      const notice = `Could not discard the current draft: ${errorMessage(error)}`;
+      setMessage(notice);
+      setAnnotationNotice(notice);
     } finally {
       discardInFlightRef.current = false;
     }
@@ -2211,6 +2276,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       <span className="browser-color-picker">{COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} title={`Use ${candidate} annotation color`} style={{ background: candidate, borderColor: candidate }} onClick={() => setColor(candidate)} />)}</span>
       <button type="button" disabled={!draft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => { if (event.ctrlKey) void discardDraft(); else if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
       <button type="button" disabled={!selectedAnnotation} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={() => { if (!selectedAnnotation) return; if (noteId !== selectedAnnotation.id) setNoteValue(selectedAnnotation.comment ?? ""); setNoteId(selectedAnnotation.id); setNoteEditorDismissed(false); markEditorDirty(); }}><AnnotationIcon name="notes" /></button>
+      <span className="browser-annotation-notes" aria-label={`Notes ${annotations.length}`} title={`Notes ${annotations.length}`}>Notes {annotations.length}</span>
       {pendingCapture ? <><span className="browser-capture-pending" role="status">Pending capture · retry sending or discard it</span><button type="button" aria-label="Discard pending capture" title="Discard pending capture" onClick={() => void discardPendingCapture()}><AnnotationIcon name="remove" /></button></> : null}
       {savedDeliveries.length > 0 ? <div className="browser-capture-pending" aria-label="Saved feedback recovery">
         {savedDeliveries.map((item, index) => {
@@ -2233,6 +2299,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />
       {descriptor ? <svg className="browser-annotation-layer" viewBox={`0 0 ${descriptor.image_width} ${descriptor.image_height}`} preserveAspectRatio="none" aria-label="Browser annotations">{annotations.map((annotation) => draw(annotation))}{annotations.map(drawLabel)}{transient ? draw(transient, true) : null}{inspectionBounds && tool === "element" ? (() => { const start = imagePoint({ x: inspectionBounds.x, y: inspectionBounds.y }); const end = imagePoint({ x: inspectionBounds.x + inspectionBounds.width, y: inspectionBounds.y + inspectionBounds.height }); return start && end ? <rect className="browser-element-hover" x={start.x} y={start.y} width={end.x - start.x} height={end.y - start.y} /> : null; })() : null}</svg> : null}
       {frame && (status === "error" || status === "unsupported") ? <div className="browser-recovery" role="status">{statusText(status, message)}</div> : null}
+      {annotationNotice && status !== "error" && status !== "unsupported" ? <div className="browser-recovery" role="alert">{annotationNotice}</div> : null}
       {blocker ? <div className="browser-blocker" role="alert"><strong>{blocker.message}</strong>{blocker.kind === "dialog" ? <div><button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "accept", text: blocker.default_prompt } })}>Accept</button>{blocker.cancellable ? <button type="button" onClick={() => void command({ type: "dialog", blocker_id: blocker.blocker_id, command: { type: "dismiss" } })}>Dismiss</button> : null}</div> : blocker.kind === "download" ? <div><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "accept" } })}>Save download</button><button type="button" onClick={() => void command({ type: "download", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel</button></div> : blocker.kind === "permission" ? <div><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "allow" } })}>Allow</button><button type="button" onClick={() => void command({ type: "permission", blocker_id: blocker.blocker_id, command: { decision: "deny" } })}>Deny</button></div> : blocker.kind === "file_chooser" ? <button type="button" onClick={() => void command({ type: "file", blocker_id: blocker.blocker_id, command: { type: "cancel" } })}>Cancel file chooser</button> : null}</div> : null}
       {noteId && selectedId === noteId && !noteEditorDismissed ? <div ref={noteEditorRef} className="browser-note-editor" style={noteEditorStyle}><textarea autoFocus value={noteValue} onChange={(event) => { markEditorDirty(); setNoteValue(event.target.value.slice(0, 4000)); }} maxLength={4000} aria-label="Annotation note" onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); saveNote(); } if (event.key === "Escape") { event.preventDefault(); dismissNoteEditor(); } }} /><div><button type="button" onClick={saveNote}>Save</button><button type="button" onClick={dismissNoteEditor}>Close</button></div></div> : null}
     </div>

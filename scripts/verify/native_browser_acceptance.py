@@ -459,7 +459,7 @@ def main():
     parser.add_argument("--fps-min", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=20)
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
-    parser.add_argument("--annotation", action="store_true", help="also exercise native region and note saves against the retained draft")
+    parser.add_argument("--annotation", action="store_true", help="also exercise native region, note save and basket clear against the retained draft")
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
     parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
@@ -883,6 +883,25 @@ def main():
             screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
             (root / "native-annotation-note.png").write_bytes(base64.b64decode(screenshot))
             result["screenshots"]["note_acknowledged"] = str(root / "native-annotation-note.png")
+            clear_controls = webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),basket:!!document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]'),list:!!document.querySelector('[aria-label=\"Annotation notes\"]')}))()")
+            if clear_controls != {"notes": "Notes 1", "basket": True, "list": False}:
+                raise RuntimeError(f"native mark controls diverged from the compact no-list contract: {clear_controls}")
+            webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]');if(!b||b.disabled)throw Error('native basket unavailable');b.dispatchEvent(new MouseEvent('click',{bubbles:true,ctrlKey:true}));return true})()")
+            def note_cleared():
+                listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                    {"target": action["target"], "action": {"type": "list"}})
+                if listing.get("type") != "draft_inventory":
+                    return None
+                revisions = listing["inventory"]["drafts"]
+                if any(draft["draft_id"] == saved_note["draft_id"] for draft in revisions):
+                    return None
+                return next((draft for draft in revisions if not draft.get("annotations")), None)
+            clean_draft = wait_until(note_cleared, "native old draft discarded and clean draft opened", 5)
+            wait_until(lambda: webdriver.execute("document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label')==='Notes 0' && !document.querySelector('.browser-annotation-region')"),
+                       "native notes and overlay cleared", 5)
+            result["annotation"]["clear"] = {"discarded_draft_id": saved_note["draft_id"],
+                "clean_draft_id": clean_draft["draft_id"], "notes": "Notes 0", "marks": 0,
+                "method": "Control-click existing basket without annotation list or confirmation"}
             webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Browse\"]');if(!b)throw Error('browse tool unavailable');b.click();return true})()")
             wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-browse')"),
                        "native browsing restored after region save", 3)
