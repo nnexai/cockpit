@@ -1216,16 +1216,20 @@ fn teardown_lock_name(id: &str) -> String {
 }
 
 pub(crate) fn atomic_write_json<T: Serialize>(dir: &Dir, name: &str, value: &T) -> io::Result<()> {
-    let tmp = format!(".{}.tmp", Uuid::new_v4());
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    atomic_write_bytes(dir, name, &bytes)
+}
+
+pub(crate) fn atomic_write_bytes(dir: &Dir, name: &str, bytes: &[u8]) -> io::Result<()> {
+    let tmp = format!(".{}.tmp", Uuid::new_v4());
     let mut options = OpenOptions::new();
     options
         .write(true)
         .create_new(true)
         .follow(cap_fs_ext::FollowSymlinks::No);
     let mut file = dir.open_with(&tmp, &options)?;
-    file.write_all(&bytes)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
     match dir.symlink_metadata(name) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {

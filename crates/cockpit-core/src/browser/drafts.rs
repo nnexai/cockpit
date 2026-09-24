@@ -26,7 +26,10 @@ use uuid::Uuid;
 use crate::{
     InspectionError,
     browser_feedback::BrowserFeedbackStore,
-    project_store::{atomic_write_json, open_dir_nofollow_absolute, prepare_root, read_json_bounded},
+    project_store::{
+        atomic_write_bytes, atomic_write_json, open_dir_nofollow_absolute, prepare_root,
+        read_json_bounded,
+    },
 };
 
 use super::{BrowserRuntimeAttachment, BrowserService};
@@ -832,8 +835,13 @@ impl BrowserDraftStore {
 
     fn write_draft(&self, draft: &StoredDraft) -> Result<(), InspectionError> {
         validate_stored_draft(&draft.draft_id, draft)?;
-        ensure_record_size(draft, MAX_DRAFT_BYTES, "browser_draft_capacity", "Draft exceeds its durable storage limit")?;
-        atomic_write_json(&self.dir()?, &draft_name(&draft.draft_id), draft)
+        let bytes = bounded_record(
+            draft,
+            MAX_DRAFT_BYTES,
+            "browser_draft_capacity",
+            "Draft exceeds its durable storage limit",
+        )?;
+        atomic_write_bytes(&self.dir()?, &draft_name(&draft.draft_id), &bytes)
             .map_err(|error| InspectionError::new("browser_draft_write", error.to_string()))
     }
     fn remove_draft(&self, draft_id: &str) -> Result<(), InspectionError> {
@@ -885,24 +893,29 @@ impl BrowserDraftStore {
     }
 
     fn write_pending(&self, pending: &StoredPendingCapture) -> Result<(), InspectionError> {
-        ensure_record_size(pending, MAX_PENDING_BYTES, "browser_draft_capacity", "Pending capture exceeds its durable storage limit")?;
-        atomic_write_json(&self.dir()?, &pending_name(&pending.association_key), pending)
+        let bytes = bounded_record(
+            pending,
+            MAX_PENDING_BYTES,
+            "browser_draft_capacity",
+            "Pending capture exceeds its durable storage limit",
+        )?;
+        atomic_write_bytes(&self.dir()?, &pending_name(&pending.association_key), &bytes)
             .map_err(|error| InspectionError::new("browser_draft_pending", error.to_string()))
     }
 }
 
-fn ensure_record_size<T: Serialize>(
+fn bounded_record<T: Serialize>(
     value: &T,
     limit: u64,
     code: &str,
     message: &str,
-) -> Result<(), InspectionError> {
+) -> Result<Vec<u8>, InspectionError> {
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| InspectionError::new(code, error.to_string()))?;
     if bytes.len() as u64 > limit {
         return Err(InspectionError::new(code, message));
     }
-    Ok(())
+    Ok(bytes)
 }
 
 fn stored_identity(identity: &BrowserDraftIdentity) -> StoredIdentity {

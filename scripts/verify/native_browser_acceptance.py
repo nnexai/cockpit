@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,15 @@ def post_json(url, value, timeout=10):
         return json.loads(raw) if raw else {}
 
 
+def herdr_request(session_socket, method, params):
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(8)
+        connection.connect(str(session_socket))
+        connection.sendall((json.dumps({"id": "native-agent-fixture", "method": method, "params": params}) + "\n").encode())
+        response = json.loads(connection.makefile().readline())
+    if "error" in response:
+        raise RuntimeError(f"private Herdr {method} refused: {response['error']}")
+    return response["result"]
 
 
 def terminate_owned(children):
@@ -459,7 +469,8 @@ def main():
     parser.add_argument("--fps-min", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=20)
     parser.add_argument("--skip-build", action="store_true", help="use supplied prebuilt binaries and frontend without rebuilding")
-    parser.add_argument("--annotation", action="store_true", help="also exercise native region, note save and basket clear against the retained draft")
+    parser.add_argument("--annotation", action="store_true", help="also exercise native region and note save, then basket clear or explicit agent-fixture paste")
+    parser.add_argument("--agent-fixture", type=Path, help="with --annotation, use this explicit disposable agent-like receiver binary for native paste proof")
     parser.add_argument("--nested-wheel", action="store_true", help="also check repeated inner and outer wheel routing without claiming physical OS input")
     parser.add_argument("--sustain-seconds", type=int, default=0, help="animate at least 330 seconds; sample owned process PSS/CPU after 30-second warm-up")
     parser.add_argument("--idle-resource-seconds", type=int, default=3, help="observe static native WebKit process PSS for at least 3 seconds after sustained animation")
@@ -485,6 +496,8 @@ def main():
         parser.error("--hidden-scroll-smoke uses the six-second scroll fixture, not sustained sampling")
     if args.native_only_open and args.annotation:
         parser.error("--native-only-open cannot use gateway-owned draft recovery for --annotation")
+    if args.agent_fixture and (not args.annotation or not args.agent_fixture.is_file() or not os.access(args.agent_fixture, os.X_OK)):
+        parser.error("--agent-fixture requires --annotation and an executable run-owned receiver binary")
     if args.trace_cdp_overrides and not args.native_only_open:
         parser.error("--trace-cdp-overrides requires --native-only-open")
     if args.trace_capture_lanes and not args.trace_cdp_overrides:
@@ -883,25 +896,95 @@ def main():
             screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
             (root / "native-annotation-note.png").write_bytes(base64.b64decode(screenshot))
             result["screenshots"]["note_acknowledged"] = str(root / "native-annotation-note.png")
-            clear_controls = webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),basket:!!document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]'),list:!!document.querySelector('[aria-label=\"Annotation notes\"]')}))()")
-            if clear_controls != {"notes": "Notes 1", "basket": True, "list": False}:
-                raise RuntimeError(f"native mark controls diverged from the compact no-list contract: {clear_controls}")
-            webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]');if(!b||b.disabled)throw Error('native basket unavailable');b.dispatchEvent(new MouseEvent('click',{bubbles:true,ctrlKey:true}));return true})()")
-            def note_cleared():
-                listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
-                                    {"target": action["target"], "action": {"type": "list"}})
-                if listing.get("type") != "draft_inventory":
+            if args.agent_fixture:
+                receiver = root / "codex"
+                shutil.copy2(args.agent_fixture, receiver)
+                paste_path = root / "agent-paste.bin"
+                pane_id = workspace["result"]["root_pane"]["pane_id"]
+                herdr_request(session_socket, "pane.send_text", {"pane_id": pane_id,
+                    "text": f"exec {shlex.quote(str(receiver))} {shlex.quote(str(paste_path))}"})
+                herdr_request(session_socket, "pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]})
+                def agent_ready():
+                    snapshot = herdr_request(session_socket, "session.snapshot", {})["snapshot"]
+                    return next((agent for agent in snapshot["agents"]
+                        if agent["pane_id"] == pane_id and agent["workspace_id"] == space_id
+                        and agent["agent"] == "codex" and agent["agent_status"] == "idle"), None)
+                agent = wait_until(agent_ready, "run-owned Herdr-recognized terminal agent", 5)
+                if not paste_path.exists() or paste_path.stat().st_size:
+                    raise RuntimeError("the private agent receiver had input before feedback")
+                def editor_settled():
+                    listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                        {"target": action["target"], "action": {"type": "list"}})
+                    return next((draft for draft in listing.get("inventory", {}).get("drafts", [])
+                        if draft["draft_id"] == saved_note["draft_id"] and draft["revision"] >= saved_note["revision"]
+                        and draft["editor"]["note_annotation_id"] is None), None)
+                wait_until(editor_settled, "saved native note editor settled before capture", 5)
+                webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Send annotations\"]');if(!b||b.disabled)throw Error('native Send unavailable');b.click();return true})()")
+                feedback_directory = root / "cockpit-state/browser/feedback"
+                selected_id = saved_note["annotations"][0]["id"]
+                def accepted_receipt():
+                    for path in feedback_directory.glob("delivery-*.json"):
+                        receipt = json.loads(path.read_text())
+                        if receipt.get("state") == "accepted" and receipt.get("selected_ids") == [selected_id]:
+                            return receipt
                     return None
-                revisions = listing["inventory"]["drafts"]
-                if any(draft["draft_id"] == saved_note["draft_id"] for draft in revisions):
-                    return None
-                return next((draft for draft in revisions if not draft.get("annotations")), None)
-            clean_draft = wait_until(note_cleared, "native old draft discarded and clean draft opened", 5)
-            wait_until(lambda: webdriver.execute("document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label')==='Notes 0' && !document.querySelector('.browser-annotation-region')"),
-                       "native notes and overlay cleared", 5)
-            result["annotation"]["clear"] = {"discarded_draft_id": saved_note["draft_id"],
-                "clean_draft_id": clean_draft["draft_id"], "notes": "Notes 0", "marks": 0,
-                "method": "Control-click existing basket without annotation list or confirmation"}
+                receipt = wait_until(accepted_receipt, "native focused-agent paste and durable receipt", args.timeout)
+                notice = wait_until(lambda: webdriver.execute("document.querySelector('.browser-delivery-complete[role=\"status\"]')?.textContent"),
+                                    "native rendered paste acknowledgement", 5)
+                if notice != "Pasted to codex · Enter not sent":
+                    raise RuntimeError(f"native UI did not explain the accepted-but-unsubmitted paste: {notice}")
+                capture_id = receipt["operation_id"].removeprefix("browser-feedback-")
+                if receipt["operation_id"] == capture_id or receipt["target"]["pane_id"] != pane_id or receipt["target"]["workspace_id"] != space_id or receipt["acknowledged_ids"] != [selected_id]:
+                    raise RuntimeError(f"recipient/acknowledgement did not match the private agent: {receipt}")
+                capture = json.loads((feedback_directory / f"capture-{capture_id}.json").read_text())
+                image = (root / "cockpit-state/browser/artifacts" / capture["image_name"]).read_bytes()
+                if image[:8] != b"\x89PNG\r\n\x1a\n" or capture["pending_ids"] or capture["annotations"][0]["comment"] != note_text:
+                    raise RuntimeError("the accepted native capture did not retain exact PNG/annotation bytes")
+                pasted = wait_until(lambda: paste_path.read_bytes() if paste_path.stat().st_size else None,
+                                    "private recipient PTY receiving raw bracketed paste", 5)
+                if not (pasted.startswith(b"\x1b[200~") and pasted.endswith(b"\x1b[201~")
+                        and pasted.count(b"\x1b[200~") == pasted.count(b"\x1b[201~") == 1
+                        and b'"points"' not in pasted and b'"bounds"' in pasted and selected_id.encode() in pasted):
+                    raise RuntimeError("private PTY did not receive one redacted, complete bracketed paste with no trailing Enter")
+                lookup = post_json(gateway_url + "/api/v1/browser/feedback", {"target": action["target"]})
+                if lookup["feedback"]["pending_count"] != 0:
+                    raise RuntimeError("accepted native feedback remained pending after acknowledged paste")
+                after = herdr_request(session_socket, "session.snapshot", {})["snapshot"]
+                if after["focused_pane_id"] != pane_id or not any(item["pane_id"] == pane_id for item in after["agents"]):
+                    raise RuntimeError("Herdr did not retain the focused same-Space agent after paste")
+                wait_until(lambda: webdriver.execute("!!document.querySelector('.browser-delivery-complete[role=\"status\"]') && !document.querySelector('[aria-label=\"Saved feedback recovery\"]')"),
+                           "native saved-feedback controls reconciled after exact acknowledgement", 5)
+                screenshot = webdriver.request("GET", webdriver.path("/screenshot"))["value"]
+                (root / "native-agent-paste.png").write_bytes(base64.b64decode(screenshot))
+                result["screenshots"]["native_agent_paste"] = str(root / "native-agent-paste.png")
+                result["agent_paste"] = {"terminal_fixture": "run-owned Codex-named raw PTY receiver; no model/provider",
+                    "pane_id": pane_id, "terminal_id": agent["terminal_id"], "annotation_id": selected_id,
+                    "capture_id": capture_id, "operation_id": receipt["operation_id"], "receipt_state": receipt["state"],
+                    "rendered_notice": notice, "pending_count_after": lookup["feedback"]["pending_count"],
+                    "png_size": len(image), "png_sha256": hashlib.sha256(image).hexdigest(),
+                    "png_width": int.from_bytes(image[16:20], "big"), "png_height": int.from_bytes(image[20:24], "big"),
+                    "paste_bytes": len(pasted), "paste_sha256": hashlib.sha256(pasted).hexdigest(),
+                    "bracketed_frames": 1, "trailing_enter": False, "raw_points_in_agent_payload": False}
+            else:
+                clear_controls = webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),basket:!!document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]'),list:!!document.querySelector('[aria-label=\"Annotation notes\"]')}))()")
+                if clear_controls != {"notes": "Notes 1", "basket": True, "list": False}:
+                    raise RuntimeError(f"native mark controls diverged from the compact no-list contract: {clear_controls}")
+                webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Remove selected annotation or Control-click to discard draft\"]');if(!b||b.disabled)throw Error('native basket unavailable');b.dispatchEvent(new MouseEvent('click',{bubbles:true,ctrlKey:true}));return true})()")
+                def note_cleared():
+                    listing = post_json(gateway_url + "/api/v1/browser/drafts/recovery",
+                                        {"target": action["target"], "action": {"type": "list"}})
+                    if listing.get("type") != "draft_inventory":
+                        return None
+                    revisions = listing["inventory"]["drafts"]
+                    if any(draft["draft_id"] == saved_note["draft_id"] for draft in revisions):
+                        return None
+                    return next((draft for draft in revisions if not draft.get("annotations")), None)
+                clean_draft = wait_until(note_cleared, "native old draft discarded and clean draft opened", 5)
+                wait_until(lambda: webdriver.execute("document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label')==='Notes 0' && !document.querySelector('.browser-annotation-region')"),
+                           "native notes and overlay cleared", 5)
+                result["annotation"]["clear"] = {"discarded_draft_id": saved_note["draft_id"],
+                    "clean_draft_id": clean_draft["draft_id"], "notes": "Notes 0", "marks": 0,
+                    "method": "Control-click existing basket without annotation list or confirmation"}
             webdriver.execute("(()=>{const b=document.querySelector('button[aria-label=\"Browse\"]');if(!b)throw Error('browse tool unavailable');b.click();return true})()")
             wait_until(lambda: webdriver.execute("document.querySelector('.browser-pane')?.classList.contains('browser-tool-browse')"),
                        "native browsing restored after region save", 3)

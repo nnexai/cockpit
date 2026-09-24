@@ -248,6 +248,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const [frame, setFrame] = useState<{ descriptor: BrowserViewFramePacket["descriptor"]; sequence: number } | null>(null);
   const [pendingCapture, setPendingCapture] = useState<BrowserViewPendingCapture | null>(null);
   const [deliveryState, setDeliveryState] = useState<DeliveryState | null>(null);
+  const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null);
   const [deliveryDuplicateRisk, setDeliveryDuplicateRisk] = useState(false);
   const [savedDeliveries, setSavedDeliveries] = useState<SavedDelivery[]>([]);
   const [selectedDeliveryCaptureId, setSelectedDeliveryCaptureId] = useState<string | null>(null);
@@ -828,6 +829,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       setSnapshot(null);
       setDraft(null);
       setPendingCapture(null);
+      setDeliveryNotice(null);
       setSavedDeliveries([]);
       setSelectedDeliveryCaptureId(null);
       selectedDeliveryCaptureIdRef.current = null;
@@ -1789,6 +1791,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const deliverAnnotations = async (ids: string[], operationId: string, acknowledgeDuplicateRisk: boolean): Promise<boolean> => {
     if (!onFeedback) { errorRef.current = true; setStatus("error"); setMessage("Annotation delivery is unavailable."); return false; }
     const updateReceipt = (state: DeliveryState, message: string) => setSavedDeliveries((current) => current.map((item) => item.operation_id === operationId ? { ...item, state, message, hasReceipt: true } : item));
+    setDeliveryNotice(null);
     setDeliveryState("pending");
     updateReceipt("pending", "Feedback delivery is pending.");
     try {
@@ -1805,6 +1808,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         errorRef.current = false;
         setDeliveryState("accepted");
         updateReceipt("accepted", response.message);
+        setDeliveryNotice(`Pasted to ${response.target?.agent_label ?? "selected agent"} · Enter not sent`);
         setDeliveryDuplicateRisk(false);
         setStatus("ready");
         setMessage(response.message);
@@ -1841,6 +1845,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     } catch (error) {
       acknowledgementFailed = true;
       setMessage(`Feedback was accepted, but its saved receipt could not be acknowledged: ${errorMessage(error)}`);
+      setDeliveryNotice(`Pasted feedback, but its saved receipt could not be acknowledged: ${errorMessage(error)}`);
     }
     if (associationOwnerRef.current !== owner || owner.sealed) return;
     await openDraft();
@@ -1850,6 +1855,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
   };
   const rememberSavedDelivery = (captureId: string, ids: string[], operationId: string, identity: CaptureIdentity | null): void => {
+    setDeliveryNotice(null);
     const item: SavedDelivery = { capture_id: captureId, ids: [...ids], operation_id: operationId, state: "pending", message: "Saved feedback is ready for explicit delivery.", blocked: false, hasReceipt: false };
     setSavedDeliveries((current) => [...current.filter((delivery) => delivery.capture_id !== captureId), item].sort((left, right) => left.capture_id.localeCompare(right.capture_id)));
     selectedDeliveryCaptureIdRef.current = captureId;
@@ -2293,6 +2299,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         })}
       </div> : null}
       {associationOwner.pendingAnnotationMutations.length > 0 ? <><span className="browser-capture-pending" role="status">Retained annotation changes need review; unknown delivery is not replayed automatically.</span><button type="button" aria-label="Retry retained annotation changes" title="Retry retained annotation changes" onClick={() => void retryAnnotationMutations()}>Retry saves</button><button type="button" aria-label="Discard retained annotation changes" title="Discard retained annotation changes" onClick={() => void discardAnnotationMutations()}>Discard retry intent</button></> : null}
+      {deliveryNotice ? <span className="browser-delivery-complete" role="status">{deliveryNotice}</span> : null}
       <button type="button" className="browser-send-annotations" disabled={pendingCapture ? false : !draft || !frame || annotations.length === 0} aria-label={pendingCapture ? "Retry pending capture" : "Send annotations"} title={pendingCapture ? "Retry pending capture" : "Send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /></button>
     </div>
       <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={onSurfaceKeyDown} onKeyUp={onSurfaceKeyUp} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
