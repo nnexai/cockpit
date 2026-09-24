@@ -1,0 +1,96 @@
+{
+  "run": "run-20260920-a3e9b950",
+  "task": "WEB-05",
+  "increment": "native page-scoped unsent draft retirement; A18 navigation and OBS-030 only",
+  "baseline_commit": "e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c",
+  "private_resources": {
+    "herdr_session": "wnav-native-0e3c4e2767c3",
+    "space": "Native browser b49621e7",
+    "space_id": "w1",
+    "fixture": "http://127.0.0.1:46593",
+    "isolated_root": "/tmp/wnav-3ak9a7_9",
+    "native_binary_sha256": "d77d97f3cb1f0d9aa7d6851635602c0bd8467ff4d564f3bc2bcf7be46718e375",
+    "gateway_binary_sha256": "0c5b908592b1fb53d4d40441c4cc427fdac0705be32c3025cdac228db1d7f706",
+    "frontend_asset": "dist/assets/index-ss06VAGP.js",
+    "frontend_asset_sha256": "670c2d9c1a200e74a868e3ac76242c30e83686763d9110021114a998974e03e8"
+  },
+  "action_and_authority": {
+    "A": {
+      "action": "native Page URL to private A; select Region; separate WebKit DOM pointer down/move/up through the actual annotation surface; save unsent note through inline editor",
+      "url": "http://127.0.0.1:46593/A",
+      "painted_header_rgba": [221, 238, 255, 255],
+      "marks": 1,
+      "note": "Native page-scoped unsent note wnav-native-0e3c4e2767c3",
+      "draft_id": "cd20fcba-dd01-4c40-a831-a715a75d45fe",
+      "draft_revision_after_note": 3,
+      "document_generation": 1790212864180,
+      "annotation_id": "b2ed6718-75e7-4e89-8c80-0f426b9606b6",
+      "screenshot": "native-navigation-A-mark.png",
+      "screenshot_sha256": "7d01f722c2a1597f87114930798d5dfde756803e044c1b8c0bff6d3d0e876920"
+    },
+    "unsafe_url": {
+      "action": "submit javascript:alert(1) through native Page URL form",
+      "status": "browser URL has an unsupported or unsafe scheme",
+      "url_after": "http://127.0.0.1:46593/A",
+      "marks_after": 1,
+      "same_draft_id_present_in_tauri_recovery": true,
+      "remote_page_replacement": false
+    },
+    "same_document_hash": {
+      "action": "submit A#same-document through native Page URL form",
+      "url_after": "http://127.0.0.1:46593/A#same-document",
+      "marks_after": 1,
+      "saved_note_visible": true,
+      "draft_id": "cd20fcba-dd01-4c40-a831-a715a75d45fe",
+      "document_generation": 1790212864180,
+      "revision": 5,
+      "observation": "The prior unsafe-URL status persists through this successful hash navigation; it clears on cross-document B. Queued as a separate WEB-04 navigation-status finding."
+    },
+    "B": {
+      "action": "submit B through native Page URL form",
+      "fixture_report": "Page B loaded at 674x188 CSS/DPR2",
+      "url": "http://127.0.0.1:46593/B",
+      "painted_header_rgba": [255, 225, 201, 255],
+      "document_generation_event": 1790212865700,
+      "marks": 0,
+      "notes": [],
+      "editor": false,
+      "stale_or_retry_notice": false,
+      "tauri_draft_inventory_ids": [],
+      "source_draft_id_absent": true,
+      "screenshot": "native-navigation-B.png",
+      "screenshot_sha256": "17473c11bafe0dbf5ef1b47cbba6fa63f77c821b8f96ac7cda21aef69c2ef6dc"
+    },
+    "A_return": {
+      "action": "click native Back",
+      "url": "http://127.0.0.1:46593/A#same-document",
+      "fixture_report": "Page A loaded afresh at 674x188 CSS/DPR2",
+      "painted_header_rgba": [221, 238, 255, 255],
+      "document_generation_event": 1790212865966,
+      "marks": 0,
+      "notes": [],
+      "editor": false,
+      "stale_or_retry_notice": false,
+      "tauri_draft_inventory_ids": ["a3304d87-6f55-449b-992d-3a0381dee803"],
+      "source_draft_id_absent": true,
+      "screenshot": "native-navigation-A-return.png",
+      "screenshot_sha256": "8e59562f86b91eef3ea3e9f69aed64ac5556a79eb2e4ad1812bf13d898720278"
+    }
+  },
+  "diagnostic_controls": {
+    "initial_single-evaluation_pointer_pair": "First isolated attempt painted A but did not acknowledge a mark; script did not establish gesture admission.",
+    "webdriver_w3c_pointer_actions": "Unsupported operation HTTP 500 before any pointer event; no OS pointer parity inferred.",
+    "separated_pointer_events": "Capture listeners saw down and move; transient SVG region was present before up; saved draft and note acknowledged by Tauri IPC.",
+    "unsafe_status_role": "Toolbar status is role=status, not role=alert; native rejected-URL predicate was corrected without product edits.",
+    "paint_tolerance": "B screenshot and canvas readback observed blue=201 against fixture #ffe1ca blue=202; ±3 flat-color tolerance avoids asserting an unobserved exact source-channel byte.",
+    "density": "Native canvas was 674x188 for a 674x188 CSS surface at devicePixelRatio 2 in this successful run; separate runs alternated 674x188 and 1348x376 at viewport revision 1. WEB-04/WEB-06 density and OS-input parity remain unresolved."
+  },
+  "cleanup": {
+    "fixture_and_static_servers": "stopped",
+    "webdriver": "stopped (-15)",
+    "private_compositor_gateway_herdr": "exited 0",
+    "user_active_session_or_installed_prefix_touched": false
+  },
+  "ok": true,
+  "unproven": "Other WEB-05 A14–A21/A24 authoring, composition, capture, feedback, concurrency, capacity, unknown-delivery and real OS pointer cases remain open."
+}
