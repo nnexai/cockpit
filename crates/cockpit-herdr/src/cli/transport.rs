@@ -8,6 +8,26 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 pub(crate) const FINITE_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const FINITE_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const FINITE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Herdr answers a process-spawning or process-stopping mutation after the
+/// process work, which slows under machine load.
+pub(crate) const PROCESS_MUTATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Git worktree mutations scale with checkout size: 120k files took 3.7 s.
+pub(crate) const GIT_MUTATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Deadline for Herdr's reply to one socket request.
+///
+/// Reads and in-place mutations answer in milliseconds, so the short bound keeps
+/// a hung Herdr from stalling callers. An expired deadline on a mutation leaves
+/// its outcome unknown and forces manual recovery, so mutations whose work
+/// grows with load or repository size get a bound sized for that work.
+pub(crate) fn response_deadline(method: &str) -> Duration {
+    match method {
+        "worktree.create" | "worktree.open" | "worktree.remove" => GIT_MUTATION_RESPONSE_TIMEOUT,
+        "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.split"
+        | "pane.close" | "plugin.pane.open" => PROCESS_MUTATION_RESPONSE_TIMEOUT,
+        _ => FINITE_RESPONSE_TIMEOUT,
+    }
+}
 
 pub(crate) async fn read_bounded_line<R: AsyncBufRead + Unpin>(
     reader: &mut R,

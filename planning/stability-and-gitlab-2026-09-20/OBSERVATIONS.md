@@ -257,3 +257,13 @@ No task was silently waived or called externally blocked merely for lacking proo
 
 - 2026-09-24, owned browser fixture `flowpaste58229695`. The gateway accepted a Context comment paste into a real Pi, archived the sent draft and advanced the batch generation. The browser never received the response. The UI correctly said the outcome was unconfirmed and disabled Paste, but its prescribed **Refresh targets** step then failed with `comment batch generation is no longer current`, and the already-delivered comment kept showing as current. No duplicate was possible, but the user could not reconcile. Owner FLOW-01 (criterion 7). Repair: a `stale_generation` prepare failure now reloads the authoritative batch. Verified with the same real browser/Herdr/Pi scenario plus a regression test; see `runs/run-20260920-a3e9b950/FLOW-01-paste-reconciliation.md`.
 - The same record resolves the unassigned Recovery alert from `FLOW-01-resume.md` (`snapshot.agents[0].agent must be a string` after starting Pi). Herdr briefly reports `agent: null` with `launch_pending: true`, which the pre-`7e94b5f55a0663bfb8b422b1b041b33a8b3e6c56` parser rejected. On the current gateway, 120/120 snapshot reads during a live Pi start returned 200, with no UI alert.
+
+### OBS-045 — Herdr mutations reported an unknown outcome for ordinary slow work
+
+- 2026-09-24, owned browser fixture (`/tmp/cflow-paste-7wq8t2y2`). Every Herdr socket mutation shared the 2 s read deadline. On a 120,000-file repository, Herdr's `worktree.create` took 3.66 s, so **Set up a task Space** showed "Herdr mutation response deadline expired; outcome is unknown" even though Herdr had created the worktree and Space. Durable recovery worked, but it cost two extra clicks. The user flagged that opening a terminal session can also exceed 2 s. Owner FLOW-01 (criterion 1).
+- Repair: per-method deadlines. Git worktree mutations get 30 s; mutations that start or stop processes, and the terminal handshake, get 10 s; reads and in-place mutations keep 2 s. The same setup then completed in one pass. See `runs/run-20260920-a3e9b950/FLOW-01-restart-and-deadlines.md`.
+
+### OBS-046 — repository discovery hid most repositories from setup
+
+- 2026-09-24. The depth-first catalog walk spent the shared 1,024-entry budget inside the first large trees. On the user's configured root (read-only), setup listed 26 of 70 repositories. In the fixture, a 120k-file repository hid its sibling even with a 100,000-entry budget. Owner FLOW-01 (criterion 1).
+- Repair: a breadth-first walk that admits each checkout as soon as its parent is listed, and a default budget of 16,384. The user's root now lists all 70, with no diagnostic, in 0.64 s. See `runs/run-20260920-a3e9b950/FLOW-01-restart-and-deadlines.md`.

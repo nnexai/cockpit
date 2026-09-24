@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -62,8 +62,13 @@ impl RepositoryCatalog {
             if !roots.insert(canonical.clone()) {
                 continue;
             }
-            let mut pending = vec![(canonical.clone(), 0u32)];
-            while let Some((directory, depth)) = pending.pop() {
+            // Breadth-first, admitting each child checkout as soon as its parent
+            // is listed: when the entry budget runs out inside one large tree,
+            // every repository nearer the root has already been found.
+            self.admit_checkout(&canonical, &canonical, &mut repositories, &mut diagnostics)
+                .await;
+            let mut pending = VecDeque::from([(canonical.clone(), 0u32)]);
+            while let Some((directory, depth)) = pending.pop_front() {
                 if Instant::now() >= deadline {
                     diagnostics.push(diagnostic(
                         "catalog_timeout",
@@ -81,26 +86,6 @@ impl RepositoryCatalog {
                     break 'roots;
                 }
                 entries_seen += 1;
-                if has_git_metadata(&directory) {
-                    match self.inspect_checkout(&directory).await {
-                        Ok(candidate)
-                            if is_within(Path::new(&candidate.checkout_path), &canonical)
-                                && is_within(Path::new(&candidate.root), &canonical) =>
-                        {
-                            repositories.push(candidate)
-                        }
-                        Ok(candidate) => diagnostics.push(diagnostic(
-                            "repository_root_escape",
-                            "Git checkout resolves outside the configured repository root",
-                            Some(&candidate.root),
-                        )),
-                        Err(error) => diagnostics.push(diagnostic(
-                            &error.code,
-                            &error.message,
-                            Some(&directory.to_string_lossy()),
-                        )),
-                    }
-                }
                 if depth >= self.config.limits.catalog_depth {
                     continue;
                 }
@@ -153,8 +138,20 @@ impl RepositoryCatalog {
                     ));
                     break 'roots;
                 }
-                children.sort_by(|left, right| right.cmp(left));
-                pending.extend(children.into_iter().map(|child| (child, depth + 1)));
+                children.sort();
+                for child in children {
+                    if Instant::now() >= deadline {
+                        diagnostics.push(diagnostic(
+                            "catalog_timeout",
+                            "repository discovery time limit reached",
+                            Some(configured),
+                        ));
+                        break 'roots;
+                    }
+                    self.admit_checkout(&child, &canonical, &mut repositories, &mut diagnostics)
+                        .await;
+                    pending.push_back((child, depth + 1));
+                }
             }
         }
         repositories.sort_by(|left, right| left.repository_id.cmp(&right.repository_id));
@@ -338,6 +335,36 @@ impl RepositoryCatalog {
             ));
         }
         Ok(fresh)
+    }
+
+    async fn admit_checkout(
+        &self,
+        directory: &Path,
+        root: &Path,
+        repositories: &mut Vec<RepositoryCandidate>,
+        diagnostics: &mut Vec<ProjectDiagnostic>,
+    ) {
+        if !has_git_metadata(directory) {
+            return;
+        }
+        match self.inspect_checkout(directory).await {
+            Ok(candidate)
+                if is_within(Path::new(&candidate.checkout_path), root)
+                    && is_within(Path::new(&candidate.root), root) =>
+            {
+                repositories.push(candidate)
+            }
+            Ok(candidate) => diagnostics.push(diagnostic(
+                "repository_root_escape",
+                "Git checkout resolves outside the configured repository root",
+                Some(&candidate.root),
+            )),
+            Err(error) => diagnostics.push(diagnostic(
+                &error.code,
+                &error.message,
+                Some(&directory.to_string_lossy()),
+            )),
+        }
     }
 
     async fn inspect_checkout(
@@ -1001,6 +1028,45 @@ mod tests {
             },
             origins: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_large_repository_does_not_hide_its_sibling_from_a_bounded_scan() {
+        let root = std::env::temp_dir().join(format!("cockpit-catalog-{}", uuid::Uuid::new_v4()));
+        for name in ["a-large", "b-small"] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+            let init = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(root.join(name))
+                .output()
+                .unwrap();
+            assert!(init.status.success());
+        }
+        for index in 0..50 {
+            std::fs::create_dir_all(root.join(format!("a-large/dir{index}"))).unwrap();
+        }
+        let mut configuration = config();
+        configuration.repository_roots = vec![root.display().to_string()];
+        configuration.limits.catalog_entries = 20;
+        let result = super::RepositoryCatalog::new(configuration)
+            .list()
+            .await
+            .unwrap();
+        let mut names: Vec<_> = result
+            .repositories
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a-large", "b-small"]);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "catalog_entries_bounded"),
+            "the scan must still stop inside the large repository"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

@@ -253,7 +253,7 @@ pub fn load_project_configuration(
             "catalog_depth",
         )?,
         catalog_entries: bounded_limit(
-            limits_file.catalog_entries.unwrap_or(1024),
+            limits_file.catalog_entries.unwrap_or(16_384),
             1,
             100_000,
             "catalog_entries",

@@ -11,7 +11,7 @@ catalog_entries = 10000
 catalog_depth = 3
 ```
 
-`catalog_entries` defaults to 1,024 and accepts 1 through 100,000. It bounds filesystem work during repository discovery across all configured roots together. The scan counts each directory visited and each directory entry examined, including files. It is not a repository count or a file-size limit. Dependencies and build output beneath a configured root can consume the budget. Narrow repository roots reduce the work; raising the budget allows a larger scan.
+`catalog_entries` defaults to 16,384 and accepts 1 through 100,000. It bounds filesystem work during repository discovery across all configured roots together. The scan counts each directory visited and each directory entry examined, including files. It is not a repository count or a file-size limit. Discovery is breadth-first and recognizes a checkout as soon as its parent directory is listed, so when the budget runs out, repositories nearer the root have already been found. Dependencies and build output beneath a configured root can still consume the budget before deeper repositories are reached. Narrow repository roots reduce the work; raising the budget allows a larger scan.
 
 `catalog_depth` defaults to 3 and accepts 1 through 32. The configured root is depth zero. `.git` directories and symlink directories are not traversed. Discovery also has a separate `operation_timeout_ms` budget, defaulting to 30,000 milliseconds.
 

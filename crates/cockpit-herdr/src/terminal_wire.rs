@@ -19,8 +19,9 @@ const MAX_NORMAL_FRAME_SIZE: usize = 2 * 1024 * 1024;
 const MAX_GRAPHICS_FRAME_SIZE: usize = 32 * 1024 * 1024;
 const READER_BUFFERED_MESSAGES: usize = 8;
 /// Terminal frames are streaming, but the finite connection/negotiation phase
-/// must not leave a replaced pane waiting forever.
-const TERMINAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+/// must not leave a replaced pane waiting forever. A busy Herdr can take
+/// several seconds to answer, and an expired handshake fails the attach.
+const TERMINAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 enum ClientMessage {
@@ -143,11 +144,20 @@ pub(crate) async fn open_terminal(
     request: &TerminalOpenRequest,
     stream_id: String,
 ) -> Result<TerminalSession, InspectionError> {
+    open_terminal_within(socket_path, request, stream_id, TERMINAL_HANDSHAKE_TIMEOUT).await
+}
+
+async fn open_terminal_within(
+    socket_path: &Path,
+    request: &TerminalOpenRequest,
+    stream_id: String,
+    deadline: Duration,
+) -> Result<TerminalSession, InspectionError> {
     request
         .validate()
         .map_err(|message| InspectionError::new("invalid_terminal_dimensions", message))?;
 
-    let mut socket = timeout(TERMINAL_HANDSHAKE_TIMEOUT, UnixStream::connect(socket_path))
+    let mut socket = timeout(deadline, UnixStream::connect(socket_path))
         .await
         .map_err(|_| {
             InspectionError::new(
@@ -162,7 +172,7 @@ pub(crate) async fn open_terminal(
             )
         })?;
     timeout(
-        TERMINAL_HANDSHAKE_TIMEOUT,
+        deadline,
         send_message(
             &mut socket,
             &ClientMessage::Hello {
@@ -179,7 +189,7 @@ pub(crate) async fn open_terminal(
     .map_err(|_| InspectionError::new("terminal_attach_timeout", "Herdr terminal hello timed out"))?
     .map_err(handshake_error)?;
 
-    match timeout(TERMINAL_HANDSHAKE_TIMEOUT, read_message(&mut socket))
+    match timeout(deadline, read_message(&mut socket))
         .await
         .map_err(|_| {
             InspectionError::new(
@@ -219,18 +229,15 @@ pub(crate) async fn open_terminal(
             takeover: request.takeover,
         },
     };
-    timeout(
-        TERMINAL_HANDSHAKE_TIMEOUT,
-        send_message(&mut socket, &attach),
-    )
-    .await
-    .map_err(|_| {
-        InspectionError::new(
-            "terminal_attach_timeout",
-            "Herdr terminal attach request timed out",
-        )
-    })?
-    .map_err(handshake_error)?;
+    timeout(deadline, send_message(&mut socket, &attach))
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "terminal_attach_timeout",
+                "Herdr terminal attach request timed out",
+            )
+        })?
+        .map_err(handshake_error)?;
 
     let (reader, writer) = socket.into_split();
     let (sender, receiver) = mpsc::channel(64);
@@ -1082,7 +1089,7 @@ mod tests {
         let listener = UnixListener::bind(&path).expect("listener");
         let server = tokio::spawn(async move {
             let (_socket, _) = listener.accept().await.expect("accept");
-            tokio::time::sleep(TERMINAL_HANDSHAKE_TIMEOUT + Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
         });
         let request = TerminalOpenRequest {
             session_id: "session".to_owned(),
@@ -1095,10 +1102,15 @@ mod tests {
             cell_height_px: 16,
         };
         assert_eq!(
-            open_terminal(&path, &request, "stream".to_owned())
-                .await
-                .expect_err("timeout")
-                .code,
+            open_terminal_within(
+                &path,
+                &request,
+                "stream".to_owned(),
+                Duration::from_millis(200)
+            )
+            .await
+            .expect_err("timeout")
+            .code,
             "terminal_attach_timeout"
         );
         server.abort();

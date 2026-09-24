@@ -49,7 +49,7 @@ use operations::pane_move_destination;
 use operations::{focus_call, mutation_call, request_is_mutating};
 use transport::{
     FINITE_CONNECT_TIMEOUT, FINITE_RESPONSE_TIMEOUT, FINITE_WRITE_TIMEOUT, read_bounded_line,
-    read_response, write_with_progress,
+    read_response, response_deadline, write_with_progress,
 };
 
 use crate::schema::{schema_fields, status_fields};
@@ -1025,7 +1025,7 @@ impl HerdrCliAdapter {
             }
         }
 
-        let response = tokio::time::timeout(FINITE_RESPONSE_TIMEOUT, async {
+        let response = tokio::time::timeout(response_deadline(method), async {
             let mut reader = BufReader::new(stream);
             let mut response = String::new();
             loop {
@@ -2973,5 +2973,81 @@ mod tests {
         assert!(request_is_mutating("worktree.remove"));
         assert!(!request_is_mutating("worktree.list"));
         assert!(!request_is_mutating("session.snapshot"));
+    }
+
+    #[test]
+    fn slow_mutations_get_deadlines_sized_for_their_work() {
+        for method in ["worktree.create", "worktree.open", "worktree.remove"] {
+            assert_eq!(
+                response_deadline(method),
+                Duration::from_secs(30),
+                "{method}"
+            );
+        }
+        for method in [
+            "workspace.create",
+            "workspace.close",
+            "tab.create",
+            "tab.close",
+            "pane.split",
+            "pane.close",
+            "plugin.pane.open",
+        ] {
+            assert_eq!(
+                response_deadline(method),
+                Duration::from_secs(10),
+                "{method}"
+            );
+        }
+        for method in [
+            "session.snapshot",
+            "ping",
+            "pane.focus",
+            "pane.send_text",
+            "worktree.list",
+        ] {
+            assert_eq!(
+                response_deadline(method),
+                FINITE_RESPONSE_TIMEOUT,
+                "{method}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn worktree_create_slower_than_the_read_deadline_still_succeeds() {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-slow-worktree-{}-{}.sock",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "worktree.create");
+            // A large checkout: Herdr answers only after git finishes.
+            tokio::time::sleep(FINITE_RESPONSE_TIMEOUT + Duration::from_millis(500)).await;
+            let response = json!({"id": request["id"], "result": {"type": "worktree_created"}});
+            reader
+                .into_inner()
+                .write_all(format!("{response}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        let config =
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(path.clone())).unwrap();
+        let result = HerdrCliAdapter::new(config)
+            .socket_request("default", "worktree.create", json!({}))
+            .await;
+        server.await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            result.expect("slow worktree creation must not be reported unknown")["type"],
+            "worktree_created"
+        );
     }
 }

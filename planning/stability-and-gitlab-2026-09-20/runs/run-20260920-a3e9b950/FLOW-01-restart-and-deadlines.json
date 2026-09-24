@@ -1,0 +1,149 @@
+{
+ "fixture_a": {
+  "root": "/tmp/cflow-paste-lsz9_z2q",
+  "session": "flowpaste6b691bfe",
+  "herdr_pid": 330693,
+  "proxy_pid": 330724,
+  "gateway": "127.0.0.1:32925",
+  "gateway_restarts": [
+   {
+    "event": "gateway_killed",
+    "pid": 330728,
+    "returncode": -9,
+    "t": 1790258291.9868212,
+    "new_pid": 336162
+   },
+   {
+    "event": "gateway_killed",
+    "pid": 336162,
+    "returncode": -9,
+    "t": 1790258476.5648425,
+    "new_pid": 341977
+   },
+   {
+    "event": "gateway_killed",
+    "pid": 341977,
+    "returncode": -9,
+    "t": 1790258514.7253673,
+    "new_pid": 343005
+   }
+  ],
+  "hold_watch": {
+   "held_seen_at": 1790258291.7917407,
+   "restart_requested_at": 1790258291.7924838
+  },
+  "proxy_events": [
+   {
+    "kind": "proxy_listening",
+    "listen": "/tmp/cflow-paste-lsz9_z2q/herdr-proxy.sock",
+    "upstream": "/tmp/cflow-paste-lsz9_z2q/config/herdr/sessions/flowpaste6b691bfe/herdr.sock",
+    "t": 1790258110.7163591
+   },
+   {
+    "kind": "held_send_text_not_forwarded",
+    "id": "cockpit-851",
+    "pane": "w2:p2",
+    "bytes": 228,
+    "t": 1790258291.7871647
+   }
+  ],
+  "receipts": [
+   {
+    "operation_id": "b87cc979-7ff6-420b-8232-a83d9dcb931f",
+    "state": "outcome_unknown",
+    "message": "Cockpit restarted while delivery was pending; inspect the terminal before retrying.",
+    "user_confirmed": false,
+    "created_at": "1790258291785",
+    "completed_at": "1790258294369",
+    "target_pane": "w2:p2",
+    "payload_hash": "sha256:d5a691eddd2989a005eb567ec3b92a4fdf916390cfd2914043233af2774759ac"
+   },
+   {
+    "operation_id": "fcc6eda5-3d66-47dd-ab83-70e6fc610e62",
+    "state": "accepted",
+    "message": "Herdr accepted one raw bracketed-paste write; no Enter was sent.",
+    "user_confirmed": false,
+    "created_at": "1790258377669",
+    "completed_at": "1790258377772",
+    "target_pane": "w2:p2",
+    "payload_hash": "sha256:d5a691eddd2989a005eb567ec3b92a4fdf916390cfd2914043233af2774759ac"
+   }
+  ],
+  "pi_input_copies_of_FLOWPASTE-R": {
+   "before_paste": 0,
+   "after_restart_recovery": 0,
+   "after_acknowledged_retry": 1
+  }
+ },
+ "fixture_b": {
+  "root": "/tmp/cflow-paste-7wq8t2y2",
+  "herdr_pid": 343629,
+  "proxy_pid": 343661,
+  "gateway": "127.0.0.1:59825",
+  "gateway_restarts": [
+   {
+    "event": "gateway_killed",
+    "pid": 343662,
+    "returncode": -9,
+    "t": 1790258831.444778,
+    "new_pid": 351033
+   },
+   {
+    "event": "gateway_killed",
+    "pid": 351033,
+    "returncode": -9,
+    "t": 1790259095.5231698,
+    "new_pid": 363393
+   }
+  ],
+  "herdr_direct_socket_seconds": {
+   "pane.split": [
+    0.006,
+    0.006,
+    0.006
+   ],
+   "tab.create": 0.006,
+   "workspace.create": 0.006,
+   "worktree.create_40000_files": [
+    1.376,
+    1.222
+   ],
+   "worktree.create_120000_files": 3.663
+  },
+  "setup_120000_files": {
+   "baseline_gateway_sha256": "078398d902453dc4261ae0a6d9ac5deeeaa7712bc8428faacf62d5f0d6018017",
+   "baseline": "alert 'Herdr mutation response deadline expired; outcome is unknown' at step 'herdr requested' after ~5 s; Recover existing checkout -> partial; Resume failed step -> completed",
+   "repaired_gateway_sha256_deadlines_only": "8284d9dff3344f422ae2a3bb67b55e50307166480fe63031ae11c3c9cba180c1",
+   "repaired": "completed in one pass, 7.7 s from Start setup to 'Space and terminal are ready'; terminal w4:p2 streamed"
+  },
+  "discovery_fixture": {
+   "baseline_catalog_entries_100000": [
+    "hugerepo"
+   ],
+   "repaired_default_16384": [
+    "source",
+    "hugerepo",
+    "worktrees/hugerepo-<setup 1>",
+    "worktrees/hugerepo-<setup 2>"
+   ],
+   "repaired_gateway_sha256": "ba69fa54e1cf6edb67d6ba1533ccb3dac70d627760b41e823aa0f0c27168f1a6"
+  }
+ },
+ "discovery_user_root_read_only": {
+  "root": "/home/nnex/dev/prj (user-configured root; names withheld)",
+  "baseline": {
+   "repositories": 26,
+   "diagnostics": [
+    "catalog_entries_bounded"
+   ],
+   "ms": 263
+  },
+  "repaired": {
+   "repositories": 70,
+   "diagnostics": [],
+   "ms": 637
+  },
+  "python_replica_full_walk_entries": 5786,
+  "files_written_under_root": 0
+ }
+}
