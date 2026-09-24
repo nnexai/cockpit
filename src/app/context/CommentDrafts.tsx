@@ -55,6 +55,7 @@ type CommentDraftsProps = {
   onEditorDismissed?: () => void;
   onCountChange?: (count: number) => void;
   invalidationGeneration?: number;
+  refreshGeneration?: number;
   sourceIdentity?: string;
   sourceKind?: ExtensionKind;
   reviewCapture?: CommentReviewRef;
@@ -98,7 +99,7 @@ export function InlineCommentDrafts({ drafts, line, actions, rootId, path }: { d
   </article>)}</div>;
 }
 
-export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, inlineEditor = false, showToolbar = true, onCommentStatusChange, onEditorDismissed, onCountChange, invalidationGeneration = 0, sourceIdentity, sourceKind = "context", reviewCapture }: CommentDraftsProps) {
+export function CommentDrafts({ client, presentation, root, path, document, selection, mode, editorState, onEditorStateChange, children, inlineEditor = false, showToolbar = true, onCommentStatusChange, onEditorDismissed, onCountChange, invalidationGeneration = 0, refreshGeneration = 0, sourceIdentity, sourceKind = "context", reviewCapture }: CommentDraftsProps) {
   const currentSourceId = sourceIdentity ?? root.companion_id;
   const scope = useMemo<CommentRequestScope>(() => ({ binding_id: presentation.binding_id, client_id: windowClientId }), [presentation.binding_id]);
   const [batch, setBatch] = useState<CommentBatch | null>(null);
@@ -117,6 +118,7 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   const [retainedStale, setRetainedStale] = useState(false);
   const generationRef = useRef(0);
   const refreshedInvalidation = useRef(invalidationGeneration);
+  const refreshedRefresh = useRef(refreshGeneration);
   const persistedBatchId = batch && batch.generation > 0 ? batch.batch_id : null;
   const identityRef = useRef(identity);
   identityRef.current = identity;
@@ -148,11 +150,14 @@ export function CommentDrafts({ client, presentation, root, path, document, sele
   }, [client, identity, onCountChange, presentation.pane_id, presentation.session_id, scope]);
 
   useEffect(() => {
-    if (pending || loading || refreshedInvalidation.current === invalidationGeneration) return;
+    if (pending || loading) return;
+    const invalidated = refreshedInvalidation.current !== invalidationGeneration;
+    const explicitlyRefreshed = refreshedRefresh.current !== refreshGeneration;
+    if (!invalidated && !explicitlyRefreshed) return;
     refreshedInvalidation.current = invalidationGeneration;
+    refreshedRefresh.current = refreshGeneration;
     void loadBatch(persistedBatchId);
-  }, [persistedBatchId, invalidationGeneration, loadBatch, loading, pending]);
-
+  }, [persistedBatchId, invalidationGeneration, refreshGeneration, loadBatch, loading, pending]);
   const switchBatch = useCallback((batchId: string) => {
     if (batch?.batch_id !== batchId) clearEditor();
     void loadBatch(batchId);

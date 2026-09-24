@@ -1003,7 +1003,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       for (const path of invalidated) {
         const key = keyFor(root.root_id, path);
         const state = next[key];
-        if (state?.document) {
+        if (state?.document && state.status !== "error") {
+          // A late invalidation must not hide the source read's actionable error.
           next[key] = {
             status: "error",
             document: state.document,
@@ -1109,6 +1110,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         editorState={value.commentEditor ?? null}
         onEditorStateChange={(commentEditor) => onChange({ ...value, commentEditor })}
         invalidationGeneration={invalidationGeneration}
+        refreshGeneration={refreshGeneration}
         sourceIdentity={root.companion_id ?? root.root_id}
         inlineEditor={effectiveMode !== "markdown"}
         showToolbar={false}

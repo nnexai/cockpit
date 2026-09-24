@@ -182,3 +182,84 @@ it.each([0, 1])("refreshes generation %i batches using their persistence state",
     host.remove();
   }
 });
+it("reconciles saved missing Context comments after explicit refresh without changing their identity or text", async () => {
+  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const draft = {
+    draft_id: "saved-draft",
+    file_ref: { root_id: "root", path: "notes.md", absolute_path: "/context/notes.md", revision: "revision", content_hash: "sha256:captured" },
+    anchor: { kind: "whole_file" },
+    comment_text: "Keep this note",
+    source_state: "missing",
+    created_at: "now",
+    updated_at: "now",
+  } as CommentBatch["drafts"][number];
+  const batch: CommentBatch = { batch_id: "saved-batch", generation: 1, drafts: [draft], owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, updated_at: "now" };
+  const recovered = { ...batch, drafts: [{ ...draft, source_state: "current" }] };
+  const commentBatch = vi.fn().mockResolvedValueOnce(batch).mockResolvedValueOnce(recovered);
+  const commentUpsert = vi.fn();
+  const client = { commentBatch, commentUpsert } as unknown as CockpitClient;
+  const host = window.document.createElement("div"); window.document.body.append(host); const mounted = createRoot(host);
+  let setRefreshGeneration!: (generation: number) => void;
+  function Harness() {
+    const [refreshGeneration, updateRefreshGeneration] = useState(0);
+    setRefreshGeneration = updateRefreshGeneration;
+    return <CommentDrafts client={client} presentation={presentation} root={root} path="notes.md" document={null} selection={null} mode="markdown" editorState={null} onEditorStateChange={() => {}} refreshGeneration={refreshGeneration} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("missing");
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("Keep this note");
+    await act(async () => setRefreshGeneration(1));
+    expect(commentBatch).toHaveBeenCalledTimes(2);
+    expect(commentBatch).toHaveBeenLastCalledWith("session", "pane", expect.objectContaining({ batch_id: "saved-batch" }));
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("current");
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("Whole file");
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("Keep this note");
+    expect(commentUpsert).not.toHaveBeenCalled();
+  } finally { await act(async () => mounted.unmount()); host.remove(); }
+});
+
+it("ignores an in-flight explicit refresh after the comment identity changes", async () => {
+  const root: ContextRoot = { root_id: "root", kind: "companion", label: "Context", path: "/context", repository_id: "repo", checkout_path: "/repo", companion_id: "source" };
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding" } as PanePresentation;
+  const draft = {
+    draft_id: "saved-draft",
+    file_ref: { root_id: "root", path: "notes.md", absolute_path: "/context/notes.md", revision: "revision", content_hash: "sha256:captured" },
+    anchor: { kind: "whole_file" },
+    comment_text: "Keep this note",
+    source_state: "current",
+    created_at: "now",
+    updated_at: "now",
+  } as CommentBatch["drafts"][number];
+  const batch: CommentBatch = { batch_id: "saved-batch", generation: 1, drafts: [draft], owner: { session_id: "session", pane_id: "pane", terminal_id: "terminal", source_kind: "context", source_id: "source" }, last_known_location: { workspace_id: "space", tab_id: "tab" }, live_attachment: null, updated_at: "now" };
+  let resolveRefresh!: (value: CommentBatch) => void;
+  const staleRefresh = new Promise<CommentBatch>((resolve) => { resolveRefresh = resolve; });
+  const commentBatch = vi.fn(async (_session: string, _pane: string, request: { batch_id: string | null }) => {
+    if (commentBatch.mock.calls.length === 1) return batch;
+    if (request.batch_id === "saved-batch") return staleRefresh;
+    return { ...batch, drafts: [{ ...draft, source_state: "current" }] };
+  });
+  const client = { commentBatch } as unknown as CockpitClient;
+  const host = window.document.createElement("div"); window.document.body.append(host); const mounted = createRoot(host);
+  let setRefreshGeneration!: (generation: number) => void;
+  let setSourceIdentity!: (identity: string) => void;
+  function Harness() {
+    const [refreshGeneration, updateRefreshGeneration] = useState(0);
+    const [sourceIdentity, updateSourceIdentity] = useState("source");
+    setRefreshGeneration = updateRefreshGeneration;
+    setSourceIdentity = updateSourceIdentity;
+    return <CommentDrafts client={client} presentation={presentation} root={root} sourceIdentity={sourceIdentity} path="notes.md" document={null} selection={null} mode="markdown" editorState={null} onEditorStateChange={() => {}} refreshGeneration={refreshGeneration} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await act(async () => setRefreshGeneration(1));
+    expect(commentBatch).toHaveBeenCalledTimes(2);
+    await act(async () => setSourceIdentity("recovered-source"));
+    expect(commentBatch).toHaveBeenCalledTimes(3);
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("current");
+    await act(async () => { resolveRefresh({ ...batch, drafts: [{ ...draft, source_state: "missing" }] }); });
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("current");
+    expect(host.querySelector(".comment-file-drafts")?.textContent).toContain("Keep this note");
+  } finally { await act(async () => mounted.unmount()); host.remove(); }
+});
