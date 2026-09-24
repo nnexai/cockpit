@@ -46,6 +46,32 @@ function applicationFontSize(): number {
   return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16;
 }
 
+// Cockpit's default 16-color terminal preset. Applications' true-color ANSI
+// sequences remain untouched; only terminal palette indices use these colors.
+const terminalTheme = {
+  background: "#0c1016",
+  foreground: "#d8dee8",
+  cursor: "#d8dee8",
+  cursorAccent: "#0c1016",
+  selectionBackground: "#315a8f99",
+  black: "#1a1f29",
+  red: "#e86872",
+  green: "#63bd83",
+  yellow: "#d8a657",
+  blue: "#6e9fdf",
+  magenta: "#b08ad4",
+  cyan: "#5fb8bc",
+  white: "#c9d1dc",
+  brightBlack: "#596273",
+  brightRed: "#ff7b86",
+  brightGreen: "#75d395",
+  brightYellow: "#edbc6a",
+  brightBlue: "#82b3f4",
+  brightMagenta: "#c29be7",
+  brightCyan: "#72cdd0",
+  brightWhite: "#f1f4f8",
+} as const;
+
 export function createCockpitTerminal(fontSize = applicationFontSize()): Terminal {
   return new Terminal({
     convertEol: false,
@@ -56,7 +82,7 @@ export function createCockpitTerminal(fontSize = applicationFontSize()): Termina
     // Herdr owns terminal scroll position. A local full-height scrollbar has
     // no authoritative position and reads as a second pane divider.
     scrollbar: { showScrollbar: false, width: 8 },
-    theme: { background: "#0c1016", foreground: "#d8dee8" },
+    theme: terminalTheme,
     scrollback: 5000,
     vtExtensions: { kittyKeyboard: true },
   });

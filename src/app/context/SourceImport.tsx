@@ -242,13 +242,34 @@ export function SourceImport({ client, sessionId, paneId, bindingId, rootId, onC
       {listError ? <div className="context-resource-error" role="alert"><strong>Source list unavailable.</strong><span>{listError}</span><button type="button" disabled={listPending} onClick={loadSources}>Retry source list</button></div> : null}
       {!listPending && !listError && listLoaded && entries.length === 0 ? <p className="context-resource-empty">No imported sources yet. Use Import source above to add one.</p> : null}
       {entries.map(entry => <article key={entry.source_id} role="listitem" className={`context-source-entry${entry.source_id === selectedSourceId ? " is-selected" : ""}`} aria-current={entry.source_id === selectedSourceId ? "true" : undefined}>
-        <strong title={entry.title}>{entry.title}</strong>
-        <span>{entry.provider_id} · {entry.provider_instance} · {entry.resource_type} · {entrySummary(entry)}</span>
-        <span className="context-source-identity"><code title={entry.canonical_id}>{entry.canonical_id}</code>{entry.source_revision ? <code title={`Provider revision ${entry.source_revision}`}>rev {entry.source_revision}</code> : null}</span>
-        {entry.relative_path ? <code title={entry.relative_path}>{entry.relative_path}</code> : <span className="context-source-unavailable">Unavailable locally; no materialized file</span>}
+        <strong className="context-source-title" title={entry.title}>{entry.title}</strong>
+        <div className="context-source-summary">
+          <span className="context-source-chip context-source-provider">{entry.provider_id}</span>
+          <span className="context-source-chip context-source-kind">{entry.resource_type}</span>
+          <span className={`context-source-chip context-source-freshness is-${entry.freshness}`}>{entry.freshness}</span>
+          <span className={`context-source-chip context-source-status is-${entry.status}`}>{entry.status}</span>
+        </div>
         {entry.status === "failed" ? <p className="context-source-diagnostic" role="alert">Materialization failed; the provider result is retained. Retry refresh.</p> : null}
         {entry.status === "unsupported" || entry.freshness === "unavailable" ? <p className="context-source-diagnostic" role="status">Provider/resource capability is unavailable for this source.</p> : null}
         {entry.status === "conflict" || entry.freshness === "conflict" ? <p className="context-source-diagnostic" role="status">Local edits preserved; refresh needs reconciliation.</p> : null}
+        <details className="context-source-details">
+          <summary>Source details</summary>
+          <dl>
+            <dt>Title</dt><dd><code>{entry.title}</code></dd>
+            <dt>Source ID</dt><dd><code>{entry.source_id}</code></dd>
+            <dt>Provider</dt><dd><code>{entry.provider_id}</code></dd>
+            <dt>Provider instance</dt><dd><code>{entry.provider_instance}</code></dd>
+            <dt>Resource type</dt><dd><code>{entry.resource_type}</code></dd>
+            <dt>Canonical ID</dt><dd><code>{entry.canonical_id}</code></dd>
+            <dt>Source URL</dt><dd><code>{entry.source_url ?? "Unavailable"}</code></dd>
+            <dt>Original URL</dt><dd><code>{entry.original_url ?? "Unavailable"}</code></dd>
+            <dt>Revision</dt><dd><code>{entry.source_revision ?? "Unavailable"}</code></dd>
+            <dt>Content hash</dt><dd><code>{entry.content_hash}</code></dd>
+            <dt>Freshness</dt><dd><code>{entry.freshness}</code></dd>
+            <dt>Materialization status</dt><dd><code>{entry.status}</code></dd>
+            <dt>Materialized path</dt><dd><code>{entry.relative_path ?? "Unavailable locally; no materialized file"}</code></dd>
+          </dl>
+        </details>
         <button type="button" disabled={isRefreshPending(entry.source_id)} aria-label={`${isRefreshPending(entry.source_id) ? "Refreshing" : "Refresh"} source ${entry.title}`} onClick={() => void perform(entry.source_id)}>{isRefreshPending(entry.source_id) ? "Refreshing…" : "Refresh source"}</button>
       </article>)}
     </div>

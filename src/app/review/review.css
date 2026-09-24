@@ -48,7 +48,7 @@
 .review-body { display: grid; min-height: 0; flex: 1; grid-template-columns: 204px minmax(0, 1fr); }
 .review-files { min-width: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--sidebar-bg); }
 .review-files > header { position: sticky; top: 0; z-index: 1; display: flex; min-height: 38px; align-items: center; justify-content: flex-start; padding: 0 13px; border-bottom: 0; background: var(--sidebar-bg); color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
 
   text-transform: uppercase;
 
@@ -82,7 +82,7 @@
 .review-hunk > header { padding-block: 4px; background: #1c293a; color: #acbfd8;
   padding: 8px 20px;
 
-  font: 11px ui-monospace, "DejaVu Sans Mono", monospace;
+  font: var(--font-size-2xs) var(--font-mono);
 }
 .review-line { display: grid; width: 100%; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .review-line:hover { background: var(--surface-hover); }
@@ -99,6 +99,10 @@
 .review-line.is-added.is-selected,
 .review-line.is-deleted.is-selected { background: var(--surface-selected); }
 .review-empty { padding: 24px; color: var(--text-secondary); }
+.review-empty:has(> .ui-icon) { display: flex; align-items: center; gap: 10px; }
+.review-empty > .ui-icon { flex: 0 0 16px; }
+.review-empty button { min-height: 28px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); cursor: pointer; }
+.review-empty button:hover { background: var(--surface-hover); }
 
 .review-viewer { display: flex; width: 100%; min-width: 0; min-height: 0; height: 100%; flex: 1; flex-direction: column; }
 .review-viewer > .review-pane { flex: 1; }
@@ -131,7 +135,7 @@
   background: #121923;
   color: var(--text-secondary);
 
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 
   flex: 0 0 auto;
 }

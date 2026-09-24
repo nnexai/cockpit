@@ -38,7 +38,7 @@
 .comment-recovery button:disabled { cursor: default; opacity: .6; }
 
 .comment-count { font-weight: 600; }
-.comment-detached { color: var(--warning, var(--working)); font-size: var(--font-size-2xs); }
+.comment-detached { color: var(--warning); font-size: var(--font-size-2xs); }
 .comment-notice {
   display: flex;
   min-height: 30px;
@@ -63,10 +63,10 @@
   color: var(--text-primary);
 }
 .comment-draft + .comment-draft { margin-top: 6px; }
-.comment-draft.is-stale { border-color: color-mix(in srgb, var(--warning, var(--working)) 65%, var(--border)); }
+.comment-draft.is-stale { border-color: color-mix(in srgb, var(--warning) 65%, var(--border)); }
 .comment-draft-meta { display: flex; align-items: baseline; gap: 8px; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .comment-draft-meta strong { color: var(--text-primary); }
-.comment-draft-meta span { color: var(--warning, var(--working)); }
+.comment-draft-meta span { color: var(--warning); }
 .comment-draft p { margin: 5px 0 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .comment-draft-actions { display: flex; gap: 6px; }
 .comment-draft-actions button { min-height: 25px; padding: 2px 7px; font-size: var(--font-size-2xs); }
@@ -78,7 +78,7 @@
 .comment-recovery-list h3 { margin: 0 0 7px; color: var(--text-secondary); font-size: var(--font-size-2xs); letter-spacing: .04em; text-transform: uppercase; }
 .comment-editor { padding: 10px 12px 12px; border-top: 1px solid var(--border); background: var(--surface); }
 .comment-editor textarea,
-.comment-preview textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; padding: 7px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--terminal-bg); color: var(--text-primary); font: 13px/19px var(--font-mono, "IBM Plex Mono", monospace); }
+.comment-preview textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; padding: 7px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--terminal-bg); color: var(--text-primary); font: var(--font-size-xs)/19px var(--font-mono); }
 .comment-editor textarea:focus,
 .comment-preview textarea:focus { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .comment-editor-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
@@ -103,13 +103,13 @@ dialog.comment-overview::backdrop { background: rgb(3 5 8 / 45%); }
 .comment-recovery-row small { grid-column: 1 / -1; color: var(--text-muted); }
 .comment-overview-list { display: grid; gap: 8px; margin-top: 16px; }
 .comment-overview-list > p { color: var(--text-secondary); }
-.comment-recovery { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 10px; border: 1px solid var(--warning, var(--working)); color: var(--text-secondary); flex-wrap: wrap; }
+.comment-recovery { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 10px; border: 1px solid var(--warning); color: var(--text-secondary); flex-wrap: wrap; }
 .comment-recovery strong { color: var(--text-primary); }
 .comment-recovery span { flex: 1 1 100%; }
 .comment-preview { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 .comment-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .comment-preview-meta { display: flex; gap: 10px; margin: 4px 0 8px; color: var(--text-secondary); font-size: var(--font-size-2xs); flex-wrap: wrap; }
-.comment-preview-reason { color: var(--warning, var(--working)); }
+.comment-preview-reason { color: var(--warning); }
 .comment-preview-ok { display: block; margin-top: 8px; color: var(--idle); }
 .comment-preview-blocked { display: block; margin-top: 8px; color: var(--blocked); }
 
@@ -122,7 +122,7 @@ dialog.comment-overview::backdrop { background: rgb(3 5 8 / 45%); }
 .comment-paste label { display: block; margin: 8px 0; }
 .comment-paste select { display: block; max-width: 100%; margin-top: 5px; padding: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); }
 
-.comment-overview { font-family: var(--font-sans, "IBM Plex Sans", sans-serif); font-size: var(--font-size-sm); }
+.comment-overview { font-family: var(--font-sans); font-size: var(--font-size-sm); }
 .comment-overview :is(button, select, textarea) { font-family: inherit; }
 .comment-recovery-list { margin-top: 10px; padding: 0; border: 1px solid var(--border); }
 .comment-recovery-list summary { display: flex; justify-content: space-between; padding: 7px 9px; color: var(--text-secondary); cursor: pointer; font-size: var(--font-size-2xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
@@ -139,12 +139,12 @@ dialog.comment-overview::backdrop { background: rgb(3 5 8 / 45%); }
 .comment-overview-list { gap: 6px; margin-top: 14px; }
 .comment-overview-list h3 { margin: 0 0 2px; color: var(--text-secondary); font-size: var(--font-size-2xs); letter-spacing: .04em; text-transform: uppercase; }
 .comment-overview .comment-draft { padding: 8px 9px; }
-.comment-overview .comment-draft-meta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--font-sans, "IBM Plex Sans", sans-serif); }
+.comment-overview .comment-draft-meta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--font-sans); }
 .comment-overview .comment-draft-meta strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .comment-preview { margin-top: 14px; padding-top: 10px; }
 .comment-preview-empty { color: var(--text-secondary); font-size: var(--font-size-sm); }
 .comment-paste { margin-top: 14px; padding-top: 10px; font-size: var(--font-size-sm); }
 .comment-paste h3 { margin: 0; font-size: var(--font-size-sm); }
 .comment-paste p { margin: 5px 0; font-size: var(--font-size-2xs); }
-.comment-paste-notice { color: var(--working, var(--text-secondary)); }
-.comment-overview .comment-preview textarea { font-family: var(--font-mono, "IBM Plex Mono", monospace); }
+.comment-paste-notice { color: var(--working); }
+.comment-overview .comment-preview textarea { font-family: var(--font-mono); }

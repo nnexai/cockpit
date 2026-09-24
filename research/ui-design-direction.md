@@ -132,7 +132,7 @@ Agents is an attention queue, not a directory and not a chat transcript.
 #### Tab strip
 
 - Height 36 px. It spans the main area above the pane layout.
-- Tabs are 36 px high, 112 px preferred width, 72 px minimum, and 220 px maximum.
+- Tabs size to their content: 40 px minimum for a numbered tab and 220 px maximum. Do not reserve 112 px for a one-character label.
 - Each tab shows a 14 px type icon, label, and close action on hover/focus. A small state mark may appear after the label if a child pane needs attention.
 - The active tab has `surface-raised`, primary text, and a 2 px bottom accent. Inactive tabs use no pill or border radius.
 - Keep Context as a normal first-class tab labeled `Context`. It belongs to the selected Space and sits after Herdr terminal tabs unless Herdr supplies a different authoritative order.
@@ -175,6 +175,7 @@ Context is a read-only work surface, not a document editor.
 - Markdown measure is capped at 88 characters, aligned 32 px from the viewer's left edge rather than centered in a broad empty canvas. Body type is 14 px/22 px. Code blocks use the terminal mono family at 13 px/19 px.
 - Frontmatter starts collapsed behind `Metadata`, with canonical identifier and freshness summary visible in the header.
 - Search opens a 32 px field in the toolbar and sends the narrow core-mediated search operation. Results appear as a compact list with file, line, and one bounded excerpt. Do not imply arbitrary shell access.
+- In Context resources, show source titles first with provider, kind, freshness, and materialization status as compact chips. Keep full canonical IDs, revisions, URLs, hashes, and paths in a keyboard-accessible details disclosure; preserve inline failure and refresh actions.
 
 ## Token-level visual specification
 
@@ -238,7 +239,7 @@ Dark is the first direction because real terminal programs and Herdr's primary s
 | `focus-strong` | `#8DB8FF` | Keyboard/pane focus |
 | `blocked` | `#FF6B78` | Blocked/error state |
 | `working` | `#E7B14A` | Working state |
-| `done` | `#69A7FF` | Done/unseen state |
+| `done` | `#AE9CDB` | Done/unseen state, distinct from selection blue |
 | `idle` | `#57C78B` | Idle/seen state |
 | `warning` | `#E7B14A` | Warning |
 | `terminal-bg` | `#0C1016` | xterm background |
@@ -248,7 +249,7 @@ Dark is the first direction because real terminal programs and Herdr's primary s
 
 State fills use no more than 12 percent opacity. Text and glyphs carry the solid color. `text-muted` is not valid for actionable controls.
 
-Recommended ANSI defaults:
+The built-in xterm preset uses the 16 ANSI colors below plus `terminal-bg`, `terminal-fg`, an explicit cursor, and selection color. It does not read the user's external terminal configuration.
 
 ```text
 black #1A1F29   red #E86872      green #63BD83   yellow #D8A657

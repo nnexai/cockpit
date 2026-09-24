@@ -3,6 +3,7 @@ import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedb
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
 import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, validateFrameDescriptor } from "./framePresenter";
 import { createBrowserTransform } from "./transform";
+import { UiIcon } from "../UiIcon";
 import "./browser.css";
 
 export type BrowserPaneRecoveryRegistration = {
@@ -107,6 +108,14 @@ const annotationIconPaths = {
 } as const;
 type AnnotationIconName = keyof typeof annotationIconPaths;
 const AnnotationIcon = ({ name }: { name: AnnotationIconName }) => <svg className={`browser-annotation-icon browser-annotation-icon-${name}`} viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round"><path d={annotationIconPaths[name]} /></svg>;
+function BrowserColorPicker({ color, onChange }: { color: string; onChange: (color: typeof COLORS[number]) => void }) {
+  return <details className="browser-color-picker">
+    <summary aria-label={`Annotation color, ${color}`} title={`Annotation color: ${color}`}><span style={{ backgroundColor: color }} /></summary>
+    <div className="browser-color-options" role="group" aria-label="Annotation color">
+      {COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} aria-pressed={color === candidate} title={`Use ${candidate} annotation color`} style={{ backgroundColor: candidate }} onClick={(event) => { onChange(candidate); event.currentTarget.closest("details")?.removeAttribute("open"); }} />)}
+    </div>
+  </details>;
+}
 
 const errorMessage = (error: unknown): string => error instanceof Error && error.message ? error.message : "The browser view stream is unavailable.";
 const newId = (prefix: string): string => `${prefix}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
@@ -2308,18 +2317,42 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     }
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
-    <header className="browser-toolbar"><strong>Browser</strong><span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span><div className="browser-toolbar-actions">{status === "error" ? <button type="button" onClick={() => void reconnectView()}>Retry</button> : null}{presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><AnnotationIcon name="expand" /></button> : null}{presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><AnnotationIcon name="expand" /></button> : null}</div></header>
-    <div className="browser-tabs" role="tablist" aria-label="Browser tabs">{targetTabs.map((browserTarget) => { const tabName = browserTarget.title || browserTarget.url || "New tab"; return <div key={browserTarget.target_id} className="browser-tab-wrap"><button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{tabName}</button>{browserTarget.can_close ? <button type="button" className="browser-tab-close" aria-label={`Close ${tabName}`} title={`Close ${tabName}`} onClick={(event) => { event.stopPropagation(); tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } }); }}>×</button> : null}</div>; })}<button type="button" className="browser-new-tab" aria-label="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}>+</button></div>
-    <div className="browser-navigation"><button type="button" disabled={!snapshot?.navigation?.can_go_back} onClick={() => navigation("back")}>←</button><button type="button" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}>→</button><button type="button" disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}>{snapshot?.navigation?.loading ? "■" : "↻"}</button><form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}><input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" /></form></div>
-    <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
-      {(["browse", "select", "freehand", "element", "region"] as const).map((candidate) => {
-        const label = candidate[0].toUpperCase() + candidate.slice(1);
-        return <button key={candidate} type="button" className={tool === candidate ? "is-active" : undefined} aria-pressed={tool === candidate} aria-label={label} title={`${label} tool`} onClick={() => { setTool(candidate); gestureRef.current = null; setGesture(null); if (candidate !== "browse") onInteractionFocus?.(); }}><AnnotationIcon name={candidate} /></button>;
-      })}
-      <span className="browser-color-picker">{COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} title={`Use ${candidate} annotation color`} style={{ background: candidate, borderColor: candidate }} onClick={() => setColor(candidate)} />)}</span>
-      <button type="button" disabled={!draft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => { if (event.ctrlKey) void discardDraft(); else if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
-      <button type="button" disabled={!selectedAnnotation} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={() => { if (!selectedAnnotation) return; if (noteId !== selectedAnnotation.id) setNoteValue(selectedAnnotation.comment ?? ""); setNoteId(selectedAnnotation.id); setNoteEditorDismissed(false); markEditorDirty(); }}><AnnotationIcon name="notes" /></button>
-      <span className="browser-annotation-notes" aria-label={`Notes ${annotations.length}`} title={`Notes ${annotations.length}`}>Notes {annotations.length}</span>
+    <header className="browser-toolbar">
+      <span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span>
+      <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+        {targetTabs.map((browserTarget) => {
+          const tabName = browserTarget.title || browserTarget.url || "New tab";
+          return <div key={browserTarget.target_id} className="browser-tab-wrap">
+            <button type="button" role="tab" aria-selected={browserTarget.target_id === snapshot?.displayed_target_id} title={browserTarget.url} onClick={() => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: browserTarget.target_id } }); }}>{tabName}</button>
+            {browserTarget.can_close ? <button type="button" className="browser-tab-close browser-toolbar-icon" aria-label={`Close ${tabName}`} title={`Close ${tabName}`} onClick={(event) => { event.stopPropagation(); tabCommand({ type: "tab", command: { type: "close", target_id: browserTarget.target_id } }); }}><UiIcon name="close" /></button> : null}
+          </div>;
+        })}
+        <button type="button" className="browser-new-tab browser-toolbar-icon" aria-label="New browser tab" title="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}><UiIcon name="plus" /></button>
+      </div>
+      <div className="browser-toolbar-actions">
+        {status === "error" ? <button type="button" onClick={() => void reconnectView()}>Retry</button> : null}
+        {presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><UiIcon name="expand" /></button> : null}
+        {presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><UiIcon name="expand" /></button> : null}
+      </div>
+    </header>
+    <div className="browser-controls">
+      <div className="browser-navigation">
+        <button type="button" className="browser-toolbar-icon" aria-label="Back" title="Back" disabled={!snapshot?.navigation?.can_go_back} onClick={() => navigation("back")}><UiIcon name="back" /></button>
+        <button type="button" className="browser-toolbar-icon" aria-label="Forward" title="Forward" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}><UiIcon name="forward" /></button>
+        <button type="button" className="browser-toolbar-icon" aria-label={snapshot?.navigation?.loading ? "Stop loading" : "Reload"} title={snapshot?.navigation?.loading ? "Stop loading" : "Reload"} disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}><UiIcon name={snapshot?.navigation?.loading ? "stop" : "refresh"} /></button>
+        <form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}>
+          <input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" />
+        </form>
+      </div>
+      <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
+        {(["browse", "select", "freehand", "element", "region"] as const).map((candidate) => {
+          const label = candidate[0].toUpperCase() + candidate.slice(1);
+          return <button key={candidate} type="button" className={tool === candidate ? "is-active" : undefined} aria-pressed={tool === candidate} aria-label={label} title={`${label} tool`} onClick={() => { setTool(candidate); gestureRef.current = null; setGesture(null); if (candidate !== "browse") onInteractionFocus?.(); }}><AnnotationIcon name={candidate} /></button>;
+        })}
+        <BrowserColorPicker color={color} onChange={setColor} />
+        <button type="button" disabled={!draft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => { if (event.ctrlKey) void discardDraft(); else if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
+        <button type="button" disabled={!selectedAnnotation} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={() => { if (!selectedAnnotation) return; if (noteId !== selectedAnnotation.id) setNoteValue(selectedAnnotation.comment ?? ""); setNoteId(selectedAnnotation.id); setNoteEditorDismissed(false); markEditorDirty(); }}><AnnotationIcon name="notes" /></button>
+        <span className="browser-annotation-notes" aria-label={`Notes ${annotations.length}`} title={`Notes ${annotations.length}`}>Notes {annotations.length}</span>
       {pendingCapture ? <><span className="browser-capture-pending" role="status">Pending capture · retry sending or discard it</span><button type="button" aria-label="Discard pending capture" title="Discard pending capture" onClick={() => void discardPendingCapture()}><AnnotationIcon name="remove" /></button></> : null}
       {savedDeliveries.length > 0 ? <div className="browser-capture-pending" aria-label="Saved feedback recovery">
         {savedDeliveries.map((item, index) => {
@@ -2338,6 +2371,8 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       {associationOwner.pendingAnnotationMutations.length > 0 ? <><span className="browser-capture-pending" role="status">Retained annotation changes need review; unknown delivery is not replayed automatically.</span><button type="button" aria-label="Retry retained annotation changes" title="Retry retained annotation changes" onClick={() => void retryAnnotationMutations()}>Retry saves</button><button type="button" aria-label="Discard retained annotation changes" title="Discard retained annotation changes" onClick={() => void discardAnnotationMutations()}>Discard retry intent</button></> : null}
       {deliveryNotice ? <span className="browser-delivery-complete" role="status">{deliveryNotice}</span> : null}
       <button type="button" className="browser-send-annotations" disabled={pendingCapture ? false : !draft || !frame || annotations.length === 0} aria-label={pendingCapture ? "Retry pending capture" : "Send annotations"} title={pendingCapture ? "Retry pending capture" : "Send annotations"} onClick={() => void capture(false)}><AnnotationIcon name="feedback" /></button>
+    </div>
+
     </div>
       <div ref={surfaceRef} className="browser-surface" tabIndex={0} style={{ cursor: tool === "browse" ? snapshot?.cursor?.cursor ?? "default" : tool === "select" ? "default" : "crosshair" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onWheel={onWheel} onKeyDown={onSurfaceKeyDown} onKeyUp={onSurfaceKeyUp} onPaste={(event) => clipboard(event, false)} onCopy={(event) => clipboard(event, true)} onCompositionStart={(event) => sendComposition(event, "start")} onCompositionUpdate={(event) => sendComposition(event, "update")} onCompositionEnd={(event) => sendComposition(event, "commit")}>
       <canvas ref={canvasRef} className="browser-frame" aria-label="Live browser frame" />

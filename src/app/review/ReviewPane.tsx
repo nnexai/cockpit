@@ -484,6 +484,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
         </section>)}
         {diff?.diagnostics.map((item, index) => <p key={`${item.code}-${index}`} className="review-notice">{item.message}</p>)}
         {diff && diff.hunks.length === 0 && !diff.file.binary ? <p className="review-empty">No textual hunk is available for this change.</p> : null}
+        {review && review.files.length === 0 && !pending && !error ? <div className="review-empty" role="status"><UiIcon name="file" /><span>No changes in this comparison.</span><button type="button" onClick={submitComparison}>Refresh</button></div> : null}
         {!review && !pending ? <p className="review-empty">{comparison === "branch" ? "Enter a base ref, then press Enter or Refresh to compare branches." : "Choose a verified Review pane to load a local Git snapshot."}</p> : null}
   </>;
   };
