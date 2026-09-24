@@ -253,7 +253,7 @@ function RepositoryPicker({ repositories, selectedId, loading, disabled, onChoos
   return <div ref={pickerRef} className="setup-repository-picker" onFocus={() => setPickerOpen(true)} onBlur={onBlur} onKeyDown={onKeyDown}>
     <div className="setup-repository-control">
       <input ref={inputRef} id="setup-repository" type="search" aria-label="Find a repository" role="combobox" aria-expanded={pickerOpen} aria-controls={pickerOpen ? "setup-repository-results" : undefined} aria-autocomplete="list" aria-activedescendant={pickerOpen && activeId ? `setup-repository-result-${active}` : undefined} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a repository" autoComplete="off" disabled={disabled} />
-      <p className="setup-picker-status" aria-live="polite">{loading ? "Loading local repositories…" : `${repositories.length} repositories`}</p>
+      <p className="setup-picker-status" aria-live="polite">{loading ? "Loading local repositories…" : `${repositories.length} ${repositories.length === 1 ? "repository" : "repositories"}`}</p>
       {pickerOpen ? <div id="setup-repository-results" className="setup-repository-list" role="listbox" aria-label="Matching repositories">
         {matches.map((repository, index) => <button key={repository.repository_id} id={`setup-repository-result-${index}`} data-setup-repository-result-index={index} type="button" role="option" aria-selected={index === active} className={`setup-repository${repository.repository_id === selectedId ? " is-selected" : ""}${index === active ? " is-active" : ""}`} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => choose(repository)} disabled={disabled}>
           <span className="setup-repository-title"><strong>{Array.from(repository.name, (character, characterIndex) => matches[index].matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</strong></span>
@@ -289,6 +289,9 @@ function PlanDetails({ plan }: { plan: WorkspaceSetupPlan }) {
   return <details open className="setup-disclosure">
     <summary>Reviewed setup effects</summary>
     <div className="setup-plan-summary">
+      <div className="setup-effects"><strong>{modeLabel(plan.mode)} · {plan.label}</strong><ul>{plan.effects.map((effect, index) => <li key={`${effect}-${index}`}>{effect}</li>)}</ul></div>
+      {plan.warnings.length > 0 ? <div className="setup-warnings"><strong>Warnings</strong><ul>{plan.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}
+      <details className="setup-plan-paths"><summary>Paths and identity</summary>
       <div className="setup-summary-row"><span>Operation</span><strong>{modeLabel(plan.mode)}</strong></div>
       <div className="setup-summary-row"><span>Review identity</span><code>{plan.operation_id} · generation {plan.generation}</code></div>
       <div className="setup-summary-row"><span>Ownership</span><span>{plan.ownership.replaceAll("_", " ")}</span></div>
@@ -298,14 +301,14 @@ function PlanDetails({ plan }: { plan: WorkspaceSetupPlan }) {
       <div className="setup-summary-row"><span>Label</span><span>{plan.label}</span></div>
       <div className="setup-summary-row"><span>Checkout</span><code>{plan.checkout_path}</code></div>
       <div className="setup-summary-row"><span>Companion</span><code>{plan.companion_path}</code></div>
-      <div className="setup-effects"><strong>Effects</strong><ul>{plan.effects.map((effect, index) => <li key={`${effect}-${index}`}>{effect}</li>)}</ul></div>
-      {plan.warnings.length > 0 ? <div className="setup-warnings"><strong>Warnings</strong><ul>{plan.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></div> : null}
+      </details>
     </div>
   </details>;
 }
 
-function Progress({ operation, readError, busy, onCancel, onResume, onReview }: {
+function Progress({ operation, readError, busy, onCancel, onResume, onReview, onDone }: {
   operation: WorkspaceOperation;
+  onDone: () => void;
   readError: string | null;
   busy: boolean;
   onCancel: () => void;
@@ -327,6 +330,7 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
       {operation.state === "running" || operation.state === "planned" ? <button type="button" onClick={onCancel} disabled={busy}>Cancel operation</button> : null}
       {failed && operation.resume_allowed ? <button type="button" className="setup-primary" onClick={onResume} disabled={busy}>{retrySource ? "Retry source import" : "Resume failed step"}</button> : null}
       {recoveryAction && recoveryLabel ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>{recoveryLabel}</button> : null}
+      {operation.state === "completed" ? <button type="button" className="setup-primary setup-done" onClick={onDone}>Done</button> : null}
     </div>
   </section>;
 }
@@ -503,7 +507,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
 
   useEffect(() => {
     if (!open) return;
-    dialogRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
+    dialogRef.current?.querySelector<HTMLElement>(".setup-body :is(input, select, button):not([disabled])")?.focus();
   }, [open]);
 
   useEffect(() => {
@@ -529,6 +533,15 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
     root.addEventListener("keydown", onKeyDown);
     return () => root.removeEventListener("keydown", onKeyDown);
   }, [handleClose, open]);
+
+  // Keep the latest setup state in view; the form above it is locked once dispatched.
+  const operationState = operation?.state ?? null;
+  useEffect(() => {
+    if (!open || !operationState) return;
+    const root = dialogRef.current;
+    root?.querySelector<HTMLElement>(".setup-progress")?.scrollIntoView?.({ block: "nearest" });
+    if (operationState === "completed") root?.querySelector<HTMLElement>(".setup-done")?.focus({ preventScroll: true });
+  }, [open, operationState]);
 
   const acceptOperation = useCallback((next: WorkspaceOperation) => {
     const current = operationRef.current;
@@ -737,8 +750,8 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, on
         </details>
         {planState.error ? <p className="setup-error" role="alert">{planState.error}</p> : null}
         {planState.plan ? <PlanDetails plan={planState.plan} /> : null}
-        {operation ? <Progress operation={operation} readError={operationReadError} busy={actionPending} onCancel={cancel} onResume={resume} onReview={reconcile} /> : null}
-        {!operation && planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Close</button><button type="button" className="setup-primary" onClick={() => void (dispatchRef.current ? inspectReceipt() : approve())} disabled={actionPending}>{actionPending ? (dispatchRef.current ? "Checking…" : "Starting…") : (dispatchRef.current ? "Check operation" : "Start setup")}</button></div> : null}
+        {operation ? <Progress operation={operation} readError={operationReadError} busy={actionPending} onCancel={cancel} onResume={resume} onReview={reconcile} onDone={handleClose} /> : null}
+        {!operation && planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Cancel</button><button type="button" className="setup-primary" onClick={() => void (dispatchRef.current ? inspectReceipt() : approve())} disabled={actionPending}>{actionPending ? (dispatchRef.current ? "Checking…" : "Starting…") : (dispatchRef.current ? "Check operation" : "Start setup")}</button></div> : null}
         {!operation && !planState.plan ? <div className="setup-actions"><button type="button" onClick={handleClose}>Cancel</button><button type="button" className="setup-primary" disabled={planState.pending || actionPending || (form.mode === "create" && (!form.repositoryId || loadState !== "ready"))} onClick={() => void submit()}>{planState.pending || actionPending ? "Preparing review…" : "Review setup"}</button></div> : null}
         {operationError ? <p className="setup-error" role="alert">{operationError}</p> : null}
       </section></main>

@@ -26,7 +26,8 @@
 
 .browser-toolbar-status {
   min-width: 0;
-  flex: 1 1 0;
+  max-width: 220px;
+  flex: 0 1 auto;
   height: 14px;
   overflow: hidden;
   color: var(--text-secondary);
@@ -38,8 +39,10 @@
 
 .browser-toolbar-actions {
   display: flex;
-  flex: 0 0 auto;
-  gap: 4px;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
 }
 
@@ -79,8 +82,7 @@
 }
 
 .browser-tabs {
-  flex: 0 1 auto;
-  max-width: 32%;
+  flex: 1 1 auto;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -195,10 +197,29 @@
 }
 
 
+/* Note count badge beside the edit-note button. */
 .browser-annotation-notes {
+  min-width: 16px;
+  margin-left: -2px;
+  padding: 0 4px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
   color: var(--text-secondary);
   font-size: var(--font-size-2xs);
+  line-height: 16px;
+  text-align: center;
   white-space: nowrap;
+}
+
+/* A live view needs no words: show a quiet dot and keep the text for assistive tech. */
+.browser-toolbar-status.is-ready {
+  position: relative;
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--idle);
+  color: transparent;
 }
 
 .browser-annotation-toolbar > button.browser-send-annotations {

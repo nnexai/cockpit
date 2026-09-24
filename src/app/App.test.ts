@@ -236,9 +236,9 @@ describe("Space tree projection", () => {
   });
 
   it("maps Space agent status to its glyph and class", () => {
-    expect(spaceStatus("blocked")).toEqual({ glyph: "●", className: "blocked" });
+    expect(spaceStatus("blocked")).toEqual({ glyph: "×", className: "blocked" });
     expect(spaceStatus("running")).toEqual({ glyph: "◐", className: "working" });
-    expect(spaceStatus("complete")).toEqual({ glyph: "●", className: "done" });
+    expect(spaceStatus("complete")).toEqual({ glyph: "✓", className: "done" });
     expect(spaceStatus("idle")).toEqual({ glyph: "○", className: "idle" });
     expect(spaceStatus("unexpected")).toEqual({ glyph: "·", className: "unknown" });
   });

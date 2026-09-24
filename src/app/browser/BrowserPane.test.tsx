@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserDraftRecoveryRequest, BrowserViewCommandOutcome, BrowserViewCommandRequest, BrowserViewCommandResponse, BrowserViewDraftState, BrowserViewEvent, BrowserViewFrameDescriptor, BrowserViewSnapshot, BrowserViewViewportState } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, CockpitClient } from "../../client/CockpitClient";
-import { BrowserPane } from "./BrowserPane";
+import { BrowserColorPicker, BrowserPane } from "./BrowserPane";
 
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x04, 0x01, 0x01, 0xff, 0xd9]);
 
@@ -574,5 +574,39 @@ describe("BrowserPane wheel recovery", () => {
     expect(host.querySelector(".browser-annotation-notes")?.getAttribute("aria-label")).toBe("Notes 0");
     expect(host.querySelector('[aria-label="Saved feedback recovery"]')?.textContent).toContain("No eligible agent.");
     expect(client.browserFeedback).toHaveBeenCalled();
+  });
+});
+
+describe("BrowserColorPicker", () => {
+  it("closes on Escape and swallows the outside click that dismisses it", async () => {
+    const host = document.createElement("div");
+    const surface = document.createElement("div");
+    surface.className = "browser-surface";
+    const surfaceDown = vi.fn();
+    surface.addEventListener("pointerdown", surfaceDown);
+    document.body.append(host, surface);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<BrowserColorPicker color="#d62828" onChange={vi.fn()} />));
+      const picker = host.querySelector<HTMLDetailsElement>(".browser-color-picker")!;
+      const open = async () => act(async () => { picker.open = true; picker.dispatchEvent(new Event("toggle")); });
+      await open();
+      await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      expect(picker.open).toBe(false);
+      expect(document.activeElement).toBe(picker.querySelector("summary"));
+      await act(async () => { picker.dispatchEvent(new Event("toggle")); });
+      await open();
+      await act(async () => { surface.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true })); });
+      expect(picker.open).toBe(false);
+      expect(surfaceDown).not.toHaveBeenCalled();
+      await act(async () => { picker.dispatchEvent(new Event("toggle")); });
+      await act(async () => { surface.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })); });
+      await act(async () => { surface.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true })); });
+      expect(surfaceDown).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      surface.remove();
+    }
   });
 });

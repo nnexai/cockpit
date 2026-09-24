@@ -103,16 +103,50 @@ const annotationIconPaths = {
   region: "M2.5 2.5h11v11h-11Z",
   remove: "M3 4.5h10M6 2.5h4M5 4.5l.6 9h4.8l.6-9M7 7v4M9 7v4",
   notes: "M14 11a3 3 0 0 1-3 3H6l-3 2v-8a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3Z",
-  feedback: "M14 11a3 3 0 0 1-3 3H6l-3 2v-8a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3Z",
+  feedback: "M14.5 1.5 7 9m7.5-7.5-4.5 13L7 9 1.5 6.5Z",
   expand: "M6 1H1v5m8-5h5v5M1 9v5h5m8-5v5H9",
 } as const;
 type AnnotationIconName = keyof typeof annotationIconPaths;
 const AnnotationIcon = ({ name }: { name: AnnotationIconName }) => <svg className={`browser-annotation-icon browser-annotation-icon-${name}`} viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round"><path d={annotationIconPaths[name]} /></svg>;
-function BrowserColorPicker({ color, onChange }: { color: string; onChange: (color: typeof COLORS[number]) => void }) {
-  return <details className="browser-color-picker">
+export function BrowserColorPicker({ color, onChange }: { color: string; onChange: (color: typeof COLORS[number]) => void }) {
+  const pickerRef = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  const close = useCallback((restoreFocus: boolean) => {
+    const picker = pickerRef.current;
+    if (!picker) return;
+    picker.open = false;
+    if (restoreFocus) picker.querySelector("summary")?.focus();
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    // A dismissing click outside the popover must not also reach the live page.
+    const onPointerDown = (event: globalThis.PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || pickerRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".browser-surface")) {
+        event.preventDefault();
+        event.stopPropagation();
+        globalThis.document.addEventListener("pointerup", (up) => up.stopPropagation(), { capture: true, once: true });
+      }
+      close(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
+    };
+    globalThis.document.addEventListener("pointerdown", onPointerDown, true);
+    globalThis.document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      globalThis.document.removeEventListener("pointerdown", onPointerDown, true);
+      globalThis.document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open, close]);
+  return <details ref={pickerRef} className="browser-color-picker" onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary aria-label={`Annotation color, ${color}`} title={`Annotation color: ${color}`}><span style={{ backgroundColor: color }} /></summary>
     <div className="browser-color-options" role="group" aria-label="Annotation color">
-      {COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} aria-pressed={color === candidate} title={`Use ${candidate} annotation color`} style={{ backgroundColor: candidate }} onClick={(event) => { onChange(candidate); event.currentTarget.closest("details")?.removeAttribute("open"); }} />)}
+      {COLORS.map((candidate) => <button key={candidate} type="button" className={color === candidate ? "is-active" : undefined} aria-label={`Use ${candidate} annotation color`} aria-pressed={color === candidate} title={`Use ${candidate} annotation color`} style={{ backgroundColor: candidate }} onClick={() => { onChange(candidate); close(true); }} />)}
     </div>
   </details>;
 }
@@ -136,6 +170,11 @@ const button = (value: number): "left" | "middle" | "right" | null => value === 
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
 const isLocalBrowserChrome = (target: EventTarget | null): boolean =>
   target instanceof Element && target.closest(".browser-note-editor, .browser-blocker, .browser-recovery") !== null;
+// The helper's blank start page is an implementation detail; show an empty address bar.
+const addressBarUrl = (value: string | null | undefined): string => {
+  if (!value) return "";
+  try { return new URL(value).pathname === "/__cockpit_browser_start__" ? "" : value; } catch { return value; }
+};
 const navigationUrl = (value: string): string => {
   const trimmed = value.trim();
   return /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
@@ -297,7 +336,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const applySnapshot = useCallback((next: BrowserViewSnapshot) => {
     snapshotRef.current = next;
     setSnapshot(next);
-    if (!urlEditing.current) setUrl(next.navigation?.url ?? "");
+    if (!urlEditing.current) setUrl(addressBarUrl(next.navigation?.url));
   }, []);
   const applyDraft = useCallback((next: BrowserViewDraftState) => {
     if (retiredDraft(associationOwner, next)) return;
@@ -1674,7 +1713,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     ++inspectRequestRef.current;
     elementIntentRef.current = null;
     const attempt = ++navigationRequestRef.current;
-    if (value.type === "navigate") setUrl(snapshotRef.current?.navigation?.url ?? "");
+    if (value.type === "navigate") setUrl(addressBarUrl(snapshotRef.current?.navigation?.url));
     urlEditing.current = false;
     draftRequestRef.current += 1;
     setSelectedId(null);
@@ -1692,7 +1731,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       const controlled = await ensureControl(); const current = controlled ? snapshotRef.current : null; const documentContext = current ? context(current) : null;
       if (!documentContext) return;
       const outcome = await command({ type: "navigation", context: documentContext, command: value });
-      if (!outcome && navigationRequestRef.current === attempt) setUrl(snapshotRef.current?.navigation?.url ?? "");
+      if (!outcome && navigationRequestRef.current === attempt) setUrl(addressBarUrl(snapshotRef.current?.navigation?.url));
     });
   };
   const dismissNoteEditor = (): void => {
@@ -2318,7 +2357,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   };
   return <section className={["browser-pane", `browser-pane-${status}`, `browser-tool-${tool}`, className].filter(Boolean).join(" ")} aria-label="Browser view">
     <header className="browser-toolbar">
-      <span className="browser-toolbar-status" role="status" aria-live="polite">{statusText(status, message)}</span>
       <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
         {targetTabs.map((browserTarget) => {
           const tabName = browserTarget.title || browserTarget.url || "New tab";
@@ -2330,6 +2368,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         <button type="button" className="browser-new-tab browser-toolbar-icon" aria-label="New browser tab" title="New browser tab" onClick={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}><UiIcon name="plus" /></button>
       </div>
       <div className="browser-toolbar-actions">
+        <span className={`browser-toolbar-status is-${status}`} role="status" aria-live="polite" title={statusText(status, message)}>{statusText(status, message)}</span>
         {status === "error" ? <button type="button" onClick={() => void reconnectView()}>Retry</button> : null}
         {presentation === "browser_only" && onBackToTerminals ? <button type="button" className="browser-toolbar-icon" aria-label="Restore split" title="Restore split" onClick={onBackToTerminals}><UiIcon name="expand" /></button> : null}
         {presentation !== "browser_only" && onExpand ? <button type="button" className="browser-toolbar-icon" aria-label="Expand browser" title="Expand browser" onClick={onExpand}><UiIcon name="expand" /></button> : null}
@@ -2341,7 +2380,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         <button type="button" className="browser-toolbar-icon" aria-label="Forward" title="Forward" disabled={!snapshot?.navigation?.can_go_forward} onClick={() => navigation("forward")}><UiIcon name="forward" /></button>
         <button type="button" className="browser-toolbar-icon" aria-label={snapshot?.navigation?.loading ? "Stop loading" : "Reload"} title={snapshot?.navigation?.loading ? "Stop loading" : "Reload"} disabled={!snapshot} onClick={() => navigation(snapshot?.navigation?.loading ? "stop" : "reload")}><UiIcon name={snapshot?.navigation?.loading ? "stop" : "refresh"} /></button>
         <form onSubmit={(event) => { event.preventDefault(); navigation("navigate", url); }}>
-          <input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(snapshotRef.current?.navigation?.url ?? ""); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" />
+          <input value={url} onFocus={() => { urlEditing.current = true; onInteractionFocus?.(); }} onBlur={() => { urlEditing.current = false; setUrl(addressBarUrl(snapshotRef.current?.navigation?.url)); }} onChange={(event) => setUrl(event.target.value)} aria-label="Page URL" placeholder="Enter URL" />
         </form>
       </div>
       <div className="browser-annotation-toolbar" role="toolbar" aria-label="Annotation tools">
@@ -2352,7 +2391,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         <BrowserColorPicker color={color} onChange={setColor} />
         <button type="button" disabled={!draft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => { if (event.ctrlKey) void discardDraft(); else if (selectedId) removeAnnotation(selectedId); }}><AnnotationIcon name="remove" /></button>
         <button type="button" disabled={!selectedAnnotation} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={() => { if (!selectedAnnotation) return; if (noteId !== selectedAnnotation.id) setNoteValue(selectedAnnotation.comment ?? ""); setNoteId(selectedAnnotation.id); setNoteEditorDismissed(false); markEditorDirty(); }}><AnnotationIcon name="notes" /></button>
-        <span className="browser-annotation-notes" aria-label={`Notes ${annotations.length}`} title={`Notes ${annotations.length}`}>Notes {annotations.length}</span>
+        <span className="browser-annotation-notes" aria-label={`Notes ${annotations.length}`} title={`Notes ${annotations.length}`}>{annotations.length}</span>
       {pendingCapture ? <><span className="browser-capture-pending" role="status">Pending capture · retry sending or discard it</span><button type="button" aria-label="Discard pending capture" title="Discard pending capture" onClick={() => void discardPendingCapture()}><AnnotationIcon name="remove" /></button></> : null}
       {savedDeliveries.length > 0 ? <div className="browser-capture-pending" aria-label="Saved feedback recovery">
         {savedDeliveries.map((item, index) => {

@@ -337,6 +337,21 @@ it("shows an unknown comment count while the review comment batch is loading", a
   }
 });
 
+it("does not wait for comments when the comparison has no files", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="empty" sessionId="session" paneId="pane" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files: [] })} file={async () => diff} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector(".review-empty[role=status]")?.textContent).toContain("No changes in this comparison.");
+    expect(host.querySelector(".review-status-actions button:last-of-type")?.textContent).toBe("Comments");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
 it("records user scrolling without writing it back or moving focus", async () => {
   const host = window.document.createElement("div");
   window.document.body.append(host);

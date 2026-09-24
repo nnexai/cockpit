@@ -236,11 +236,11 @@ export function SourceImport({ client, sessionId, paneId, bindingId, rootId, onC
       <label>Source URL<input aria-label="Source URL" type="url" value={url} disabled={importPending} onChange={event => setUrl(event.target.value)} /></label>
       <button type="button" disabled={importPending || !providerId || !url.trim()} onClick={() => void perform()}>{importPending ? "Importing source…" : "Import source"}</button>
     </> : null}
-    <label><input type="checkbox" checked={hydrate} disabled={importPending} onChange={event => setHydrate(event.target.checked)} /> Include linked sources from this repository within import limits</label>
+    {providers.length ? <label><input type="checkbox" checked={hydrate} disabled={importPending} onChange={event => setHydrate(event.target.checked)} /> Include linked sources from this repository within import limits</label> : null}
     <div className="context-resource-list" role="list" aria-label="Imported sources">
       {listPending && !listLoaded ? <p className="context-resource-loading" role="status">Loading imported sources…</p> : null}
       {listError ? <div className="context-resource-error" role="alert"><strong>Source list unavailable.</strong><span>{listError}</span><button type="button" disabled={listPending} onClick={loadSources}>Retry source list</button></div> : null}
-      {!listPending && !listError && listLoaded && entries.length === 0 ? <p className="context-resource-empty">No imported sources yet. Use Import source above to add one.</p> : null}
+      {!listPending && !listError && listLoaded && entries.length === 0 ? <p className="context-resource-empty">{providers.length ? "No imported sources yet. Use Import source above to add one." : "No imported sources yet."}</p> : null}
       {entries.map(entry => <article key={entry.source_id} role="listitem" className={`context-source-entry${entry.source_id === selectedSourceId ? " is-selected" : ""}`} aria-current={entry.source_id === selectedSourceId ? "true" : undefined}>
         <strong className="context-source-title" title={entry.title}>{entry.title}</strong>
         <div className="context-source-summary">

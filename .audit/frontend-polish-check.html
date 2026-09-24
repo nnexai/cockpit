@@ -180,7 +180,39 @@ ol.next li, ul li { margin: 4px 0; }
 </ul>
 </div>
 
-<h2>Suggested follow-up instructions</h2>
+<h2>Follow-up pass (2026-09-24)</h2>
+<p>Everything below was done in the working tree (not committed) and checked in the browser against a fresh isolated fixture. Typecheck passes, and 233 unit tests pass, including 2 new ones.</p>
+<div class="table-wrap"><table>
+<tr><th>Item</th><th>Status</th><th>What changed</th></tr>
+<tr><td>R1 checkbox</td><td><span class="pill ok">fixed</span></td><td>Checkbox is 13px wide again, with its label on one line. With no provider configured, the checkbox is hidden and the empty text no longer points to a missing "Import source" control.</td></tr>
+<tr><td>R2 colour picker</td><td><span class="pill ok">fixed</span></td><td>Esc closes it and returns focus to the swatch. An outside click closes it, and that click doesn't reach the page: the fixture counter stayed at 9 on the dismissing click and went to 10 on the next click. New unit test.</td></tr>
+<tr><td>Q11 Review</td><td><span class="pill ok">fixed</span></td><td>An empty comparison shows "Comments" instead of an endless "Loading comments…". The empty message uses the UI font. The hunk-header font now actually applies (monospace). New unit test.</td></tr>
+<tr><td>Q8 New Space</td><td><span class="pill ok">fixed</span></td><td>The buttons stay visible at the bottom (sticky footer). Effects are listed first, with IDs and paths folded under "Paths and identity". The progress box scrolls into view, and a <b>Done</b> button appears on completion. Initial focus goes to the first field. "1 repository"; the Cancel label no longer changes to Close.</td></tr>
+<tr><td>Q3–Q6 browser</td><td><span class="pill ok">fixed</span></td><td>Tabs come first and get the space. "Live" is now a green dot; other states still show text. The note count is a small badge. Send has its own paper-plane icon. The internal start-page URL is hidden. At 1024px wide the controls take 101px (was 133).</td></tr>
+<tr><td>H3 glyphs</td><td><span class="pill ok">done</span></td><td>Uses Herdr's "symbols" set, which your Herdr config uses: × blocked, ◐ working, ✓ done, ○ idle, · unknown. Space rows now show the glyph too, instead of a 5px square.</td></tr>
+<tr><td>H1 sidebar</td><td><span class="pill warn">partial</span></td><td>Branch is shown on every Space whose branch differs from its label. Agent rows are two lines (space · tab, then agent), with the status in the glyph, tooltip and screen-reader label. <b>Ahead count not done:</b> Herdr's <code>session.snapshot</code> doesn't include ahead/behind, so it needs a backend git query.</td></tr>
+<tr><td>H2 chrome</td><td><span class="pill ok">done</span></td><td>A tab with a single terminal pane no longer shows the pane header (the header comes back for splits, graphical panes, and focus pending or error). The terminal starts at y=42 instead of 75. The breadcrumb reads "Review / Local changes" together.</td></tr>
+<tr><td>H5 headings/tabs</td><td><span class="pill ok">done</span></td><td>Lowercase "spaces" and "agents" at 13px. The active tab is a filled block, and the number in a numbered tab is centred.</td></tr>
+<tr><td>Type scale</td><td><span class="pill ok">fixed</span></td><td>Added a 12px <code>--font-size-control</code> step. The 25 declarations that were 12px before the agent's commit use it again, so command rows, context menus and setup text are back to their original size.</td></tr>
+<tr><td>Q14 hygiene</td><td><span class="pill ok">fixed</span></td><td>100 stray leading spaces removed. The <code>.tab-item</code> and <code>.tab-button</code> rules are merged into one block each, and the computed styles are unchanged (checked in the browser).</td></tr>
+</table></div>
+<div class="grid2">
+<figure><img src="polish-check/31-browser.png" alt="Browser pane after follow-up"><figcaption>After: lone terminal without a header, filled active tab, lowercase headings, and a browser pane with tabs first and a status dot.</figcaption></figure>
+<figure><img src="polish-check/46-done.png" alt="New Space dialog completed"><figcaption>After: completion in view with a Done button; effects first, paths folded.</figcaption></figure>
+<figure><img src="polish-check/44-review-staged.png" alt="Review empty comparison after follow-up"><figcaption>After: empty Review shows "Comments"; the pane breadcrumb reads together.</figcaption></figure>
+<figure><img src="polish-check/48-narrow.png" alt="1024 wide layout"><figcaption>At 1024px wide: Send stays on its row. The Review toolbar still clips when narrow (not addressed).</figcaption></figure>
+</div>
+<p><b>Still open:</b></p>
+<ul>
+<li>Ahead/behind count (needs backend work).</li>
+<li>#8 radius and z-index scale.</li>
+<li>#10 splitting <code>BrowserPane.tsx</code>.</li>
+<li>Q10 empty Context file tree.</li>
+<li>The Review toolbar clips at narrow widths.</li>
+<li>The "switch session..." command is lowercase. It isn't Herdr wording, but the chooser's heading matches it, so it's left as is.</li>
+</ul>
+
+<h2>Original suggested follow-up instructions</h2>
 <ol class="next">
 <li><b>Fix the regressions</b>: restore <code>width:auto</code> on the checkbox (R1). Close the colour picker on Esc and on outside clicks, without passing the click to the page (R2).</li>
 <li><b>Fix the Review bug</b> Q11: "Loading comments…" never clears after switching comparison. Also remove the dead hunk-header rule, or make it win over the <code>viewer.css</code> rule.</li>

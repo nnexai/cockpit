@@ -98,7 +98,7 @@
 .review-line.is-deleted { background-color: color-mix(in srgb, var(--blocked) 14%, transparent); }
 .review-line.is-added.is-selected,
 .review-line.is-deleted.is-selected { background: var(--surface-selected); }
-.review-empty { padding: 24px; color: var(--text-secondary); }
+.review-empty { padding: 24px; color: var(--text-secondary); font-family: var(--font-sans); font-size: var(--font-size-sm); }
 .review-empty:has(> .ui-icon) { display: flex; align-items: center; gap: 10px; }
 .review-empty > .ui-icon { flex: 0 0 16px; }
 .review-empty button { min-height: 28px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-primary); cursor: pointer; }

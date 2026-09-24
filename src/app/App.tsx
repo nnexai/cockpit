@@ -60,11 +60,12 @@ function describeError(error: unknown, fallback: string): StatusError {
   }
   return { message: fallback };
 }
+// Herdr's "distinct symbols" status indicators, so state never depends on colour alone.
 function stateGlyph(status: string): string {
   switch (status.toLowerCase()) {
-    case "blocked": case "error": return "●";
+    case "blocked": case "error": return "×";
     case "working": case "running": return "◐";
-    case "done": case "complete": return "●";
+    case "done": case "complete": return "✓";
     case "idle": return "○";
     default: return "·";
   }
@@ -411,13 +412,13 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
         {editingId === space.id
           ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
           : <button type="button" disabled={busy} draggable={!busy} className="resource-select" title={displayLabel} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
-            <span className="resource-icon" title={status.className} aria-hidden="true">{row.kind === "parent" ? <UiIcon name="grid" /> : <span className="space-status-dot" />}</span>
+            <span className="resource-icon" title={status.className} aria-hidden="true">{row.kind === "parent" ? <UiIcon name="grid" /> : <span className="space-state">{status.glyph}</span>}</span>
             <span className="space-details"><span className="resource-label">{displayLabel}</span></span>
           </button>}
         {row.kind === "parent" && row.repositoryKey
           ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}><UiIcon name={row.expanded ? "down" : "right"} /></button>
           : null}
-        {space.id === selectedSpaceId && row.branch ? <div className="space-branch" title={row.branch}><UiIcon name="branch" />{row.branch}</div> : null}
+        {row.branch && row.branch !== displayLabel ? <div className="space-branch" title={row.branch}><UiIcon name="branch" />{row.branch}</div> : null}
       </div>;
     })}</div>
   </section>;
@@ -427,7 +428,7 @@ function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]
   return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{orderedAgents.length}</span></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
     const location = [spaces.find((space) => space.id === agent.space_id)?.label, tabs.find((tab) => tab.id === agent.tab_id)?.label].filter(Boolean).join(" · ");
     const status = agent.status || "unknown";
-    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span><span className="agent-status">{status}</span></span></button>;
+    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")} aria-label={[location, agent.name, status].filter(Boolean).join(", ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span></span></button>;
   })}</div></section>;
 }
 
@@ -484,9 +485,11 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, onEdit, o
   </nav>;
 }
 
-function PaneView({ pane, label, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
+function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
   pane: Pane;
   label: string;
+  /** The only Herdr pane in its tab; like Herdr, a lone terminal needs no header row. */
+  solo?: boolean;
   selected: boolean;
   paintedSelected: boolean;
   retained: boolean;
@@ -550,7 +553,7 @@ function PaneView({ pane, label, selected, paintedSelected, retained, busy, cont
   }, [selected]);
   return <section ref={paneRef} className={`pane-view${selected || paintedSelected ? " is-selected" : ""}`} style={style} aria-label={title} inert={retained}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
-    <header className="pane-header">
+    <header className={`pane-header${solo && !graphical && !controlPending && !focusError ? " is-hidden" : ""}`}>
       <button type="button" className="pane-header-select" onClick={onSelect} title={title}>
         <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{isGraphicalReview(renderer) ? "Review" : isGraphicalContext(renderer) ? "Files" : title}</span>{graphical ? <span className="pane-subtitle">/ {isGraphicalReview(renderer) ? "Local changes" : "Context"}</span> : null}
       </button>
@@ -1473,7 +1476,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const paneFocusError = incoming && state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
     const deferTerminal = !incoming || state.sync !== "live" || snapshot?.focused_tab_id !== pane.tab_id
       || state.focusPending?.kind === "tab" || state.focusPending?.kind === "space";
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
+    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
   const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
     "--sidebar-width": `${sidebarWidth}px`,
