@@ -1,0 +1,175 @@
+{
+  "result": "PASS: actual browser Region+note capture saved durably, duplicate feedback lookups are non-consuming, and actual Send annotations rendered no-recipient rejection while preserving captured mark/note on-screen.",
+  "baseline": "825405527bc42fc1bed287007b669bd3b53f0bbe",
+  "surface": "Cockpit browser gateway in managed Chromium",
+  "run_root": "/tmp/cpol-45_xi88j",
+  "private_session": "polish-45_xi88j",
+  "gateway": "http://127.0.0.1:34017",
+  "fixture": "http://127.0.0.1:37281/",
+  "fixture_marker": "FIXTURE-PROVENANCE:browser-web05-20260924",
+  "target": {
+    "session_id": "polish-45_xi88j",
+    "space_id": "w1",
+    "pane_id": null,
+    "endpoint_path": null
+  },
+  "ui_action": {
+    "navigation": "Page URL form Enter",
+    "annotation": "actual Region pointer drag",
+    "color": "#1769aa",
+    "inline_note_saved": "WEB-05 browser region comment: preserve this exact note.",
+    "send_button": "Send annotations"
+  },
+  "pre_send_draft": {
+    "id": "4215b72c-7775-4649-97b6-255f9eea5c48",
+    "revision": 4,
+    "target_id": "0AEAA1389E0C87DE6D4C4EF506993760",
+    "document_generation": 1790213596268,
+    "annotations": 1,
+    "annotation_id": "17c34cf0-44cd-4149-9cdc-33ab7077986a",
+    "comment": "WEB-05 browser region comment: preserve this exact note."
+  },
+  "capture": {
+    "id": "e5d58853-263f-4637-b189-8a40736bd8c5",
+    "pending_ids": [
+      "17c34cf0-44cd-4149-9cdc-33ab7077986a"
+    ],
+    "pending_count": 1,
+    "context": {
+      "target_id": "0AEAA1389E0C87DE6D4C4EF506993760",
+      "frame_id": "0AEAA1389E0C87DE6D4C4EF506993760",
+      "document_generation": 1790213596268,
+      "frame_generation": 1790213596268,
+      "stream_epoch": 1,
+      "frame_sequence": 17,
+      "viewport_revision": 1,
+      "pixel_captured_at_micros": 1790213596629179,
+      "capture_as_shown": false
+    },
+    "page": {
+      "url": "http://127.0.0.1:37281/",
+      "title": "WEB-05 Browser Fixture",
+      "document_id": "0AEAA1389E0C87DE6D4C4EF506993760",
+      "captured_at": "2026-09-24T01:34:31.854Z",
+      "viewport": {
+        "width": 408,
+        "height": 682,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "device_pixel_ratio": 1.25,
+        "visual_scale": 1
+      },
+      "image_width": 408,
+      "image_height": 682
+    },
+    "annotation": {
+      "id": "17c34cf0-44cd-4149-9cdc-33ab7077986a",
+      "kind": "region",
+      "comment": "WEB-05 browser region comment: preserve this exact note.",
+      "color": "#1769aa",
+      "points": [
+        {
+          "x": 48.91749023213054,
+          "y": 158
+        },
+        {
+          "x": 173.94621925994025,
+          "y": 228
+        }
+      ],
+      "bounds": {
+        "x": 48.91749023213054,
+        "y": 158,
+        "width": 125.0287290278097,
+        "height": 70
+      },
+      "element": null
+    },
+    "image_path": "/tmp/cpol-45_xi88j/cockpit-state/browser/artifacts/capture-e5d58853-263f-4637-b189-8a40736bd8c5.png",
+    "lookup_http_statuses": [
+      200,
+      200
+    ],
+    "duplicate_lookup": {
+      "sameCaptureId": true,
+      "sameAnnotationIds": true,
+      "samePendingCount": true
+    }
+  },
+  "post_send_ui": {
+    "status": "no eligible agent target is available in this Space",
+    "delivery": true,
+    "emptyInbox": true,
+    "annotationSvg": "<svg class=\"browser-annotation-layer\" viewBox=\"0 0 408 682\" preserveAspectRatio=\"none\" aria-label=\"Browser annotations\"><rect class=\"browser-annotation browser-annotation-region is-selected\" x=\"48.91749023213054\" y=\"158\" width=\"125.0287290278097\" height=\"70\" stroke=\"#1769aa\"></rect><text class=\"browser-annotation-label\" x=\"56.91749023213054\" y=\"174\" fill=\"#1769aa\">WEB-05 browser region comment: preserve this exact note.</text></svg>",
+    "comment": "WEB-05 browser region comment: preserve this exact note."
+  },
+  "post_send_draft_recovery": {
+    "http_status": 200,
+    "revision": 5,
+    "annotation_count": 0,
+    "pending_capture": null,
+    "retention_explanation": "Current editable draft is empty after capture; the same mark/comment remain in the authoritative pending capture (pending_ids) and are visibly rendered in the browser. No acknowledgement was performed."
+  },
+  "png": {
+    "artifact": "WEB-05-capture-browser-saved.png",
+    "mime": "image/png",
+    "bytes": 103042,
+    "sha256": "0e62ce1774bc7d7214d63d4ce7480fe2efdec48b1453255686bae8dad04a814b",
+    "width": 408,
+    "height": 682,
+    "samples": {
+      "page_background": {
+        "at": [
+          2,
+          2
+        ],
+        "rgba": [
+          215,
+          241,
+          254,
+          255
+        ]
+      },
+      "gold_region": {
+        "at": [
+          40,
+          140
+        ],
+        "rgba": [
+          252,
+          204,
+          93,
+          255
+        ]
+      },
+      "blue_region_outline_or_label": {
+        "at": [
+          100,
+          170
+        ],
+        "rgba": [
+          23,
+          105,
+          170,
+          255
+        ]
+      },
+      "mint_inner_page": {
+        "at": [
+          200,
+          300
+        ],
+        "rgba": [
+          83,
+          214,
+          162,
+          255
+        ]
+      }
+    },
+    "chrome_exclusion": "Stored PNG is 408x682, exactly the reported page viewport. Visual inspection shows only fixture content; no Cockpit toolbar/address chrome."
+  },
+  "screenshots": {
+    "no_recipient": "WEB-05-capture-browser-no-recipient.webp"
+  }
+}
