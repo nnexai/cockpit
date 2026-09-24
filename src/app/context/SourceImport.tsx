@@ -8,7 +8,11 @@ const MAX_ACTIVE_OPERATIONS = 2;
 type Feedback = { tone: "status" | "error"; message: string };
 
 function errorMessage(error: unknown, fallback: string): string {
-  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return `${error.code}: ${error instanceof Error && error.message ? error.message : fallback}`;
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") {
+    // Transport codes such as http_error hide the server's domain code.
+    const code = "operationCode" in error && typeof error.operationCode === "string" ? error.operationCode : error.code;
+    return `${code}: ${error instanceof Error && error.message ? error.message : fallback}`;
+  }
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
