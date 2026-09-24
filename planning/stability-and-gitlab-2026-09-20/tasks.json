@@ -608,7 +608,8 @@
         "OBS-038 integrated tab close moved inside browser tab in e2d1a30f4a04c2f96a2c05d757a5d3d6512b0f1c; browser/native hit targets painted, but selected/background close matrix remains. A separate native run observed alternating CSS 674x188 and DPR2 1348x376 bitmaps at one viewport revision; WEB-04 density/input gates remain open.",
         "OBS-042 queued: native frame fit and remaining A04-A12 input, ownership and blocker cases require execution; no external resource prevents work.",
         "OBS-042: decoded raster-generation diagnostics prove newer CSS-density frames must not be dropped; DPR2 settled-frame acceptance remains red. Lifecycle/readiness subrepair and diagnostic harness committed in 413ec15ba3b4a07086e0d5b5b53f6ca69719acfc after focused 6/6 tests, build, actual isolated browser navigation/click/Close and private native one-helper observations. Owner released at a clean checkpoint; A04-A12 browser/native and TUI handoff acceptance remain open.",
-        "OBS-043 supersedes DPR2 as an unconditional first/settled/full-time gate: attempt sharp frames but accept lower-resolution streaming to preserve newer content, animations and input responsiveness. Chromium/CDP is the frame producer; WebKit is the Linux-native consumer. WEB-04 returns to queued with clean released locks, not done; A04-A12, native interaction and stable fit/performance evidence remain open while the coordinating session updates its contract files."
+        "OBS-043 supersedes DPR2 as an unconditional first/settled/full-time gate: attempt sharp frames but accept lower-resolution streaming to preserve newer content, animations and input responsiveness. Chromium/CDP is the frame producer; WebKit is the Linux-native consumer. WEB-04 returns to queued with clean released locks, not done; A04-A12, native interaction and stable fit/performance evidence remain open while the coordinating session updates its contract files.",
+        "c9033d4a OBS-053: two of five native runs lost the first Browse click right after a feedback paste; Chromium delivered every click. Open."
       ]
     },
     {
@@ -659,7 +660,8 @@
         "9cc51f8d8c48284a8a4000ab0405170bcc5c9549",
         "0b0578498327b0038928f5bb323cc5414a6d95f8",
         "36adc4e45e73aebfa7cba46e7f4aba45fc5ab9b1",
-        "7cd0ba9b1aa2c74469a3a701599314e6308cda1f"
+        "7cd0ba9b1aa2c74469a3a701599314e6308cda1f",
+        "c9033d4aeb012ef826e19c18fd0b34cfa730c64f"
       ],
       "notes": [
         "OBS-015 batch: BrowserUI owns capture/draft/feedback interaction and stable send operation identity; BrowserRuntime owns frame-bound geometry; BrowserHost owns durable browser delivery. BatchWorkflows alone owns generic comment-paste implementation; its API is unchanged.",
@@ -674,7 +676,8 @@
         "OBS-042: Main safely released WEB-05 locks after committed product/evidence, closed owned browser/native fixtures and left no partial product edit. WEB-05 is queued until the native frame-density repair unblocks its real-surface acceptance.",
         "OBS-049: ledger correction — the OBS-042 release note already queued WEB-05, but status/owner still said in_progress/Main and held its four locks, which made FLOW-01/WEB-04/WEB-06/WEB-08 look lock-waiting. Status is now queued and unowned; no criterion changes.",
         "OBS-051/OBS-052: 36adc4e4 proves A18 gateway restart (same capture ID and PNG hash, one paste, no Enter) and repairs a crash-interrupted pending receipt dead end (now unknown, retried once after explicit duplicate-risk acknowledgement), empty old drafts filling the eight-draft limit, a stale client showing removed marks, and a stale paste notice. Browser-verified; native parity unverified. Remaining: A14 native gestures, A15/A16 cross-origin iframe, canvas and drift, A17 multi-DPR/zoom, A20 wrong-Space move, A21 retention, and the user decision on unsent notes from a closed and reopened page.",
-        "7cd0ba9b: user decision — unsent browser notes are temporary to their page; drafts of a closed browser or an earlier document in the same tab are discarded when the new page opens its draft (saved feedback kept). Browser-verified; A18's 'restart retains drafts' is now read as retaining saved captures, not page notes."
+        "7cd0ba9b: user decision — unsent browser notes are temporary to their page; drafts of a closed browser or an earlier document in the same tab are discarded when the new page opens its draft (saved feedback kept). Browser-verified; A18's 'restart retains drafts' is now read as retaining saved captures, not page notes.",
+        "c9033d4a native parity: paste/receipt/no Enter/no points and DPR2 capture pass in the Linux app; see the native parity section of WEB-05.md."
       ]
     },
     {
@@ -717,7 +720,8 @@
         "OBS-015 batch completes bounded input, helper/frame/decode ownership and transport retirement in disjoint UI/runtime/host boundaries. Pre/post-decode validation and bitmap/object URL release findings are assigned; measurements follow integration.",
         "OBS-015 batch implemented, reviewed and checked; OBS-016 final checkpoint stops owned runtimes and releases locks. Exact passes, failures and unexecuted checks are in BATCH-FINAL.md; no full-matrix claim.",
         "OBS-020 verifies the geometry-triggered fresh-frame path on Linux native at 2×; subsequent five-minute scroll runs passed 57.86 painted FPS and zero static-idle paints, but WebKit PSS remained non-plateauing. This does not provide WEB-06 queue, decode, reconnect, lifecycle cleanup, or full resource acceptance.",
-        "OBS-042 queued: WEB-04 completion gates final closure but native DPR2 first-frame density, helper/decoder/observer/reconnect lifecycle and memory plateau are actionable; prior owner released locks at a safe checkpoint."
+        "OBS-042 queued: WEB-04 completion gates final closure but native DPR2 first-frame density, helper/decoder/observer/reconnect lifecycle and memory plateau are actionable; prior owner released locks at a safe checkpoint.",
+        "c9033d4a OBS-053: eight native harness roots from 00:55–02:43 on 2026-09-24 still hold managed Chrome and helper processes. Open."
       ]
     },
     {
