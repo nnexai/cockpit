@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { SpaceGitStatus, SpaceSummary } from "../../protocol/generated/v1";
+import type { PaneSummary, SpaceGitStatus, SpaceSummary } from "../../protocol/generated/v1";
 
 export const SPACE_GIT_POLL_MS = 15_000;
 
-/** A key that changes when the set of Space checkouts changes, so a new Space is read at once. */
-export function spaceCheckoutKey(spaces: readonly SpaceSummary[]): string {
-  return spaces.map((space) => `${space.id}\u0000${space.git?.checkout_path ?? ""}`).join("\u0001");
+/**
+ * A key that changes when the folder any Space shows a branch for changes, so a new Space is read at once.
+ * That is the Space's checkout, else its first pane's folder, the same choice Cockpit makes when reading Git.
+ */
+export function spaceCheckoutKey(spaces: readonly SpaceSummary[], panes: readonly PaneSummary[] = []): string {
+  return spaces.map((space) => `${space.id}\u0000${space.git?.checkout_path ?? panes.find((pane) => pane.space_id === space.id && pane.cwd)?.cwd ?? ""}`).join("\u0001");
 }
 
 /**

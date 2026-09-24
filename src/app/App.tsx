@@ -116,6 +116,14 @@ export function spaceStatus(status: string): { glyph: string; className: string 
   return { glyph: stateGlyph(status), className: stateClass(status) };
 }
 
+/** A collapsed repository row stands for its hidden worktrees, so it shows the most urgent of their states. */
+export function spaceRowStatus(row: SpaceTreeRow, spaces: Space[]): string {
+  if (row.kind !== "parent" || row.expanded || !row.repositoryKey) return row.space.agent_status;
+  return spaces
+    .filter((space) => space.git?.repository_key === row.repositoryKey)
+    .reduce((urgent, space) => agentStatusPriority(space.agent_status) > agentStatusPriority(urgent) ? space.agent_status : urgent, row.space.agent_status);
+}
+
 function worktreeLabel(space: Space): string {
   const branch = space.git?.branch;
   return branch ? branch.replace(/^worktree\//, "") : space.label;
@@ -387,14 +395,16 @@ function Spaces({ spaces, gitStatus, selectedSpaceId, editingId, busy, onEdit, o
     {dragMessage ? <p className="resource-inline-status" role="status">{dragMessage}</p> : null}
     <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row, index) => {
       const space = row.space;
-      const status = spaceStatus(space.agent_status);
+      const status = spaceStatus(spaceRowStatus(row, spaces));
       const displayLabel = row.label;
       const git = gitStatus.get(space.id);
       const branch = row.branch ?? git?.branch ?? null;
       const position = aheadBehindLabel(git);
-      const showBranch = Boolean(branch && (branch !== displayLabel || position));
+      // Herdr shows the branch under every Space's name except a linked worktree's, which is named for its branch.
+      const showBranch = Boolean(branch && !space.git?.is_linked_worktree && row.kind !== "child");
+      const branchTitle = branch ? (git?.upstream ? `${branch} · ${git.ahead ?? 0} ahead, ${git.behind ?? 0} behind ${git.upstream}` : branch) : null;
       const side = dropMark?.targetId === space.id ? dropMark.side : null;
-      return <div className={`resource-row space-tree-row space-tree-${row.kind}${showBranch && row.kind !== "child" ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
+      return <div className={`resource-row space-tree-row space-tree-${row.kind}${showBranch ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
         onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }}
         onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
         onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
@@ -418,14 +428,13 @@ function Spaces({ spaces, gitStatus, selectedSpaceId, editingId, busy, onEdit, o
         {row.kind === "child" ? <span className={`space-connector${rows[index - 1]?.kind === "parent" ? " is-first" : ""}${row.connector === "└─" ? " is-last" : ""}`} aria-hidden="true" /> : null}
         {editingId === space.id
           ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
-          : <button type="button" disabled={busy} draggable={!busy} className="resource-select" title={displayLabel} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
-            <span className="resource-icon" title={status.className} aria-hidden="true">{row.kind === "parent" ? <UiIcon name="grid" /> : <span className="space-state">{status.glyph}</span>}</span>
-            <span className="space-details"><span className="resource-label">{displayLabel}</span></span>
+          : <button type="button" disabled={busy} draggable={!busy} className="resource-select" title={[displayLabel, branchTitle].filter(Boolean).join(" · ")} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
+            <span className="resource-icon" title={status.className} aria-hidden="true"><span className="space-state">{status.glyph}</span></span>
+            <span className="space-details"><span className="resource-label">{displayLabel}</span>{showBranch ? <span className="space-branch"><span className="space-branch-name">{branch}</span>{position ? <span className="space-ahead-behind" aria-label={`${git?.ahead ?? 0} ahead, ${git?.behind ?? 0} behind ${git?.upstream ?? "upstream"}`}>{position}</span> : null}</span> : null}</span>
           </button>}
         {row.kind === "parent" && row.repositoryKey
           ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}><UiIcon name={row.expanded ? "down" : "right"} /></button>
           : null}
-        {showBranch ? <div className="space-branch" title={git?.upstream ? `${branch} · ${git.ahead ?? 0} ahead, ${git.behind ?? 0} behind ${git.upstream}` : branch ?? undefined}><UiIcon name="branch" /><span className="space-branch-name">{branch}</span>{position ? <span className="space-ahead-behind" aria-label={`${git?.ahead ?? 0} ahead, ${git?.behind ?? 0} behind ${git?.upstream ?? "upstream"}`}>{position}</span> : null}</div> : null}
       </div>;
     })}</div>
   </section>;
@@ -433,9 +442,11 @@ function Spaces({ spaces, gitStatus, selectedSpaceId, editingId, busy, onEdit, o
 function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]; spaces: Space[]; tabs: Tab[]; selection: Selection; onSelect: (agent: Agent) => void }) {
   const orderedAgents = orderAgentsByHerdrPriority(agents);
   return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{orderedAgents.length}</span></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
-    const location = [spaces.find((space) => space.id === agent.space_id)?.label, tabs.find((tab) => tab.id === agent.tab_id)?.label].filter(Boolean).join(" · ");
+    const spaceLabel = spaces.find((space) => space.id === agent.space_id)?.label;
+    const tabLabel = tabs.find((tab) => tab.id === agent.tab_id)?.label;
+    const location = [spaceLabel, tabLabel].filter(Boolean).join(" · ");
     const status = agent.status || "unknown";
-    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")} aria-label={[location, agent.name, status].filter(Boolean).join(", ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{location}</span> : null}<span className="agent-name">{agent.name}</span></span></button>;
+    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")} aria-label={[location, agent.name, status].filter(Boolean).join(", ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{spaceLabel ? <span className="agent-space">{spaceLabel}</span> : null}{spaceLabel && tabLabel ? <span className="agent-tab"> · {tabLabel}</span> : tabLabel ? <span className="agent-tab">{tabLabel}</span> : null}</span> : null}<span className="agent-name">{agent.name}</span></span></button>;
   })}</div></section>;
 }
 
@@ -869,7 +880,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const visiblePaneIds = projectedPaneIds(panes.map((pane) => pane.id), layout, snapshot?.focused_pane_id ?? selection.paneId);
   const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
   const allPaneIds = (snapshot?.panes ?? []).map((pane) => pane.id);
-  const spaceGit = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces));
+  const spaceGit = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const renderers = usePaneRenderers(client, state.sessionId, visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
   // Keep incoming panes mounted for fitting and first-frame rendering, but out
   // of the painted frame until each visible pane reports readiness.

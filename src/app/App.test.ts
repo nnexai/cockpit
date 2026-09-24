@@ -14,6 +14,7 @@ import {
   paneIdInDirection,
   spaceDropBeforeId,
   projectSpaceTree,
+  spaceRowStatus,
   spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
@@ -234,6 +235,18 @@ describe("Space tree projection", () => {
     const ids = projectSpaceTree(spaces).map((row) => row.space.id);
     expect(ids).toEqual(["parent", "child-before", "second-parent", "child-after"]);
     expect(new Set(ids).size).toBe(spaces.length);
+  });
+
+  it("shows the most urgent worktree state on a collapsed repository row only", () => {
+    const spaces = [
+      space("parent", "repo", git("repo", "main", false), "idle"),
+      space("child-1", "one", git("repo", "worktree/one", true), "blocked"),
+      space("child-2", "two", git("repo", "worktree/two", true), "working"),
+      space("other", "other", git("other", "main", false), "blocked"),
+    ];
+    const status = (collapsed: string[]) => projectSpaceTree(spaces, new Set(collapsed)).filter((row) => row.kind !== "child").map((row) => spaceRowStatus(row, spaces));
+    expect(status([])).toEqual(["idle", "blocked"]);
+    expect(status(["repo"])).toEqual(["blocked", "blocked"]);
   });
 
   it("maps Space agent status to its glyph and class", () => {

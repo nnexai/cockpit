@@ -3,13 +3,17 @@
 //! Herdr reports each Space's checkout but not how far its branch is from the
 //! upstream, which its TUI shows as `main ↑14`. Cockpit reads that from Git
 //! for the checkout paths in Herdr's snapshot only; clients never name a path.
+//! A Space Herdr does not know as a checkout gets the branch of its first
+//! pane's folder, as Herdr's sidebar shows it.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Output;
 use std::time::Duration;
 
-use cockpit_protocol::v1::{SessionSnapshotResponse, SpaceGitStatus, SpaceGitStatusResponse};
+use cockpit_protocol::v1::{
+    SessionSnapshotResponse, SpaceGitStatus, SpaceGitStatusResponse, SpaceSummary,
+};
 use tokio::process::Command;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -23,21 +27,41 @@ struct CheckoutStatus {
     behind: Option<u32>,
 }
 
-/// Read branch, upstream and ahead/behind counts for every Space with a checkout.
+/// The folder whose branch a Space shows: its checkout, else its first pane's folder.
+fn space_folder<'a>(
+    snapshot: &'a SessionSnapshotResponse,
+    space: &'a SpaceSummary,
+) -> Option<&'a str> {
+    if let Some(git) = &space.git {
+        return Some(&git.checkout_path);
+    }
+    snapshot
+        .panes
+        .iter()
+        .filter(|pane| pane.space_id == space.id)
+        .find_map(|pane| pane.cwd.as_deref())
+}
+
+/// Read branch, upstream and ahead/behind counts for every Space with a folder.
 /// Git failures leave the fields empty: the status is informational.
 pub async fn read(snapshot: &SessionSnapshotResponse) -> SpaceGitStatusResponse {
     let mut by_checkout: HashMap<&str, CheckoutStatus> = HashMap::new();
     let mut spaces = Vec::new();
     for space in &snapshot.spaces {
-        let Some(git) = &space.git else { continue };
-        let status = match by_checkout.get(git.checkout_path.as_str()) {
+        let Some(folder) = space_folder(snapshot, space) else {
+            continue;
+        };
+        let status = match by_checkout.get(folder) {
             Some(status) => status.clone(),
             None => {
-                let status = checkout_status(Path::new(&git.checkout_path)).await;
-                by_checkout.insert(&git.checkout_path, status.clone());
+                let status = checkout_status(Path::new(folder)).await;
+                by_checkout.insert(folder, status.clone());
                 status
             }
         };
+        if space.git.is_none() && status.branch.is_none() {
+            continue;
+        }
         spaces.push(SpaceGitStatus {
             space_id: space.id.clone(),
             branch: status.branch,
@@ -142,7 +166,7 @@ async fn git_output(directory: &Path, args: &[&str]) -> Result<Output, crate::In
 mod tests {
     use std::path::PathBuf;
 
-    use cockpit_protocol::v1::{SpaceGitSummary, SpaceSummary};
+    use cockpit_protocol::v1::{PaneSummary, SpaceGitSummary};
     use uuid::Uuid;
 
     use super::*;
@@ -259,6 +283,48 @@ mod tests {
         assert_eq!(status.spaces[0].upstream, None);
         assert_eq!(status.spaces[0].ahead, None);
         assert_eq!(status.spaces[1].branch, None);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    fn pane(space_id: &str, cwd: &Path) -> PaneSummary {
+        PaneSummary {
+            id: format!("{space_id}:p1"),
+            terminal_id: format!("term-{space_id}"),
+            space_id: space_id.to_owned(),
+            tab_id: format!("{space_id}:t1"),
+            title: None,
+            focused: false,
+            agent: None,
+            agent_status: "unknown".to_owned(),
+            revision: 0,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plain_space_shows_the_branch_of_its_first_panes_folder() {
+        let (root, _origin, clone) = fixture();
+        let nested = clone.join("nested");
+        std::fs::create_dir_all(&nested).expect("nested folder");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("outside folder");
+        let plain = |id: &str| SpaceSummary {
+            git: None,
+            ..space(id, &clone)
+        };
+        let mut state = snapshot(vec![plain("w1"), plain("w2"), plain("w3")]);
+        state.panes = vec![pane("w1", &nested), pane("w2", &outside)];
+
+        let status = read(&state).await;
+
+        assert_eq!(
+            status.spaces.len(),
+            1,
+            "no branch outside Git or without a pane"
+        );
+        assert_eq!(status.spaces[0].space_id, "w1");
+        assert_eq!(status.spaces[0].branch.as_deref(), Some("main"));
+        assert_eq!(status.spaces[0].upstream.as_deref(), Some("origin/main"));
         std::fs::remove_dir_all(root).ok();
     }
 

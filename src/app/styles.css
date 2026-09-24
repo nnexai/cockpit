@@ -2549,3 +2549,73 @@ kbd {
 }
 
 .pane-header.is-hidden { display: none; }
+
+/*
+ * Herdr-aligned sidebar rows: one status column, the name beside it and the
+ * branch on a second line under the name; worktrees hang from a trunk under
+ * their repository's name. Agents share the same columns.
+ */
+.sidebar {
+  --sidebar-row-inset: 12px;
+  --sidebar-state-width: 14px;
+  --sidebar-state-gap: 8px;
+  --sidebar-label-start: calc(var(--sidebar-row-inset) + var(--sidebar-state-width) + var(--sidebar-state-gap));
+  --space-tree-trunk-offset: calc(var(--sidebar-label-start) + 3px);
+  --space-tree-child-indent: calc(var(--sidebar-label-start) + 12px);
+}
+.space-tree-row { align-items: stretch; flex-wrap: nowrap; }
+.space-tree-row .resource-select,
+.space-tree-parent .resource-select,
+.agent-row {
+  align-items: flex-start;
+  gap: var(--sidebar-state-gap);
+  min-height: 30px;
+  padding: 7px 4px 7px var(--sidebar-row-inset);
+}
+.space-tree-child .resource-select { padding-left: 0; }
+.space-tree-row .resource-icon,
+.agent-row .agent-state {
+  display: inline-flex;
+  width: var(--sidebar-state-width);
+  flex: 0 0 var(--sidebar-state-width);
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+.space-tree-row .space-state,
+.agent-row .agent-state { font-family: var(--font-mono); font-size: var(--font-size-xs); line-height: 1; }
+.space-tree-row .resource-label { line-height: 16px; }
+.space-tree-parent .resource-label,
+.space-tree-top-level .resource-label,
+.space-tree-row.is-selected .resource-label { font-weight: 600; }
+.space-tree-child .resource-label { font-weight: 400; }
+.space-details { gap: 2px; }
+.space-tree-row .space-branch {
+  width: auto;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  line-height: 14px;
+}
+.space-tree-row.is-selected .space-branch { color: var(--text-secondary); }
+.space-chevron {
+  order: 0;
+  width: 26px;
+  flex: 0 0 26px;
+  align-self: flex-start;
+  height: 30px;
+  margin: 0 4px 0 0;
+  color: var(--text-muted);
+}
+.space-connector,
+.space-connector:not(.is-last) { align-self: stretch; height: auto; }
+.space-connector::after { top: 15px; width: 8px; }
+.space-connector.is-first::before { top: 0; }
+.space-connector.is-last::before { bottom: auto; height: 15px; }
+.agent-row { padding-right: 12px; }
+.agent-details { gap: 2px; }
+.agent-location { line-height: 16px; }
+.agent-space { font-weight: 600; }
+.agent-tab { color: var(--text-muted); font-weight: 400; }
+.agent-name { line-height: 14px; }

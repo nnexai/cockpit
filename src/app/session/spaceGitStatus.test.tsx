@@ -3,7 +3,8 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import { aheadBehindLabel, useSpaceGitStatus } from "./spaceGitStatus";
+import type { PaneSummary, SpaceSummary } from "../../protocol/generated/v1";
+import { aheadBehindLabel, spaceCheckoutKey, useSpaceGitStatus } from "./spaceGitStatus";
 
 afterEach(() => { vi.useRealTimers(); });
 
@@ -45,4 +46,13 @@ it("polls while visible and skips polls while the page is hidden", async () => {
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+it("rereads a plain Space when its first pane moves to another folder, and ignores other panes", () => {
+  const plain: SpaceSummary = { id: "w1", label: "main", number: 1, tab_count: 1, pane_count: 2, focused: true, agent_status: "idle", git: null };
+  const pane = (id: string, cwd?: string): PaneSummary => ({ id, terminal_id: `t-${id}`, space_id: "w1", tab_id: "w1:t1", title: null, focused: false, agent: null, agent_status: "idle", revision: 0, cwd });
+  const key = spaceCheckoutKey([plain], [pane("w1:p1", "/src/app"), pane("w1:p2", "/tmp")]);
+  expect(spaceCheckoutKey([plain], [pane("w1:p1", "/src/app"), pane("w1:p2", "/elsewhere")])).toBe(key);
+  expect(spaceCheckoutKey([plain], [pane("w1:p1", "/src/other"), pane("w1:p2", "/tmp")])).not.toBe(key);
+  expect(spaceCheckoutKey([plain], [pane("w1:p1"), pane("w1:p2", "/tmp")])).toBe(spaceCheckoutKey([plain], [pane("w1:p2", "/tmp")]));
 });
