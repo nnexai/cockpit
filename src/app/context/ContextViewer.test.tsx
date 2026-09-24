@@ -353,3 +353,29 @@ it("releases continuation loading when navigation aborts the pending page", asyn
     host.remove();
   }
 });
+
+it("explains an empty root instead of asking for a file selection", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
+    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: [],
+  }));
+  const client = { contextDirectory: directory } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn() });
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    expect(host.querySelector(".context-tree-status")?.textContent).toBe("Empty");
+    expect(host.querySelector(".context-empty-message")?.textContent).toContain("This directory is empty.");
+    expect(host.textContent).not.toContain("Select a file to inspect its source.");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});

@@ -1031,6 +1031,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     window.addEventListener(FILE_NAVIGATION_EVENT, onNavigation);
     return () => window.removeEventListener(FILE_NAVIGATION_EVENT, onNavigation);
   }, [focusContent, focusTree, openFilePicker]);
+  const rootDirectory = directories[keyFor(root.root_id, "")];
+  const rootEmpty = rootDirectory?.status === "ready" && rootDirectory.data?.entries.length === 0 && rootDirectory.data.next_offset === undefined;
   const renderDocument = (): ReactNode => {
     const fileState = selectedPath
       ? selectedFileState ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision: selectedRevision }
@@ -1041,6 +1043,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       ? { start: fileState.selectionStart, end: fileState.selectionEnd }
       : null;
     const renderDocumentBody = (drafts: CommentDraft[] = [], actions?: CommentDraftActions, inlineEditor?: (line: number) => ReactNode): ReactNode => {
+      if (!selectedPath && rootEmpty) {
+        return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Import a source or snapshot from Resources to add files." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
+      }
       if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
       if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
       if (documentState.status === "error" && !document) {
@@ -1166,6 +1171,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         /></details> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}
+          {rootEmpty ? <div className="context-tree-status is-empty">Empty</div> : null}
           {treeRows.map((row) => <div className="context-tree-node" key={row.entry.entry_id}>
             <button type="button" data-context-path={row.path} className={`context-tree-row${selectedPath === row.path ? " is-selected" : ""}`} style={{ paddingLeft: `${8 + row.depth * 16}px` }} disabled={!isTreeRowEnabled(row)} onClick={() => row.entry.kind === "directory" ? toggleDirectory(row.entry) : chooseEntry(row.entry)} aria-label={`${row.label}${row.entry.refusal ? `, refused: ${row.entry.refusal}` : ""}`}>
               <span className="context-tree-disclosure">{row.entry.kind === "directory" ? <UiIcon name={row.open ? "down" : "right"} /> : null}</span>
