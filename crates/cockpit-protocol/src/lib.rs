@@ -21,7 +21,8 @@ pub use v1::{
     FocusResponse, HerdrCompatibility, HerdrIdentity, LayoutPane, LayoutRect, PaneMoveDestination,
     PaneOutputResponse, PaneResizeDirection, PaneSplitDirection, PaneSummary, PaneZoomMode,
     ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
-    SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitSummary, SpaceSummary,
-    StatusResponse, TabLayout, TabSummary, TerminalCommand, TerminalMode, TerminalOpenRequest,
-    TerminalOwnershipState, TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
+    SessionSnapshotResponse, SessionStreamMessage, SessionSummary, SpaceGitStatus,
+    SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabLayout, TabSummary,
+    TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState,
+    TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };

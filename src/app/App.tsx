@@ -17,11 +17,13 @@ import type {
   SessionSnapshotResponse,
   SessionStreamMessage,
   SessionSummary,
+  SpaceGitStatus,
   TabLayout,
   TerminalOpenRequest,
 } from "../protocol/generated/v1";
 import { initialSessionState, sessionReducer, type SessionState } from "./session/sessionStore";
 import { useFocusCoordinator } from "./session/focusCoordinator";
+import { aheadBehindLabel, spaceCheckoutKey, useSpaceGitStatus } from "./session/spaceGitStatus";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
 import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
@@ -354,8 +356,9 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }}>{children}</div>;
 }
 
-function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate }: {
+function Spaces({ spaces, gitStatus, selectedSpaceId, editingId, busy, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate }: {
   spaces: Space[];
+  gitStatus: ReadonlyMap<string, SpaceGitStatus>;
   selectedSpaceId: string | null;
   editingId: string | null;
   busy: boolean;
@@ -386,8 +389,12 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
       const space = row.space;
       const status = spaceStatus(space.agent_status);
       const displayLabel = row.label;
+      const git = gitStatus.get(space.id);
+      const branch = row.branch ?? git?.branch ?? null;
+      const position = aheadBehindLabel(git);
+      const showBranch = Boolean(branch && (branch !== displayLabel || position));
       const side = dropMark?.targetId === space.id ? dropMark.side : null;
-      return <div className={`resource-row space-tree-row space-tree-${row.kind}${row.branch && row.kind !== "child" ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
+      return <div className={`resource-row space-tree-row space-tree-${row.kind}${showBranch && row.kind !== "child" ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
         onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }}
         onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
         onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
@@ -418,7 +425,7 @@ function Spaces({ spaces, selectedSpaceId, editingId, busy, onEdit, onSelect, on
         {row.kind === "parent" && row.repositoryKey
           ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}><UiIcon name={row.expanded ? "down" : "right"} /></button>
           : null}
-        {row.branch && row.branch !== displayLabel ? <div className="space-branch" title={row.branch}><UiIcon name="branch" />{row.branch}</div> : null}
+        {showBranch ? <div className="space-branch" title={git?.upstream ? `${branch} · ${git.ahead ?? 0} ahead, ${git.behind ?? 0} behind ${git.upstream}` : branch ?? undefined}><UiIcon name="branch" /><span className="space-branch-name">{branch}</span>{position ? <span className="space-ahead-behind" aria-label={`${git?.ahead ?? 0} ahead, ${git?.behind ?? 0} behind ${git?.upstream ?? "upstream"}`}>{position}</span> : null}</div> : null}
       </div>;
     })}</div>
   </section>;
@@ -866,6 +873,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const visiblePaneIds = projectedPaneIds(panes.map((pane) => pane.id), layout, snapshot?.focused_pane_id ?? selection.paneId);
   const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
   const allPaneIds = (snapshot?.panes ?? []).map((pane) => pane.id);
+  const spaceGit = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces));
   const renderers = usePaneRenderers(client, state.sessionId, visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
   // Keep incoming panes mounted for fitting and first-frame rendering, but out
   // of the painted frame until each visible pane reports readiness.
@@ -1509,7 +1517,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
       <SidebarHeader session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} />
-      <Spaces spaces={spaces} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} />
+      <Spaces spaces={spaces} gitStatus={spaceGit} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} />
       <Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={focusAgent} />
     </aside>
     {!narrowViewport && !sidebarCollapsed ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}

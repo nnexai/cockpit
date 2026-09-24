@@ -7,6 +7,7 @@ import {
   parseResourceMutationRequest,
   parseResourceMutationResponse,
   parseSessionSnapshotResponse,
+  parseSpaceGitStatusResponse,
   parseStatusResponse,
   parseTerminalCommand,
   parseTerminalOpenRequest,
@@ -117,6 +118,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     commentPreview: vi.fn(async () => { throw new Error("Unexpected comment preview in terminal fixture"); }),
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
+    spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot })),
     subscribeSession: vi.fn(async () => ({ close: vi.fn() })),
@@ -139,6 +141,9 @@ describe("client DTO parsers", () => {
     const legacyAgent = { pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "working", title: null, focused: true };
     expect(parseSessionSnapshotResponse({ ...snapshot, agents: [legacyAgent] }).agents[0]?.state_change_seq).toBe(0);
     expect(() => parseSessionSnapshotResponse({ ...snapshot, session_id: undefined })).toThrow(CockpitClientError);
+    expect(parseSpaceGitStatusResponse({ session_id: "s", spaces: [{ space_id: "w1", branch: "main", upstream: null, ahead: null, behind: null, extra: 1 }] }))
+      .toEqual({ session_id: "s", spaces: [{ space_id: "w1", branch: "main", upstream: null, ahead: null, behind: null }] });
+    expect(() => parseSpaceGitStatusResponse({ session_id: "s", spaces: [{ space_id: "w1", branch: null, upstream: null, ahead: -1, behind: null }] })).toThrow(CockpitClientError);
     expect(() => parseSessionSnapshotResponse({
       ...snapshot,
       spaces: [{ ...snapshot.spaces[0], git: { repository: "cockpit", branch: "main", checkout_path: "/work/cockpit" } }],

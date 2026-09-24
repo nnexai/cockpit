@@ -704,6 +704,8 @@ fn typescript_rendering_is_deterministic() {
         "StatusResponse",
         "ErrorResponse",
         "SpaceGitSummary",
+        "SpaceGitStatus",
+        "SpaceGitStatusResponse",
         "SpaceSummary",
         "TabSummary",
         "PaneSummary",

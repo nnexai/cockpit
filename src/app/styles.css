@@ -2311,6 +2311,9 @@ kbd {
 .space-tree-row .space-branch { padding: 0 12px 6px 37px; background: transparent; }
 .space-tree-parent .resource-select { padding-left: 0; }
 .space-branch .ui-icon { width: 12px; height: 12px; flex-basis: 12px; }
+.space-branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Herdr shows the upstream position after the branch, e.g. "main ↑14". */
+.space-ahead-behind { flex: 0 0 auto; color: var(--idle); }
 .space-chevron .ui-icon { width: 14px; height: 14px; }
 .session-chevron { margin-left: auto; }
 .connection-mark { font-size: var(--font-size-2xs); }

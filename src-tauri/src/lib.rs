@@ -39,8 +39,8 @@ use cockpit_protocol::{
     v1::{
         CockpitMode, ErrorResponse, FocusRequest, FocusResponse, ResourceMutationRequest,
         ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse,
-        SessionStreamMessage, StatusResponse, TerminalCommand, TerminalOpenRequest,
-        TerminalOwnershipState, TerminalStreamMessage,
+        SessionStreamMessage, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
+        TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage,
     },
 };
 use futures_util::{SinkExt, StreamExt};
@@ -1064,6 +1064,17 @@ async fn cockpit_session_snapshot(
 }
 
 #[tauri::command]
+async fn cockpit_space_git_status(
+    session_id: String,
+    service: State<'_, CockpitService>,
+) -> Result<SpaceGitStatusResponse, ErrorResponse> {
+    service
+        .space_git_status(&session_id)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
 async fn cockpit_focus(
     session_id: String,
     request: FocusRequest,
@@ -1789,6 +1800,7 @@ pub fn run() {
             cockpit_browser_feedback_send,
             cockpit_sessions,
             cockpit_session_snapshot,
+            cockpit_space_git_status,
             cockpit_focus,
             cockpit_mutate,
             cockpit_session_subscribe,

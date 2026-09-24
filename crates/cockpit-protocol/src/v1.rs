@@ -69,6 +69,26 @@ pub struct SpaceGitSummary {
     pub is_linked_worktree: bool,
 }
 
+/// Branch position of a Space checkout, read from Git by Cockpit because
+/// Herdr's API does not expose it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceGitStatus {
+    pub space_id: String,
+    pub branch: Option<String>,
+    pub upstream: Option<String>,
+    /// Commits on HEAD that are not on the upstream; `None` without an upstream.
+    pub ahead: Option<u32>,
+    /// Commits on the upstream that are not on HEAD; `None` without an upstream.
+    pub behind: Option<u32>,
+}
+
+/// Git status for the Spaces of one session that have a repository checkout.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceGitStatusResponse {
+    pub session_id: String,
+    pub spaces: Vec<SpaceGitStatus>,
+}
+
 /// A summary of a Herdr Space in the current session.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct SpaceSummary {

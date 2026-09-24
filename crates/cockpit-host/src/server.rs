@@ -195,6 +195,10 @@ fn build_router_with_validated_root(
             "/api/v1/sessions/{session_id}/snapshot",
             get(session_snapshot),
         )
+        .route(
+            "/api/v1/sessions/{session_id}/space-git",
+            get(space_git_status),
+        )
         .route("/api/v1/sessions/{session_id}/focus", post(focus))
         .route(
             "/api/v1/sessions/{session_id}/mutations",
@@ -376,6 +380,19 @@ async fn session_snapshot(
     }
     match service.session_snapshot(&session_id).await {
         Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn space_git_status(
+    State(service): State<CockpitService>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Response {
+    if !valid_session_id(&session_id) {
+        return bad_request("invalid_session_id", "Invalid session id");
+    }
+    match service.space_git_status(&session_id).await {
+        Ok(status) => Json(status).into_response(),
         Err(error) => inspection_error(error),
     }
 }

@@ -207,6 +207,18 @@ export type BrowserViewCommandResponse = { "status": "accepted", view_id: string
 
 export type SpaceGitSummary = { repository_key: string, repository: string, branch: string | null, checkout_path: string, is_linked_worktree: boolean, };
 
+export type SpaceGitStatus = { space_id: string, branch: string | null, upstream: string | null,
+/**
+ * Commits on HEAD that are not on the upstream; `None` without an upstream.
+ */
+ahead: number | null,
+/**
+ * Commits on the upstream that are not on HEAD; `None` without an upstream.
+ */
+behind: number | null, };
+
+export type SpaceGitStatusResponse = { session_id: string, spaces: Array<SpaceGitStatus>, };
+
 export type SpaceSummary = { id: string, label: string, number: number, tab_count: number, pane_count: number, focused: boolean, agent_status: string, git: SpaceGitSummary | null, };
 
 export type TabSummary = { id: string, space_id: string, label: string, number: number, pane_count: number, focused: boolean, };

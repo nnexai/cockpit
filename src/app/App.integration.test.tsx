@@ -197,6 +197,7 @@ class AppFixture {
     commentPreview: vi.fn(async () => { throw new Error("Unexpected comment preview in terminal fixture"); }),
     sessions: this.sessionsCalls,
     sessionSnapshot: this.snapshotCalls,
+    spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
     focus: this.focusCalls,
     mutate: this.mutateCalls,
     subscribeSession: vi.fn(async (sessionId, onMessage, onError) => {
@@ -349,6 +350,19 @@ async function exhaustAutomaticRecovery(fixture: AppFixture): Promise<void> {
 }
 
 describe("mounted App mutation and session ordering", () => {
+  it("shows the Space branch position from Cockpit's Git status", async () => {
+    const fixture = new AppFixture();
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [{ space_id: "space-1", branch: "main", upstream: "origin/main", ahead: 2, behind: 1 }] });
+    await mount(fixture);
+    await settle();
+
+    expect(fixture.client.spaceGitStatus).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
+    const line = container.querySelector(".space-branch");
+    expect(line?.querySelector(".space-branch-name")?.textContent).toBe("main");
+    expect(line?.querySelector(".space-ahead-behind")?.textContent).toBe("↑2 ↓1");
+    expect(line?.querySelector(".space-ahead-behind")?.getAttribute("aria-label")).toBe("2 ahead, 1 behind origin/main");
+  });
+
   it("opens Review from the command overlay for the selected single pane", async () => {
     const fixture = new AppFixture();
     const presentation = panePresentation("session-1", "pane-1", true);

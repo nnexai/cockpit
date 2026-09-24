@@ -17,6 +17,7 @@ pub mod projects;
 pub mod repositories;
 pub mod review;
 pub mod sources;
+pub mod space_git;
 
 pub use browser::{BrowserHerdrAdapter, BrowserHerdrSnapshot, BrowserService};
 pub use extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
@@ -30,8 +31,8 @@ use async_trait::async_trait;
 use cockpit_protocol::v1::{
     CockpitCapabilities, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility,
     PaneMoveDestination, ResourceMutationRequest, ResourceMutationResponse, SessionListResponse,
-    SessionSnapshotResponse, StatusResponse, TerminalCommand, TerminalOpenRequest,
-    TerminalStreamMessage,
+    SessionSnapshotResponse, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
+    TerminalOpenRequest, TerminalStreamMessage,
 };
 use tokio::sync::{RwLock, mpsc};
 
@@ -307,6 +308,15 @@ impl CockpitService {
         self.session_result(session_id, validate_snapshot_session(session_id, &snapshot))
             .await?;
         Ok(snapshot)
+    }
+
+    /// Branch and upstream position for the session's Space checkouts.
+    pub async fn space_git_status(
+        &self,
+        session_id: &str,
+    ) -> Result<SpaceGitStatusResponse, InspectionError> {
+        let snapshot = self.session_snapshot(session_id).await?;
+        Ok(space_git::read(&snapshot).await)
     }
 
     pub async fn focus(

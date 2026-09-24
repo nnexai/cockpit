@@ -60,6 +60,7 @@ This records the decisions made during the architecture refinement interview. It
 - The sidebar has:
   - scrollable hierarchical Spaces at the top;
   - an Agents section below, acting as Herdr’s attention queue.
+- Space rows show the branch and its upstream position (`main ↑14`) like Herdr's TUI. Herdr's API does not expose the counts, so Cockpit reads them from Git for the checkout paths in Herdr's snapshot only, and the frontend polls every 15 seconds while visible because commits produce no Herdr event.
 - The main area shows tabs for the selected Space and fills available space.
 - Spaces and agent/process entries use Herdr-native terminology and identifiers at the UI level where practical.
 - The initial Cockpit foundation is the real Herdr mirror plus terminal attach/input, Herdr-semantic focus/layout controls, schema-gated socket access, and a working `cockpit serve` browser gateway.

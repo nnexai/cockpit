@@ -40,6 +40,7 @@ import type {
   ResourceMutationResponse,
   SessionListResponse,
   SessionSnapshotResponse,
+  SpaceGitStatusResponse,
   SessionStreamMessage,
   StatusResponse,
   TerminalCommand,
@@ -76,6 +77,7 @@ import {
   parseResourceMutationResponse,
   parseSessionListResponse,
   parseSessionSnapshotResponse,
+  parseSpaceGitStatusResponse,
   parseSessionStreamMessage,
   parseStatusResponse,
   parseTerminalCommand,
@@ -843,6 +845,14 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     },
     status(): Promise<StatusResponse> { return invokeAndParse(invoke, "cockpit_status", undefined, "status", parseStatusResponse); },
     sessions(): Promise<SessionListResponse> { return invokeAndParse(invoke, "cockpit_sessions", undefined, "sessions", parseSessionListResponse); },
+    spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse> {
+      try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+      return invokeAndParse(invoke, "cockpit_space_git_status", { sessionId }, "Space Git status", parseSpaceGitStatusResponse).then((value) => {
+        signal?.throwIfAborted();
+        if (value.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space Git status belongs to another session");
+        return value;
+      });
+    },
     sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<SessionSnapshotResponse> {
       try { validateSessionId(sessionId); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
       const pending = invokeAndParse(invoke, "cockpit_session_snapshot", { sessionId }, "session snapshot", parseSessionSnapshotResponse).then((value) => {

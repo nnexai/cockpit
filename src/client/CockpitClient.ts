@@ -102,6 +102,8 @@ import type {
   SessionSnapshotResponse,
   SessionStreamMessage,
   SessionSummary,
+  SpaceGitStatus,
+  SpaceGitStatusResponse,
   SpaceGitSummary,
   SpaceSummary,
   TabLayout,
@@ -298,6 +300,7 @@ export interface CockpitClient {
   commentPreview(sessionId: string, paneId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<CockpitSessionSnapshot>;
+  spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;
   mutate(
     sessionId: string,
@@ -1449,6 +1452,22 @@ export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotRes
     spaces: value.spaces, tabs: value.tabs, panes: value.panes, layouts: value.layouts,
     agents: value.agents.map((agent) => ({ ...agent, state_change_seq: agent.state_change_seq ?? 0 })),
   };
+}
+
+function isNullableU32(value: unknown): value is number | null {
+  return value === null || isU32(value);
+}
+
+function isSpaceGitStatus(value: unknown): value is SpaceGitStatus {
+  return isRecord(value) && isString(value.space_id) && isNullableString(value.branch) && isNullableString(value.upstream) &&
+    isNullableU32(value.ahead) && isNullableU32(value.behind);
+}
+
+export function parseSpaceGitStatusResponse(value: unknown): SpaceGitStatusResponse {
+  if (!isRecord(value) || !isString(value.session_id) || !Array.isArray(value.spaces) || !value.spaces.every(isSpaceGitStatus)) {
+    return malformed("Space Git status response is missing required fields");
+  }
+  return { session_id: value.session_id, spaces: value.spaces.map(({ space_id, branch, upstream, ahead, behind }) => ({ space_id, branch, upstream, ahead, behind })) };
 }
 
 export function parseSessionSummary(value: unknown): SessionSummary {
