@@ -1,7 +1,7 @@
 .setup-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-drawer);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -23,7 +23,7 @@
   max-height: min(860px, calc(100vh - 48px));
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--surface);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .32);
 }
@@ -67,7 +67,7 @@
 .setup-empty button {
   min-height: 32px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 6px 12px;
   background: var(--surface-raised);
   color: var(--text-primary);
@@ -95,22 +95,22 @@
   width: 100%;
   min-height: 34px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 7px 9px;
   background: var(--terminal-bg);
   color: var(--text-primary);
 }
 .setup-field input::placeholder { color: var(--text-muted); }
 
-.setup-repository-picker { position: relative; z-index: 1; min-width: 0; }
-.setup-repository-picker:focus-within { z-index: 3; }
+.setup-repository-picker { position: relative; z-index: var(--z-raised); min-width: 0; }
+.setup-repository-picker:focus-within { z-index: var(--z-floating-top); }
 .setup-picker-status,
 .setup-picker-help { margin: 5px 0 0; color: var(--text-muted); font-size: var(--font-size-2xs); line-height: 15px; }
 .setup-picker-help { margin-top: 6px; }
 .setup-repository-control { position: relative; }
 .setup-repository-list {
   position: absolute;
-  z-index: 2;
+  z-index: var(--z-floating);
   top: calc(100% + 4px);
   right: 0;
   left: 0;
@@ -130,7 +130,7 @@
   gap: 3px;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 8px 9px;
   background: var(--surface-raised);
   color: var(--text-secondary);
@@ -195,7 +195,7 @@
   gap: 5px;
   min-height: 76px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 12px;
   background: var(--surface-raised);
   color: var(--text-secondary);
@@ -229,7 +229,7 @@
 .setup-progress { margin: 16px 24px 0; border: 1px solid var(--border); padding: 14px 16px; background: var(--terminal-bg); }
 .setup-progress-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .setup-progress-heading h3 { margin-top: 3px; font-size: var(--font-size-sm); text-transform: capitalize; }
-.setup-state { border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px; color: var(--text-secondary); font-size: var(--font-size-2xs); text-transform: capitalize; }
+.setup-state { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 3px 7px; color: var(--text-secondary); font-size: var(--font-size-2xs); text-transform: capitalize; }
 .setup-state-completed { border-color: var(--idle); color: var(--idle); }
 .setup-state-running { border-color: var(--working); color: var(--working); }
 .setup-state-partial,
@@ -297,7 +297,7 @@
   .setup-progress-track span { transition: none; }
 }
 
-.setup-dialog-compact { background: var(--surface); border-color: var(--border-strong); border-radius: 5px; }
+.setup-dialog-compact { background: var(--surface); border-color: var(--border-strong); border-radius: var(--radius-panel); }
 .setup-dialog-compact .setup-header { padding: 18px 20px; align-items: center; gap: 10px; }
 .setup-dialog-compact .setup-header h2 { font-size: var(--font-size-lg); line-height: 24px; letter-spacing: -.025em; }
 .setup-session { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: var(--font-size-control); }
@@ -335,7 +335,7 @@
 .setup-compact-form > .setup-actions {
   position: sticky;
   bottom: -24px;
-  z-index: 1;
+  z-index: var(--z-raised);
   margin: 14px -24px -24px;
   padding: 12px 24px;
   border-top: 1px solid var(--border);

@@ -85,7 +85,7 @@
 
 dialog.comment-editor { position: static; width: auto; max-width: none; max-height: none; color: var(--text-primary); }
 dialog.comment-editor:not([open]) { display: none; }
-dialog.comment-editor.is-sheet { position: fixed; inset: auto 12px 12px; z-index: 19; width: min(600px, calc(100vw - 24px)); max-height: min(70dvh, 520px); margin: 0 auto; overflow: auto; border: 1px solid var(--border-strong); border-radius: var(--radius-control); box-shadow: 0 8px 24px rgb(0 0 0 / 32%); }
+dialog.comment-editor.is-sheet { position: fixed; inset: auto 12px 12px; z-index: var(--z-sheet); width: min(600px, calc(100vw - 24px)); max-height: min(70dvh, 520px); margin: 0 auto; overflow: auto; border: 1px solid var(--border-strong); border-radius: var(--radius-control); box-shadow: 0 8px 24px rgb(0 0 0 / 32%); }
 dialog.comment-editor.is-sheet::backdrop { background: rgb(3 5 8 / 45%); }
 dialog.comment-editor.is-sheet textarea { min-height: 100px; }
 .comment-editor-actions { flex-wrap: wrap; }

@@ -60,7 +60,7 @@
 
 .browser-controls {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
   display: flex;
   flex: 0 0 auto;
   min-width: 0;
@@ -325,7 +325,7 @@
 
 .browser-color-options {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-dropdown);
   top: calc(100% + 4px);
   left: 0;
   display: flex;
@@ -467,7 +467,7 @@
 .browser-blocker,
 .browser-note-editor {
   position: absolute;
-  z-index: 2;
+  z-index: var(--z-floating);
   right: 12px;
   bottom: 12px;
   left: 12px;

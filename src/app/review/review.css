@@ -47,7 +47,7 @@
 .review-warning { color: var(--working); }
 .review-body { display: grid; min-height: 0; flex: 1; grid-template-columns: 204px minmax(0, 1fr); }
 .review-files { min-width: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--sidebar-bg); }
-.review-files > header { position: sticky; top: 0; z-index: 1; display: flex; min-height: 38px; align-items: center; justify-content: flex-start; padding: 0 13px; border-bottom: 0; background: var(--sidebar-bg); color: var(--text-secondary);
+.review-files > header { position: sticky; top: 0; z-index: var(--z-raised); display: flex; min-height: 38px; align-items: center; justify-content: flex-start; padding: 0 13px; border-bottom: 0; background: var(--sidebar-bg); color: var(--text-secondary);
   font-size: var(--font-size-2xs);
 
   text-transform: uppercase;

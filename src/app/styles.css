@@ -50,7 +50,26 @@
   --space-tree-trunk-offset: 25px;
   --space-tree-child-indent: 38px;
   --tab-strip-height: 41px;
+  --radius-small: 3px;
   --radius-control: 4px;
+  --radius-panel: 6px;
+  --radius-pill: 999px;
+  /* Layers inside a pane or component, lowest first. */
+  --z-raised: 1;
+  --z-floating: 2;
+  --z-floating-top: 3;
+  --z-overlay: 4;
+  --z-dropdown: 5;
+  --z-dropdown-top: 6;
+  --z-chrome-toggle: 8;
+  /* App-wide layers, lowest first. */
+  --z-panel: 10;
+  --z-sheet: 20;
+  --z-drawer: 40;
+  --z-modal: 50;
+  --z-modal-panel: 55;
+  --z-context-menu: 60;
+  --z-indicator: 70;
   --compact-control-size: 28px;
   --control-height: 32px;
   --menu-control-height: 29px;
@@ -216,7 +235,7 @@ summary:focus-visible {
 }
 
 .sidebar-resizer {
-  z-index: 4;
+  z-index: var(--z-overlay);
   width: 5px;
   min-height: 0;
   margin-left: -2px;
@@ -236,7 +255,7 @@ summary:focus-visible {
 .drawer-scrim {
   position: fixed;
   inset: 0;
-  z-index: 39;
+  z-index: calc(var(--z-drawer) - 1);
   border: 0;
   background: rgb(3 5 8 / 62%);
   cursor: default;
@@ -246,7 +265,7 @@ summary:focus-visible {
   position: absolute;
   top: 6px;
   left: 8px;
-  z-index: 8;
+  z-index: var(--z-chrome-toggle);
   display: none;
   min-height: var(--compact-control-size);
   padding: 3px 8px;
@@ -320,7 +339,7 @@ summary:focus-visible {
 }
 
 .terminal-host .xterm-image-layer-top {
-  z-index: 4 !important;
+  z-index: var(--z-overlay) !important;
 }
 
 .terminal-overlay {
@@ -328,7 +347,7 @@ summary:focus-visible {
   right: 8px;
   bottom: 8px;
   left: 8px;
-  z-index: 4;
+  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -356,7 +375,7 @@ summary:focus-visible {
   position: absolute;
   top: 4px;
   right: 6px;
-  z-index: 3;
+  z-index: var(--z-floating-top);
   display: inline-flex;
   min-width: 16px;
   min-height: 16px;
@@ -386,7 +405,7 @@ summary:focus-visible {
 
 .terminal-context-menu {
   position: fixed;
-  z-index: 6;
+  z-index: var(--z-dropdown-top);
   display: grid;
   min-width: 96px;
   max-width: calc(100vw - 16px);
@@ -521,7 +540,7 @@ summary:focus-visible {
   padding: 0 13px;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
   background: var(--sidebar-bg);
 }
 
@@ -830,7 +849,7 @@ summary:focus-visible {
 }
 
 .pane-view.is-selected {
-  z-index: 1;
+  z-index: var(--z-raised);
   border: 2px solid var(--focus-strong);
 }
 
@@ -920,7 +939,7 @@ summary:focus-visible {
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 2;
+  z-index: var(--z-floating);
   display: flex;
   min-height: 26px;
   align-items: center;
@@ -1036,7 +1055,7 @@ summary:focus-visible {
 
 .create-menu[open],
 .resource-menu[open] {
-  z-index: 8;
+  z-index: var(--z-chrome-toggle);
   background: var(--surface-raised);
   color: var(--text-primary);
 }
@@ -1228,7 +1247,7 @@ summary:focus-visible {
 .resize-layer {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: var(--z-overlay);
   pointer-events: none;
 }
 
@@ -1599,7 +1618,7 @@ summary:focus-visible {
   margin: 2px 7px;
   padding: 2px 6px;
   border: 1px solid var(--focus-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-small);
   background: var(--app-bg);
   color: var(--text-primary);
 }
@@ -1797,7 +1816,7 @@ summary:focus-visible {
 
 .pane-presentation-error {
   position: absolute;
-  z-index: 5;
+  z-index: var(--z-dropdown);
   right: 6px;
   bottom: 6px;
   left: 6px;
@@ -1823,14 +1842,14 @@ summary:focus-visible {
 
 .context-menu {
   position: fixed;
-  z-index: 60;
+  z-index: var(--z-context-menu);
   display: grid;
   width: 286px;
   max-height: calc(100vh - 16px);
   padding: 5px;
   overflow: auto;
   border: 1px solid #445165;
-  border-radius: 5px;
+  border-radius: var(--radius-panel);
   background: var(--surface-raised);
   box-shadow: 0 10px 35px #0006;
 }
@@ -1839,7 +1858,7 @@ summary:focus-visible {
   min-height: 32px;
   padding: 7px 10px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--text-primary);
   text-align: left;
@@ -1888,7 +1907,7 @@ summary:focus-visible {
 .overlay-scrim {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: 20px;
@@ -1902,7 +1921,7 @@ summary:focus-visible {
   max-height: min(680px, 100%);
   overflow: auto;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--surface-raised);
   box-shadow: 0 18px 64px rgb(0 0 0 / 55%);
 }
@@ -1932,7 +1951,7 @@ summary:focus-visible {
 .command-overlay header button,
 .chooser-overlay button {
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-small);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -1997,7 +2016,7 @@ summary:focus-visible {
   gap: 12px;
   padding: 5px 7px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-small);
   background: transparent;
   color: var(--text-secondary);
   text-align: left;
@@ -2100,7 +2119,7 @@ kbd {
   min-height: var(--control-height);
   padding: 3px 7px;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--app-bg);
   color: var(--text-primary);
 }
@@ -2128,10 +2147,10 @@ kbd {
   position: fixed;
   right: 12px;
   bottom: 12px;
-  z-index: 70;
+  z-index: var(--z-indicator);
   padding: 3px 7px;
   border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--text-primary);
   font-family: "IBM Plex Mono", "Noto Sans Mono", monospace;
@@ -2142,14 +2161,14 @@ kbd {
   position: fixed;
   right: 12px;
   bottom: 12px;
-  z-index: 55;
+  z-index: var(--z-modal-panel);
   display: grid;
   width: min(640px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);
   gap: 1px;
   overflow: auto;
   border: 1px solid var(--blocked);
-  border-radius: 6px;
+  border-radius: var(--radius-panel);
   background: var(--surface-raised);
   box-shadow: 0 8px 28px rgb(0 0 0 / 42%);
 }
@@ -2181,7 +2200,7 @@ kbd {
   flex: 0 0 auto;
   padding: 2px 6px;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-small);
   background: transparent;
   cursor: pointer;
 }
@@ -2244,7 +2263,7 @@ kbd {
     top: 0;
     bottom: 0;
     left: 0;
-    z-index: 40;
+    z-index: var(--z-drawer);
     display: flex;
     width: min(360px, calc(100vw - 48px));
     max-width: calc(100vw - 48px);
@@ -2296,7 +2315,7 @@ kbd {
 .session-chevron { margin-left: auto; }
 .connection-mark { font-size: var(--font-size-2xs); }
 .sidebar-header .connection-mark { color: #779c91; }
-.tab-sidebar-toggle { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; margin: 4px; padding: 5px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.tab-sidebar-toggle { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; margin: 4px; padding: 5px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); cursor: pointer; }
 .tab-sidebar-toggle:hover { background: var(--surface-hover); }
 .tab-toolbar { background: #121923; }
 .tab-strip-actions { padding: 0 8px; gap: 5px; background: #121923; }
@@ -2336,18 +2355,18 @@ kbd {
 }
 .pane-header-expand .ui-icon { width: 15px; height: 15px; }
 .context-menu .ui-icon { width: 14px; height: 14px; flex-basis: 14px; color: var(--text-muted); }
-.command-search-box { display: flex; align-items: center; gap: 9px; margin: 12px 14px 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal-bg); color: var(--text-muted); }
+.command-search-box { display: flex; align-items: center; gap: 9px; margin: 12px 14px 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--terminal-bg); color: var(--text-muted); }
 .command-search-box .command-search { width: 100%; margin: 0; padding: 9px 0; border: 0; background: transparent; font-size: var(--font-size-xs); }
 .command-search-box:focus-within { border-color: var(--accent); }
 .command-search-box .command-search:focus-visible { outline: none; }
-.command-overlay { width: min(600px, 100%); border-radius: 5px; background: var(--surface-raised); }
+.command-overlay { width: min(600px, 100%); border-radius: var(--radius-panel); background: var(--surface-raised); }
 .command-overlay header { height: 49px; padding: 0 16px; }
 .command-overlay h2 { font-size: var(--font-size-sm); font-weight: 600; }
 .command-group h3 { font-size: var(--font-size-2xs); padding: 8px 3px 4px; }
 .command-row { justify-content: flex-start; gap: 8px; padding: 7px 10px; font-size: var(--font-size-control); min-height: 34px; }
 .command-row-label { flex: 1; }
 .command-row > .ui-icon { color: var(--text-muted); width: 14px; height: 14px; flex-basis: 14px; }
-.command-row kbd { font: var(--font-size-2xs) ui-monospace, monospace; border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px; }
+.command-row kbd { font: var(--font-size-2xs) ui-monospace, monospace; border: 1px solid var(--border); border-radius: var(--radius-small); padding: 1px 4px; }
 .command-footer { padding: 8px 14px; font-size: var(--font-size-2xs); }
 .context-menu { max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; }
 .pane-header-select { gap: 7px; min-width: 0; }
@@ -2381,7 +2400,7 @@ kbd {
 .command-group h3 { font-size: var(--font-size-2xs); font-weight: 500; margin: 0; padding: 10px 10px 7px; }
 .command-row { min-height: 34px; color: var(--text-primary); }
 .command-row-label small { font-size: var(--font-size-2xs); }
-.tab-strip-action { border-left: 0; height: 30px; align-self: center; border-radius: 4px; }
+.tab-strip-action { border-left: 0; height: 30px; align-self: center; border-radius: var(--radius-control); }
 @media (max-width: 800px) {
   .workbench { display: flex; }
   .workbench > .sidebar { width: min(300px, calc(100vw - 48px)); }
@@ -2437,7 +2456,7 @@ kbd {
 
 .browser-splitter {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
   flex: 0 0 9px;
   min-width: 9px;
   min-height: 9px;

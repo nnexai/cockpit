@@ -89,7 +89,7 @@
 .context-tree-header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
   display: flex;
   min-height: 38px;
   align-items: center;
@@ -157,7 +157,7 @@
 .context-document-header strong { min-width: 0; overflow: hidden; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .context-state-warning { color: var(--warning); }
 .context-mode-switch { display: flex; gap: 4px; padding-block-start: 6px; background: var(--terminal-bg); }
-.context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: 4px 4px 0 0; color: var(--text-secondary); }
+.context-mode-switch button { min-height: 26px; border-bottom-color: transparent; border-radius: var(--radius-control) var(--radius-control) 0 0; color: var(--text-secondary); }
 .context-mode-switch button.is-selected { border-color: var(--accent); background: var(--surface-selected); color: var(--text-primary); }
 .context-source-scroll,
 .context-markdown-scroll { min-height: 0; flex: 1; overflow: auto; }
@@ -247,7 +247,7 @@
 .context-resources {
   position: absolute;
   inset: 0;
-  z-index: 10;
+  z-index: var(--z-panel);
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -366,7 +366,7 @@
 .context-source-diagnostic,
 .context-source-details { grid-column: 1 / -1; min-width: 0; }
 .context-source-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.context-source-chip { display: inline-flex; max-width: 100%; align-items: center; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); font-size: var(--font-size-2xs); line-height: 1.35; overflow-wrap: anywhere; }
+.context-source-chip { display: inline-flex; max-width: 100%; align-items: center; padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text-secondary); font-size: var(--font-size-2xs); line-height: 1.35; overflow-wrap: anywhere; }
 .context-source-freshness.is-fresh,
 .context-source-status.is-materialized,
 .context-source-status.is-unchanged { border-color: color-mix(in srgb, var(--idle) 55%, var(--border)); color: var(--idle); }
