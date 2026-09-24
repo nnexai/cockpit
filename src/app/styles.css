@@ -2296,9 +2296,14 @@ kbd {
 .tab-strip-action { display: inline-flex; align-items: center; gap: 7px; font-size: var(--font-size-2xs); }
 .tab-strip-action .ui-icon { width: 13px; height: 13px; flex-basis: 13px; }
 /* Herdr marks the active tab with a filled block rather than an underline. */
-.tab-item.is-selected { background: color-mix(in srgb, var(--accent) 30%, transparent); border-bottom-color: transparent; }
+.tab-item.is-selected { background: var(--accent); border-bottom-color: transparent; }
+.tab-item.is-selected .tab-button,
 .tab-item.is-selected .tab-label,
-.tab-item.is-selected .tab-number { color: var(--text-primary); }
+.tab-item.is-selected .tab-number,
+.tab-item.is-selected .tab-menu { color: var(--app-bg); }
+.tab-item.is-selected .tab-button:hover,
+.tab-item.is-selected .tab-menu:hover { background: rgb(0 0 0 / 14%); }
+.tab-item.is-selected :focus-visible { outline-color: var(--app-bg); }
 .pane-overflow { display: inline-flex; align-items: center; justify-content: center; }
 .pane-overflow .ui-icon { stroke-width: 3px; }
 .pane-view.is-selected .pane-header { box-shadow: inset 0 1px var(--accent); }
