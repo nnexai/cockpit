@@ -1,0 +1,46 @@
+{
+  "snapshot": {
+    "binding_id": "sha256:3ee892a83f19b6ca965726ddfff2ce9d0f383c23cb756242d8d6bb149db55f61",
+    "session_id": "ng24flow",
+    "pane_id": "w2:p4",
+    "review_id": "f5aa2c5c-60e4-4848-a346-90fdae8e2ead",
+    "generation": 1,
+    "repository_id": "repo-3a87472e559414bc9b491491af6091cd7d67917755f7d1c465d72ff854af1fbe",
+    "checkout_path": "/tmp/cflow-native-green-20260924/worktrees/repo-1391137f-70a4-4dd8-a44b-2f36bd14a543",
+    "source_id": "review-0efd72e26de5b9a04345c995c936d11e6f48d9ce41861828d342778c64fbfda9",
+    "comparison": "branch",
+    "base_revision": "17681db91491d30c5b689fe27bd6cfd6680c6e6f",
+    "head_revision": "65fca411b95eb5c1c4b4fe7a62632d7f3fd3e39a",
+    "index_revision": "sha256:127df3acf562018ff04317996dde545516f0572159490156d55b4886ac76efe7",
+    "worktree_revision": "sha256:581f2c5f2e7c60f74eaabbac0e9b8174e85403bae9ae2c38578e6a5de8d0ac14",
+    "files": [
+      {
+        "file_id": "file-7ecb53de399ba2de2750baa53eb801dcdb8283a473d31c31c2e3286755f67891",
+        "comparison": "branch",
+        "status": "added",
+        "old_path": null,
+        "new_path": "branch-only.txt",
+        "binary": false,
+        "additions": 1,
+        "deletions": 0,
+        "summary": "branch added",
+        "old_revision": "17681db91491d30c5b689fe27bd6cfd6680c6e6f",
+        "new_revision": "65fca411b95eb5c1c4b4fe7a62632d7f3fd3e39a"
+      }
+    ],
+    "truncated": false,
+    "diagnostics": []
+  },
+  "changes": {
+    "file-7ecb53de399ba2de2750baa53eb801dcdb8283a473d31c31c2e3286755f67891": {
+      "status": "added",
+      "comparison": "branch",
+      "old_path": null,
+      "new_path": "branch-only.txt",
+      "old_revision": null,
+      "new_revision": "65fca411b95eb5c1c4b4fe7a62632d7f3fd3e39a"
+    }
+  },
+  "diffs": {},
+  "created_at": "1790243098512"
+}

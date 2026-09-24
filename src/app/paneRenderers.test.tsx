@@ -146,31 +146,37 @@ const reviewWithRoot = {
     companion_id: null,
   }],
 } as PanePresentation;
-const nestedReviewWithRoot = {
-  ...reviewWithRoot,
-  default_root_id: "nested",
-  roots: [
-    { ...reviewWithRoot.roots[0], root_id: "outer", repository_id: "outer-repo" },
-    { ...reviewWithRoot.roots[0], root_id: "nested", repository_id: "nested-repo", path: "/repo/nested", checkout_path: "/repo/nested" },
-  ],
-} as PanePresentation;
-
-it("opens Review against the default repository when nested roots are present", async () => {
+it.each([
+  { source: "terminal", extension: null, renderer: null, authorized: "child" },
+  { source: "verified Context", extension: "context", renderer: "context", authorized: "parent" },
+] as const)("opens Review for the authorized $source checkout rather than an unrelated root", async ({ extension, renderer, authorized }) => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const host = document.createElement("div");
   document.body.append(host);
   const mounted = createRoot(host);
-  const inspectPane = vi.fn().mockResolvedValue(structuredClone(nestedReviewWithRoot));
-  const openReview = vi.fn().mockResolvedValue(undefined);
+  const roots = [
+    { ...reviewWithRoot.roots[0], root_id: "parent", repository_id: "parent" },
+    { ...reviewWithRoot.roots[0], root_id: "child", path: "/worktrees/child", checkout_path: "/worktrees/child", repository_id: "child" },
+    { ...reviewWithRoot.roots[0], root_id: "companion", kind: "companion" as const, path: "/companions/task", checkout_path: "/worktrees/child", repository_id: "parent" },
+  ];
+  const linked = { ...reviewWithRoot, extension, renderer, default_root_id: "companion", roots } as PanePresentation;
+  const inspectPane = vi.fn().mockResolvedValue(structuredClone(linked));
+  const openReview = vi.fn<CockpitClient["openReview"]>().mockImplementation(async (_session, request) => {
+    if (request.repository_id !== authorized) throw new CockpitClientError("native_error", "selected repository is not the source pane's current checkout", { operationCode: "context_root_not_authorized" });
+    return linked;
+  });
+  const onResync = vi.fn();
   const client = { inspectPane, openReview } as unknown as CockpitClient;
   function Probe() {
-    const { open } = usePaneRenderers(client, "session", ["pane"], ["pane"], true, 0, vi.fn());
-    return <button type="button" onClick={() => { void open("pane", "right", "review"); }}>open</button>;
+    const renderers = usePaneRenderers(client, "session", ["pane"], ["pane"], true, 0, onResync);
+    return <div><button type="button" onClick={() => { void renderers.open("pane", "right", "review"); }}>Open Review</button><span role="alert">{renderers.panes.pane?.actionError}</span></div>;
   }
   try {
     await act(async () => { mounted.render(<Probe />); await settle(); });
     await act(async () => { host.querySelector<HTMLButtonElement>("button")!.click(); await settle(); });
-    expect(openReview).toHaveBeenCalledWith("session", { pane_id: "pane", binding_id: "binding", repository_id: "nested-repo", direction: "right" });
+    expect(host.querySelector("[role=alert]")?.textContent).toBe("");
+    expect(onResync).toHaveBeenCalledOnce();
+    expect(openReview).toHaveBeenCalledOnce();
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

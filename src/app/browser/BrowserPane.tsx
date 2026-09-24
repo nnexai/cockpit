@@ -860,7 +860,6 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "targets_changed": {
           next = { ...previous, targets: incoming.targets, displayed_target_id: incoming.displayed_target_id };
           if (previous.displayed_target_id !== incoming.displayed_target_id) {
-            if (previous.document && previous.displayed_target_id) retireDraftsFor(previous.displayed_target_id, previous.document.document_generation);
             void releaseRemotePointer();
             ++inputGenerationRef.current; clearPresentedFrame(); gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
             draftRef.current = null; associationOwner.draft = null; associationOwner.localDraftRevision = null;
@@ -870,7 +869,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
           break;
         }
         case "document_changed": {
-          if (previous.document && previous.displayed_target_id) retireDraftsFor(previous.displayed_target_id, previous.document.document_generation);
+          if (incoming.document && previous.document
+            && previous.document.target_id === incoming.document.target_id
+            && previous.document.document_generation !== incoming.document.document_generation
+            && previous.displayed_target_id === incoming.document.target_id) {
+            retireDraftsFor(previous.document.target_id, previous.document.document_generation);
+          }
           void releaseRemotePointer();
           next = { ...previous, document: incoming.document };
           ++inputGenerationRef.current; clearPresentedFrame(); gestureRef.current = null; setGesture(null); draftRequestRef.current += 1; setSelectedId(null); setInspection(null);
@@ -907,7 +911,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       }
       applySnapshot(next);
       presenter?.revalidate();
-      if (incoming.type === "document_changed") queueMicrotask(() => void openDraft());
+      if (incoming.type === "document_changed"
+        || (incoming.type === "targets_changed"
+          && previous.displayed_target_id !== next.displayed_target_id
+          && next.document?.target_id === next.displayed_target_id)) {
+        queueMicrotask(() => void openDraft());
+      }
       if (incoming.type !== "viewport_changed" && incoming.type !== "document_changed" && incoming.type !== "navigation_changed") {
         const nextStatus = statusFor(next);
         if (nextStatus !== "loading" || !frameRef.current) setStatus(nextStatus);
@@ -2056,6 +2065,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         await openDraft();
         if (associationOwnerRef.current !== captureOwner || captureOwner.sealed) return;
         if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(deliveryIdentity, ids, operationId, retried.capture.saved.capture_id);
+        else {
+          await openDraft();
+          if (associationOwnerRef.current === captureOwner && !captureOwner.sealed) await refreshSavedFeedback(captureOwner);
+        }
       }
       if (retried?.type === "capture" && retried.capture.state === "pending") {
         setPendingCaptureState(retried.capture.pending);
@@ -2128,6 +2141,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         await openDraft();
         if (associationOwnerRef.current !== captureOwner || captureOwner.sealed) return;
         if (await deliverAnnotations(ids, operationId, false)) await finishCaptureDelivery(captureIdentity, ids, operationId, saved.capture.saved.capture_id);
+        else {
+          await openDraft();
+          if (associationOwnerRef.current === captureOwner && !captureOwner.sealed) await refreshSavedFeedback(captureOwner);
+        }
       }
     } catch (error) {
       setStatus("error"); setMessage(`Could not capture browser image: ${errorMessage(error)}`);
@@ -2266,7 +2283,20 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const tabCommand = (commandValue: Extract<BrowserViewCommand, { type: "tab" }>) => {
     if (!liveInputEnabledRef.current) return;
     void releaseRemotePointer();
-    void enqueueInput("boundary", async () => { await command(commandValue); });
+    void enqueueInput("boundary", async () => {
+      try {
+        if (editorDirtyRef.current && draftRef.current) await persistEditor();
+        await associationOwner.mutationTail;
+        if (associationOwner.pendingAnnotationMutations.length || pendingCaptureRef.current) {
+          setMessage("Save or resolve retained browser annotations before switching tabs.");
+          return;
+        }
+      } catch (error) {
+        setMessage(`Could not preserve browser editor changes before switching tabs: ${errorMessage(error)}`);
+        return;
+      }
+      if (await ensureControl()) await command(commandValue);
+    });
   };
   const reconnectView = async (): Promise<void> => {
     try {

@@ -196,12 +196,6 @@ export function validateFrameDescriptor(descriptor: BrowserViewFrameDescriptor, 
   }
 }
 
-export function packetBytes(packet: BrowserViewFramePacket): ArrayBuffer {
-  const value = packet.jpeg;
-  return value.slice(0);
-}
-
-
 export interface FramePresenterOptions {
   readonly limits?: BrowserViewFrameEnvelopeV2;
   readonly validate?: (descriptor: BrowserViewFrameDescriptor) => void;
@@ -245,7 +239,7 @@ function sameNumericDescriptor(left: ParsedBrowserFrame, right: BrowserViewFrame
 }
 
 function packetJpeg(packet: BrowserViewFramePacket, limits: BrowserViewFrameEnvelopeV2): ArrayBuffer {
-  const bytes = packetBytes(packet);
+  const bytes = packet.jpeg;
   const view = new DataView(bytes);
   if (bytes.byteLength >= 4 && view.getUint32(0, false) === IBFV_V2_MAGIC) {
     const parsed = parseBrowserViewFrame(bytes, limits);
