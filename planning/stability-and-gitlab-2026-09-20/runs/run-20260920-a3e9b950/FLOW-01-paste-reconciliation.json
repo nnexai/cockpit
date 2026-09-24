@@ -1,0 +1,175 @@
+{
+ "fixture_1": {
+  "root": "/tmp/cflow-paste-ea66wzlc",
+  "session": "flowpaste58229695",
+  "socket": "/tmp/cflow-paste-ea66wzlc/config/herdr/sessions/flowpaste58229695/herdr.sock",
+  "url": "http://127.0.0.1:38651",
+  "pids": {
+   "herdr": 291456,
+   "gateway": 291487
+  },
+  "receipts": [
+   {
+    "operation_id": "54f2c46f-bacb-476c-845f-0c626b411568",
+    "state": "accepted",
+    "message": "Herdr accepted one raw bracketed-paste write; no Enter was sent.",
+    "user_confirmed": false,
+    "payload_hash": "sha256:6f852bb6be429bde42616f2d30f71757c146b9a0f80c7a97e3810a748c476702",
+    "batch_generation": 3,
+    "sent_draft_ids": [
+     "04de0bd5-8f0b-408e-9b9e-e1210b92f1a5"
+    ],
+    "created_at": "1790257516724",
+    "completed_at": "1790257516827",
+    "target": {
+     "session_id": "flowpaste58229695",
+     "workspace_id": "w2",
+     "tab_id": "w2:t2",
+     "pane_id": "w2:p4",
+     "terminal_id": "term_65c3ac018e8ce5",
+     "agent_fingerprint": "sha256:3627b305e3bc1bd3c823aacee0e10c9806a280f39e13d64c1a225807947412bb",
+     "agent_label": "pi"
+    }
+   },
+   {
+    "operation_id": "c3e82316-3cd5-453a-a558-55010afb7113",
+    "state": "accepted",
+    "message": "Herdr accepted one raw bracketed-paste write; no Enter was sent.",
+    "user_confirmed": false,
+    "payload_hash": "sha256:d4437e2cb881d2c1b6b91c2a11a0a5ee7fee43d6586affe63904a29b97670b43",
+    "batch_generation": 1,
+    "sent_draft_ids": [
+     "db93dce7-a9a1-46ef-ba44-88fa963d558f"
+    ],
+    "created_at": "1790257339560",
+    "completed_at": "1790257339663",
+    "target": {
+     "session_id": "flowpaste58229695",
+     "workspace_id": "w2",
+     "tab_id": "w2:t2",
+     "pane_id": "w2:p4",
+     "terminal_id": "term_65c3ac018e8ce5",
+     "agent_fingerprint": "sha256:3627b305e3bc1bd3c823aacee0e10c9806a280f39e13d64c1a225807947412bb",
+     "agent_label": "pi"
+    }
+   },
+   {
+    "operation_id": "f9381744-8c56-4555-8be2-6e82522e3094",
+    "state": "rejected",
+    "message": "paste target no longer has a verified agent identity",
+    "user_confirmed": false,
+    "payload_hash": "sha256:d4437e2cb881d2c1b6b91c2a11a0a5ee7fee43d6586affe63904a29b97670b43",
+    "batch_generation": 1,
+    "sent_draft_ids": [],
+    "created_at": "1790257304036",
+    "completed_at": "1790257304036",
+    "target": {
+     "session_id": "flowpaste58229695",
+     "workspace_id": "w2",
+     "tab_id": "w2:t2",
+     "pane_id": "w2:p2",
+     "terminal_id": "term_65c3ab60eeca73",
+     "agent_fingerprint": "sha256:d4a79c9506839cf8ba0919be899c6594f76da12fe0814f5818645967ad164d66",
+     "agent_label": "pi"
+    }
+   }
+  ],
+  "snapshot_polls_during_pi_start": "120 200",
+  "agent_start": {
+   "agent": "pi",
+   "agent_status": "idle",
+   "cwd": "/tmp/cflow-paste-ea66wzlc/worktrees/source-7e8d87f4-6d67-448f-b854-597dd650c5f1",
+   "focused": false,
+   "foreground_cwd": "/tmp/cflow-paste-ea66wzlc/worktrees/source-7e8d87f4-6d67-448f-b854-597dd650c5f1",
+   "interactive_ready": true,
+   "name": "flow-pi",
+   "pane_id": "w2:p2",
+   "revision": 1,
+   "state_change_seq": 1,
+   "tab_id": "w2:t2",
+   "terminal_id": "term_65c3ab60eeca73",
+   "terminal_title": "\u03c0 - source-7e8d87f4-6d67-448f-b854-597dd650c5f1",
+   "terminal_title_stripped": "\u03c0 - source-7e8d87f4-6d67-448f-b854-597dd650c5f1",
+   "workspace_id": "w2"
+  }
+ },
+ "fixture_2": {
+  "root": "/tmp/cflow-paste-jpht2d4x",
+  "session": "flowpasted9a3e384",
+  "socket": "/tmp/cflow-paste-jpht2d4x/config/herdr/sessions/flowpasted9a3e384/herdr.sock",
+  "proxy_socket": "/tmp/cflow-paste-jpht2d4x/herdr-proxy.sock",
+  "url": "http://127.0.0.1:41801",
+  "pids": {
+   "herdr": 320610,
+   "proxy": 320641,
+   "gateway": 320644
+  },
+  "receipts": [
+   {
+    "operation_id": "e7910ab5-e622-4441-ab24-5fde2cbf6d17",
+    "state": "accepted",
+    "message": "User marked the inspected paste as delivered; matching frozen drafts were archived.",
+    "user_confirmed": true,
+    "payload_hash": "sha256:731a382d2a5228610a667685c190220b565af7e1b4bea9a8ce5fc84828e78f0e",
+    "batch_generation": 1,
+    "sent_draft_ids": [
+     "804c2d16-e04d-4778-90be-bb83a7aab8f9"
+    ],
+    "created_at": "1790257711919",
+    "completed_at": "1790257760221",
+    "target": {
+     "session_id": "flowpasted9a3e384",
+     "workspace_id": "w2",
+     "tab_id": "w2:t2",
+     "pane_id": "w2:p2",
+     "terminal_id": "term_65c3ad619a3e73",
+     "agent_fingerprint": "sha256:dd762d8da6021525de2c324f5fa974700b02d1c9ac05dccb0f3c5c0a61de0953",
+     "agent_label": "pi"
+    }
+   }
+  ],
+  "proxy_events": [
+   {
+    "kind": "proxy_listening",
+    "listen": "/tmp/cflow-paste-jpht2d4x/herdr-proxy.sock",
+    "upstream": "/tmp/cflow-paste-jpht2d4x/config/herdr/sessions/flowpasted9a3e384/herdr.sock",
+    "t": 1790257605.2787914
+   },
+   {
+    "kind": "forwarded_send_text_will_drop_reply",
+    "id": "cockpit-653",
+    "pane": "w2:p2",
+    "bytes": 228,
+    "t": 1790257711.9211686
+   },
+   {
+    "kind": "withheld_herdr_reply",
+    "id": "cockpit-653",
+    "reply": {
+     "id": "cockpit-653",
+     "result": {
+      "type": "ok"
+     }
+    },
+    "t": 1790257712.022149
+   }
+  ],
+  "unacknowledged_retry": {
+   "operation_id": "11111111-2222-4333-8444-555555555555",
+   "acknowledge_duplicate_risk": false,
+   "expected_payload_hash": "sha256:731a382d2a5228610a667685c190220b565af7e1b4bea9a8ce5fc84828e78f0e",
+   "response": {
+    "status": 503,
+    "code": "comments_paste_duplicate_risk"
+   }
+  }
+ },
+ "agent_input_copies": {
+  "pane_B_FLOWPASTE_A": 1,
+  "pane_B_FLOWPASTE_B": 1,
+  "pane_C_after_unknown": 1,
+  "pane_C_after_unacked_retry": 1,
+  "pane_C_after_mark_pasted": 1,
+  "pane_B_unchanged_after_stale_target_rejection": true
+ }
+}

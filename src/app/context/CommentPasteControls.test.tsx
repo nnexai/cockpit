@@ -3,7 +3,7 @@ import { webcrypto } from "node:crypto";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { CockpitClient } from "../../client/CockpitClient";
+import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { CommentBatch, CommentPastePrepareResponse, CommentPreview } from "../../protocol/generated/v1";
 import { CommentPasteControls } from "./CommentPasteControls";
 
@@ -21,7 +21,7 @@ it("uses the prepared payload and requires duplicate acknowledgment before retry
   const accepted = vi.fn();
   const host = document.createElement("div"); document.body.append(host); const mounted = createRoot(host);
   const render = async (text: string) => {
-    await act(async () => { mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={null} onAccepted={accepted} />); });
+    await act(async () => { mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={null} onBatchChanged={accepted} />); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
   };
   const button = () => [...host.querySelectorAll("button")].find(item => item.textContent === "Paste to agent")!;
@@ -52,7 +52,7 @@ it("resolves an uncertain receipt only after input inspection without sending ag
   const host = document.createElement("div"); document.body.append(host); const mounted = createRoot(host);
   const accepted = vi.fn();
   try {
-    await act(async () => mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={null} onAccepted={accepted} />));
+    await act(async () => mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={null} onBatchChanged={accepted} />));
     const button = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("Mark pasted"))!;
     expect(button.disabled).toBe(true);
     await act(async () => (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click());
@@ -80,7 +80,7 @@ it("defaults to the first fresh eligible agent and replaces a stale target after
   const scope = { binding_id: "binding", client_id: "client" };
   const button = (label: string) => [...host.querySelectorAll("button")].find(item => item.textContent === label)!;
   try {
-    await act(async () => mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={{ batch_id: "batch", generation: 1, exportable: true, payload } as CommentPreview} onAccepted={vi.fn()} />));
+    await act(async () => mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={{ batch_id: "batch", generation: 1, exportable: true, payload } as CommentPreview} onBatchChanged={vi.fn()} />));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
     const select = host.querySelector<HTMLSelectElement>("select")!;
     expect(select.value).toBe(first.pane_id);
@@ -91,5 +91,36 @@ it("defaults to the first fresh eligible agent and replaces a stale target after
     expect(host.querySelector<HTMLSelectElement>("select")!.value).toBe(replacement.pane_id);
     await act(async () => button("Paste to agent").click());
     expect(send).toHaveBeenCalledWith("session", "source", expect.objectContaining({ target: replacement, expected_payload_hash: hash }));
+  } finally { await act(async () => mounted.unmount()); host.remove(); vi.unstubAllGlobals(); }
+});
+
+it("reloads the batch when a lost send response left the prepared generation stale", async () => {
+  vi.stubGlobal("crypto", webcrypto);
+  const payload = "Delivered before the response was lost";
+  const hash = `sha256:${Buffer.from(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))).toString("hex")}`;
+  const target = { endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "agent", terminal_id: "terminal", agent_fingerprint: "fingerprint", agent_label: "Agent" };
+  const prepared = { batch_id: "batch", generation: 1, payload_hash: hash, targets: [target], paste_available: true, reason: null, receipts: [] } as unknown as CommentPastePrepareResponse;
+  const prepare = vi.fn()
+    .mockResolvedValueOnce(prepared)
+    .mockRejectedValueOnce(new CockpitClientError("http_error", "comment batch generation is no longer current", { status: 409, operationCode: "stale_generation" }));
+  const send = vi.fn(async () => { throw new CockpitClientError("transport_error", "Could not reach the comment paste send endpoint"); });
+  const client = { commentPastePrepare: prepare, commentPasteSend: send } as unknown as CockpitClient;
+  const batch = { batch_id: "batch", generation: 1 } as CommentBatch;
+  const scope = { binding_id: "binding", client_id: "client" };
+  const batchChanged = vi.fn();
+  const host = document.createElement("div"); document.body.append(host); const mounted = createRoot(host);
+  const button = (label: string) => [...host.querySelectorAll("button")].find(item => item.textContent === label)!;
+  try {
+    await act(async () => mounted.render(<CommentPasteControls client={client} sessionId="session" paneId="source" scope={scope} batch={batch} retainStale={false} preview={null} onBatchChanged={batchChanged} />));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    await act(async () => button("Paste to agent").click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Paste outcome is unconfirmed");
+    expect(button("Paste to agent").disabled).toBe(true);
+    expect(batchChanged).not.toHaveBeenCalled();
+    await act(async () => button("Refresh targets").click());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(batchChanged).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Reloading the current comments");
+    expect(send).toHaveBeenCalledTimes(1);
   } finally { await act(async () => mounted.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });

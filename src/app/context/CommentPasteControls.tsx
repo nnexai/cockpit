@@ -27,9 +27,9 @@ function mayHaveDispatched(error: unknown): boolean {
   return code === null || !PROVEN_PRE_DISPATCH_ERRORS.has(code);
 }
 
-export function CommentPasteControls({ client, sessionId, paneId, scope, batch, retainStale, preview, onAccepted }: {
+export function CommentPasteControls({ client, sessionId, paneId, scope, batch, retainStale, preview, onBatchChanged }: {
   client: CockpitClient; sessionId: string; paneId: string; scope: CommentRequestScope;
-  batch: CommentBatch; retainStale: boolean; preview: CommentPreview | null; onAccepted: () => void;
+  batch: CommentBatch; retainStale: boolean; preview: CommentPreview | null; onBatchChanged: () => void;
 }) {
   const [prepared, setPrepared] = useState<CommentPastePrepareResponse | null>(null);
   const [targetPane, setTargetPane] = useState("");
@@ -40,6 +40,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
   const [duplicateRisk, setDuplicateRisk] = useState(false);
   const identity = `${sessionId}\0${paneId}\0${scope.binding_id}\0${batch.batch_id}\0${batch.generation}`;
   const identityRef = useRef(identity); identityRef.current = identity;
+  const onBatchChangedRef = useRef(onBatchChanged); onBatchChangedRef.current = onBatchChanged;
   const requestSequence = useRef(0);
   const prepare = useCallback(async () => {
     const sequence = ++requestSequence.current;
@@ -49,7 +50,15 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
       if (identityRef.current !== identity || sequence !== requestSequence.current) return;
       setPrepared(result);
     } catch (reason) {
-      if (identityRef.current === identity && sequence === requestSequence.current) setError(reason instanceof Error ? reason.message : "Could not prepare paste.");
+      if (identityRef.current !== identity || sequence !== requestSequence.current) return;
+      if (operationCode(reason) === "stale_generation") {
+        // A send whose response was lost may have archived the sent drafts.
+        // Only the reloaded batch can show what remains to paste.
+        setError("Comments changed since this view loaded. Reloading the current comments…");
+        onBatchChangedRef.current();
+        return;
+      }
+      setError(reason instanceof Error ? reason.message : "Could not prepare paste.");
     }
   }, [batch.batch_id, batch.generation, client, identity, paneId, retainStale, scope, sessionId]);
   useEffect(() => {
@@ -75,7 +84,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
       if (identityRef.current !== identity) return;
       setReceipt(result);
       setPrepared(null); setTargetPane("");
-      if (result.state === "accepted") onAccepted();
+      if (result.state === "accepted") onBatchChanged();
     } catch (reason) {
       if (identityRef.current === identity) {
         if (mayHaveDispatched(reason)) {
@@ -95,7 +104,7 @@ export function CommentPasteControls({ client, sessionId, paneId, scope, batch, 
         batch: { scope, batch_id: batch.batch_id, expected_generation: batch.generation }, operation_id: operationId,
       });
       if (identityRef.current !== identity) return;
-      setReceipt(result); setPrepared(null); setTargetPane(""); onAccepted();
+      setReceipt(result); setPrepared(null); setTargetPane(""); onBatchChanged();
     } catch (reason) {
       if (identityRef.current === identity) setError(reason instanceof Error ? reason.message : "Could not resolve the paste receipt.");
     } finally { setPending(false); }

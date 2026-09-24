@@ -1,0 +1,52 @@
+# FLOW-01 — paste target change, lost response and unknown-outcome reconciliation (2026-09-24)
+
+## Identity and scope
+
+Browser-only FLOW-01 increment for criteria 6 and 7 (target changes before send; lost paste response; unknown outcome; no duplicate dispatch). It also re-checks the Recovery alert `snapshot.agents[0].agent must be a string` that stopped the earlier `FLOW-01-resume.md` run after a Pi agent started. Main owned this increment; no other writer was active. FLOW-01 stays open (see "Remaining").
+
+- Source baseline `9cc438f047b29d8b9050635b9c1c88aaf91dbda3` plus the `CommentPasteControls` repair below. Gateway `target/debug/cockpit` SHA-256 `078398d902453dc4261ae0a6d9ac5deeeaa7712bc8428faacf62d5f0d6018017` (current with the baseline source; `cargo build --bin cockpit` had nothing to rebuild). Repaired frontend bundle `dist/assets/index-DI0XfbwR.js` SHA-256 `0e38bb7854b0a95b3f974b6cad98ed2345ec133aa7c44de989b73062b5b4affd`.
+- Herdr 0.9.1, Pi 0.84.2, Google Chrome 153.0.8010.47 through `playwright-cli` (private in-memory profile, session `flowpaste`), Linux x86_64, 1568×1009 viewport.
+- Fixture 1: root `/tmp/cflow-paste-ea66wzlc`, Herdr session `flowpaste58229695` (PID 291456), gateway `127.0.0.1:38651` (PID 291487). Fixture 2: root `/tmp/cflow-paste-jpht2d4x`, session `flowpasted9a3e384` (Herdr PID 320610), gateway `127.0.0.1:41801` (PID 320644), which reached Herdr **only** through a run-owned Unix-socket proxy (PID 320641, below). Each root had private HOME/XDG/Herdr config and socket, a copied read-only `herdr-file-viewer` 1.15.0 registered only in that root, a one-commit fixture repository `source/`, and Cockpit config/state beneath the root. The user's Herdr session, profile, installed app and `.audit/` files were not touched.
+- In both fixtures, Cockpit **Set up a task Space** created an owned worktree, a companion and child Space `w2`. **Open Context right** opened the real plugin pane in `w2:t2`, and **Import local snapshot** copied the task checkout. The saved line comment targets `README.md:3-4`.
+
+## Pi agent start no longer raises the snapshot Recovery alert
+
+The prior report left the source unresolved. Established cause: while Pi launches, Herdr 0.9.1 briefly reports the agent row with `agent: null` and `launch_pending: true`. A private repro that polled `herdr api snapshot` during `herdr agent start --kind pi` saw `agent` go `null` → `"pi"`, always schema-valid (`string | null`). Before `7e94b5f55a0663bfb8b422b1b041b33a8b3e6c56`, `cli.rs::parse_snapshot` required a string there. That commit skips the unconfirmed row instead, and `FLOW-01-resume.md` describes the pre-fix parser.
+
+Runtime check on the current gateway (fixture 1): while Cockpit was live on `w2:t2`, `herdr agent start flow-pi --kind pi --pane w2:p2` returned `agent: "pi"`, `idle`, `interactive_ready: true`. During the start, 120/120 polls of `GET /api/v1/sessions/flowpaste58229695/snapshot` returned 200. The UI had no `[role=alert]`, no "must be a string" text, and the Agents list showed `pi · idle` (`FLOW-01-paste-pi-start-no-alert.png`).
+
+## Scenarios and results
+
+All operation IDs, targets, payload hashes, proxy events and copy counts are in `FLOW-01-paste-reconciliation.json`. Agent input was read with `herdr pane read` before and after each action.
+
+1. **Stale prepared target is refused (fixture 1).** Paste targets listed Pi A `w2:p2` (selected) and Pi B `w2:p4`. Pi A exited from inside Herdr, and its shell and pane closed. The UI still showed A as the prepared selection. Clicking **Paste to agent** produced receipt `f9381744-8c56-4555-8be2-6e82522e3094`: `rejected`, "paste target no longer has a verified agent identity", empty `sent_draft_ids`. The UI rendered "Paste rejected: …", the comment stayed, and pane B's text was byte-identical before and after. **Refresh targets** then listed only B.
+2. **Browser loses the response after dispatch (fixture 1).** A Playwright route forwarded `POST …/comments/paste-send` to the gateway, then aborted the browser's response (`connectionreset`). The gateway recorded receipt `c3e82316-3cd5-453a-a558-55010afb7113` `accepted` ("no Enter was sent") for `w2:p4`. It archived the sent draft, and batch generation went 1 → 2. The UI rendered "Paste outcome is unconfirmed. Your comments are retained. Refresh the receipt before any retry…" and disabled Paste. Pi B stayed `idle`.
+   - **Defect found:** **Refresh targets** then failed with `comment batch generation is no longer current`. The UI kept showing the already-delivered comment as current and never showed the accepted receipt, so the reconciliation path the UI tells the user to take was a dead end. No duplicate was possible because Paste stayed disabled.
+3. **Repair verified (fixture 1, rebuilt bundle).** After a page reload, the view showed "0 comments" (A was archived) and the authoritative receipt history (accepted A, rejected T1). Comment `FLOWPASTE-B` was saved and sent with the same response drop. The gateway accepted receipt `54f2c46f-bacb-476c-845f-0c626b411568` and the UI showed the unconfirmed alert. **Refresh targets** now reloaded the batch: "No comments yet.", with no stale alert and no paste controls (`FLOW-01-paste-lost-response-reloaded.png`). Pi B's input held exactly one `FLOWPASTE-A` and one `FLOWPASTE-B`, unsubmitted, and the agent stayed `idle`.
+4. **Herdr's reply lost after dispatch → `outcome_unknown` (fixture 2).** The gateway's `COCKPIT_HERDR_SOCKET` pointed at `herdr_proxy`, a transparent line relay to the private Herdr socket. With its one-shot `DROP` flag set, it forwarded the next `pane.send_text` (`cockpit-653`, 228 bytes, pane `w2:p2`) and recorded Herdr's success reply. It then closed the gateway connection without relaying that reply. Herdr **did** insert the payload: Pi's input held one `FLOWPASTE-C`. The gateway recorded receipt `e7910ab5-e622-4441-ab24-5fde2cbf6d17` as `outcome_unknown` ("Herdr mutation outcome is unknown: Herdr closed the connection"), retained the draft, and did not archive it. The UI rendered "Paste outcome unknown: …", disabled **Paste to agent**, and showed the duplicate-risk checkbox. **Mark pasted · e7910ab5** stayed disabled until the box was ticked (`FLOW-01-paste-outcome-unknown.png`).
+5. **Server-enforced duplicate-risk refusal (fixture 2).** The page's own send body was replayed from the gateway origin with a new operation ID `11111111-2222-4333-8444-555555555555` and `acknowledge_duplicate_risk: false`. The gateway returned 503 `comments_paste_duplicate_risk`. It wrote no receipt, sent nothing to Herdr (no new proxy event), and Pi's input still held one copy. The same replay via `curl` without the gateway Origin was refused with 400 `request_origin_required`.
+6. **Explicit resolution without a resend (fixture 2).** After ticking the acknowledgement, **Mark pasted** updated the same receipt to `accepted`, `user_confirmed: true` ("User marked the inspected paste as delivered; matching frozen drafts were archived."). The batch went to generation 2 with zero drafts, the proxy saw no further `pane.send_text`, Pi's input still held one copy, and the agent stayed `idle` (`FLOW-01-paste-outcome-unknown-resolved.png`).
+
+Proxy limitation: the proxy relays newline-delimited frames with asyncio's default 64 KiB line bound. In fixture 2 the terminal pane's live stream showed "Terminal WebSocket failed" through the proxy. Fixture 1 had no proxy and streamed normally (its screenshot shows Pi's input). This is a test-harness artifact, not a product finding. Agent input in fixture 2 was verified with `herdr pane read` against the real Herdr socket.
+
+## Repair
+
+`src/app/context/CommentPasteControls.tsx`: when paste prepare fails with `stale_generation`, the control now calls its parent's batch reload. It shows "Comments changed since this view loaded. Reloading the current comments…" instead of a dead-end error. After reload, the paste identity re-prepares against the current generation, or the controls unmount when no drafts remain. The callback is renamed `onAccepted` → `onBatchChanged` because it now covers both cases. It is held in a ref, so the parent's inline closure does not change `prepare`'s identity or re-trigger preparation. The server contract, identities, receipts and duplicate-risk rules are unchanged.
+
+Checks: new regression `reloads the batch when a lost send response left the prepared generation stale`. It fails 1/4 against the pre-repair component and passes 4/4 with the repair. `bun run test -- src/app/context` passes 34/34; the full frontend `bun run test` passes 240/240 in 29 files; `bun run build` (tsc + vite) passes.
+
+## Criterion matrix (this increment only)
+
+| # | Result | Observation / limit |
+| --- | --- | --- |
+| 6 | **PASS for browser target-change and receipts** | A stale prepared target was refused with a durable rejected receipt and no write elsewhere. After refresh only the current agent is offered. Accepted pastes into a real Pi used the exact prepared hash with no Enter. Refused and unknown receipts were recorded. Native parity is not rerun here; prior native accepted and refused runs are in `FLOW-01.md`. |
+| 7 | **PASS for browser paste-response loss and reconciliation, after repair** | A browser-side lost response caused no duplicate and now reconciles by reloading the batch. A Herdr-side lost reply yields a durable `outcome_unknown`. Both UI and server require explicit duplicate-risk acknowledgement, and **Mark pasted** resolves it without a resend. Comment text was retained until authoritative delivery. Gateway restart while a receipt is `pending` (the `recover_pending` path) was not exercised. |
+| 1–5, 8 | Not in this increment | See `FLOW-01.md` and `FLOW-01-resume*.md`. |
+
+## Cleanup
+
+Both fixtures stopped with Herdr exit 0 and gateway exit 0; the proxy was terminated by SIGTERM. `ps` showed none of PIDs 291456, 291487, 320610, 320641 or 320644. Neither Herdr session socket nor the proxy socket remained. Ports 38651 and 41801 were no longer listening, and `pgrep` found no processes referencing either root. Both roots were removed. The `playwright-cli` session was closed and `playwright-cli list` reports no browsers.
+
+## Remaining FLOW-01 work
+
+Still open: native Review/comment parity and teardown; Herdr server/session-process restart and pending-intent recovery; gateway restart during a `pending` paste; provider source import (no provider configured in isolated fixtures); and the native full-workflow comparison.
