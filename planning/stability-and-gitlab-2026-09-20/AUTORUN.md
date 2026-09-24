@@ -24,7 +24,7 @@ The native goal tracks the full authorized campaign. Follow [repository executio
 
 Pause is sticky. A paused campaign goal never auto-resumes, including after interruption, recovery, a new worker, or a new orchestrator. Resume only on an explicit user instruction. Do not ask the user to restart the goal, relay worker messages, approve routine safe choices, or manually run the helper. At campaign start, inspect native goal state. If no matching goal exists, create this campaign goal; if it exists and is paused, leave it paused unless the user explicitly resumes it. If an unrelated goal is active or paused, do not silently replace, complete, pause, or repurpose it; report the exact collision for deliberate resolution. Do not create competing campaign orchestrators. Recover from the durable ledger and run evidence without replaying completed work.
 
-The campaign is complete only when all 24 original required task identities (plus any user-authorized required additions) are done, every original in-scope criterion passes on its required surface, all owned implementation/evidence changes have real full-SHA commits, and `ACCEPT-01` is complete. `LATER-GHPR` and `LATER-JIRA` remain `deferred`; keep GitHub issue #6 explicitly partial.
+The campaign is complete only when all 24 original required task identities (plus any user-authorized required additions) are done, every original in-scope criterion passes on its required surface, all owned implementation/evidence changes have real full-SHA commits, and `ACCEPT-01` is complete. `LATER-GHPR` remains `deferred`; `LATER-JIRA` is user-activated optional work (OBS-049). Keep GitHub issue #6 explicitly partial.
 
 ### Explicit user scope amendments
 

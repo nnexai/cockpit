@@ -298,12 +298,16 @@ def validate(ledger: Path) -> tuple[dict[str, Any], Path]:
                 bad(f"{status} task {task_id} has completion/ownership metadata")
             if task["blockers"] or task["evidence"] or task["commits"]:
                 bad(f"{status} task {task_id} has recorded execution metadata")
-        if not task["required"] and status != "deferred":
+        # Optional scope stays deferred unless the user explicitly activates
+        # it; an activation is recorded as an OBS note on the task (OBS-049).
+        activated = any(
+            isinstance(note, str) and "activated by the user" in note
+            for note in task["notes"]
+        )
+        if not task["required"] and status != "deferred" and not activated:
             bad(f"non-required task {task_id} must remain deferred")
         if status == "deferred" and task["required"]:
             bad(f"required task {task_id} cannot be deferred")
-        if status == "done" and not task["required"]:
-            bad(f"deferred-scope task {task_id} cannot be done")
         for evidence in task["evidence"]:
             path = safe_path(root, evidence, f"task {task_id}.evidence")
             if (

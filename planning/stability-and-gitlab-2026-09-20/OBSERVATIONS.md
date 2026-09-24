@@ -277,3 +277,8 @@ No task was silently waived or called externally blocked merely for lacking proo
 
 - 2026-09-24, found in code while designing live planning. `recover_startup` marked every `planned` record as `partial` with `resume_allowed`, so a plan the user never started appeared as an abandoned setup and resuming it would run it. Plans also never expired, and the store refuses to list beyond 4,096 entries. Owner FLOW-01.
 - Repair: plans expire after one hour, unstarted expired plans are deleted (with their lock files) at startup and periodically while planning, and startup leaves recent unstarted plans alone. Store regression test added; same commit `e6709202b0b3f0eb5541913665d7b34e62510566`.
+
+### OBS-049 — ledger said WEB-05 was active and Jira was deferred
+
+- 2026-09-24, found while planning the remaining work at the user's request. WEB-05's last note (OBS-042) released and queued it, but its status still said `in_progress` with owner Main, so its four locks made FLOW-01, WEB-04, WEB-06 and WEB-08 look lock-waiting. LATER-JIRA said `deferred` although the user had explicitly asked for Jira support and it shipped in `e6709202b0b3f0eb5541913665d7b34e62510566`.
+- Correction: WEB-05 is `queued` and unowned. LATER-JIRA is activated by the user, stays `required: false`, and adds no campaign dependency. `campaign.py` now accepts a non-required task outside `deferred` only when its notes record the user activation. GitHub #6 stays partial until LATER-GHPR is also delivered or the user changes its scope.

@@ -8,7 +8,7 @@ Read repository authorities (`CONTEXT.md`, `DECISIONS.md`, `CODE_GUIDE.md`) and 
 
 ## Scope and finish line
 
-Required: the 24 `required: true` tasks in `tasks.json`. Deferred: GitHub PR and Jira source expansion (`LATER-GHPR`, `LATER-JIRA`) and macOS-specific execution and acceptance (including `NATIVE-02`), following the user's explicit 2026-09-22 scope decision. None is silently complete. Linux-native behavior remains required in its owning tasks. GitHub #6 must remain open/partially satisfied after GitLab delivery unless its remaining provider scope is separately completed. No new credential store, settings product, remote-access platform, terminal graphics revival, or generic provider framework.
+Required: the 24 `required: true` tasks in `tasks.json`. Deferred: GitHub PR source expansion (`LATER-GHPR`; `LATER-JIRA` was activated by the user on 2026-09-24, OBS-049) and macOS-specific execution and acceptance (including `NATIVE-02`), following the user's explicit 2026-09-22 scope decision. None is silently complete. Linux-native behavior remains required in its owning tasks. GitHub #6 must remain open/partially satisfied after GitLab delivery unless its remaining provider scope is separately completed. No new credential store, settings product, remote-access platform, terminal graphics revival, or generic provider framework.
 
 The campaign is complete only when every required task is `done`, all required criteria have passing evidence, owned changes have commits and ACCEPT-01 reconciles issues/resources. Follow [repository execution rules](../../.omp/RULES.md) and [AUTORUN.md](AUTORUN.md#execution); do not narrow acceptance or stop solely because verification found a repairable defect.
 

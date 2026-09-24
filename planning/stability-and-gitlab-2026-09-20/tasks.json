@@ -310,7 +310,7 @@
         "163ee85fba8c883f80b5b24871de84bd210a7823"
       ],
       "notes": [
-        "Delivered under OBS-013/014: descriptor-bound no-replace publication, preflight and exact-manifest durability recovery integrated. Five companion tests and actual Linux gateway setup passed. Actual macOS filesystem/native checks remain user verification\u2014not executed\u2014in the committed handoff; no Darwin runtime pass is claimed."
+        "Delivered under OBS-013/014: descriptor-bound no-replace publication, preflight and exact-manifest durability recovery integrated. Five companion tests and actual Linux gateway setup passed. Actual macOS filesystem/native checks remain user verification—not executed—in the committed handoff; no Darwin runtime pass is claimed."
       ]
     },
     {
@@ -631,8 +631,8 @@
         11
       ],
       "brief": "tasks/WEB-05.md",
-      "status": "in_progress",
-      "owner": "Main",
+      "status": "queued",
+      "owner": null,
       "started_at": "2026-09-24T01:06:26Z",
       "completed_at": null,
       "blockers": [],
@@ -667,7 +667,8 @@
         "083fc7da5b9acd2e02b393838aed6758b8754cdb proves one-viewport browser/native real PNG composition with page pixels/mark/note and no chrome, non-consuming repeated feedback lookup, and an actionable no-recipient saved-capture rejection retaining exact pending bytes/metadata. OBS-041 records the zero-annotation editable draft versus still-painted overlay; hide/reopen/editability and other A14-A21/A24 criteria remain open under Main's WEB-05 locks.",
         "9cc51f8d8c48284a8a4000ab0405170bcc5c9549 records private Chromium/native OBS-041 action and remount diagnosis: a consumed mark accepted a note editor but could not save, and local feedback/mutation refs stranded the BrowserPane behind handoff Retry/Discard after Space return while exact frozen pending capture persisted. A separate native run retained a legitimately newer editable note on the same annotation ID without changing the immutable pending capture. Read-only lookup and truthful recovery repair are accepted in WEB-05.md; WEB-05 is not complete.",
         "0b0578498327b0038928f5bb323cc5414a6d95f8 repairs saved-feedback association and Element selection; actual Chromium mark/save/reopen passed. The one native DPR2 density failure stopped before native annotation proof. Main retains WEB-05 ownership; all remaining matrix criteria stay open.",
-        "OBS-042: Main safely released WEB-05 locks after committed product/evidence, closed owned browser/native fixtures and left no partial product edit. WEB-05 is queued until the native frame-density repair unblocks its real-surface acceptance."
+        "OBS-042: Main safely released WEB-05 locks after committed product/evidence, closed owned browser/native fixtures and left no partial product edit. WEB-05 is queued until the native frame-density repair unblocks its real-surface acceptance.",
+        "OBS-049: ledger correction — the OBS-042 release note already queued WEB-05, but status/owner still said in_progress/Main and held its four locks, which made FLOW-01/WEB-04/WEB-06/WEB-08 look lock-waiting. Status is now queued and unowned; no criterion changes."
       ]
     },
     {
@@ -816,7 +817,7 @@
         "8fe09231093ac2ce017017d3a254f321c211b502"
       ],
       "notes": [
-        "Adjusted delivery complete under explicit user OBS-013: owned macOS bundle implementation, reviewed publication/refusal behavior, 15 final Python tests and real owned Linux install/help/update/uninstall passed. Actual macOS launch/update/filesystem checks are user verification\u2014not executed; no Darwin or GUI pass is claimed. Installer docs exclude the unrelated WEB-07 hunk."
+        "Adjusted delivery complete under explicit user OBS-013: owned macOS bundle implementation, reviewed publication/refusal behavior, 15 final Python tests and real owned Linux install/help/update/uninstall passed. Actual macOS launch/update/filesystem checks are user verification—not executed; no Darwin or GUI pass is claimed. Installer docs exclude the unrelated WEB-07 hunk."
       ]
     },
     {
@@ -977,14 +978,23 @@
         6
       ],
       "brief": "tasks/LATER-JIRA.md",
-      "status": "deferred",
-      "owner": null,
-      "started_at": null,
-      "completed_at": null,
+      "status": "done",
+      "owner": "Main",
+      "started_at": "2026-09-24T00:00:00Z",
+      "completed_at": "2026-09-24T17:45:00Z",
       "blockers": [],
-      "evidence": [],
-      "commits": [],
-      "notes": []
+      "evidence": [
+        "runs/run-20260920-a3e9b950/SETUP-link-first.md",
+        "runs/run-20260920-a3e9b950/LATER-JIRA.md"
+      ],
+      "commits": [
+        "e6709202b0b3f0eb5541913665d7b34e62510566",
+        "2f883cae5235d9016da116f61a058e47716cc360"
+      ],
+      "notes": [
+        "OBS-049: activated by the user's explicit 2026-09-24 request (install/configure jira-cli for https://nnexai.atlassian.net, create test item SCRUM-5, implement Jira work items and MR-linked items). Remains required:false; activation adds no campaign dependency. e6709202 delivers the jira-cli provider (`jira issue view --raw`, site-verified self URL, ADF→Markdown, bounded comments), site authority, /browse and selectedIssue URL resolution, Jira-link setup and linked items; SETUP-link-first.md proves real import during setup. Refresh/local-edit conflict and real negative cases remain.",
+        "2f883cae proves real browser refresh (unchanged, changed with revision/content hashes), a local edit preserved byte for byte on conflict, and not-found, foreign-site, board, malformed and logged-out links with domain error codes. Conflict reconciliation and native Context are not exercised. GitHub #6 stays partial until LATER-GHPR."
+      ]
     }
   ]
 }
