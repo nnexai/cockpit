@@ -331,7 +331,7 @@ fn parse_snapshot(
     let agents = required_array(snapshot, "agents", "snapshot")?
         .iter()
         .enumerate()
-        .map(|(index, value)| {
+        .try_fold(Vec::new(), |mut agents, (index, value)| {
             let context = format!("snapshot.agents[{index}]");
             let object = object(value, &context)?;
             let title = sanitized_title(object, &context)?;
@@ -345,18 +345,37 @@ fn parse_snapshot(
                     "{context}.state_change_seq exceeds JavaScript safe integer range"
                 )));
             }
-            Ok(AgentSummary {
-                pane_id: required_string(object, "pane_id", &context)?,
-                space_id: required_string(object, "workspace_id", &context)?,
-                tab_id: required_string(object, "tab_id", &context)?,
-                name: required_string(object, "agent", &context)?,
-                status: required_string(object, "agent_status", &context)?,
+            let pane_id = required_string(object, "pane_id", &context)?;
+            let space_id = required_string(object, "workspace_id", &context)?;
+            let tab_id = required_string(object, "tab_id", &context)?;
+            let status = required_string(object, "agent_status", &context)?;
+            let focused = required_bool(object, "focused", &context)?;
+            let name = match object.get("agent") {
+                None | Some(Value::Null) => {
+                    // Herdr can report an agent pane before confirming its
+                    // identity. Labels cannot authorize an agent action.
+                    let pane = panes.iter().find(|pane| pane.id == pane_id).ok_or_else(|| {
+                        malformed(format!("{context} references unknown pane_id {pane_id}"))
+                    })?;
+                    if pane.space_id != space_id || pane.tab_id != tab_id {
+                        return Err(malformed(format!("{context} location does not match pane")));
+                    }
+                    return Ok(agents);
+                }
+                Some(_) => required_string(object, "agent", &context)?,
+            };
+            agents.push(AgentSummary {
+                pane_id,
+                space_id,
+                tab_id,
+                name,
+                status,
                 title,
-                focused: required_bool(object, "focused", &context)?,
+                focused,
                 state_change_seq,
-            })
-        })
-        .collect::<Result<Vec<_>, InspectionError>>()?;
+            });
+            Ok(agents)
+        })?;
 
     let response = SessionSnapshotResponse {
         session_id: session_id.to_owned(),
@@ -1910,7 +1929,7 @@ fn known_event(event: &str, data: &Value, snapshot: &SessionSnapshotResponse) ->
     if LIFECYCLE.contains(&normalized.as_str()) {
         return true;
     }
-    if normalized == "pane_agent_status_changed" || normalized == "pane_scroll_changed" {
+    if matches!(normalized.as_str(), "pane_agent_status_changed" | "pane_agent_detected" | "pane_scroll_changed") {
         return data
             .get("pane_id")
             .and_then(Value::as_str)
@@ -2135,6 +2154,44 @@ impl BrowserHerdrAdapter for HerdrCliAdapter {
             snapshot: parse_snapshot(json!({"result": result}), session_id)?,
         })
     }
+    async fn browser_endpoint_identity(
+        &self,
+        session_id: &str,
+    ) -> Result<(String, String), InspectionError> {
+        self.selected_session(session_id)?;
+        let path = self.socket_path(session_id)?;
+        let endpoint_path = path.to_str().map(str::to_owned).ok_or_else(|| {
+            InspectionError::new(
+                "endpoint_unavailable",
+                "Herdr endpoint path is not valid UTF-8",
+            )
+        })?;
+        let stream = tokio::time::timeout(
+            Duration::from_millis(250),
+            UnixStream::connect(&path),
+        )
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "endpoint_identity_unavailable",
+                "Herdr endpoint identity probe timed out",
+            )
+        })?
+        .map_err(|error| {
+            InspectionError::new(
+                "endpoint_identity_unavailable",
+                format!("could not connect to Herdr endpoint: {error}"),
+            )
+        })?;
+        let identity = Self::socket_peer_identity(&path, &stream)?;
+        if identity.contains(":start=unavailable") {
+            return Err(InspectionError::new(
+                "endpoint_identity_unavailable",
+                "Herdr process generation is unavailable",
+            ));
+        }
+        Ok((identity, endpoint_path))
+    }
 }
 
 #[cfg(test)]
@@ -2179,6 +2236,27 @@ mod tests {
             agents: Vec::new(),
         }
     }
+    #[test]
+    fn unidentified_agent_does_not_invalidate_snapshot_or_authorize_a_named_agent() {
+        let mut raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        raw["result"]["snapshot"]["agents"][0]["agent"] = Value::Null;
+        raw["result"]["snapshot"]["agents"][0]["display_agent"] = json!("assistant");
+        raw["result"]["snapshot"]["agents"][0]["name"] = json!("assistant");
+        let pending = parse_snapshot(raw.clone(), "default").expect("unidentified agent is schema-valid");
+        assert!(pending.agents.is_empty());
+        assert_eq!(pending.focused_pane_id.as_deref(), Some("pane-a"));
+        assert_eq!(pending.panes[0].id, "pane-a");
+        assert!(known_event("pane.agent_detected", &json!({"pane_id":"pane-a"}), &pending));
+        assert!(!known_event("pane.agent_detected", &json!({"pane_id":"other"}), &pending));
+
+        raw["result"]["snapshot"]["agents"][0]["agent"] = json!({"name":"assistant"});
+        assert!(parse_snapshot(raw.clone(), "default").is_err());
+        raw["result"]["snapshot"]["agents"][0]["agent"] = json!("assistant");
+        let identified = parse_snapshot(raw, "default").expect("confirmed agent identity");
+        assert_eq!(identified.agents[0].name, "assistant");
+        assert_eq!(identified.agents[0].pane_id, "pane-a");
+    }
+
 
     #[test]
     fn session_subscriptions_keep_state_events_but_exclude_terminal_scrollback() {
@@ -2450,6 +2528,91 @@ mod tests {
         assert_eq!(snapshot.spaces.len(), 1);
         assert!(snapshot.spaces[0].git.is_none());
         assert_eq!(structure.panes, snapshot.panes);
+    }
+
+    #[tokio::test]
+    async fn endpoint_identity_changes_when_same_socket_path_is_replaced_by_another_process() {
+        let socket = std::env::temp_dir().join(format!(
+            "cockpit-herdr-endpoint-replacement-{}-{}.sock",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let adapter = HerdrCliAdapter::new(
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone()))
+                .unwrap(),
+        );
+        let first = spawn_identity_server(&socket);
+        wait_for_socket(&socket).await;
+        let (old_identity, old_path) = adapter
+            .browser_endpoint_identity("default")
+            .await
+            .expect("first process identity is available");
+        assert_eq!(old_path, socket.to_str().unwrap());
+        drop(first);
+
+        let replacement = spawn_identity_server(&socket);
+        wait_for_socket(&socket).await;
+        let (new_identity, new_path) = adapter
+            .browser_endpoint_identity("default")
+            .await
+            .expect("replacement process identity is available");
+        drop(replacement);
+
+        assert_eq!(new_path, old_path);
+        assert_ne!(
+            new_identity, old_identity,
+            "same session/socket path must not hide a replaced server process"
+        );
+    }
+
+    #[test]
+    fn socket_identity_child_server() {
+        if std::env::var_os("COCKPIT_ENDPOINT_TEST_CHILD").is_none() {
+            return;
+        }
+        let socket = std::env::var_os("COCKPIT_ENDPOINT_TEST_SOCKET").unwrap();
+        let _listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    struct IdentityServer {
+        child: std::process::Child,
+        socket: PathBuf,
+    }
+
+    impl Drop for IdentityServer {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+
+    fn spawn_identity_server(socket: &Path) -> IdentityServer {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("cli::tests::socket_identity_child_server")
+            .arg("--nocapture")
+            .env("COCKPIT_ENDPOINT_TEST_CHILD", "1")
+            .env("COCKPIT_ENDPOINT_TEST_SOCKET", socket)
+            .spawn()
+            .unwrap();
+        IdentityServer {
+            child,
+            socket: socket.to_owned(),
+        }
+    }
+
+    async fn wait_for_socket(socket: &Path) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !socket.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("replacement server binds its socket");
     }
 
     fn parsed_title(value: Value) -> Option<String> {

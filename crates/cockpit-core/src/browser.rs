@@ -56,7 +56,19 @@ pub trait BrowserHerdrAdapter: Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<BrowserHerdrSnapshot, InspectionError>;
+
+    /// Return the identity of the live socket peer without requesting a session snapshot.
+    /// Implementations should use the same peer-credential/process-generation identity as
+    /// `browser_snapshot`; the default keeps existing adapters correct, though less cheaply.
+    async fn browser_endpoint_identity(
+        &self,
+        session_id: &str,
+    ) -> Result<(String, String), InspectionError> {
+        let snapshot = self.browser_snapshot(session_id).await?;
+        Ok((snapshot.endpoint_identity, snapshot.endpoint_path))
+    }
 }
+
 
 #[derive(Clone)]
 pub struct BrowserService {
@@ -79,6 +91,8 @@ pub struct BrowserRuntimeAttachment {
     pub browser_incarnation: String,
     pub session_id: String,
     pub space_id: String,
+    pub endpoint_identity: String,
+    pub endpoint_path: String,
     pub profile_path: PathBuf,
     pub cdp_endpoint: String,
     /// Stable CDP target identity selected for this association.
@@ -330,6 +344,8 @@ impl BrowserService {
             browser_incarnation: incarnation,
             session_id: receipt.session_id,
             space_id: receipt.space_id,
+            endpoint_identity: receipt.endpoint_identity,
+            endpoint_path: receipt.endpoint_path,
             profile_path: PathBuf::from(receipt.profile_path),
             cdp_endpoint,
             target_id,
@@ -337,6 +353,34 @@ impl BrowserService {
             node_executable: Some(node_executable),
             helper_module,
         })
+    }
+
+    /// Check the pinned Herdr socket peer without asking it for another snapshot.
+    /// Call at command admission and periodically while frame transport is active.
+    pub async fn verify_browser_runtime_endpoint(
+        &self,
+        attachment: &BrowserRuntimeAttachment,
+    ) -> Result<(), InspectionError> {
+        let (identity, path) = self
+            .adapter
+            .browser_endpoint_identity(&attachment.session_id)
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "stale_browser_endpoint",
+                    "Herdr endpoint identity is unavailable; the inline view was revoked",
+                )
+            })?;
+        if path != attachment.endpoint_path
+            || identity != attachment.endpoint_identity
+            || identity.contains(":start=unavailable")
+        {
+            return Err(InspectionError::new(
+                "stale_browser_endpoint",
+                "Herdr endpoint changed; the inline view was revoked",
+            ));
+        }
+        Ok(())
     }
 
     /// Reconcile durable associations without treating a transient Herdr failure

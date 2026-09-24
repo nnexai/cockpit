@@ -228,6 +228,8 @@ impl BrowserRuntime {
                 let cleanup_device = socket_device;
                 let cleanup_inode = socket_inode;
                 let mut reconcile = tokio::time::interval(Duration::from_secs(15));
+                let mut endpoint_probe = tokio::time::interval(Duration::from_millis(250));
+                endpoint_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
                 let mut retired = helper.take_retired_receiver().await.expect("retirement receiver available");
                 let task_helper = Arc::clone(&helper);
@@ -238,6 +240,9 @@ impl BrowserRuntime {
                             _ = reconcile.tick() => {
                                 let _ = owner_service.reconcile().await;
                                 let _ = owner_service.prune_feedback();
+                            }
+                            _ = endpoint_probe.tick() => {
+                                task_helper.verify_active_endpoints(&owner_service).await;
                             }
                             Some(retired_view) = retired.recv() => {
                                 task_helper.retire_view(retired_view).await;
@@ -349,7 +354,13 @@ impl BrowserRuntime {
     ) -> Result<BrowserViewOpen, InspectionError> {
         if let Some(helper) = self.helper.as_ref() {
             let attachment = self.service.browser_runtime_attachment(&request).await?;
-            return helper.open(attachment, request).await;
+            self.service.verify_browser_runtime_endpoint(&attachment).await?;
+            let opened = helper.open(attachment.clone(), request).await?;
+            if let Err(error) = self.service.verify_browser_runtime_endpoint(&attachment).await {
+                helper.revoke_attachment(&attachment).await;
+                return Err(error);
+            }
+            return Ok(opened);
         }
         match self.request(WireRequest::BrowserViewOpen(request)).await? {
             WireResponse::BrowserViewOpen(open) => Ok(BrowserViewOpen {
@@ -369,12 +380,12 @@ impl BrowserRuntime {
             _ => Err(invalid_response()),
         }
     }
-
     pub async fn browser_view_events(
         &self,
         view_id: &str,
     ) -> Result<BrowserViewEvents, InspectionError> {
         if let Some(helper) = self.helper.as_ref() {
+            verify_view_endpoint(&self.service, helper, view_id).await?;
             return helper.events(view_id).await;
         }
         let socket = self.owner_socket().await?;
@@ -386,6 +397,7 @@ impl BrowserRuntime {
         stream_epoch: u64,
     ) -> Result<BrowserViewNativeSubscription, InspectionError> {
         if let Some(helper) = self.helper.as_ref() {
+            verify_view_endpoint(&self.service, helper, view_id).await?;
             return helper.native_subscribe(view_id, stream_epoch).await;
         }
         let events = self.browser_view_events(view_id).await?;
@@ -412,6 +424,16 @@ impl BrowserRuntime {
 
     pub async fn browser_view_native_release(&self, view_id: &str) {
         if let Some(helper) = self.helper.as_ref() {
+            if let Ok((_, attachment)) = helper.attachment_context(view_id).await
+                && self
+                    .service
+                    .verify_browser_runtime_endpoint(&attachment)
+                    .await
+                    .is_err()
+            {
+                helper.revoke_attachment(&attachment).await;
+                return;
+            }
             helper.native_release(view_id).await;
         } else {
             let _ = self.browser_view_detach(view_id).await;
@@ -440,6 +462,7 @@ impl BrowserRuntime {
         grant: &BrowserViewFrameGrant,
     ) -> Result<String, InspectionError> {
         if let Some(helper) = self.helper.as_ref() {
+            verify_view_endpoint(&self.service, helper, &grant.view_id).await?;
             return helper.frame_endpoint(grant).await;
         }
         match self
@@ -453,6 +476,7 @@ impl BrowserRuntime {
 
     pub async fn browser_view_detach(&self, view_id: &str) -> Result<(), InspectionError> {
         if let Some(helper) = self.helper.as_ref() {
+            verify_view_endpoint(&self.service, helper, view_id).await?;
             helper.detach(view_id).await;
             return Ok(());
         }
@@ -623,7 +647,12 @@ async fn dispatch(
                 )
             })?;
             let attachment = service.browser_runtime_attachment(&request).await?;
-            let opened = helper.open(attachment, request).await?;
+            service.verify_browser_runtime_endpoint(&attachment).await?;
+            let opened = helper.open(attachment.clone(), request).await?;
+            if let Err(error) = service.verify_browser_runtime_endpoint(&attachment).await {
+                helper.revoke_attachment(&attachment).await;
+                return Err(error);
+            }
             Ok(WireResponse::BrowserViewOpen(WireBrowserViewOpen {
                 snapshot: opened.snapshot,
                 first_frame: opened.first_frame,
@@ -649,6 +678,7 @@ async fn dispatch(
                     "Inline browser owner helper is unavailable",
                 )
             })?;
+            verify_view_endpoint(service, helper, &grant.view_id).await?;
             helper
                 .frame_endpoint(&grant)
                 .await
@@ -656,6 +686,7 @@ async fn dispatch(
         }
         WireRequest::BrowserViewDetach(view_id) => {
             if let Some(helper) = helper {
+                verify_view_endpoint(service, helper, &view_id).await?;
                 helper.detach(&view_id).await;
             }
             Ok(WireResponse::BrowserViewDetached)
@@ -667,11 +698,25 @@ async fn dispatch(
     }
 }
 
+async fn verify_view_endpoint(
+    service: &BrowserService,
+    helper: &BrowserHelperSupervisor,
+    view_id: &str,
+) -> Result<(), InspectionError> {
+    let (_, attachment) = helper.attachment_context(view_id).await?;
+    if let Err(error) = service.verify_browser_runtime_endpoint(&attachment).await {
+        helper.revoke_attachment(&attachment).await;
+        return Err(error);
+    }
+    Ok(())
+}
+
 async fn owner_view_command(
     service: &BrowserService,
     helper: &BrowserHelperSupervisor,
     request: BrowserViewCommandRequest,
 ) -> Result<BrowserViewCommandResponse, InspectionError> {
+    verify_view_endpoint(service, helper, &request.view_id).await?;
     if matches!(&request.command, &BrowserViewCommand::Detach) {
         let snapshot = helper.events(&request.view_id).await?.snapshot;
         if snapshot.identity.stream_epoch != request.stream_epoch {
@@ -713,6 +758,7 @@ async fn owner_view_command(
             });
         }
         let (target, attachment) = helper.attachment_context(&request.view_id).await?;
+        verify_view_endpoint(service, helper, &request.view_id).await?;
         let result = service.browser_annotation_command(
             &target, &attachment, context.clone(), draft_id.as_deref(), *expected_revision, command.clone(),
         ).await;
@@ -736,6 +782,7 @@ async fn owner_view_command(
         let document = snapshot.document.filter(|document|
             document.target_id == descriptor.target_id && document.document_generation == descriptor.document_generation
         ).ok_or_else(|| InspectionError::new("browser_capture_stale", "The document changed during capture preparation"))?;
+        verify_view_endpoint(service, helper, &request.view_id).await?;
         service.browser_prepare_capture(&target, &attachment, command, capture_id, descriptor,
             document.frame_id, document.frame_generation).await?;
     }
@@ -767,6 +814,9 @@ async fn serve_peer(
         }
     };
     if let WireRequest::BrowserViewEvents(view_id) = request {
+        if verify_view_endpoint(&service, &helper, &view_id).await.is_err() {
+            return;
+        }
         let Ok(view) = helper.events(&view_id).await else {
             return;
         };

@@ -133,6 +133,11 @@ fn targets_from_snapshot(
             )
         })?;
         let pane_id = required_string(agent, "pane_id", "agent snapshot")?;
+        // Herdr reports a pane before detecting its agent. Display labels do
+        // not establish a paste recipient; only the confirmed agent identity does.
+        if agent.get("agent").is_none_or(Value::is_null) {
+            continue;
+        }
         let agent_name = required_string(agent, "agent", "agent snapshot")?;
         let session = match session(agent) {
             Ok(session) => session,
@@ -435,6 +440,28 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(restarted.len(), 1);
         assert_ne!(first[0].agent_fingerprint, restarted[0].agent_fingerprint);
+    }
+
+    #[test]
+    fn unidentified_agent_does_not_become_a_paste_target() {
+        let mut raw = snapshot(serde_json::Value::Null);
+        raw["snapshot"]["agents"][0]["agent"] = serde_json::Value::Null;
+        raw["snapshot"]["agents"][0]["display_agent"] = json!("codex");
+        raw["snapshot"]["agents"][0]["name"] = json!("codex");
+        assert!(targets_from_snapshot(raw.clone(), "endpoint".to_owned(), "session")
+            .expect("an unidentified agent is not a malformed snapshot")
+            .is_empty());
+
+        raw["snapshot"]["agents"][0]["agent"] = json!({"name":"codex"});
+        assert!(targets_from_snapshot(raw.clone(), "endpoint".to_owned(), "session").is_err());
+
+        raw["snapshot"]["agents"][0]["agent"] = json!("codex");
+        assert_eq!(
+            targets_from_snapshot(raw, "endpoint".to_owned(), "session")
+                .expect("a confirmed matching agent")
+                .len(),
+            1
+        );
     }
 
     #[test]

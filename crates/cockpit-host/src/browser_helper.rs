@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -56,6 +56,11 @@ pub(crate) struct BrowserHelperSupervisor {
     state_root: PathBuf,
     /// Incarnation is part of the registry key so a restarted Chromium can
     associations: Mutex<HashMap<(String, String), Vec<String>>>,
+    /// Serializes only opens for the same verified browser incarnation. The
+    /// helper itself remains unregistered until its first frame is ready.
+    admission_gates: Mutex<HashMap<(String, String), Weak<Mutex<()>>>>,
+    /// The packaged file has one publication path across all incarnations.
+    materialization: Mutex<()>,
     views: Mutex<HashMap<String, ManagedView>>,
     native_connections: Mutex<HashMap<String, usize>>,
     retired_tx: mpsc::UnboundedSender<RetiredView>,
@@ -104,10 +109,12 @@ enum HelperInput {
         stream_epoch: u64,
         frame_grant: BrowserViewFrameGrant,
     },
-    DetachView { view_id: String },
+    DetachView {
+        view_id: String,
+    },
+    Detach,
     Pause,
     Resume,
-    Detach,
     Stop,
     Command {
         request: BrowserViewCommandRequest,
@@ -151,6 +158,8 @@ impl BrowserHelperSupervisor {
         Self {
             state_root,
             associations: Mutex::new(HashMap::new()),
+            admission_gates: Mutex::new(HashMap::new()),
+            materialization: Mutex::new(()),
             views: Mutex::new(HashMap::new()),
             native_connections: Mutex::new(HashMap::new()),
             retired_tx,
@@ -183,10 +192,6 @@ impl BrowserHelperSupervisor {
                  [browser].node_executable before retrying the browser view",
             )
         })?;
-        let helper = match attachment.helper_module.clone() {
-            Some(path) => path,
-            None => self.materialize_helper()?,
-        };
         let view_id = Uuid::new_v4().to_string();
         let stream_epoch = 1;
         let frame_grant = new_grant(&view_id, stream_epoch)?;
@@ -194,6 +199,19 @@ impl BrowserHelperSupervisor {
             attachment.association_key.clone(),
             attachment.browser_incarnation.clone(),
         );
+        let admission_gate = {
+            let mut gates = self.admission_gates.lock().await;
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(&association_key).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(Mutex::new(()));
+                    gates.insert(association_key.clone(), Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        let _admission = admission_gate.lock().await;
         while let Some(existing_id) = self.existing_view_id(&association_key).await {
             match self
                 .open_shared(
@@ -209,6 +227,13 @@ impl BrowserHelperSupervisor {
                 Err(error) => return Err(error),
             }
         }
+        let helper = match attachment.helper_module.clone() {
+            Some(path) => path,
+            None => {
+                let _materialization = self.materialization.lock().await;
+                self.materialize_helper()?
+            }
+        };
         let (input, mut input_rx) = mpsc::channel(HELPER_QUEUE);
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -505,12 +530,12 @@ impl BrowserHelperSupervisor {
         let view_id = Uuid::new_v4().to_string();
         let stream_epoch = 1;
         let grant = new_grant(&view_id, stream_epoch)?;
-        input
-            .send(HelperInput::Resume)
-            .await
-            .map_err(|_| {
-                InspectionError::new("browser_helper_failed", "Shared browser helper is not running")
-            })?;
+        input.send(HelperInput::Resume).await.map_err(|_| {
+            InspectionError::new(
+                "browser_helper_failed",
+                "Shared browser helper is not running",
+            )
+        })?;
         input
             .send(HelperInput::AttachView {
                 view_id: view_id.clone(),
@@ -519,7 +544,10 @@ impl BrowserHelperSupervisor {
             })
             .await
             .map_err(|_| {
-                InspectionError::new("browser_helper_failed", "Shared browser helper is not running")
+                InspectionError::new(
+                    "browser_helper_failed",
+                    "Shared browser helper is not running",
+                )
             })?;
         baseline.identity.view_id = view_id.clone();
         baseline.identity.stream_epoch = stream_epoch;
@@ -546,9 +574,10 @@ impl BrowserHelperSupervisor {
                     metadata_sequence: value.metadata_sequence,
                 };
                 let event = match replace_event_metadata(event, metadata) {
-                    BrowserViewEvent::Attached { metadata, .. } => {
-                        BrowserViewEvent::Attached { metadata, snapshot: value.clone() }
-                    }
+                    BrowserViewEvent::Attached { metadata, .. } => BrowserViewEvent::Attached {
+                        metadata,
+                        snapshot: value.clone(),
+                    },
                     event => event,
                 };
                 let _ = task_events.send(event);
@@ -605,9 +634,12 @@ impl BrowserHelperSupervisor {
         view_id: &str,
     ) -> Result<(BrowserTarget, BrowserRuntimeAttachment), InspectionError> {
         let views = self.views.lock().await;
-        let view = views.get(view_id).ok_or_else(|| InspectionError::new(
-            "browser_view_not_found", "Browser view is not attached to this owner",
-        ))?;
+        let view = views.get(view_id).ok_or_else(|| {
+            InspectionError::new(
+                "browser_view_not_found",
+                "Browser view is not attached to this owner",
+            )
+        })?;
         let mut attachment = view.attachment.clone();
         if let Some(target_id) = view.snapshot.lock().await.displayed_target_id.clone() {
             attachment.target_id = target_id;
@@ -709,13 +741,153 @@ impl BrowserHelperSupervisor {
             }
         }
     }
+    pub(crate) async fn verify_active_endpoints(
+        &self,
+        service: &cockpit_core::BrowserService,
+    ) {
+        let attachments = {
+            let views = self.views.lock().await;
+            views
+                .values()
+                .map(|view| view.attachment.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut probes = HashMap::new();
+        for attachment in attachments {
+            probes
+                .entry((
+                    attachment.session_id.clone(),
+                    attachment.endpoint_path.clone(),
+                    attachment.endpoint_identity.clone(),
+                ))
+                .or_insert(attachment);
+        }
+        let mut checks = tokio::task::JoinSet::new();
+        for (key, attachment) in probes {
+            let service = service.clone();
+            checks.spawn(async move {
+                let valid = service
+                    .verify_browser_runtime_endpoint(&attachment)
+                    .await
+                    .is_ok();
+                (key, valid)
+            });
+        }
+        let mut stale = Vec::new();
+        while let Some(Ok((key, valid))) = checks.join_next().await {
+            if !valid {
+                stale.push(key);
+            }
+        }
+        if stale.is_empty() {
+            return;
+        }
+        self.revoke_endpoint_views(&stale).await;
+    }
+
+    pub(crate) async fn revoke_attachment(
+        &self,
+        attachment: &cockpit_core::browser::BrowserRuntimeAttachment,
+    ) {
+        self.revoke_endpoint_views(&[(
+            attachment.session_id.clone(),
+            attachment.endpoint_path.clone(),
+            attachment.endpoint_identity.clone(),
+        )])
+        .await;
+    }
+    async fn revoke_endpoint_views(&self, stale: &[(String, String, String)]) {
+        let retired = {
+            let mut views = self.views.lock().await;
+            let stale_tasks = views
+                .values()
+                .filter(|view| {
+                    stale.iter().any(|(session, path, identity)| {
+                        view.attachment.session_id == *session
+                            && view.attachment.endpoint_path == *path
+                            && view.attachment.endpoint_identity == *identity
+                    })
+                })
+                .map(|view| Arc::clone(&view.task))
+                .collect::<Vec<_>>();
+            let ids = views
+                .iter()
+                .filter(|(_, view)| {
+                    stale_tasks
+                        .iter()
+                        .any(|task| Arc::ptr_eq(task, &view.task))
+                })
+                .map(|(view_id, _)| view_id.clone())
+                .collect::<Vec<_>>();
+            ids.into_iter()
+                .filter_map(|view_id| views.remove(&view_id).map(|view| (view_id, view)))
+                .collect::<Vec<_>>()
+        };
+        if retired.is_empty() {
+            return;
+        }
+        let ids = retired
+            .iter()
+            .map(|(view_id, _)| view_id.clone())
+            .collect::<Vec<_>>();
+        self.native_connections
+            .lock()
+            .await
+            .retain(|view_id, _| !ids.contains(view_id));
+        {
+            let mut associations = self.associations.lock().await;
+            for view_ids in associations.values_mut() {
+                view_ids.retain(|view_id| !ids.contains(view_id));
+            }
+            associations.retain(|_, view_ids| !view_ids.is_empty());
+        }
+        let mut stopped = Vec::new();
+        for (view_id, view) in retired {
+            if let Some(task) = view.forward_task {
+                task.abort();
+            }
+            let mut snapshot = view.snapshot.lock().await;
+            snapshot.frame_grant = None;
+            let metadata = BrowserViewEventMetadata {
+                view_id,
+                stream_epoch: snapshot.identity.stream_epoch,
+                metadata_sequence: snapshot.metadata_sequence.saturating_add(1),
+            };
+            snapshot.metadata_sequence = metadata.metadata_sequence;
+            let _ = view.events.send(BrowserViewEvent::FrameTransportRevoked {
+                metadata,
+                code: "stale_browser_endpoint".into(),
+                message: "Herdr endpoint changed; this browser view was revoked".into(),
+            });
+            drop(snapshot);
+            if !stopped
+                .iter()
+                .any(|task: &Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>| Arc::ptr_eq(task, &view.task))
+            {
+                stopped.push(Arc::clone(&view.task));
+            }
+        }
+        for task in stopped {
+            if let Some(task) = task.lock().await.take() {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
     pub(crate) async fn retire_view(&self, retired: RetiredView) {
-        if self.native_connections.lock().await.contains_key(&retired.view_id) {
+        if self
+            .native_connections
+            .lock()
+            .await
+            .contains_key(&retired.view_id)
+        {
             return;
         }
         let managed = {
             let mut views = self.views.lock().await;
-            let Some(view) = views.get(&retired.view_id) else { return };
+            let Some(view) = views.get(&retired.view_id) else {
+                return;
+            };
             let epoch = view.snapshot.lock().await.identity.stream_epoch;
             if epoch != retired.stream_epoch {
                 return;
@@ -756,7 +928,9 @@ impl BrowserHelperSupervisor {
         }
         let idle = {
             let associations = self.associations.lock().await;
-            associations.values().any(|ids| ids.len() == 1 && ids.first().is_some_and(|id| id == view_id))
+            associations
+                .values()
+                .any(|ids| ids.len() == 1 && ids.first().is_some_and(|id| id == view_id))
         };
         if idle {
             let managed = {
@@ -800,7 +974,7 @@ impl BrowserHelperSupervisor {
         for view_ids in associations.values_mut() {
             view_ids.retain(|id| id != view_id);
         }
-        let last_view = associations.values().all(Vec::is_empty) || associations.values().all(|ids| ids.is_empty());
+        let last_view = associations.values().all(Vec::is_empty);
         associations.retain(|_, ids| !ids.is_empty());
         drop(associations);
         if let Some(task) = managed.forward_task {
@@ -941,7 +1115,6 @@ fn set_private_permissions(path: &Path, file: bool) -> Result<(), InspectionErro
     }
     Ok(())
 }
-
 
 async fn run_helper(
     _child: Child,
