@@ -134,7 +134,7 @@ summary:focus-visible {
   min-width: 0;
   flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--sidebar-bg);
 }
@@ -517,8 +517,16 @@ summary:focus-visible {
   margin: 0;
 }
 
+/* The sidebar itself never scrolls; Spaces and Agents each scroll their own list. */
 .sidebar-section {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+}
+
+.sidebar-header,
+.sidebar-section-heading {
+  flex: 0 0 auto;
 }
 
 .spaces-section {
@@ -562,6 +570,7 @@ summary:focus-visible {
 
 .space-list,
 .agent-list {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
 }
@@ -1385,8 +1394,6 @@ summary:focus-visible {
   border: 0;
 
   padding-top: 6px;
-
-  overflow: auto;
 }
 
 .sidebar-section-heading {
@@ -1652,9 +1659,7 @@ summary:focus-visible {
   max-height: none;
 }
 
-.agent-list {
-  max-height: 280px;
-}
+
 
 .agent-row {
   min-height: 31px;
