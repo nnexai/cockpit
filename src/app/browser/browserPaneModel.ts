@@ -91,6 +91,48 @@ export const statusText = (status: PaneStatus, message: string | null): string =
   if (status === "hidden") return "Browser view hidden";
   return message ?? (status === "unsupported" ? "Browser view is unsupported by this runtime" : "Browser stream error");
 };
+/** How long the view may lag behind dropped frames or refused input before the pane says so. */
+export const LAG_NOTICE_DELAY_MS = 2_000;
+export const FRAME_BEHIND_MESSAGE = "Browser view is behind: newer page frames could not be shown.";
+/**
+ * Holds back a transient problem (a dropped frame, a refused input) until it
+ * has gone unresolved for a while. A newer frame or the next accepted input
+ * resolves it, so a problem that fixes itself never reaches the pane.
+ */
+export class DelayedNotice {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private message: string | null = null;
+  private shown = false;
+  constructor(
+    private readonly show: (message: string) => void,
+    private readonly clear: (message: string) => void,
+    private readonly delayMs = LAG_NOTICE_DELAY_MS,
+  ) {}
+  report(message: string): void {
+    this.message = message;
+    if (this.shown) { this.show(message); return; }
+    if (this.timer !== null) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.message === null) return;
+      this.shown = true;
+      this.show(this.message);
+    }, this.delayMs);
+  }
+  resolve(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    const message = this.message;
+    this.message = null;
+    if (this.shown && message !== null) { this.shown = false; this.clear(message); }
+  }
+  dispose(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.message = null;
+    this.shown = false;
+  }
+}
 export const button = (value: number): "left" | "middle" | "right" | null => value === 0 ? "left" : value === 1 ? "middle" : value === 2 ? "right" : null;
 export const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
 export const isLocalBrowserChrome = (target: EventTarget | null): boolean =>

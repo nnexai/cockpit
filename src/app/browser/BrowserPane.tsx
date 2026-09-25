@@ -3,7 +3,7 @@ import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedb
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
 import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, validateFrameDescriptor } from "./framePresenter";
 import { createBrowserTransform } from "./transform";
-import { MAX_INPUT_JOBS, deliveryOperationId, MAX_ANNOTATION_POINTS, errorMessage, newId, annotationId, statusFor, statusText, button, modifiers, isLocalBrowserChrome, addressBarUrl, navigationUrl, rectFrom, kindFor, sameDraftAnnotation, simplify, context, location, retiredDraft, retiredDocumentKey, ownsBrowserControl, type PaneStatus, type Tool, type Gesture, type WheelIntent, type InputJob, type PointerIntent, type ElementInspectionIntent, type DraftAssociationOwner, type CaptureIdentity, type SavedDelivery, type DeliveryState } from "./browserPaneModel";
+import { MAX_INPUT_JOBS, deliveryOperationId, MAX_ANNOTATION_POINTS, errorMessage, newId, annotationId, statusFor, statusText, DelayedNotice, FRAME_BEHIND_MESSAGE, button, modifiers, isLocalBrowserChrome, addressBarUrl, navigationUrl, rectFrom, kindFor, sameDraftAnnotation, simplify, context, location, retiredDraft, retiredDocumentKey, ownsBrowserControl, type PaneStatus, type Tool, type Gesture, type WheelIntent, type InputJob, type PointerIntent, type ElementInspectionIntent, type DraftAssociationOwner, type CaptureIdentity, type SavedDelivery, type DeliveryState } from "./browserPaneModel";
 import { AnnotationIcon, AnnotationToolButtons, BrowserColorPicker, COLORS } from "./AnnotationControls";
 import { AnnotationLayer, BrowserNavigationBar, BrowserTabStrip, SavedDeliveryList } from "./BrowserChrome";
 import "./browser.css";
@@ -60,6 +60,16 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const pendingElementClientPointRef = useRef<{ clientX: number; clientY: number; targetId: string; documentGeneration: number; viewportRevision: number } | null>(null);
   const inspectRequestRef = useRef(0);
   const inspectionNoticeRef = useRef<string | null>(null);
+  // A refused input is only worth a notice when the next input does not go through.
+  const staleInputNoticeRef = useRef<DelayedNotice | null>(null);
+  staleInputNoticeRef.current ??= new DelayedNotice(
+    (notice) => { setStatus("stale"); setMessage(notice); },
+    (notice) => {
+      setMessage((current) => current === notice ? null : current);
+      setStatus((current) => current === "stale" ? (streamRef.current ? "ready" : "loading") : current);
+    },
+  );
+  useEffect(() => () => staleInputNoticeRef.current?.dispose(), []);
   const hoverInspectTimerRef = useRef<number | null>(null);
   const hoverInspectPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const selectingElementRef = useRef(false);
@@ -249,8 +259,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       if (response.status !== "accepted") {
         if ("code" in response && response.code === "stale_input_sequence") {
           inputSequence.current = snapshotRef.current?.control.next_input_sequence ?? 1;
-          setStatus("stale");
-          setMessage(`Input stale: ${response.message || "the input sequence is no longer current"} Retry the gesture; it was not replayed.`);
+          staleInputNoticeRef.current?.report(`Input stale: ${response.message || "the input sequence is no longer current"} Retry the gesture; it was not replayed.`);
           return null;
         }
         if (response.status === "stale") return null;
@@ -272,6 +281,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         }
         return null;
       }
+      staleInputNoticeRef.current?.resolve();
       if (response.outcome.type === "snapshot") {
         const current = snapshotRef.current;
         const next = response.outcome.snapshot;
@@ -607,14 +617,18 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     previousAssociationOwnerKeyRef.current = associationOwner.key;
     let closed = false;
     let presenter: FramePresenter | null = null;
-    let consecutiveFrameErrors = 0;
-    let frameFailureVisible = false;
+    // Dropped or stale frames only matter when no newer frame replaces them.
+    const frameNotice = new DelayedNotice(
+      (notice) => { if (!closed && !errorRef.current) { setStatus("error"); setMessage(notice); } },
+      (notice) => { if (!errorRef.current) setMessage((current) => current === notice ? null : current); },
+    );
     let stream: BrowserViewStream | null = null;
     let cursor: number | null = null;
     const controller = new AbortController();
     const close = () => {
       if (closed) return;
       closed = true;
+      frameNotice.dispose();
       if (editorDirtyRef.current && draftRef.current) void persistEditor().catch(() => undefined);
       if (hoverInspectTimerRef.current !== null) window.clearTimeout(hoverInspectTimerRef.current);
       hoverInspectTimerRef.current = null;
@@ -743,7 +757,9 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         case "control_changed": inputSequence.current = incoming.control.next_input_sequence; next = { ...previous, control: incoming.control }; break;
         case "frame_descriptor": return;
         case "frame_transport_revoked": setStatus("error"); setMessage(incoming.message); return;
-        case "failed": setStatus("error"); setMessage(incoming.message); return;
+        case "failed":
+          if (incoming.code === "browser_frame_invalid") { frameNotice.report(FRAME_BEHIND_MESSAGE); return; }
+          setStatus("error"); setMessage(incoming.message); return;
         case "closed": setStatus("error"); setMessage(incoming.reason); return;
       }
       applySnapshot(next);
@@ -788,18 +804,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
         if (targetCanvas.height !== descriptor.image_height) targetCanvas.height = descriptor.image_height;
         drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
         const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted);
-        consecutiveFrameErrors = 0;
-        if (frameFailureVisible && !errorRef.current) { frameFailureVisible = false; setMessage(null); }
+        frameNotice.resolve();
         if (!errorRef.current) setStatus(streamRef.current ? "ready" : "loading");
       },
-      onError: (error) => {
-        consecutiveFrameErrors += 1;
-        if (consecutiveFrameErrors >= 3 && !errorRef.current) {
-          frameFailureVisible = true;
-          setStatus("error");
-          setMessage(errorMessage(error));
-        }
-      },
+      onError: () => frameNotice.report(FRAME_BEHIND_MESSAGE),
     });
     presenterRef.current = presenter;
     const request: BrowserViewOpenRequest = { target, client_id: clientId ?? clientRef.current, presentation, viewport: paneViewport(), takeover: false };
