@@ -93,12 +93,6 @@ pub(crate) fn materialize_source_markdown(
     let association = read_companion_association(root)?;
     let mut manifest = read_manifest(root, companion_id, &association)?;
     recover_pending_source_intent(root, &mut manifest)?;
-    let provider = format!(
-        "provider-{:x}",
-        Sha256::digest(provider_instance.as_bytes())
-    );
-    let asset = format!("asset-{:x}.md", Sha256::digest(canonical_id.as_bytes()));
-    let relative = format!("sources/{provider}/{resource_type}/{asset}");
     let logical_id =
         format!("source:{provider_id}:{provider_instance}:{resource_type}:{canonical_id}");
     // `content_hash` identifies the immutable provider record. The manifest's
@@ -124,6 +118,35 @@ pub(crate) fn materialize_source_markdown(
         }
         replace_owned = true;
     }
+    // A refresh keeps the file where it is; a new source is named after the
+    // provider and the item's own identity, for example `sources/jira/issue/PROJ-12.md`.
+    let relative = match &previous_entry {
+        Some(entry) => entry.relative_path.clone(),
+        None => {
+            let directory = format!(
+                "sources/{}/{}",
+                readable_name(provider_id),
+                readable_name(resource_type)
+            );
+            let name = readable_name(canonical_id);
+            let taken = |candidate: &str| {
+                manifest
+                    .entries
+                    .iter()
+                    .any(|entry| entry.relative_path == candidate)
+                    || root.symlink_metadata(candidate).is_ok()
+            };
+            let readable = format!("{directory}/{name}.md");
+            if taken(&readable) {
+                format!(
+                    "{directory}/{name}-{}.md",
+                    short_hash(logical_id.as_bytes())
+                )
+            } else {
+                readable
+            }
+        }
+    };
     let path = safe_companion_relative(&relative)?;
     let (parent, leaf) = create_parent(root, &path)?;
     if parent.symlink_metadata(&leaf).is_ok() && !replace_owned {
@@ -327,7 +350,8 @@ pub(crate) async fn snapshot_working_tree(
         ));
     }
 
-    let generation = Uuid::new_v4().simple().to_string();
+    let repository_dir = snapshot_repository_directory(&manifest, repository);
+    let generation = snapshot_generation(companion_root, &repository_dir);
     let staging_name = format!(".context-snapshot-{generation}.tmp");
     companion_root.create_dir(&staging_name).map_err(|error| {
         InspectionError::new(
@@ -343,6 +367,7 @@ pub(crate) async fn snapshot_working_tree(
         &paths,
         &gitlinks,
         source_head.as_deref(),
+        &repository_dir,
         &generation,
         &mut manifest,
         &mut diagnostics,
@@ -355,10 +380,9 @@ pub(crate) async fn snapshot_working_tree(
         }
     };
 
-    let repository_key = repository_key(&repository.repository_id);
     let repositories = ensure_directory(companion_root, "repos")?;
-    let repository_dir = ensure_directory(&repositories, &repository_key)?;
-    let snapshots = ensure_directory(&repository_dir, "snapshots")?;
+    let repository_root = ensure_directory(&repositories, &repository_dir)?;
+    let snapshots = ensure_directory(&repository_root, "snapshots")?;
     snapshots
         .symlink_metadata(&generation)
         .map(|_| {
@@ -408,7 +432,7 @@ pub(crate) async fn snapshot_working_tree(
         binding_id: String::new(),
         root_id: String::new(),
         repository_id: repository.repository_id.clone(),
-        snapshot_path: format!("repos/{repository_key}/snapshots/{generation}"),
+        snapshot_path: format!("repos/{repository_dir}/snapshots/{generation}"),
         generation,
         mode: ContextSnapshotMode::WorkingTree,
         copy_mode,
@@ -463,6 +487,7 @@ fn snapshot_into_staging(
     paths: &[PathBuf],
     gitlinks: &[Gitlink],
     source_head: Option<&str>,
+    repository_dir: &str,
     generation: &str,
     _manifest: &mut ContextManifest,
     diagnostics: &mut Vec<ProjectDiagnostic>,
@@ -511,8 +536,7 @@ fn snapshot_into_staging(
             ));
         }
         let relative_path = format!(
-            "repos/{}/snapshots/{generation}/{}",
-            repository_key(&repository.repository_id),
+            "repos/{repository_dir}/snapshots/{generation}/{}",
             relative.to_string_lossy()
         );
         entries.push(ContextManifestEntry {
@@ -545,8 +569,7 @@ fn snapshot_into_staging(
     }
     for gitlink in gitlinks {
         let relative_path = format!(
-            "repos/{}/snapshots/{generation}/{}",
-            repository_key(&repository.repository_id),
+            "repos/{repository_dir}/snapshots/{generation}/{}",
             gitlink.path.to_string_lossy()
         );
         entries.push(ContextManifestEntry {
@@ -1486,10 +1509,99 @@ fn paths_overlap(first: &Path, second: &Path) -> bool {
     first == second || first.strip_prefix(second).is_ok() || second.strip_prefix(first).is_ok()
 }
 
-fn repository_key(repository_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(repository_id.as_bytes());
-    format!("repo-{:x}", hasher.finalize())
+/// A file or directory name a person can read: letters, digits, `.`, `_` and
+/// `-`, with other characters replaced by `-`. Never empty or hidden.
+fn readable_name(value: &str) -> String {
+    let mut name = String::new();
+    for character in value.chars() {
+        let character = if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        {
+            character
+        } else {
+            '-'
+        };
+        if character == '-' && name.ends_with('-') {
+            continue;
+        }
+        name.push(character);
+        if name.len() >= 80 {
+            break;
+        }
+    }
+    let name = name.trim_matches(|character| character == '-' || character == '.');
+    if name.is_empty() {
+        "item".to_owned()
+    } else {
+        name.to_owned()
+    }
+}
+
+fn short_hash(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))[..8].to_owned()
+}
+
+/// Snapshots of a repository live under its name. A different repository with
+/// the same name already there gets the name with a short hash.
+fn snapshot_repository_directory(
+    manifest: &ContextManifest,
+    repository: &RepositoryCandidate,
+) -> String {
+    let name = readable_name(&repository.name);
+    let prefix = format!("repos/{name}/");
+    let taken = manifest.entries.iter().any(|entry| {
+        entry.relative_path.starts_with(&prefix)
+            && entry.source_repository_id != repository.repository_id
+    });
+    if taken {
+        format!("{name}-{}", short_hash(repository.repository_id.as_bytes()))
+    } else {
+        name
+    }
+}
+
+/// A snapshot is named by its UTC capture time, `2026-09-25_07-14-32`.
+fn snapshot_generation(companion_root: &Dir, repository_dir: &str) -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let base = utc_timestamp_name(seconds);
+    let mut generation = base.clone();
+    let mut attempt = 2;
+    while companion_root
+        .symlink_metadata(format!("repos/{repository_dir}/snapshots/{generation}"))
+        .is_ok()
+    {
+        generation = format!("{base}-{attempt}");
+        attempt += 1;
+    }
+    generation
+}
+
+fn utc_timestamp_name(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}_{:02}-{:02}-{:02}",
+        rest / 3_600,
+        rest % 3_600 / 60,
+        rest % 60
+    )
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -1726,6 +1838,24 @@ mod tests {
             .status()
             .expect("run git");
         assert!(status.success(), "git {:?} failed", args);
+    }
+
+    #[test]
+    fn generated_names_are_readable_and_safe() {
+        assert_eq!(super::readable_name("PROJ-123"), "PROJ-123");
+        assert_eq!(super::readable_name("group/project!12"), "group-project-12");
+        assert_eq!(super::readable_name("../..//"), "item");
+        assert_eq!(super::readable_name(".hidden"), "hidden");
+        assert!(super::readable_name(&"x".repeat(500)).len() <= 80);
+        assert_eq!(super::utc_timestamp_name(0), "1970-01-01_00-00-00");
+        assert_eq!(
+            super::utc_timestamp_name(1_790_320_522),
+            "2026-09-25_07-15-22"
+        );
+        assert_eq!(
+            super::utc_timestamp_name(951_782_400),
+            "2000-02-29_00-00-00"
+        );
     }
 
     #[test]
