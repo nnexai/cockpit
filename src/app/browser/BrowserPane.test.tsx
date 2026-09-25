@@ -90,7 +90,7 @@ describe("BrowserPane wheel recovery", () => {
     });
     expect(firstFrame.ack).toHaveBeenCalledOnce();
     const canvas = host.querySelector<HTMLCanvasElement>("canvas.browser-frame")!;
-    expect([canvas.width, canvas.height]).toEqual([4, 3]);
+    expect([canvas.width, canvas.height]).toEqual([800, 600]);
 
     await act(async () => {
       emitEvent({ type: "viewport_changed", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 2 }, viewport: viewport(2, 120) });
@@ -251,7 +251,7 @@ describe("BrowserPane wheel recovery", () => {
       emitFrame(packet(descriptor(1, 1, 0)));
       await new Promise<void>((resolve) => setTimeout(resolve, 30));
     });
-    expect(host.querySelector<HTMLCanvasElement>("canvas.browser-frame")?.width).toBe(4);
+    expect(host.querySelector<HTMLCanvasElement>("canvas.browser-frame")?.width).toBe(800);
     expect(host.querySelector(".browser-toolbar-status")?.textContent).toBe("Loading browser view…");
     await act(async () => {
       resolveOpen({ command: async (request) => { commands.push(request); return accepted(request); }, close: vi.fn() });

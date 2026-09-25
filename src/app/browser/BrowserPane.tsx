@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
-import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedbackDeliveryStatus, BrowserFeedbackSendResponse, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest } from "../../protocol/generated/v1";
+import type { BrowserCaptureSubmission, BrowserDraftRecoveryAction, BrowserFeedbackDeliveryStatus, BrowserFeedbackSendResponse, BrowserInlineCaptureProvenance, BrowserPoint, BrowserRect, BrowserTarget, BrowserViewCommand, BrowserViewCommandOutcome, BrowserViewDraftAnnotation, BrowserViewDraftState, BrowserViewEvent, BrowserViewInspectResult, BrowserViewLocation, BrowserViewOpenRequest, BrowserViewPendingCapture, BrowserViewPresentation, BrowserViewSnapshot, BrowserViewViewportRequest, BrowserViewViewportState } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket, BrowserViewStream, CockpitClient } from "../../client/CockpitClient";
-import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, validateFrameDescriptor } from "./framePresenter";
+import { BrowserFrameError, FramePresenter, IBFV_V2_DEFAULT_LIMITS, canvasBackingSize, validateFrameDescriptor } from "./framePresenter";
 import { createBrowserTransform } from "./transform";
 import { MAX_INPUT_JOBS, deliveryOperationId, MAX_ANNOTATION_POINTS, errorMessage, newId, annotationId, statusFor, statusText, DelayedNotice, FRAME_BEHIND_MESSAGE, button, modifiers, isLocalBrowserChrome, addressBarUrl, navigationUrl, rectFrom, kindFor, sameDraftAnnotation, simplify, context, location, retiredDraft, retiredDocumentKey, ownsBrowserControl, type PaneStatus, type Tool, type Gesture, type WheelIntent, type InputJob, type PointerIntent, type ElementInspectionIntent, type DraftAssociationOwner, type CaptureIdentity, type SavedDelivery, type DeliveryState } from "./browserPaneModel";
 import { AnnotationIcon, AnnotationToolButtons, BrowserColorPicker, COLORS } from "./AnnotationControls";
 import { AnnotationLayer, BrowserNavigationBar, BrowserTabStrip, SavedDeliveryList } from "./BrowserChrome";
 import "./browser.css";
+
+// WebKitGTK composites GPU-backed canvases as separate layers and can show a
+// stale or partly swapped buffer for a frame whenever other panes repaint.
+// A CPU-backed, opaque canvas is painted with the rest of the page instead.
+// The browser reports the device pixel ratio it measured, which Chromium
+// rounds; requesting the same fit again re-renders the page and flickers.
+const viewportFits = (current: BrowserViewViewportState, requested: BrowserViewViewportRequest): boolean =>
+  current.css_width === requested.css_width
+  && current.css_height === requested.css_height
+  && Math.abs(current.device_pixel_ratio - requested.device_pixel_ratio) <= 0.01;
+const frameContext = (canvas: HTMLCanvasElement | null | undefined): CanvasRenderingContext2D | null =>
+  canvas?.getContext("2d", { alpha: false, willReadFrequently: true }) ?? null;
 
 export type BrowserPaneRecoveryRegistration = {
   guard: () => Promise<void>;
@@ -175,7 +187,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
     setFrame(null);
     if (!clearCanvas) return;
     const canvas = canvasRef.current;
-    const drawing = canvas?.getContext("2d");
+    const drawing = frameContext(canvas);
     if (canvas && drawing) drawing.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
   const invalidateInteractionFrame = useCallback(() => {
@@ -798,11 +810,12 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       },
       present: (image, descriptor) => {
         if (!canPresent(descriptor)) throw new BrowserFrameError("identity_mismatch", "Browser frame became stale while decoding");
-        const targetCanvas = canvasRef.current; const drawing = targetCanvas?.getContext("2d");
+        const targetCanvas = canvasRef.current; const drawing = frameContext(targetCanvas);
         if (!targetCanvas || !drawing) throw new Error("Browser view canvas is unavailable");
-        if (targetCanvas.width !== descriptor.image_width) targetCanvas.width = descriptor.image_width;
-        if (targetCanvas.height !== descriptor.image_height) targetCanvas.height = descriptor.image_height;
-        drawing.drawImage(image, 0, 0, descriptor.image_width, descriptor.image_height);
+        const backing = canvasBackingSize({ width: targetCanvas.width, height: targetCanvas.height }, descriptor, snapshotRef.current?.viewport?.device_pixel_ratio);
+        if (targetCanvas.width !== backing.width) targetCanvas.width = backing.width;
+        if (targetCanvas.height !== backing.height) targetCanvas.height = backing.height;
+        drawing.drawImage(image, 0, 0, targetCanvas.width, targetCanvas.height);
         const accepted = { descriptor, sequence: descriptor.frame_sequence }; frameRef.current = accepted; setFrame(accepted);
         frameNotice.resolve();
         if (!errorRef.current) setStatus(streamRef.current ? "ready" : "loading");
@@ -852,19 +865,14 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       timer = window.setTimeout(() => {
         const current = snapshotRef.current;
         const requested = paneViewport();
-        if (!visible || !liveInputEnabledRef.current || !current?.viewport
-          || (current.viewport.css_width === requested.css_width
-            && current.viewport.css_height === requested.css_height
-            && current.viewport.device_pixel_ratio === requested.device_pixel_ratio)) return;
+        if (!visible || !liveInputEnabledRef.current || !current?.viewport || viewportFits(current.viewport, requested)) return;
         void enqueueInput("boundary", async () => {
           const controlled = await ensureControl();
           const latest = snapshotRef.current;
           const latestRequested = paneViewport();
           const documentContext = latest ? context(latest) : null;
           if (!controlled || !latest || !latest.viewport || !ownsBrowserControl(latest) || !documentContext
-            || (latest.viewport.css_width === latestRequested.css_width
-              && latest.viewport.css_height === latestRequested.css_height
-              && latest.viewport.device_pixel_ratio === latestRequested.device_pixel_ratio)) return;
+            || viewportFits(latest.viewport, latestRequested)) return;
           await command({ type: "resize", context: documentContext, viewport: latestRequested });
           // Metadata invalidates old geometry; a response must not erase a newer frame.
         });
@@ -1617,9 +1625,10 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const pngBase64 = async (annotationsToPaint: BrowserViewDraftAnnotation[], pinnedDescriptor: BrowserViewFramePacket["descriptor"]): Promise<string | null> => {
     const source = canvasRef.current;
     if (!source || !snapshotRef.current?.document || !snapshotRef.current.viewport) return null;
-    const output = document.createElement("canvas"); output.width = source.width; output.height = source.height;
+    // The live canvas keeps the viewport's backing size; captures keep the pinned frame's pixels.
+    const output = document.createElement("canvas"); output.width = pinnedDescriptor.image_width; output.height = pinnedDescriptor.image_height;
     const drawing = output.getContext("2d"); if (!drawing) return null;
-    drawing.drawImage(source, 0, 0);
+    drawing.drawImage(source, 0, 0, output.width, output.height);
     const map = (point: BrowserPoint): BrowserPoint => ({
       x: (point.x - pinnedDescriptor.scroll_x - pinnedDescriptor.viewport_offset_x) / pinnedDescriptor.viewport_css_width * output.width,
       y: (point.y - pinnedDescriptor.scroll_y - pinnedDescriptor.viewport_offset_y) / pinnedDescriptor.viewport_css_height * output.height,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserViewFrameDescriptor } from "../../protocol/generated/v1";
 import type { BrowserViewFramePacket } from "../../client/CockpitClient";
-import { FramePresenter } from "./framePresenter";
+import { FramePresenter, canvasBackingSize } from "./framePresenter";
 
 const jpeg = Uint8Array.from([
   0xff, 0xd8,
@@ -65,5 +65,32 @@ describe("FramePresenter metadata ordering", () => {
     presenter.push(old);
     expect(old.discard).toHaveBeenCalledTimes(1);
     presenter.close();
+  });
+});
+
+describe("canvasBackingSize", () => {
+  const frame = (width: number, height: number, cssWidth = 492, cssHeight = 756): BrowserViewFrameDescriptor => ({
+    ...descriptor(1, 1), image_width: width, image_height: height, viewport_css_width: cssWidth, viewport_css_height: cssHeight,
+  });
+
+  it("keeps one device-density backing store while screencast and settle frames alternate", () => {
+    let backing = canvasBackingSize({ width: 300, height: 150 }, frame(492, 756), 2);
+    expect(backing).toEqual({ width: 984, height: 1512 });
+    for (const next of [frame(984, 1512), frame(492, 756), frame(985, 1511), frame(492, 756)]) {
+      const kept = canvasBackingSize(backing, next, 2);
+      expect(kept).toBe(backing);
+      backing = kept;
+    }
+  });
+
+  it("follows a real viewport change and never shrinks below the frame", () => {
+    const backing = { width: 984, height: 1512 };
+    expect(canvasBackingSize(backing, frame(600, 756, 600, 756), 2)).toEqual({ width: 1200, height: 1512 });
+    expect(canvasBackingSize({ width: 4, height: 3 }, frame(800, 600, 800, 600), 1)).toEqual({ width: 800, height: 600 });
+    expect(canvasBackingSize({ width: 4, height: 3 }, frame(800, 600, 400, 300), undefined)).toEqual({ width: 800, height: 600 });
+  });
+
+  it("falls back to the frame size when the device size exceeds the transport limits", () => {
+    expect(canvasBackingSize({ width: 0, height: 0 }, frame(1280, 800, 1280, 800), 3)).toEqual({ width: 1280, height: 800 });
   });
 });

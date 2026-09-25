@@ -439,3 +439,34 @@ export class FramePresenter {
     this.active = null;
   }
 }
+
+export interface CanvasBackingSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * One viewport streams CSS-density screencast frames and device-density
+ * settle captures. Resizing the canvas for each of them lets a compositor
+ * show the previous bitmap in the new layer size for a frame, so size the
+ * backing store for the viewport and keep it while frames only differ in
+ * density or by encoder rounding.
+ */
+export function canvasBackingSize(
+  current: CanvasBackingSize,
+  descriptor: BrowserViewFrameDescriptor,
+  devicePixelRatio: number | null | undefined,
+  limits: BrowserViewFrameEnvelopeV2 = IBFV_V2_DEFAULT_LIMITS,
+): CanvasBackingSize {
+  let width = descriptor.image_width;
+  let height = descriptor.image_height;
+  if (devicePixelRatio && Number.isFinite(devicePixelRatio) && devicePixelRatio > 0) {
+    const deviceWidth = Math.round(descriptor.viewport_css_width * devicePixelRatio);
+    const deviceHeight = Math.round(descriptor.viewport_css_height * devicePixelRatio);
+    if (deviceWidth <= limits.max_width && deviceHeight <= limits.max_height && deviceWidth * deviceHeight <= limits.max_pixels) {
+      width = Math.max(width, deviceWidth);
+      height = Math.max(height, deviceHeight);
+    }
+  }
+  return Math.abs(current.width - width) <= 1 && Math.abs(current.height - height) <= 1 ? current : { width, height };
+}

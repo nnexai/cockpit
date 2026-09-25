@@ -1966,6 +1966,10 @@ async function installPageObservers() {
     frame._geometry = baseline;
     scheduleSessionAck(frame);
     if (!baseline) return;
+    // A clipped screenshot renders the page at device density until the
+    // requested metrics are restored; the screencast copies that surface
+    // unscaled, so its frames show a cropped, magnified viewport.
+    if (screenshotCommandInFlight) return;
     if (frameMetadataDiffers(frame, baseline) && !rebaseScrollFrame(frame, baseline)) {
       queueFrameGeometryRepair(observed, cdp, bindingGeneration, baseline);
       return;
@@ -2085,6 +2089,17 @@ async function command(request) {
     }
     if (request.command.type === 'resize') {
       requireControl(request.command);
+      const nextViewport = requestedViewport(request.command.viewport);
+      // Chromium reports a rounded device pixel ratio, so a view can repeat
+      // the fit it already has. Re-applying metrics re-renders the page and
+      // restarts density refinement, so a repeated fit is a no-op.
+      if (state.geometryFresh
+        && nextViewport.width === state.requestedCssWidth
+        && nextViewport.height === state.requestedCssHeight
+        && Math.abs(nextViewport.dpr - state.requestedDevicePixelRatio) <= 0.001
+        && actualViewportMatchesRequest({ width: state.viewportCssWidth, height: state.viewportCssHeight, dpr: state.measuredDevicePixelRatio })) {
+        return { status: 'accepted', ...base, outcome: { type: 'none' } };
+      }
       const previousViewport = {
         width: state.requestedCssWidth,
         height: state.requestedCssHeight,
