@@ -176,14 +176,59 @@ fn raster_header(bytes: &[u8]) -> Result<(&'static str, u32, u32), InspectionErr
         parse_png_header(bytes).map(|(width, height)| ("image/png", width, height))
     } else if bytes.starts_with(&[0xff, 0xd8]) {
         parse_jpeg_header(bytes).map(|(width, height)| ("image/jpeg", width, height))
+    } else if let Some((width, height)) = svg_dimensions(bytes) {
+        // Shown only through <img>, where an SVG runs no script and loads nothing.
+        Ok(("image/svg+xml", width, height))
     } else {
         return Err(InspectionError::new(
             "context_media_type_refused",
-            "only PNG and JPEG Context media are supported",
+            "only PNG, JPEG and SVG Context media are supported",
         ));
     }?;
     validate_dimensions(result.1, result.2)?;
     Ok(result)
+}
+
+/// Size of an SVG document from its root element's `width`/`height`, else its
+/// `viewBox`, else the browser default. `None` when this is not an SVG.
+fn svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let start = text.trim_start_matches('\u{feff}').trim_start();
+    if !(start.starts_with("<?xml") || start.starts_with("<svg") || start.starts_with("<!")) {
+        return None;
+    }
+    let open = text.find("<svg")?;
+    let end = open + text[open..].find('>')?;
+    let tag = &text[open..end];
+    let attribute = |name: &str| {
+        let at = tag.find(&format!(" {name}="))? + name.len() + 2;
+        let quote = tag[at..]
+            .chars()
+            .next()
+            .filter(|quote| *quote == '"' || *quote == '\'')?;
+        let value = &tag[at + 1..];
+        Some(value[..value.find(quote)?].trim().to_owned())
+    };
+    let number = |value: &str| {
+        value
+            .trim_end_matches("px")
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite() && *number >= 1.0)
+            .map(|number| number.round() as u32)
+    };
+    let explicit = attribute("width")
+        .and_then(|width| number(&width))
+        .zip(attribute("height").and_then(|height| number(&height)));
+    let from_view_box = || {
+        let view_box = attribute("viewBox")?;
+        let parts: Vec<_> = view_box
+            .split(|character: char| character == ',' || character.is_whitespace())
+            .filter(|part| !part.is_empty())
+            .collect();
+        (parts.len() == 4).then(|| number(parts[2]).zip(number(parts[3])))?
+    };
+    Some(explicit.or_else(from_view_box).unwrap_or((300, 150)))
 }
 
 fn parse_png_header(bytes: &[u8]) -> Result<(u32, u32), InspectionError> {
@@ -488,6 +533,22 @@ mod tests {
     }
 
     #[test]
+    fn svg_media_reports_its_size() {
+        assert_eq!(
+            super::svg_dimensions(
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="20px" height="10">"#
+            ),
+            Some((20, 10))
+        );
+        assert_eq!(
+            super::svg_dimensions(b"<?xml version='1.0'?>\n<svg viewBox='0 0 120 40'></svg>"),
+            Some((120, 40))
+        );
+        assert_eq!(super::svg_dimensions(b"<svg></svg>"), Some((300, 150)));
+        assert_eq!(super::svg_dimensions(b"plain text <svg>"), None);
+    }
+
+    #[test]
     fn recognizes_real_png_and_jpeg_headers() {
         assert_eq!(
             raster_header(&png(64, 32)).expect("PNG"),
@@ -501,12 +562,6 @@ mod tests {
 
     #[test]
     fn refuses_active_and_malformed_media() {
-        assert_eq!(
-            raster_header(b"<svg xmlns='http://www.w3.org/2000/svg'>")
-                .expect_err("SVG")
-                .code,
-            "context_media_type_refused"
-        );
         assert_eq!(
             raster_header(b"<!doctype html><img>")
                 .expect_err("HTML")
