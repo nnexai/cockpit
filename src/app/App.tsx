@@ -615,6 +615,7 @@ function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; muta
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [preview, setPreview] = useState<{ id: string; delta: number } | null>(null);
   const drag = useRef<{ handle: ResizeHandle; pointerId: number; start: number } | null>(null);
+  useEffect(() => () => document.body.classList.remove("is-resizing-panes"), []);
   const area = layout?.area;
   const pctX = (value: number) => area && area.width ? `${((value - area.x) / area.width) * 100}%` : "0%";
   const pctY = (value: number) => area && area.height ? `${((value - area.y) / area.height) * 100}%` : "0%";
@@ -623,10 +624,10 @@ function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; muta
     const style = handle.axis === "x" ? { left: pctX(handle.coordinate), top: pctY(handle.start), height: area ? `${handle.length / area.height * 100}%` : "0%", transform: `translateX(${delta}px)` } : { top: pctY(handle.coordinate), left: pctX(handle.start), width: area ? `${handle.length / area.width * 100}%` : "0%", transform: `translateY(${delta}px)` };
     return <div key={handle.id} role="separator" aria-label={`Resize pane ${handle.paneId} ${handle.axis === "x" ? "horizontally" : "vertically"}`} aria-orientation={handle.axis === "x" ? "vertical" : "horizontal"} tabIndex={0} className={`resize-handle resize-${handle.axis}`} style={style}
       onKeyDown={(event) => { const step = event.shiftKey ? 20 : 5; const deltaValue = handle.axis === "x" ? event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0 : event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0; if (!deltaValue) return; event.preventDefault(); const bounds = canvasRef.current?.getBoundingClientRect(); const request = resizeRequest(handle, deltaValue, handle.axis === "x" ? bounds?.width ?? 0 : bounds?.height ?? 0); if (request) mutate(`pane:${handle.paneId}`, request); }}
-      onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { handle, pointerId: event.pointerId, start: handle.axis === "x" ? event.clientX : event.clientY }; setPreview({ id: handle.id, delta: 0 }); }}
+      onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); document.body.classList.add("is-resizing-panes"); drag.current = { handle, pointerId: event.pointerId, start: handle.axis === "x" ? event.clientX : event.clientY }; setPreview({ id: handle.id, delta: 0 }); }}
       onPointerMove={(event) => { const active = drag.current; if (!active || active.pointerId !== event.pointerId) return; setPreview({ id: active.handle.id, delta: (active.handle.axis === "x" ? event.clientX : event.clientY) - active.start }); }}
-      onPointerUp={(event) => { const active = drag.current; if (!active || active.pointerId !== event.pointerId) return; const deltaValue = (active.handle.axis === "x" ? event.clientX : event.clientY) - active.start; const bounds = canvasRef.current?.getBoundingClientRect(); const request = resizeRequest(active.handle, deltaValue, active.handle.axis === "x" ? bounds?.width ?? 0 : bounds?.height ?? 0); drag.current = null; setPreview(null); if (request) mutate(`pane:${active.handle.paneId}`, request); }}
-      onPointerCancel={() => { drag.current = null; setPreview(null); }} />;
+      onPointerUp={(event) => { const active = drag.current; if (!active || active.pointerId !== event.pointerId) return; const deltaValue = (active.handle.axis === "x" ? event.clientX : event.clientY) - active.start; const bounds = canvasRef.current?.getBoundingClientRect(); const request = resizeRequest(active.handle, deltaValue, active.handle.axis === "x" ? bounds?.width ?? 0 : bounds?.height ?? 0); drag.current = null; setPreview(null); document.body.classList.remove("is-resizing-panes"); if (request) mutate(`pane:${active.handle.paneId}`, request); }}
+      onPointerCancel={() => { drag.current = null; setPreview(null); document.body.classList.remove("is-resizing-panes"); }} />;
   })}</div>;
 }
 

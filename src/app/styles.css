@@ -1267,6 +1267,13 @@ summary:focus-visible {
   background: transparent;
 }
 
+/* A pane resize drag must not start or extend a text selection in the panes it crosses. */
+body.is-resizing-panes,
+body.is-resizing-panes * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
 .resize-handle::after {
   position: absolute;
   content: "";
