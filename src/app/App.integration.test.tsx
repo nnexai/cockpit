@@ -18,9 +18,9 @@ import { App } from "./App";
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
-  TerminalPane: ({ request, onSelect, onReady }: { request: { pane_id: string }; onSelect?: () => void; onReady?: () => void }) => {
+  TerminalPane: ({ request, deferAttachment, onSelect, onReady }: { request: { pane_id: string }; deferAttachment?: boolean; onSelect?: () => void; onReady?: () => void }) => {
     if (onReady) terminalReadyCallbacks.set(request.pane_id, onReady);
-    return <button type="button" data-testid={`terminal-${request.pane_id}`} onClick={onSelect}>terminal</button>;
+    return <button type="button" data-testid={`terminal-${request.pane_id}`} data-deferred={String(Boolean(deferAttachment))} onClick={onSelect}>terminal</button>;
   },
 }));
 
@@ -580,6 +580,22 @@ describe("mounted App mutation and session ordering", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps attached terminals attached while the session resyncs after a mutation", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const terminal = () => container.querySelector<HTMLElement>('[data-testid="terminal-pane-1"]');
+    expect(terminal()?.dataset.deferred).toBe("false");
+
+    click(button("Create tab"));
+    const followUp = deferred<SessionSnapshotResponse>();
+    fixture.queueSnapshot("session-1", followUp.promise);
+    fixture.resolveMutation(0, mutationResponse("session-1", snapshot("session-1")));
+    await settle();
+
+    expect(container.querySelector(".session-state")?.textContent).toBe("loading");
+    expect(terminal()?.dataset.deferred).toBe("false");
   });
 
   it("keeps a newer stream event when the delayed mutation response arrives after it", async () => {

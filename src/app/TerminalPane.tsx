@@ -9,6 +9,12 @@ import { createClipboardAccess, type ClipboardAccess } from "../client/clipboard
 export const MAX_PENDING_CONTROL_COMMANDS = 64;
 const MAX_QUEUED_FRAME_COUNT = 64;
 const MAX_QUEUED_FRAME_BYTES = 8 * 1024 * 1024;
+/** How long control survives a transient loss before the stream drops to observe. */
+const CONTROL_RELEASE_DELAY_MS = 750;
+/** How long a resize may go unanswered before the next one is sent anyway. */
+const RESIZE_ANSWER_TIMEOUT_MS = 150;
+/** DEC 2026: xterm holds rendering until the frame's closing sequence. */
+const SYNC_OUTPUT_BEGIN = "\x1b[?2026h";
 export function appendPendingControlCommand(queue: TerminalCommand[], command: TerminalCommand): TerminalCommand[] {
   return queue.length >= MAX_PENDING_CONTROL_COMMANDS
     ? [...queue.slice(queue.length - MAX_PENDING_CONTROL_COMMANDS + 1), command]
@@ -220,8 +226,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const pendingIntentRef = useRef<{ epoch: number; paneId: string; token: number } | null>(null);
   const attachRetryKeyRef = useRef<string | null>(null);
   const attachRetryCountRef = useRef(0);
-  const [controlRequested, setControlRequested] = useState(controlAllowed);
-  const controlRequestedRef = useRef(controlAllowed);
+  const [controlRequested, setControlRequested] = useState(controlAllowed || (controlPending && selected));
+  const controlRequestedRef = useRef(controlRequested);
   const controlRequestPendingRef = useRef(false);
   const takeoverRequestedRef = useRef(false);
   const controlAllowedRef = useRef(controlAllowed);
@@ -231,6 +237,16 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   const renderedGridRef = useRef<TerminalGrid | null>(null);
   const authoritativeFrameRef = useRef(false);
   const suppressFrameResizeRef = useRef(false);
+  const resizeInFlightRef = useRef<{ grid: TerminalGrid; timer: number } | null>(null);
+  const resizeFollowUpRef = useRef(false);
+  const settleResize = () => {
+    const inFlight = resizeInFlightRef.current;
+    if (inFlight) window.clearTimeout(inFlight.timer);
+    resizeInFlightRef.current = null;
+    if (!resizeFollowUpRef.current) return;
+    resizeFollowUpRef.current = false;
+    requestViewportSizing();
+  };
   const requestViewportSizing = () => {
     const fit = fitRef.current;
     const terminal = terminalRef.current;
@@ -262,8 +278,18 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       && previous.cell_width_px === resizeCommand.cell_width_px
       && previous.cell_height_px === resizeCommand.cell_height_px
     ) return;
+    // One resize at a time: Herdr answers each with a frame at the new grid,
+    // and sizes asked for in between are folded into the next request.
+    if (resizeInFlightRef.current) {
+      resizeFollowUpRef.current = true;
+      return;
+    }
     lastResizeRef.current = resizeCommand;
     stream.send(resizeCommand);
+    resizeInFlightRef.current = {
+      grid: { cols: resizeCommand.cols, rows: resizeCommand.rows },
+      timer: window.setTimeout(settleResize, RESIZE_ANSWER_TIMEOUT_MS),
+    };
   };
   controlAllowedRef.current = controlAllowed;
   const selectedRef = useRef(selected);
@@ -344,8 +370,9 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     if (controlAllowedRef.current && controlRequestedRef.current && ownershipRef.current === "owned") return;
     takeoverRequestedRef.current = true;
     controlRequestPendingRef.current = true;
-    controlRequestedRef.current = controlAllowedRef.current;
-    setControlRequested(controlAllowedRef.current);
+    const wantsControl = controlAllowedRef.current || (controlPendingRef.current && selectedRef.current);
+    controlRequestedRef.current = wantsControl;
+    setControlRequested(wantsControl);
   };
 
   const flushPendingPaste = () => {
@@ -440,7 +467,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     if (!host) return;
     const terminal = createCockpitTerminal();
     const fit = new FitAddon();
-    let resizeTimer: number | null = null;
+    let resizeFrame: number | null = null;
     let disposed = false;
     terminal.open(host);
     terminal.loadAddon(fit);
@@ -452,17 +479,19 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     renderedGridRef.current = initialGrid;
     setTerminalReady(true);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
-      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => {
-        resizeTimer = null;
+      if (resizeFrame !== null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
         if (!disposed && terminalRef.current === terminal) requestViewportSizing();
-      }, 100);
+      });
     });
     observer?.observe(host);
     return () => {
       disposed = true;
       observer?.disconnect();
-      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      if (resizeInFlightRef.current) window.clearTimeout(resizeInFlightRef.current.timer);
+      resizeInFlightRef.current = null;
       terminal.dispose();
       if (fitRef.current === fit) fitRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
@@ -573,11 +602,24 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       if (!controlAllowed) clearPendingCommands();
       clearMouseMode();
     }
-    if (controlRequestedRef.current) {
+    if (controlPending && selected) {
+      // Attach for control while Herdr confirms focus; input stays queued until it does.
+      if (!controlRequestedRef.current) {
+        controlRequestedRef.current = true;
+        setControlRequested(true);
+      }
+      return;
+    }
+    if (!controlRequestedRef.current) return;
+    // Control drops for a moment during a session resync; switching the stream
+    // to observe and back would reattach twice. Input stays gated meanwhile.
+    const release = window.setTimeout(() => {
+      if (controlAllowedRef.current || !controlRequestedRef.current) return;
       controlRequestedRef.current = false;
       setControlRequested(false);
-    }
-  }, [controlAllowed, controlPending]);
+    }, CONTROL_RELEASE_DELAY_MS);
+    return () => window.clearTimeout(release);
+  }, [controlAllowed, controlPending, selected]);
 
   useEffect(() => {
     const intent = pendingIntentRef.current;
@@ -670,6 +712,10 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     const controller = new AbortController();
     const generation = ++attachmentGeneration.current;
     lastSequence.current = null;
+    // The open request carries the current viewport grid.
+    if (resizeInFlightRef.current) window.clearTimeout(resizeInFlightRef.current.timer);
+    resizeInFlightRef.current = null;
+    resizeFollowUpRef.current = false;
     setError(null);
     setClosed(false);
     ownershipRef.current = "pending";
@@ -728,14 +774,39 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       try {
         authoritativeFrameRef.current = true;
         const frameGrid = { cols: frame.width, rows: frame.height };
-        suppressFrameResizeRef.current = true;
-        try {
-          if (terminal.cols !== frameGrid.cols || terminal.rows !== frameGrid.rows) terminal.resize(frameGrid.cols, frameGrid.rows);
-        } finally {
-          suppressFrameResizeRef.current = false;
+        const inFlight = resizeInFlightRef.current;
+        if (inFlight && inFlight.grid.cols === frameGrid.cols && inFlight.grid.rows === frameGrid.rows) settleResize();
+        const present = () => {
+          suppressFrameResizeRef.current = true;
+          try {
+            terminal.resize(frameGrid.cols, frameGrid.rows);
+          } finally {
+            suppressFrameResizeRef.current = false;
+          }
+          renderedGridRef.current = frameGrid;
+          terminal.write(text, finishFrame);
+        };
+        if (terminal.cols === frameGrid.cols && terminal.rows === frameGrid.rows) {
+          renderedGridRef.current = frameGrid;
+          terminal.write(text, finishFrame);
+        } else {
+          // xterm reflows the old buffer on resize and could paint it before
+          // this frame replaces it; hold rendering until the frame completes.
+          // resize() flushes xterm's write queue, so it must run after the
+          // write loop has returned, never inside one of its callbacks.
+          terminal.write(SYNC_OUTPUT_BEGIN, () => queueMicrotask(() => {
+            if (cancelled || generation !== attachmentGeneration.current || terminalRef.current !== terminal) {
+              finishFrame();
+              return;
+            }
+            try {
+              present();
+            } catch {
+              fail("terminal_frame", "Terminal could not render a frame");
+              finishFrame();
+            }
+          }));
         }
-        renderedGridRef.current = frameGrid;
-        terminal.write(text, finishFrame);
       } catch {
         if (!cancelled && generation === attachmentGeneration.current) fail("terminal_frame", "Terminal could not render a frame");
         finishFrame();

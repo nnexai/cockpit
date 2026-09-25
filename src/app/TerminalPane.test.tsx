@@ -326,11 +326,21 @@ describe("TerminalPane fitting and pointer ownership", () => {
       terminal.write.mockImplementation((_data, done) => { if (done) writes.push(done); });
       act(() => messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "ansi", width: 60, height: 12, full: true, bytes: btoa("frame") }));
       await act(async () => { await settle(); });
+      // Rendering is held before the grid changes, so xterm's reflow of the old buffer never paints.
+      expect(terminal.write).toHaveBeenLastCalledWith("\x1b[?2026h", expect.any(Function));
+      expect(terminal.resize).not.toHaveBeenCalled();
+      await act(async () => {
+        writes[0]!();
+        // resize() flushes xterm's write queue; it must not run inside a write callback.
+        expect(terminal.resize).not.toHaveBeenCalled();
+        await settle();
+      });
       expect(terminal.resize).toHaveBeenCalledWith(60, 12);
       expect(terminal.cols).toBe(60);
       expect(terminal.rows).toBe(12);
+      expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)![0] as Uint8Array)).toBe("frame");
       expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
-      writes[0]!();
+      writes[1]!();
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -355,15 +365,20 @@ describe("TerminalPane fitting and pointer ownership", () => {
       });
       await act(async () => { await settle(); });
       expect(writes).toHaveLength(1);
+      await act(async () => { writes[0]!(); await settle(); });
+      expect(writes).toHaveLength(2);
       expect(terminal.cols).toBe(60);
       expect(terminal.rows).toBe(12);
-      writes[0]!();
+      writes[1]!();
       await act(async () => { await settle(); });
-      expect(writes).toHaveLength(2);
+      expect(writes).toHaveLength(3);
+      expect(terminal.cols).toBe(60);
+      await act(async () => { writes[2]!(); await settle(); });
+      expect(writes).toHaveLength(4);
       expect(terminal.resize).toHaveBeenLastCalledWith(100, 20);
       expect(terminal.cols).toBe(100);
       expect(terminal.rows).toBe(20);
-      writes[1]!();
+      writes[3]!();
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -611,7 +626,48 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
-  it("debounces resize fitting and cancels a stale callback across remount", async () => {
+  it("keeps one resize in flight and follows up with the latest viewport once Herdr answers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    mocks.fitDimensions.push([80, 24]);
+    mocks.fitProposals.push([80, 24], [120, 40], [90, 20], [90, 20], [70, 15], [70, 15]);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const grids = () => sent.flatMap((command) => command.type === "terminal.resize" ? [`${command.cols}x${command.rows}`] : []);
+    const frame = (seq: number, width: number, height: number) => ({ type: "frame" as const, session_id: "session", pane_id: "pane", stream_id: "stream", seq: String(seq), encoding: "ansi" as const, width, height, full: seq === 1, bytes: btoa("frame") });
+    const observe = async () => {
+      mocks.observers[0]!.callback([], mocks.observers[0] as unknown as ResizeObserver);
+      await vi.advanceTimersByTimeAsync(16);
+    };
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      act(() => {
+        messages[0]!(message("owned"));
+        messages[0]!(frame(1, 80, 24));
+      });
+      await act(async () => { await settle(); });
+      await observe();
+      expect(grids()).toEqual(["120x40"]);
+      await observe();
+      expect(grids()).toEqual(["120x40"]);
+      act(() => messages[0]!(frame(2, 120, 40)));
+      await act(async () => { await settle(); });
+      expect(grids()).toEqual(["120x40", "90x20"]);
+      await observe();
+      expect(grids()).toEqual(["120x40", "90x20"]);
+      await vi.advanceTimersByTimeAsync(150);
+      expect(grids()).toEqual(["120x40", "90x20", "70x15"]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("fits once per animation frame and cancels a stale callback across remount", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
     mocks.fitDimensions.push([80, 24], [80, 24], [120, 40], [100, 30]);
@@ -632,12 +688,10 @@ describe("TerminalPane fitting and pointer ownership", () => {
       expect(openTerminal.mock.calls[0]?.[0]).toMatchObject({ cols: 80, rows: 24 });
       const firstObserver = mocks.observers[0];
       firstObserver.callback([], firstObserver as unknown as ResizeObserver);
-      await vi.advanceTimersByTimeAsync(50);
       firstObserver.callback([], firstObserver as unknown as ResizeObserver);
-      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
-      await vi.advanceTimersByTimeAsync(99);
-      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(16);
+      expect(vi.getTimerCount()).toBe(0);
       expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
       act(() => messages[0]!(message("owned")));
       expect(sent.filter((command): command is Extract<TerminalCommand, { type: "terminal.resize" }> => command.type === "terminal.resize")).toEqual([
@@ -887,6 +941,62 @@ describe("TerminalPane fitting and pointer ownership", () => {
       });
       await act(async () => { messages.at(-1)!(message("owned")); });
       expect(sent.filter((command) => command.type === "terminal.input")).toEqual([{ type: "terminal.input", text: "A", bytes: null }]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("attaches for control while focus is confirmed, but holds input until control is allowed", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { selected: false, controlAllowed: false })} />); await settle(); });
+      expect(openTerminal.mock.calls.at(-1)![0]).toMatchObject({ mode: "observe" });
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { selected: true, controlAllowed: false, controlPending: true })} />); await settle(); });
+      expect(openTerminal).toHaveBeenCalledTimes(2);
+      expect(openTerminal.mock.calls[1]![0]).toMatchObject({ mode: "control" });
+      await act(async () => { messages.at(-1)!(message("owned")); });
+      (mocks.terminals.at(-1)!.onData.mock.calls[0][0] as (data: string) => void)("typed early");
+      expect(sent.filter((command) => command.type === "terminal.input")).toEqual([]);
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { selected: true })} />); await settle(); });
+      expect(openTerminal).toHaveBeenCalledTimes(2);
+      expect(sent.filter((command) => command.type === "terminal.input")).toHaveLength(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("keeps the control stream through a brief loss of control and releases it after a pause", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); await settle(); });
+      expect(openTerminal).toHaveBeenCalledTimes(1);
+      expect(openTerminal.mock.calls[0]![0]).toMatchObject({ mode: "control" });
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false })} />); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(openTerminal).toHaveBeenCalledTimes(1);
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true, { controlAllowed: false })} />); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(749); });
+      expect(openTerminal).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); await settle(); });
+      expect(openTerminal).toHaveBeenCalledTimes(2);
+      expect(openTerminal.mock.calls[1]![0]).toMatchObject({ mode: "observe" });
     } finally {
       await act(async () => root.unmount());
       host.remove();

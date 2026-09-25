@@ -907,6 +907,14 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const paneRenderKey = selectedTab && visiblePanes.length > 0 ? `${selectedTab.id}\0${visiblePaneIds.join("\0")}\0${rendererKey}` : null;
   const paneProjection: PaneCanvasProjection = { key: paneRenderKey, panes: visiblePanes, layout, visiblePaneIds, selectedPaneId: selection.paneId && visiblePaneIds.includes(selection.paneId) ? selection.paneId : null };
   const committedProjection = useRef<PaneCanvasProjection | null>(null);
+  // Terminals attached at the last commit stay attached while the session
+  // resyncs after a mutation, so a split drag or rename does not reattach them.
+  const attachedTerminals = useRef<{ epoch: number; paneIds: ReadonlySet<string> }>({ epoch: -1, paneIds: new Set() });
+  const nextAttachedTerminals = new Set<string>();
+  useLayoutEffect(() => {
+    attachedTerminals.current = { epoch: state.epoch, paneIds: nextAttachedTerminals };
+  });
+  const sessionResyncing = state.sync === "loading" && state.snapshot !== null && attachedTerminals.current.epoch === state.epoch;
   const [paneReadiness, setPaneReadiness] = useState<{ key: string | null; paneIds: ReadonlySet<string> }>({ key: null, paneIds: new Set() });
   useLayoutEffect(() => {
     setPaneReadiness({ key: paneRenderKey, paneIds: new Set() });
@@ -1516,8 +1524,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
           : state.focusPending.kind === "space" && state.focusPending.target_id === pane.space_id);
     const currentPaneStatus = incoming && pane.id === selection.paneId && state.focusPending !== null && !controlPendingForPane;
     const paneFocusError = incoming && state.focusError && (pane.id === controlPaneId || pane.id === selection.paneId) ? state.focusError : null;
-    const deferTerminal = !incoming || state.sync !== "live" || snapshot?.focused_tab_id !== pane.tab_id
+    const sessionAttachable = state.sync === "live" || (sessionResyncing && attachedTerminals.current.paneIds.has(pane.id));
+    const deferTerminal = !incoming || !sessionAttachable || snapshot?.focused_tab_id !== pane.tab_id
       || state.focusPending?.kind === "tab" || state.focusPending?.kind === "space";
+    if (!deferTerminal) nextAttachedTerminals.add(pane.id);
     return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
   const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
