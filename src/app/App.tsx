@@ -503,6 +503,17 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, onEdit, o
   </nav>;
 }
 
+/** Header of a graphical pane: what it shows and, for files, which folder. */
+function viewerTitle(renderer: PaneRendererState): { title: string; subtitle: string | null; path?: string } {
+  if (isGraphicalReview(renderer)) return { title: "Review", subtitle: null };
+  const { roots, default_root_id } = renderer.presentation;
+  const root = roots.find(candidate => candidate.root_id === (renderer.view.rootId ?? default_root_id)) ?? roots[0];
+  if (root?.kind === "companion") return { title: "Context", subtitle: null, path: root.path };
+  // Task worktrees are named `<repository>-<operation id>`; the id is noise here.
+  const label = root?.label.replace(/-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "") ?? null;
+  return { title: "Files", subtitle: label, path: root?.path };
+}
+
 function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
   pane: Pane;
   label: string;
@@ -573,7 +584,7 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
     <header className={`pane-header${solo && !graphical && !controlPending && !focusError ? " is-hidden" : ""}`}>
       <button type="button" className="pane-header-select" onClick={onSelect} title={title}>
-        <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{isGraphicalReview(renderer) ? "Review" : isGraphicalContext(renderer) ? "Files" : title}</span>{graphical ? <span className="pane-subtitle">/ {isGraphicalReview(renderer) ? "Local changes" : "Context"}</span> : null}
+        <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{graphical && renderer ? viewerTitle(renderer).title : title}</span>{graphical && renderer && viewerTitle(renderer).subtitle ? <span className="pane-subtitle" title={viewerTitle(renderer).path}>{viewerTitle(renderer).subtitle}</span> : null}
       </button>
       {controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null}
       <button type="button" className="pane-header-expand" aria-label="Expand or restore pane" title="Expand / restore pane" onClick={() => mutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" })}><UiIcon name="expand" /></button>

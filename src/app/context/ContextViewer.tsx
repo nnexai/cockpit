@@ -5,7 +5,7 @@ import { SafeImage } from "./SafeImage";
 import { MermaidView } from "./MermaidView";
 import type { CommentReviewRef } from "../../protocol/generated/v1";
 import { HtmlPreview } from "./HtmlPreview";
-import { Component, Fragment, useId, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, useId, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CockpitClient } from "../../client/CockpitClient";
@@ -28,6 +28,8 @@ import { ContextResources } from "./ContextResources";
 import { splitSourceLines } from "./sourceLines";
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
+import { highlightLines } from "../viewer/highlight";
+import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
 import "./context.css";
 
 export type ContextViewMode = "auto" | "source" | "markdown" | "html";
@@ -249,6 +251,11 @@ function sourceMetadata(source: string): SourceMetadata {
   return { canonicalId: fields.canonical_id ?? null, provider: fields.provider ?? null, fetchedAt: fields.fetched_at ?? null };
 }
 
+/** Preview-limit diagnostics are already explained by the bounded-window notice. */
+function isShownDiagnostic(diagnostic: { code: string }): boolean {
+  return diagnostic.code !== "context_preview_lines" && diagnostic.code !== "context_preview_bytes";
+}
+
 function documentName(path: string): string {
   const name = path.slice(path.lastIndexOf("/") + 1);
   return name || path;
@@ -326,6 +333,8 @@ export function SourceLines({
   onCreateFileComment?: () => void;
 }) {
   const lines = useMemo(() => splitSourceLines(text), [text]);
+  const highlighted = useMemo(() => highlightLines(text, state.path), [text, state.path]);
+  const [wrap] = useWrapPreference();
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<number | null>(null);
   const restoredScrollIdentity = useRef<string | null>(null);
@@ -347,7 +356,8 @@ export function SourceLines({
   };
   return (
     <div
-      className="context-source-scroll"
+      className={`context-source-scroll${wrap ? " is-wrapped" : ""}`}
+      style={{ "--source-digits": `${Math.max(2, String(lines.length).length)}ch` } as CSSProperties}
       ref={scrollRef}
       onScroll={(event) => onScroll(event.currentTarget.scrollTop)}
       role="grid"
@@ -389,7 +399,7 @@ export function SourceLines({
                 }}
               >
                 <span className="context-line-number" aria-hidden="true">{lineNumber}</span>
-                <code className="context-line-text">{line.text || " "}</code>
+                {highlighted?.[index] ? <code className="context-line-text" dangerouslySetInnerHTML={{ __html: highlighted[index] }} /> : <code className="context-line-text">{line.text || " "}</code>}
               </button>
               {commentActions ? <InlineCommentDrafts drafts={commentDrafts} line={lineNumber} actions={commentActions} rootId={state.rootId} path={state.path} /> : null}
               {inlineEditor?.(lineNumber)}
@@ -415,6 +425,33 @@ export function localImagePath(documentPath: string, value: string | undefined):
   return segments.length ? segments.join("/") : null;
 }
 
+/** An absolute http(s) image address; other schemes are never loaded. */
+function remoteImageUrl(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Markdown image references to web addresses, e.g. `![badge](https://…)`. */
+function countExternalImages(markdown: string): number {
+  return markdown.match(/!\[[^\]]*\]\(\s*<?https?:\/\//gi)?.length ?? 0;
+}
+
+/**
+ * A remote image stays blocked until the reader loads external images for the
+ * document, as a mail client does. It loads without a referrer; a failure
+ * leaves its alt text.
+ */
+function RemoteImage({ src, alt, allowed }: { src: string; alt: string; allowed: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (!allowed || failed) return <span className="context-media-refusal" title={src}>{alt || "image"}</span>;
+  return <img className="context-safe-image" src={src} alt={alt} title={alt || undefined} referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+}
+
 function MarkdownView({
   text,
   state,
@@ -429,6 +466,10 @@ function MarkdownView({
   onScroll: (scrollTop: number) => void;
 }) {
   const derived = useMemo(() => sourceLinesForMarkdown(text), [text]);
+  const externalImages = useMemo(() => countExternalImages(derived.text), [derived.text]);
+  const documentKey = `${state.rootId}\u0000${state.path}`;
+  const [externalAllowedFor, setExternalAllowedFor] = useState<string | null>(null);
+  const externalAllowed = externalAllowedFor === documentKey;
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredScrollIdentity = useRef<string | null>(null);
   const scrollIdentity = `${state.rootId}\u0000${state.path}\u0000${state.revision ?? ""}\u0000${text}`;
@@ -468,15 +509,17 @@ function MarkdownView({
       : <span {...props} {...blockData(node, derived.sourceLines)}>{children}</span>,
     img: ({ node, alt, src }) => {
       const path = localImagePath(state.path, src);
-      return <span {...blockData(node, derived.sourceLines)}>{path ? <SafeImage client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} request={{ binding_id: presentation.binding_id, root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : <span className="context-media-refusal">[Image unavailable: only Context-root PNG/JPEG images are supported]</span>}</span>;
+      const remote = !path && remoteImageUrl(src);
+      return <span {...blockData(node, derived.sourceLines)}>{path ? <SafeImage client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} request={{ binding_id: presentation.binding_id, root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : remote ? <RemoteImage src={remote} alt={alt ?? ""} allowed={externalAllowed} /> : <span className="context-media-refusal">{alt || "image"}</span>}</span>;
     },
-  }), [derived.sourceLines, derived.text, client, presentation.session_id, presentation.pane_id, presentation.binding_id, state.rootId, state.path]);
+  }), [derived.sourceLines, derived.text, client, externalAllowed, presentation.session_id, presentation.pane_id, presentation.binding_id, state.rootId, state.path]);
   return (
     <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
       if (event.target instanceof Element && event.target.closest("dialog, button, textarea")) return;
       const span = spanFromClick(event);
       if (span) onSelect(span.start, span.end);
     }}>
+      {externalImages > 0 && !externalAllowed ? <div className="context-external-images" role="status"><span>{externalImages === 1 ? "1 external image" : `${externalImages} external images`} not loaded</span><button type="button" onClick={(event) => { event.stopPropagation(); setExternalAllowedFor(documentKey); }}>Load external images</button></div> : null}
       <article className="context-markdown-body">
         <ReactMarkdown skipHtml remarkPlugins={[remarkGfm, remarkBoundDiagrams]} components={components}>{derived.text}</ReactMarkdown>
       </article>
@@ -557,6 +600,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const viewerRef = useRef<HTMLElement>(null);
   const overview = useFileOverview(viewerRef);
   const overviewId = useId();
+  const tree = useTreeWidth();
+  const [wrap, toggleWrap] = useWrapPreference();
   const documentRef = useRef<HTMLElement>(null);
   const treeRef = useRef<HTMLElement>(null);
   const treeFocusPathRef = useRef<{ path: string; restoreAfterLoad: boolean } | null>(null);
@@ -1033,6 +1078,16 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }, [focusContent, focusTree, openFilePicker]);
   const rootDirectory = directories[keyFor(root.root_id, "")];
   const rootEmpty = rootDirectory?.status === "ready" && rootDirectory.data?.entries.length === 0 && rootDirectory.data.next_offset === undefined;
+  // Open the folder's guide instead of an empty document area.
+  const openedDefaultRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (value.path || !rootDirectory?.data || openedDefaultRef.current === identityKey) return;
+    openedDefaultRef.current = identityKey;
+    const files = rootDirectory.data.entries.filter((entry) => entry.kind === "file" && !entry.refusal && entry.path);
+    const named = (name: string) => files.find((entry) => entry.name.toLowerCase() === name);
+    const guide = named("task.md") ?? named("readme.md") ?? files.find((entry) => /\.md$/i.test(entry.name));
+    if (guide) chooseEntry(guide);
+  });
   const renderDocument = (): ReactNode => {
     const fileState = selectedPath
       ? selectedFileState ?? { rootId: root.root_id, path: selectedPath, mode: "source" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision: selectedRevision }
@@ -1063,8 +1118,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       return (
         <>
           <div className="context-document-header">
-            <span className="document-source-kind">{metadata.canonicalId ? "Issue" : "File"}</span><strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
-            {metadata.canonicalId ? <span className="viewer-secondary-metadata">Imported snapshot</span> : null}
+            {metadata.canonicalId ? <span className="document-source-kind">{metadata.provider ?? "Issue"}</span> : null}<strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
 
             <details className="viewer-details">
@@ -1086,23 +1140,23 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
             </details>
           </div>
           {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
-          {document.text !== null && document.diagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
+          {document.text !== null && document.diagnostics.some(isShownDiagnostic) ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.filter(isShownDiagnostic).map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
           {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && (root.kind === "companion" || root.kind === "folder") && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage client={client} sessionId={sessionId} paneId={paneId} request={{ binding_id: bindingId, root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
             {(() => {
               const mode = effectiveMode;
               return <>
-                {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing a bounded source window.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading === pageRequestKey}>{documentPageLoading === pageRequestKey ? "Loading…" : "Load next source page"}</button></div> : null}
+                {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing the start of a large file.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading === pageRequestKey}>{documentPageLoading === pageRequestKey ? "Loading…" : "Load next source page"}</button></div> : null}
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
                   {mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={{ ...fileState!, mode: "markdown" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
                 </RenderErrorBoundary>
               </>;
             })()}
-            {actions ? <footer className="context-comment-status" aria-label="Context comment shortcuts"><span>{selectedLines ?? "Select a line"}</span><span className="context-comment-status-actions"><button type="button" onClick={() => actions.createLines()} disabled={!commentStatus.canCreateLines} title={commentStatus.canCreateLines ? "Comment on selected lines (C)" : "Select source lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={actions.createWholeFile} disabled={!commentStatus.canCreateWholeFile} title={commentStatus.canCreateWholeFile ? "Comment on whole file (Shift+C)" : "Source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={() => actions.openOverview()} title="Open comments overview">{commentStatus.count} comments</button></span></footer> : null}
+            {actions ? <footer className="context-comment-status" aria-label="Context comment shortcuts"><span>{selectedLines ?? ""}</span><span className="context-comment-status-actions"><button type="button" onClick={() => actions.createLines()} disabled={!commentStatus.canCreateLines} title={commentStatus.canCreateLines ? "Comment on selected lines (C)" : "Select source lines before commenting"}><kbd>C</kbd> comment</button><button type="button" onClick={actions.createWholeFile} disabled={!commentStatus.canCreateWholeFile} title={commentStatus.canCreateWholeFile ? "Comment on whole file (Shift+C)" : "Source is not ready"}><kbd>Shift+C</kbd> file</button><button type="button" onClick={() => actions.openOverview()} title="Open comments overview">{commentStatus.count} comments</button></span></footer> : null}
           </>}
         </>
       );
     };
-    if (!commentsEnabled) return <>{renderDocumentBody()}<div className="context-notice" role="status">Comments are available from the verified Context root.</div></>;
+    if (!commentsEnabled) return renderDocumentBody();
     return (
       <CommentDrafts
         client={client}
@@ -1140,6 +1194,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") { event.preventDefault(); event.stopPropagation(); openFilePicker(); }
       if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "1") { event.preventDefault(); focusTree(); }
       if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "2") { event.preventDefault(); focusContent(); }
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === "KeyZ") { event.preventDefault(); toggleWrap(); }
     }}>
       <header className="context-toolbar">
 
@@ -1150,14 +1205,14 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         <span className="context-toolbar-spacer" />
         {document && selectedPath && (isMarkdown(document, selectedPath) || isHtml(document, selectedPath)) ? <div className="viewer-segmented" role="group" aria-label="Document presentation"><button type="button" aria-pressed={selectedFileState?.mode !== "source"} onClick={() => updateFile({ mode: "auto" })}>Preview</button><button type="button" aria-pressed={selectedFileState?.mode === "source"} onClick={() => updateFile({ mode: "source" })}>Source</button></div> : null}
 
+        <button type="button" className="viewer-wrap-toggle" aria-pressed={wrap} onClick={toggleWrap} title={wrap ? "Long lines wrap (Alt+Z)" : "Long lines scroll (Alt+Z)"}><UiIcon name="wrap" /><span className="viewer-wrap-label">Wrap</span></button>
         <button type="button" onClick={refresh} aria-label="Refresh Context files" title="Refresh files"><UiIcon name="refresh" /></button>
         <button type="button" onClick={onTerminalView} aria-label="Show terminal" title="Show terminal"><UiIcon name="terminal" /></button>
       </header>
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
-      <div className={`context-body${overview.open ? " has-file-overview" : ""}`}>
+      <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
         {overview.narrow && overview.open ? <button type="button" className="viewer-overview-backdrop" aria-label="Close file overview" onClick={overview.close} /> : null}
         <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label="Context files" ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else onTreeKeyDown(event); }}>
-          <div className="context-tree-header">FILES <span>{root.label}</span></div>
         {root.kind === "companion" ? <details className="viewer-tree-search"><summary><UiIcon name="search" /> Search contents</summary><ContextSearch
           identity={identityKey}
           bindingId={bindingId}
@@ -1182,6 +1237,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
             {row.entry.refusal ? <div className="context-tree-refusal">{row.entry.refusal}</div> : null}
           </div>)}
         </aside>
+        {overview.open && !overview.narrow ? <TreeSplitter width={tree.width} onChange={tree.setWidth} /> : null}
         <main className="context-document" ref={documentRef} tabIndex={-1}>
           {renderDocument()}
         </main>

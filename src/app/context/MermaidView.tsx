@@ -27,6 +27,5 @@ export function MermaidView({ source }: { source: string }) {
     {frame ? <iframe ref={frameRef} title="Mermaid diagram preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={frame} style={{ width: "100%", height, border: 0, pointerEvents: "none" }} tabIndex={-1} /> : null}
     {status ? <p role="status">{status}</p> : null}
     <details><summary>Diagram source</summary><pre><code>{source}</code></pre></details>
-    <span className="context-mermaid-caption">Select this block to comment on its source lines.</span>
   </div>;
 }

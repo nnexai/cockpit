@@ -19,6 +19,7 @@ const paths = {
   refresh: "M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6",
   terminal: "m4 6 6 6-6 6m9 0h7",
   close: "m6 6 12 12M6 18 18 6",
+  wrap: "M3 6h18M3 12h15a3 3 0 0 1 0 6h-4m2-2-2 2 2 2M3 18h7",
   comment: "M21 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3ZM7 8h10M7 12h7",
 } satisfies Record<string, string>;
 
