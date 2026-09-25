@@ -797,6 +797,8 @@ impl ContextService {
                     workspace_id: source.workspace_id,
                     cwd: launch_cwd.to_string_lossy().into_owned(),
                     direction: request.direction,
+                    label: (root.root.kind == ContextRootKind::Companion)
+                        .then(|| CONTEXT_PANE_LABEL.to_owned()),
                 },
             )
             .await?;
@@ -854,6 +856,7 @@ impl ContextService {
                     workspace_id: source.workspace_id,
                     cwd: checkout.to_string_lossy().into_owned(),
                     direction: request.direction,
+                    label: None,
                 },
             )
             .await?;
@@ -1138,7 +1141,11 @@ impl ContextService {
             }
         }
         let viewer_root = resolve_verified_viewer_root(&self.configuration, evidence).await;
-        let viewer_companion = resolve_viewer_companion(viewer_root.as_deref(), &companion_roots);
+        let viewer_companion = resolve_viewer_companion(
+            viewer_root.as_deref(),
+            evidence.label.as_deref() == Some(CONTEXT_PANE_LABEL),
+            &companion_roots,
+        );
         let verified_viewer = evidence.extension == Some(ExtensionKind::Context)
             && verified_confidence(evidence.confidence)
             && viewer_root.is_some();
@@ -1281,6 +1288,9 @@ impl ContextService {
         ))
     }
 }
+
+/// Herdr label of the Context viewers Cockpit opens.
+const CONTEXT_PANE_LABEL: &str = "Context";
 
 fn require_binding(presentation: &PanePresentation, binding: &str) -> Result<(), InspectionError> {
     if binding != presentation.binding_id {
@@ -1557,14 +1567,18 @@ fn evidence_cwd(evidence: &ExtensionPaneEvidence) -> Option<PathBuf> {
     metadata.is_dir().then_some(absolute)
 }
 
+/// The file viewer always roots at its source pane's checkout, so only a pane
+/// Cockpit labelled as Context shows the companion of that checkout. Any other
+/// viewer there is an ordinary file browser of the checkout.
 fn resolve_viewer_companion(
     viewer_root: Option<&Path>,
+    labelled_context: bool,
     companions: &[AuthorizedRoot],
 ) -> Option<(String, PathBuf)> {
     let viewer_root = viewer_root?;
     let mut matches = companions.iter().filter(|companion| {
         companion.canonical == viewer_root
-            || companion_checkout(companion).as_deref() == Some(viewer_root)
+            || (labelled_context && companion_checkout(companion).as_deref() == Some(viewer_root))
     });
     let companion = matches.next()?;
     if matches.next().is_some() {
@@ -2131,6 +2145,7 @@ mod review_checkout_tests {
                 cwd: Some(source.to_string_lossy().into_owned()),
                 foreground_cwd: Some(source.to_string_lossy().into_owned()),
                 viewer_cwd: None,
+                label: None,
                 process_identity: "process".to_owned(),
                 extension: None,
                 confidence: DetectionConfidence::None,
@@ -2267,6 +2282,7 @@ mod review_checkout_tests {
                 cwd: Some(non_git_cwd.to_string_lossy().into_owned()),
                 foreground_cwd: Some(child.to_string_lossy().into_owned()),
                 viewer_cwd: None,
+                label: None,
                 process_identity: "process".to_owned(),
                 extension: None,
                 confidence: DetectionConfidence::None,
@@ -2415,6 +2431,7 @@ mod review_checkout_tests {
                 cwd: Some(plugin_install.to_string_lossy().into_owned()),
                 foreground_cwd: Some(plugin_install.to_string_lossy().into_owned()),
                 viewer_cwd: Some(folder.to_string_lossy().into_owned()),
+                label: None,
                 process_identity: "process".to_owned(),
                 extension: Some(ExtensionKind::Context),
                 confidence: DetectionConfidence::VerifiedProcess,
@@ -2666,6 +2683,7 @@ mod review_checkout_tests {
                 cwd: Some(plugin_install.to_string_lossy().into_owned()),
                 foreground_cwd: Some(plugin_install.to_string_lossy().into_owned()),
                 viewer_cwd: Some(linked.to_string_lossy().into_owned()),
+                label: None,
                 process_identity: "process".to_owned(),
                 extension: Some(ExtensionKind::Context),
                 confidence: DetectionConfidence::VerifiedProcess,
@@ -2747,9 +2765,14 @@ mod review_checkout_tests {
             Some("companion:one")
         );
         assert_eq!(
-            resolve_viewer_companion(Some(&checkout), std::slice::from_ref(&companion))
+            resolve_viewer_companion(Some(&checkout), true, std::slice::from_ref(&companion))
                 .map(|(root_id, _)| root_id),
             Some("companion:one".to_owned())
+        );
+        assert!(
+            resolve_viewer_companion(Some(&checkout), false, std::slice::from_ref(&companion))
+                .is_none(),
+            "an unlabelled viewer of the checkout browses the checkout, not its Context"
         );
 
         let second_path = workspace.join("second-companion");

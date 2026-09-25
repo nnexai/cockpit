@@ -3121,6 +3121,7 @@ mod tests {
                 cwd: Some(root.to_string_lossy().into_owned()),
                 foreground_cwd: None,
                 viewer_cwd: None,
+                label: None,
                 process_identity: "process".to_owned(),
                 extension: Some(ExtensionKind::Review),
                 confidence: DetectionConfidence::VerifiedProcess,

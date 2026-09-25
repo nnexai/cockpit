@@ -562,7 +562,7 @@ impl ExtensionHerdrAdapter {
             kind = process_info.and_then(candidate_kind_from_process);
         }
         if kind.is_none() {
-            kind = if title == "Files" {
+            kind = if title == "Files" || title == "Context" {
                 Some(ExtensionKind::Context)
             } else if title.eq_ignore_ascii_case("reviewr") {
                 Some(ExtensionKind::Review)
@@ -688,6 +688,7 @@ impl ExtensionHerdrAdapter {
             cwd,
             foreground_cwd,
             viewer_cwd,
+            label: pane.title.clone(),
             process_identity,
             extension: kind,
             confidence,
@@ -879,6 +880,17 @@ impl ExtensionHerdrAdapter {
             required_string(opened_pane, "tab_id", "plugin pane").map_err(post_mutation_error)?;
         let opened_cwd =
             optional_string(opened_pane, "cwd", "plugin pane").map_err(post_mutation_error)?;
+        if let Some(label) = &request.label {
+            self.herdr
+                .socket_request_with_identity(
+                    session_id,
+                    "pane.rename",
+                    json!({"pane_id": pane_id, "label": label}),
+                    Some(&endpoint_identity),
+                )
+                .await
+                .map_err(post_mutation_error)?;
+        }
         let opened_cwd_matches = match kind {
             ExtensionKind::Context => opened_cwd.as_deref().is_some_and(|cwd| {
                 actual_cwd_matches(cwd, &manifest.plugin_root.to_string_lossy())
@@ -1033,6 +1045,7 @@ impl ExtensionHerdrAdapter {
             foreground_cwd: optional_string(opened_pane, "foreground_cwd", "plugin pane")
                 .map_err(post_mutation_error)?,
             viewer_cwd,
+            label: request.label.clone(),
             process_identity,
             extension: Some(kind),
             confidence,
@@ -1320,6 +1333,7 @@ mod tests {
             workspace_id: "workspace".to_owned(),
             cwd: "/approved/root".to_owned(),
             direction: ContextSplitDirection::Right,
+            label: None,
         };
         let context = plugin_open_parameters(
             &request,

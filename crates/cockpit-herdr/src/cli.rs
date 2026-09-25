@@ -1341,7 +1341,15 @@ impl HerdrCliAdapter {
         request: &ResourceMutationRequest,
     ) -> Result<ResourceMutationResponse, InspectionError> {
         self.selected_session(session_id)?;
-        let (method, params) = mutation_call(request);
+        let (method, mut params) = mutation_call(request);
+        // Herdr opens a new tab in the focused pane's folder, which may be a
+        // viewer plugin's install directory. Start it in the Space's folder.
+        if let ResourceMutationRequest::TabCreate { space_id, .. } = request
+            && let Ok(snapshot) = self.read_snapshot(session_id).await
+            && let Some(cwd) = space_folder(&snapshot, space_id)
+        {
+            params["cwd"] = json!(cwd);
+        }
         let result = self.socket_request(session_id, method, params).await?;
         validate_mutation_result(request, result)?;
         let snapshot = self.read_snapshot(session_id).await.map_err(|error| {
@@ -2207,6 +2215,19 @@ impl BrowserHerdrAdapter for HerdrCliAdapter {
         }
         Ok((identity, endpoint_path))
     }
+}
+
+/// A Space's own folder: its checkout, else the folder of its first pane.
+fn space_folder<'a>(snapshot: &'a SessionSnapshotResponse, space_id: &str) -> Option<&'a str> {
+    let space = snapshot.spaces.iter().find(|space| space.id == space_id)?;
+    if let Some(git) = &space.git {
+        return Some(&git.checkout_path);
+    }
+    snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.space_id == space_id)
+        .and_then(|pane| pane.cwd.as_deref())
 }
 
 #[cfg(test)]

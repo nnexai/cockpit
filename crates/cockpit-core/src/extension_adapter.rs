@@ -16,6 +16,9 @@ pub struct ExtensionPaneEvidence {
     /// File-viewer launch directory from confirmed Herdr context, never inferred
     /// from workspace membership. Core resolves and authorizes its browsing root.
     pub viewer_cwd: Option<String>,
+    /// Herdr's pane label. Cockpit labels the Context viewers it opens, which
+    /// tells them apart from file viewers started in the same checkout.
+    pub label: Option<String>,
     pub process_identity: String,
     pub extension: Option<ExtensionKind>,
     pub confidence: DetectionConfidence,
@@ -32,6 +35,8 @@ pub struct ExtensionLaunch {
     pub workspace_id: String,
     pub cwd: String,
     pub direction: ContextSplitDirection,
+    /// Label given to the opened pane.
+    pub label: Option<String>,
 }
 
 #[async_trait]
