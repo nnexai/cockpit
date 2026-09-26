@@ -408,7 +408,7 @@ fn parse_reference(
         "issues" if value.parse::<u64>().is_ok() => {
             format!("{}/{}#{}", authority.owner, authority.repository, value)
         }
-        "pulls" if value.parse::<u64>().is_ok() => {
+        "pulls" | "pull" if value.parse::<u64>().is_ok() => {
             format!("{}/{}!{}", authority.owner, authority.repository, value)
         }
         "wiki"
@@ -438,5 +438,43 @@ fn diagnostic(
             message: message.to_owned(),
             path: path.map(str::to_owned),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_reference;
+    use crate::sources::SourceAuthority;
+
+    fn github_authority() -> SourceAuthority {
+        SourceAuthority {
+            provider_instance: "https://github.com".into(),
+            origin_host: "github.com".into(),
+            origin_port: None,
+            origin_base_path: String::new(),
+            owner: "acme".into(),
+            repository: "repo".into(),
+        }
+    }
+
+    #[test]
+    fn singular_github_pull_and_existing_pulls_paths_resolve_to_reviews() {
+        for path in ["pull/7", "pulls/7"] {
+            let reference = parse_reference(
+                &format!("https://github.com/acme/repo/{path}"),
+                &github_authority(),
+            )
+            .unwrap()
+            .unwrap();
+
+            assert_eq!(reference.canonical_id, "acme/repo!7");
+        }
+    }
+
+    #[test]
+    fn pull_reference_requires_the_configured_repository_authority() {
+        assert!(
+            parse_reference("https://github.com/other/repo/pull/7", &github_authority(),).is_err()
+        );
     }
 }

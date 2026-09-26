@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::sources::{
-    SourceAsset, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
@@ -128,6 +128,11 @@ impl TeaSourceProvider {
                 "Tea returned a different pull request index",
             ));
         }
+        let source_url = verified_url(
+            request,
+            &self.base_url,
+            value_string(&review, &["html_url", "url"]).as_deref(),
+        )?;
         let mut comments = Vec::new();
         for page in 1..=MAX_COMMENT_PAGES {
             let page_comments: Vec<Value> = serde_json::from_slice(
@@ -293,7 +298,7 @@ impl TeaSourceProvider {
                 canonical_id: format!("{repo}!{index}"),
             },
             title,
-            source_url: Some(request.artifact_url.clone()),
+            source_url: Some(source_url),
             original_url: None,
             source_revision: value_string(
                 &review,
@@ -302,6 +307,12 @@ impl TeaSourceProvider {
             complete: true,
             diagnostics: Vec::new(),
             body,
+            container: Some(SourceContainer {
+                id: repo.into(),
+                label: repo.into(),
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }])
     }
 
@@ -342,6 +353,11 @@ impl TeaSourceProvider {
             }
             page => page,
         };
+        let source_url = verified_url(
+            request,
+            &self.base_url,
+            value_string(&wiki, &["html_url", "url"]).as_deref(),
+        )?;
         let title = value_string(&wiki, &["title", "name"]).ok_or_else(|| {
             InspectionError::new("source_provider_contract", "Tea wiki page has no title")
         })?;
@@ -406,12 +422,18 @@ impl TeaSourceProvider {
                 canonical_id: format!("{repo}:{page}"),
             },
             title,
-            source_url: Some(request.artifact_url.clone()),
+            source_url: Some(source_url),
             original_url: None,
             source_revision: Some(source_revision),
             complete: true,
             diagnostics: Vec::new(),
             body,
+            container: Some(SourceContainer {
+                id: repo.into(),
+                label: repo.into(),
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }])
     }
 
@@ -459,6 +481,8 @@ struct Issue {
     title: String,
     body: Option<String>,
     updated: Option<String>,
+    #[serde(alias = "url")]
+    html_url: String,
 }
 #[derive(Deserialize)]
 struct Comment {
@@ -466,6 +490,7 @@ struct Comment {
     body: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum ArtifactKind {
     Issue(u64),
     Review(u64),
@@ -480,11 +505,16 @@ fn artifact_kind(
         .map_err(|_| InspectionError::new("source_artifact_invalid", "artifact URL is invalid"))?;
     let authority = &request.authority;
     if provider_instance(base_url) != authority.provider_instance
+        || authority.origin_host != base_url.host_str().unwrap_or_default()
+        || authority.origin_port != normalized_port(base_url)
+        || base_path(&authority.origin_base_path) != base_path(base_url.path())
         || url.username() != ""
         || url.password().is_some()
         || url.scheme() != base_url.scheme()
         || url.host_str() != Some(authority.origin_host.as_str())
         || normalized_port(&url) != authority.origin_port
+        || url.query().is_some()
+        || url.fragment().is_some()
     {
         return Err(InspectionError::new(
             "source_artifact_mismatch",
@@ -517,8 +547,8 @@ fn artifact_kind(
         })
     };
     let kind = match segments[2] {
-        "issues" => ArtifactKind::Issue(index(segments[3])?),
-        "pulls" => ArtifactKind::Review(index(segments[3])?),
+        "issues" if segments.len() == 4 => ArtifactKind::Issue(index(segments[3])?),
+        "pulls" if segments.len() == 4 => ArtifactKind::Review(index(segments[3])?),
         "wiki" if segments[3..].iter().all(|segment| !segment.is_empty()) => {
             ArtifactKind::Wiki(segments[3..].join("/"))
         }
@@ -536,6 +566,31 @@ fn artifact_kind(
         }
     };
     Ok((format!("{}/{}", segments[0], segments[1]), kind))
+}
+
+/// Tea's `url` JSON column is the API record's `html_url`.
+fn verified_url(
+    request: &SourceFetchRequest,
+    base: &Url,
+    value: Option<&str>,
+) -> Result<String, InspectionError> {
+    let mismatch = || {
+        InspectionError::new(
+            "source_identity_mismatch",
+            "Tea returned a different canonical artifact URL",
+        )
+    };
+    let value = value.ok_or_else(mismatch)?;
+    let returned = SourceFetchRequest {
+        provider_id: request.provider_id.clone(),
+        artifact_url: value.into(),
+        authority: request.authority.clone(),
+    };
+    let actual = artifact_kind(&returned, base).map_err(|_| mismatch())?;
+    if actual != artifact_kind(request, base)? {
+        return Err(mismatch());
+    }
+    Ok(value.into())
 }
 
 fn value_string(value: &Value, names: &[&str]) -> Option<String> {
@@ -637,10 +692,11 @@ impl SourceProvider for TeaSourceProvider {
                         "Tea returned a different issue index",
                     ));
                 }
+                let source_url = verified_url(request, &self.base_url, Some(&issue.html_url))?;
                 Ok(SourceMetadata {
                     title: issue.title,
                     source_branch: None,
-                    source_url: None,
+                    source_url: Some(source_url),
                     source_commit: None,
                     description: None,
                 })
@@ -654,7 +710,7 @@ impl SourceProvider for TeaSourceProvider {
                             "--output".into(),
                             "json".into(),
                             "--fields".into(),
-                            "index,title,head".into(),
+                            "index,title,head,url".into(),
                             "--repo".into(),
                             repo,
                             "--login".into(),
@@ -683,10 +739,15 @@ impl SourceProvider for TeaSourceProvider {
                     )
                 })?;
                 let source_branch = review_source_branch(&review);
+                let source_url = verified_url(
+                    request,
+                    &self.base_url,
+                    value_string(&review, &["html_url", "url"]).as_deref(),
+                )?;
                 Ok(SourceMetadata {
                     title,
                     source_branch,
-                    source_url: None,
+                    source_url: Some(source_url),
                     source_commit: None,
                     description: None,
                 })
@@ -735,6 +796,7 @@ impl SourceProvider for TeaSourceProvider {
                 "Tea returned a different issue index",
             ));
         }
+        let source_url = verified_url(request, &self.base_url, Some(&issue.html_url))?;
         let mut comments = Vec::new();
         for page in 1..=MAX_COMMENT_PAGES {
             let page_comments = parse_comments(
@@ -791,12 +853,18 @@ impl SourceProvider for TeaSourceProvider {
         Ok(vec![SourceAsset {
             source,
             title: issue.title,
-            source_url: Some(request.artifact_url.clone()),
+            source_url: Some(source_url),
             original_url: None,
             source_revision: issue.updated,
             complete: true,
             diagnostics: Vec::new(),
             body,
+            container: Some(SourceContainer {
+                id: repo.clone(),
+                label: repo,
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }])
     }
 }
@@ -805,7 +873,7 @@ impl SourceProvider for TeaSourceProvider {
 mod tests {
     use super::{
         Duration, SourceFetchRequest, SourceProvider, TeaSourceProvider, Url, base_path,
-        parse_comments, provider_instance, review_source_branch,
+        parse_comments, provider_instance, review_source_branch, verified_url,
     };
     use cockpit_core::sources::SourceAuthority;
     use std::io::{Read, Write};
@@ -818,6 +886,56 @@ mod tests {
     use std::thread::{self, JoinHandle};
 
     static FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn canonical_api_urls_match_instance_repository_and_artifact() {
+        let base = Url::parse("https://forge.test:9443/gitea").unwrap();
+        for path in ["issues/7", "pulls/7", "wiki/Guide"] {
+            let url = format!("https://forge.test:9443/gitea/acme/repo/{path}");
+            let request = source_request("tea", &base, url.clone());
+            assert_eq!(verified_url(&request, &base, Some(&url)).unwrap(), url);
+            for mismatch in [
+                url.replace("https:", "http:"),
+                url.replace("forge.test", "wrong.test"),
+                url.replace(":9443", ""),
+                url.replace("/gitea/", "/other/"),
+                url.replace("acme/repo", "other/repo"),
+                format!("{url}/extra"),
+                format!("{url}?other=1"),
+            ] {
+                assert_eq!(
+                    verified_url(&request, &base, Some(&mismatch))
+                        .unwrap_err()
+                        .code,
+                    "source_identity_mismatch"
+                );
+            }
+        }
+        let base = Url::parse("https://forge.test/gitea").unwrap();
+        let request = source_request(
+            "tea",
+            &base,
+            "https://forge.test/gitea/acme/repo/issues/7".into(),
+        );
+        assert!(
+            verified_url(
+                &request,
+                &base,
+                Some("https://forge.test:443/gitea/acme/repo/issues/7")
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            verified_url(
+                &request,
+                &base,
+                Some("https://forge.test/gitea/acme/repo/issues/8")
+            )
+            .unwrap_err()
+            .code,
+            "source_identity_mismatch"
+        );
+    }
 
     #[test]
     fn review_metadata_uses_the_head_ref_not_the_commit_sha() {
@@ -1023,11 +1141,13 @@ mod tests {
         }
         if path.contains("/pulls/1") {
             return format!(
-                r#"{{"id":1,"number":1,"title":"review","body":"review body","html_url":"{base_url}/pulls/1","diff_url":"{base_url}/api/v1/repos/acme/repo/pulls/1.diff","updated_at":"2026-01-01T00:00:00Z","base":{{"ref":"main","sha":"base-sha"}},"head":{{"ref":"feature","sha":"head-sha"}},"user":{{"id":1,"login":"fixture"}}}}"#
+                r#"{{"id":1,"number":1,"title":"review","body":"review body","html_url":"{base_url}/acme/repo/pulls/1","diff_url":"{base_url}/api/v1/repos/acme/repo/pulls/1.diff","updated_at":"2026-01-01T00:00:00Z","base":{{"ref":"main","sha":"base-sha"}},"head":{{"ref":"feature","sha":"head-sha"}},"user":{{"id":1,"login":"fixture"}}}}"#
             );
         }
         if path.contains("/wiki/") {
-            return r#"{"title":"Guide","content_base64":"IyBndWlkZQo=","sha":"wiki-sha","html_url":"http://x/wiki/Guide","last_commit":{"id":"wiki-sha"}}"#.into();
+            return format!(
+                r#"{{"title":"Guide","content_base64":"IyBndWlkZQo=","sha":"wiki-sha","html_url":"{base_url}/acme/repo/wiki/Guide","last_commit":{{"id":"wiki-sha"}}}}"#
+            );
         }
         if path.contains("issues/1") {
             let number = match mode {
@@ -1035,7 +1155,7 @@ mod tests {
                 _ => 1,
             };
             return format!(
-                r#"{{"id":1,"number":{number},"title":"issue","body":"body","html_url":"http://x/issues/{number}","updated_at":"2026-01-01T00:00:00Z","user":{{"id":1,"login":"fixture"}}}}"#
+                r#"{{"id":1,"number":{number},"title":"issue","body":"body","html_url":"{base_url}/acme/repo/issues/{number}","updated_at":"2026-01-01T00:00:00Z","user":{{"id":1,"login":"fixture"}}}}"#
             );
         }
         r#"{"id":1,"login":"fixture","full_name":"Fixture","email":"x","avatar_url":"","language":"en-US","is_admin":false,"active":true,"restricted":false}"#.into()
@@ -1073,12 +1193,15 @@ mod tests {
                 let line = String::from_utf8_lossy(&b[..n]);
                 let path = line.lines().next().unwrap().to_string();
                 s.lock().unwrap().push(path.clone());
+                let issue_json = format!(
+                    r#"{{"id":1,"number":1,"title":"issue","body":"body","html_url":"http://{addr}/acme/repo/issues/1","updated_at":"2026-01-01T00:00:00Z","user":{{"id":1,"login":"fixture"}}}}"#
+                );
                 let body = if path.contains("/user/keys") || path.contains("reactions") {
                     "[]"
                 } else if path.contains("comments") {
                     r#"[{"id":2,"body":"comment","updated_at":"2026-01-01T00:00:00Z","user":{"id":1,"login":"fixture"}}]"#
                 } else if path.contains("issues/1") {
-                    r#"{"id":1,"number":1,"title":"issue","body":"body","html_url":"http://x/issues/1","updated_at":"2026-01-01T00:00:00Z","user":{"id":1,"login":"fixture"}}"#
+                    &issue_json
                 } else {
                     r#"{"id":1,"login":"fixture","full_name":"Fixture","email":"x","avatar_url":"","language":"en-US","is_admin":false,"active":true,"restricted":false}"#
                 };

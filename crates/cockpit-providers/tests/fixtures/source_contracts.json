@@ -1,0 +1,69 @@
+{
+  "github_same_repo": {
+    "number": 7,
+    "title": "Repair review flow",
+    "url": "https://github.com/other/repo/pull/7",
+    "body": "Pull request description",
+    "updatedAt": "2026-09-26T12:00:00Z",
+    "headRefName": "feature/review",
+    "headRefOid": "0123456789abcdef0123456789abcdef01234567",
+    "baseRefName": "main",
+    "state": "OPEN",
+    "isDraft": false,
+    "isCrossRepository": false
+  },
+  "github_fork": {
+    "number": 7,
+    "title": "Repair review flow from fork",
+    "url": "https://github.com/other/repo/pull/7",
+    "body": "Fork pull request description",
+    "updatedAt": "2026-09-26T12:00:00Z",
+    "headRefName": "contributor/review",
+    "headRefOid": "89abcdef0123456789abcdef0123456789abcdef",
+    "baseRefName": "main",
+    "state": "OPEN",
+    "isDraft": false,
+    "isCrossRepository": true
+  },
+  "conversation_pages": [
+    [{"id": 101, "body": "Conversation first page", "user": {"login": "reviewer"}, "created_at": "2026-09-26T12:00:00Z", "html_url": "https://github.com/other/repo/pull/7#issuecomment-101"}],
+    [{"id": 102, "body": "Conversation second page", "user": {"login": "author"}, "created_at": "2026-09-26T12:01:00Z", "html_url": "https://github.com/other/repo/pull/7#issuecomment-102"}]
+  ],
+  "review_pages": [
+    [{"id": 201, "body": "Review first page", "path": "src/main.rs", "line": 12, "user": {"login": "reviewer"}, "html_url": "https://github.com/other/repo/pull/7#discussion_r201"}],
+    [{"id": 202, "body": "Review second page", "path": "src/lib.rs", "line": 25, "user": {"login": "reviewer"}, "html_url": "https://github.com/other/repo/pull/7#discussion_r202"}]
+  ],
+  "gitlab_project": {
+    "id": 42, "path_with_namespace": "other/group/repo",
+    "web_url": "https://gitlab.test:9443/subfolder/other/group/repo"
+  },
+  "gitlab_issue": {
+    "project_id": 42, "iid": 7, "title": "Self-hosted issue", "issue_type": "issue",
+    "references": {"full": "other/group/repo#7"},
+    "web_url": "https://gitlab.test:9443/subfolder/other/group/repo/-/issues/7",
+    "description": "Issue description", "author": {"username": "author"},
+    "state": "opened", "labels": ["backend"], "assignees": [], "milestone": null,
+    "created_at": "2026-09-26T12:00:00Z", "updated_at": "2026-09-26T12:01:00Z"
+  },
+  "gitlab_review": {
+    "project_id": 42, "target_project_id": 42, "source_project_id": 42,
+    "iid": 7, "title": "Self-hosted merge request", "description": "Merge request description",
+    "references": {"full": "other/group/repo!7"},
+    "web_url": "https://gitlab.test:9443/subfolder/other/group/repo/-/merge_requests/7",
+    "author": {"username": "author"}, "state": "opened", "labels": [], "assignees": [], "reviewers": [],
+    "source_branch": "feature/review", "target_branch": "main",
+    "sha": "0123456789abcdef0123456789abcdef01234567",
+    "created_at": "2026-09-26T12:00:00Z", "updated_at": "2026-09-26T12:01:00Z"
+  },
+  "gitlab_approvals": {"approved": false, "approvals_left": 1, "approved_by": []},
+  "jira": {
+    "id": "10007", "key": "OPS-7",
+    "self": "https://jira.internal.test/jira/rest/api/2/issue/10007",
+    "fields": {
+      "summary": "On-premises wiki markup", "project": {"key": "OPS"},
+      "description": "h2. Legacy heading\n{code}unchanged{code}",
+      "updated": "2026-09-26T12:01:00Z",
+      "comment": {"total": 1, "comments": [{"id": "9", "body": "{quote}Legacy comment{quote}", "author": {"displayName": "Reviewer"}}]}
+    }
+  }
+}

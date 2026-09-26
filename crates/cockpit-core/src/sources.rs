@@ -56,7 +56,43 @@ pub struct SourceRef {
     pub canonical_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceContainer {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FrontmatterValue {
+    String(String),
+    Number(i64),
+    Boolean(bool),
+    Strings(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrontmatterField {
+    pub key: String,
+    pub value: FrontmatterValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceAttachment {
+    pub id: String,
+    pub title: String,
+    pub media_type: Option<String>,
+    pub size: Option<u64>,
+    pub source_url: Option<String>,
+    pub source_revision: Option<String>,
+    pub path: Option<String>,
+    pub not_downloaded: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceAsset {
     pub source: SourceRef,
     pub title: String,
@@ -68,9 +104,15 @@ pub struct SourceAsset {
     pub complete: bool,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub body: String,
+    #[serde(default)]
+    pub container: Option<SourceContainer>,
+    #[serde(default)]
+    pub fields: Vec<FrontmatterField>,
+    #[serde(default)]
+    pub attachments: Vec<SourceAttachment>,
 }
 
-/// Proof derived from the configured provider and the primary checkout origin.
+/// Proof derived from the configured provider and an authorized artifact identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceAuthority {
     pub provider_instance: String,
@@ -99,6 +141,82 @@ pub struct SourceMetadata {
     pub source_commit: Option<String>,
     /// Bounded description text, read only to find linked work items.
     pub description: Option<String>,
+}
+#[derive(Debug, Clone)]
+pub struct FetchedAssets {
+    pub assets: Vec<SourceAsset>,
+    pub diagnostics: Vec<ProjectDiagnostic>,
+    pub hydration: Option<SourceHydration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceHydration {
+    pub completed: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub truncated: bool,
+    pub total_bytes: u64,
+}
+
+/// Resolve authority from the selected configured instance, never a checkout.
+pub fn instance_authority(
+    configuration: &ProjectConfiguration,
+    provider_id: &str,
+    artifact_url: &str,
+) -> Result<SourceAuthority, InspectionError> {
+    let artifact = crate::repositories::resolve_artifact(configuration, artifact_url)?;
+    if artifact.provider_id != provider_id {
+        return Err(InspectionError::new(
+            "source_authority_mismatch",
+            "artifact does not belong to the selected configured provider",
+        ));
+    }
+    let mut authority = site_authority(configuration, provider_id)?;
+    if crate::repositories::provider_is_repository_independent(configuration, provider_id) {
+        return Ok(authority);
+    }
+    if artifact.kind == "wiki" {
+        let mut parts = artifact.canonical_id.splitn(3, '/');
+        let owner = parts.next().unwrap_or("");
+        let repository = parts.next().unwrap_or("");
+        let page = parts.next().unwrap_or("");
+        if owner.is_empty()
+            || repository.is_empty()
+            || !page.starts_with("wiki/")
+            || page == "wiki/"
+        {
+            return Err(InspectionError::new(
+                "source_artifact_invalid",
+                "artifact has no repository identity",
+            ));
+        }
+        authority.owner = owner.into();
+        authority.repository = repository.into();
+        return Ok(authority);
+    }
+    let repository = match artifact.kind.as_str() {
+        "issue" => artifact.canonical_id.rsplit_once('#'),
+        "review" => artifact.canonical_id.rsplit_once('!'),
+        _ => {
+            return Err(InspectionError::new(
+                "source_artifact_unsupported",
+                "unsupported source kind",
+            ));
+        }
+    }
+    .map(|(repository, _)| repository)
+    .ok_or_else(|| {
+        InspectionError::new(
+            "source_artifact_invalid",
+            "artifact has no repository identity",
+        )
+    })?;
+    let (owner, repository) = repository.rsplit_once('/').ok_or_else(|| {
+        InspectionError::new("source_artifact_invalid", "artifact has no owner identity")
+    })?;
+    authority.owner = owner.into();
+    authority.repository = repository.into();
+    Ok(authority)
 }
 
 /// Derive source authority from the primary checkout's origin without trusting
@@ -431,7 +549,8 @@ struct CacheIndex {
 
 #[derive(Clone)]
 pub struct SourceService {
-    cache: Arc<ProjectStore>,
+    cache: Arc<std::sync::OnceLock<Result<ProjectStore, InspectionError>>>,
+    cache_root: std::path::PathBuf,
     providers: Arc<Vec<Arc<dyn SourceProvider>>>,
     operation_timeout: Duration,
     recent: Arc<std::sync::Mutex<RecentReads>>,
@@ -485,15 +604,21 @@ impl SourceService {
         providers: Vec<Arc<dyn SourceProvider>>,
     ) -> Result<Self, InspectionError> {
         Ok(Self {
-            cache: Arc::new(ProjectStore::new(
-                Path::new(&configuration.state_root).join("sources"),
-            )?),
+            cache: Arc::new(std::sync::OnceLock::new()),
+            cache_root: Path::new(&configuration.state_root).join("sources"),
             providers: Arc::new(providers),
             operation_timeout: Duration::from_millis(
                 configuration.limits.operation_timeout_ms.into(),
             ),
             recent: Arc::new(std::sync::Mutex::new(RecentReads::default())),
         })
+    }
+
+    fn cache(&self) -> Result<&ProjectStore, InspectionError> {
+        self.cache
+            .get_or_init(|| ProjectStore::new(&self.cache_root))
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     pub async fn fetch(
@@ -632,7 +757,7 @@ impl SourceService {
         &self,
     ) -> Result<Vec<(SourceEntry, bool, Vec<ProjectDiagnostic>)>, InspectionError> {
         let _lock = self
-            .cache
+            .cache()?
             .acquire_named_lock(LOCK_NAME, "source_cache_lock")?;
         let index = self.read_index()?;
         index
@@ -761,7 +886,7 @@ impl SourceService {
             ));
         }
         let _lock = self
-            .cache
+            .cache()?
             .acquire_named_lock(LOCK_NAME, "source_cache_lock")?;
         let index = self.read_index()?;
         let pointer = index.current.get(source_id_value).ok_or_else(|| {
@@ -858,26 +983,24 @@ impl SourceService {
         .await
     }
 
-    async fn fetch_to_companion_hydrated_preserving(
+    /// Fetch and validate provider assets without accessing cache or companion state.
+    pub async fn fetch_assets(
         &self,
         request: SourceFetchRequest,
-        companion: Option<(&Dir, &str)>,
         hydrate_references: bool,
-        preserved_original_url: Option<&str>,
+    ) -> Result<FetchedAssets, InspectionError> {
+        self.fetch_assets_reusing(request, hydrate_references, false, false)
+            .await
+    }
+
+    async fn fetch_assets_reusing(
+        &self,
+        request: SourceFetchRequest,
+        hydrate_references: bool,
         reuse_recent: bool,
-    ) -> Result<SourceImportResponse, InspectionError> {
+        remember_recent: bool,
+    ) -> Result<FetchedAssets, InspectionError> {
         validate_request(&request)?;
-        // One nonblocking durable lease spans fetch, cache selection and
-        // companion publication across browser/native hosts sharing this store.
-        let _operation = self
-            .cache
-            .try_acquire_named_lock(IMPORT_LOCK_NAME, "source_import_lock")?
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "source_import_busy",
-                    "Another source import is active. Retry when it finishes.",
-                )
-            })?;
         let provider = self
             .providers
             .iter()
@@ -930,18 +1053,30 @@ impl SourceService {
                             "source import exceeded the configured operation deadline",
                         )
                     })??;
-                remember_read(
-                    &mut self
-                        .recent
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .fetches,
-                    key,
-                    assets.clone(),
-                );
+                if remember_recent {
+                    remember_read(
+                        &mut self
+                            .recent
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .fetches,
+                        key,
+                        assets.clone(),
+                    );
+                }
                 assets
             }
         };
+        if primary.len() > MAX_ASSETS_PER_FETCH {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "provider returned too many source assets",
+            ));
+        }
+        for asset in &primary {
+            validate_provider_asset(&request, asset)?;
+            validate_asset(asset)?;
+        }
         if hydrate_references
             && (primary.len() > hydration::HYDRATION_MAX_ASSETS
                 || primary.iter().map(|asset| asset.body.len()).sum::<usize>()
@@ -965,11 +1100,56 @@ impl SourceService {
                 total_bytes: 0,
             }
         };
-        let primary_source_id = hydration
-            .assets
-            .first()
-            .map(|asset| source_id(&asset.source));
-        let mut hydration_report = hydrate_references.then(|| HydrationReport {
+        if hydration.assets.len() > MAX_ASSETS_PER_FETCH {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "provider returned too many source assets",
+            ));
+        }
+        let mut diagnostics = hydration.diagnostics;
+        for asset in &hydration.assets {
+            validate_provider_asset(&request, asset)?;
+            validate_asset(asset)?;
+            diagnostics.extend(asset.diagnostics.iter().cloned());
+        }
+        Ok(FetchedAssets {
+            assets: hydration.assets,
+            diagnostics,
+            hydration: hydrate_references.then_some(SourceHydration {
+                completed: hydration.completed,
+                skipped: hydration.skipped,
+                failed: hydration.failed,
+                truncated: hydration.truncated,
+                total_bytes: hydration.total_bytes,
+            }),
+        })
+    }
+
+    async fn fetch_to_companion_hydrated_preserving(
+        &self,
+        request: SourceFetchRequest,
+        companion: Option<(&Dir, &str)>,
+        hydrate_references: bool,
+        preserved_original_url: Option<&str>,
+        reuse_recent: bool,
+    ) -> Result<SourceImportResponse, InspectionError> {
+        validate_request(&request)?;
+        // One nonblocking durable lease spans fetch, cache selection and
+        // companion publication across browser/native hosts sharing this store.
+        let _operation = self
+            .cache()?
+            .try_acquire_named_lock(IMPORT_LOCK_NAME, "source_import_lock")?
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "source_import_busy",
+                    "Another source import is active. Retry when it finishes.",
+                )
+            })?;
+        let fetched = self
+            .fetch_assets_reusing(request.clone(), hydrate_references, reuse_recent, true)
+            .await?;
+        let primary_source_id = fetched.assets.first().map(|asset| source_id(&asset.source));
+        let mut hydration_report = fetched.hydration.as_ref().map(|hydration| HydrationReport {
             schema_version: 1,
             primary_source_id: primary_source_id.clone().unwrap_or_default(),
             companion_key: companion.map(|(_, companion_id)| companion_report_key(companion_id)),
@@ -981,18 +1161,12 @@ impl SourceService {
             max_assets: hydration::HYDRATION_MAX_ASSETS as u32,
             max_total_bytes: hydration::HYDRATION_MAX_TOTAL_BYTES as u64,
             total_bytes: hydration.total_bytes,
-            diagnostics: bounded_report_diagnostics(&hydration.diagnostics),
+            diagnostics: bounded_report_diagnostics(&fetched.diagnostics),
             updated_at: timestamp(),
         });
-        let assets = hydration.assets;
-        if assets.len() > MAX_ASSETS_PER_FETCH {
-            return Err(InspectionError::new(
-                "source_provider_contract",
-                "provider returned too many source assets",
-            ));
-        }
+        let assets = fetched.assets;
         let mut entries = Vec::with_capacity(assets.len());
-        let mut diagnostics = hydration.diagnostics;
+        let mut diagnostics = fetched.diagnostics;
         for (index, asset) in assets.into_iter().enumerate() {
             let mut asset = asset;
             if index == 0 {
@@ -1000,10 +1174,7 @@ impl SourceService {
                     asset.original_url = Some(original_url.to_owned());
                 }
             }
-            validate_provider_asset(&request, &asset)?;
             let artifact_url = asset.source_url.clone();
-            let asset_diagnostics = asset.diagnostics.clone();
-            diagnostics.extend(asset_diagnostics);
             let outcome = match self.cache_asset(asset) {
                 Ok(outcome) => outcome,
                 Err(error) if hydrate_references && index > 0 => {
@@ -1165,10 +1336,10 @@ impl SourceService {
         report: HydrationReport,
     ) -> Result<(), InspectionError> {
         let _lock = self
-            .cache
+            .cache()?
             .acquire_named_lock(LOCK_NAME, "source_cache_lock")?;
         write_json_bounded(
-            self.cache.state_dir(),
+            self.cache()?.state_dir(),
             &hydration_report_name(primary_source_id, report.companion_key.as_deref()),
             &report,
             MAX_HYDRATION_REPORT_BYTES,
@@ -1202,7 +1373,7 @@ impl SourceService {
         }
 
         let _lock = self
-            .cache
+            .cache()?
             .acquire_named_lock(LOCK_NAME, "source_cache_lock")?;
         let mut index = self.read_index()?;
         self.remove_orphaned_records(&index)?;
@@ -1212,11 +1383,11 @@ impl SourceService {
             .map(|pointer| self.read_cached(&pointer.content_hash))
             .transpose()?;
         let name = cache_name(&content_hash);
-        let result = match self.cache.state_dir().symlink_metadata(&name) {
+        let result = match self.cache()?.state_dir().symlink_metadata(&name) {
             Ok(_) => self.read_cached(&content_hash)?,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 write_json_bounded(
-                    self.cache.state_dir(),
+                    self.cache()?.state_dir(),
                     &name,
                     &cached,
                     MAX_CACHE_RECORD_BYTES as usize,
@@ -1251,9 +1422,9 @@ impl SourceService {
         let obsolete = self.trim_index(&mut index)?;
         // Publish pointers before deleting objects. A crash during garbage
         // collection can leave an orphan, never a dangling durable pointer.
-        write_json_bounded(self.cache.state_dir(), INDEX_NAME, &index, MAX_INDEX_BYTES)?;
+        write_json_bounded(self.cache()?.state_dir(), INDEX_NAME, &index, MAX_INDEX_BYTES)?;
         for hash in obsolete {
-            match self.cache.state_dir().remove_file(cache_name(&hash)) {
+            match self.cache()?.state_dir().remove_file(cache_name(&hash)) {
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => {
@@ -1296,10 +1467,10 @@ impl SourceService {
     }
 
     fn read_index(&self) -> Result<CacheIndex, InspectionError> {
-        match self.cache.state_dir().symlink_metadata(INDEX_NAME) {
+        match self.cache()?.state_dir().symlink_metadata(INDEX_NAME) {
             Ok(_) => {
                 let index: CacheIndex =
-                    read_json_bounded(self.cache.state_dir(), INDEX_NAME, MAX_INDEX_BYTES as u64)?;
+                    read_json_bounded(self.cache()?.state_dir(), INDEX_NAME, MAX_INDEX_BYTES as u64)?;
                 if index.schema_version != 1
                     || index.current.len() > MAX_CURRENT
                     || index.immutable.len() > MAX_IMMUTABLE
@@ -1329,7 +1500,7 @@ impl SourceService {
 
     fn read_cached(&self, hash: &str) -> Result<CachedSource, InspectionError> {
         let cached: CachedSource = read_json_bounded(
-            self.cache.state_dir(),
+            self.cache()?.state_dir(),
             &cache_name(hash),
             MAX_CACHE_RECORD_BYTES,
         )?;
@@ -1348,13 +1519,16 @@ impl SourceService {
             complete: cached.complete,
             diagnostics: cached.diagnostics.clone(),
             body: String::new(),
+            container: None,
+            fields: Vec::new(),
+            attachments: Vec::new(),
         })?;
         Ok(cached)
     }
 
     fn remove_orphaned_records(&self, index: &CacheIndex) -> Result<(), InspectionError> {
         let entries =
-            self.cache.state_dir().entries().map_err(|error| {
+            self.cache()?.state_dir().entries().map_err(|error| {
                 InspectionError::new("source_cache_unavailable", error.to_string())
             })?;
         for (count, entry) in entries.enumerate() {
@@ -1392,7 +1566,7 @@ impl SourceService {
             // A strict bounded read validates the hash-named cache envelope;
             // symlinks and unrelated files never become cleanup authority.
             self.read_cached(hash)?;
-            self.cache.state_dir().remove_file(name).map_err(|error| {
+            self.cache()?.state_dir().remove_file(name).map_err(|error| {
                 InspectionError::new("source_cache_unavailable", error.to_string())
             })?;
         }
@@ -1621,6 +1795,7 @@ fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
                     .is_none_or(|path| bounded_text(path, MAX_URL_BYTES))
         });
     if !bounded_text(&asset.source.provider_id, 128)
+        || !valid_extended_metadata(asset)
         || !bounded_text(&asset.source.provider_instance, 512)
         || !identifier(&asset.source.resource_type, 64)
         || !bounded_text(&asset.source.canonical_id, 512)
@@ -1663,6 +1838,190 @@ fn identifier(value: &str, max: usize) -> bool {
         && value
             .bytes()
             .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'_' | b'-'))
+}
+
+const RESERVED_FIELDS: &[&str] = &[
+    "schema_version",
+    "provider",
+    "provider_instance",
+    "resource_type",
+    "canonical_id",
+    "source_url",
+    "original_url",
+    "complete",
+    "fetched_at",
+    "source_revision",
+    "content_hash",
+    "generated",
+    "container",
+    "attachments",
+    "library_item_id",
+    "library_revision",
+];
+
+fn valid_frontmatter_value(value: &FrontmatterValue) -> bool {
+    let valid_text = |text: &str| text.len() <= MAX_METADATA_BYTES && !text.contains('\0');
+    let valid = match value {
+        FrontmatterValue::String(text) => valid_text(text),
+        FrontmatterValue::Strings(values) => {
+            values.len() <= 256 && values.iter().all(|text| valid_text(text))
+        }
+        FrontmatterValue::Number(_) | FrontmatterValue::Boolean(_) => true,
+    };
+    valid && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= MAX_METADATA_BYTES)
+}
+
+fn valid_extended_metadata(asset: &SourceAsset) -> bool {
+    let mut keys = std::collections::BTreeSet::new();
+    asset.container.as_ref().is_none_or(|container| {
+        bounded_text(&container.id, MAX_METADATA_BYTES)
+            && bounded_text(&container.label, MAX_METADATA_BYTES)
+    }) && asset.fields.len() <= 32
+        && asset.fields.iter().all(|field| {
+            !field.key.is_empty()
+                && field.key.len() <= 48
+                && field
+                    .key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+                && !RESERVED_FIELDS.contains(&field.key.as_str())
+                && keys.insert(&field.key)
+                && valid_frontmatter_value(&field.value)
+        })
+        && asset.attachments.len() <= 256
+        && asset.attachments.iter().all(|attachment| {
+            bounded_text(&attachment.id, MAX_METADATA_BYTES)
+                && bounded_text(&attachment.title, MAX_METADATA_BYTES)
+                && [
+                    &attachment.media_type,
+                    &attachment.source_revision,
+                    &attachment.not_downloaded,
+                ]
+                .iter()
+                .all(|value| {
+                    value
+                        .as_deref()
+                        .is_none_or(|value| bounded_text(value, MAX_METADATA_BYTES))
+                })
+                && attachment
+                    .source_url
+                    .as_deref()
+                    .is_none_or(|url| bounded_text(url, MAX_URL_BYTES))
+                && attachment.path.as_deref().is_none_or(|path| {
+                    path.strip_prefix("attachments/").is_some_and(|name| {
+                        bounded_text(name, 255)
+                            && !matches!(name, "." | "..")
+                            && !name.contains(['/', '\\'])
+                    })
+                })
+                && !(attachment.path.is_some() && attachment.not_downloaded.is_some())
+        })
+}
+
+/// Content identity, deliberately independent of provenance and presentation.
+pub fn content_revision(asset: &SourceAsset) -> String {
+    let mut hash = Sha256::new();
+    for value in [
+        asset.source.provider_id.as_str(),
+        &asset.source.provider_instance,
+        &asset.source.resource_type,
+        &asset.source.canonical_id,
+        &asset.title,
+        asset.source_revision.as_deref().unwrap_or(""),
+        &asset.body,
+    ] {
+        hash.update(value.as_bytes());
+        hash.update([0]);
+    }
+    hash.update([u8::from(asset.complete)]);
+    if !asset.fields.is_empty() {
+        hash.update(b"\0fields\0");
+        hash.update(serde_json::to_vec(&asset.fields).expect("field serialization"));
+    }
+    if !asset.attachments.is_empty() {
+        hash.update(b"\0attachments\0");
+        for attachment in &asset.attachments {
+            // Download state and URLs are provenance, not source content.
+            hash.update(
+                serde_json::to_vec(&(
+                    &attachment.id,
+                    &attachment.title,
+                    &attachment.media_type,
+                    attachment.size,
+                    &attachment.source_revision,
+                ))
+                .expect("attachment serialization"),
+            );
+            hash.update([0]);
+        }
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+/// Stable Library document; the Library adds its own item and revision keys.
+pub fn library_markdown(asset: &SourceAsset, revision: &str) -> String {
+    let mut markdown = format!(
+        "---\nschema_version: 1\nprovider: {}\nresource_type: {}\ncanonical_id: {}\nprovider_instance: {}\nsource_url: {}\noriginal_url: {}\ncomplete: {}\nsource_revision: {}\ncontent_hash: {}\ngenerated: true\n",
+        yaml_scalar(&asset.source.provider_id),
+        yaml_scalar(&asset.source.resource_type),
+        yaml_scalar(&asset.source.canonical_id),
+        yaml_scalar(&asset.source.provider_instance),
+        yaml_scalar(asset.source_url.as_deref().unwrap_or("")),
+        yaml_scalar(asset.original_url.as_deref().unwrap_or("")),
+        asset.complete,
+        yaml_scalar(asset.source_revision.as_deref().unwrap_or("")),
+        yaml_scalar(revision),
+    );
+    if let Some(container) = &asset.container {
+        markdown.push_str(&format!(
+            "container:\n  id: {}\n  label: {}\n",
+            yaml_scalar(&container.id),
+            yaml_scalar(&container.label)
+        ));
+    }
+    for field in &asset.fields {
+        markdown.push_str(&format!(
+            "{}: {}\n",
+            field.key,
+            serde_json::to_string(&field.value).expect("field serialization")
+        ));
+    }
+    if !asset.attachments.is_empty() {
+        markdown.push_str("attachments:\n");
+        for attachment in &asset.attachments {
+            markdown.push_str(&format!(
+                "  - id: {}\n    title: {}\n",
+                yaml_scalar(&attachment.id),
+                yaml_scalar(&attachment.title)
+            ));
+            for (key, value) in [
+                ("media_type", attachment.media_type.as_deref()),
+                ("source_url", attachment.source_url.as_deref()),
+                ("source_revision", attachment.source_revision.as_deref()),
+                ("path", attachment.path.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    markdown.push_str(&format!("    {key}: {}\n", yaml_scalar(value)));
+                }
+            }
+            if let Some(size) = attachment.size {
+                markdown.push_str(&format!("    size: {size}\n"));
+            }
+            if attachment.path.is_none() {
+                markdown.push_str(&format!(
+                    "    not_downloaded: {}\n",
+                    yaml_scalar(
+                        attachment
+                            .not_downloaded
+                            .as_deref()
+                            .unwrap_or("not_requested")
+                    )
+                ));
+            }
+        }
+    }
+    markdown.push_str(&format!("---\n\n# {}\n\n{}\n", asset.title, asset.body));
+    markdown
 }
 
 fn canonical_markdown(asset: &SourceAsset) -> String {
@@ -1862,7 +2221,209 @@ mod tests {
             complete: true,
             diagnostics: Vec::new(),
             body: body.into(),
+            container: None,
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn content_revision_ignores_provenance_but_tracks_source_content() {
+        let original = asset("body");
+        let revision = content_revision(&original);
+        let mut metadata = original.clone();
+        metadata.source_url = Some("https://forge.test/gitea/acme/repo/issues/01".into());
+        metadata.original_url = Some("https://forge.test/gitea/acme/repo/issues/1".into());
+        metadata.container = Some(SourceContainer {
+            id: "acme/repo".into(),
+            label: "Renamed repository".into(),
+        });
+        metadata.diagnostics.push(ProjectDiagnostic {
+            code: "source_markup_unconverted".into(),
+            message: "Jira returned wiki markup; shown unconverted".into(),
+            path: None,
+        });
+        assert_eq!(content_revision(&metadata), revision);
+        for changed in [
+            SourceAsset {
+                body: "edited body".into(),
+                ..original.clone()
+            },
+            SourceAsset {
+                title: "edited title".into(),
+                ..original.clone()
+            },
+            SourceAsset {
+                source_revision: Some("2".into()),
+                ..original.clone()
+            },
+            SourceAsset {
+                complete: false,
+                ..original.clone()
+            },
+            SourceAsset {
+                fields: vec![FrontmatterField {
+                    key: "labels".into(),
+                    value: FrontmatterValue::Strings(vec!["backend".into()]),
+                }],
+                ..original.clone()
+            },
+        ] {
+            assert_ne!(content_revision(&changed), revision);
+        }
+    }
+
+    #[test]
+    fn old_source_assets_deserialize_with_empty_extensions() {
+        let original = asset("body");
+        let mut value = serde_json::to_value(&original).unwrap();
+        for key in ["container", "fields", "attachments"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let restored: SourceAsset = serde_json::from_value(value).unwrap();
+        assert!(restored.container.is_none());
+        assert!(restored.fields.is_empty());
+        assert!(restored.attachments.is_empty());
+        assert_eq!(semantic_hash(&restored), semantic_hash(&original));
+        assert_eq!(content_revision(&restored), content_revision(&original));
+    }
+
+    #[test]
+    fn source_extension_preserves_legacy_forge_and_jira_cache_hashes() {
+        for (provider, id) in [
+            ("tea", "acme/repo#1"),
+            ("gitlab", "acme/repo!1"),
+            ("github", "acme/repo#1"),
+            ("jira", "OPS-1"),
+        ] {
+            let mut original = asset("unchanged source body");
+            original.source.provider_id = provider.into();
+            original.source.canonical_id = id.into();
+            let old_hash = semantic_hash(&original);
+            let mut extended = original.clone();
+            extended.container = Some(SourceContainer {
+                id: "container".into(),
+                label: "Container".into(),
+            });
+            assert_eq!(semantic_hash(&extended), old_hash);
+            assert_eq!(content_revision(&extended), content_revision(&original));
+            extended.source_url = Some("https://elsewhere.test/provenance".into());
+            assert_ne!(semantic_hash(&extended), old_hash);
+            assert_eq!(content_revision(&extended), content_revision(&original));
+        }
+    }
+
+    #[test]
+    fn library_markdown_preserves_structured_values_and_attachment_availability() {
+        let mut source = asset("Body");
+        source.container = Some(SourceContainer {
+            id: "acme/repo".into(),
+            label: "A: repository".into(),
+        });
+        source.fields = vec![
+            FrontmatterField {
+                key: "labels".into(),
+                value: FrontmatterValue::Strings(vec!["a: b".into(), "quoted\\\"".into()]),
+            },
+            FrontmatterField {
+                key: "version".into(),
+                value: FrontmatterValue::Number(7),
+            },
+        ];
+        source.attachments = vec![SourceAttachment {
+            id: "11".into(),
+            title: "reference.png".into(),
+            media_type: Some("image/png".into()),
+            size: Some(12),
+            source_url: Some("https://forge.test/attachment/11".into()),
+            source_revision: Some("1".into()),
+            path: None,
+            not_downloaded: Some("not_requested".into()),
+        }];
+        validate_asset(&source).unwrap();
+        let revision = content_revision(&source);
+        let document = library_markdown(&source, &revision);
+        assert_eq!(document, library_markdown(&source, &revision));
+        assert!(document.contains(&format!("content_hash: \"{revision}\"\n")));
+        assert!(
+            document.contains("labels: [\"a: b\",\"quoted\\\\\\\"\"]\nversion: 7\nattachments:\n")
+        );
+        assert!(document.contains("    not_downloaded: \"not_requested\"\n"));
+        source.attachments[0].path = Some("attachments/reference.png".into());
+        source.attachments[0].not_downloaded = None;
+        assert_eq!(content_revision(&source), revision);
+        let downloaded = library_markdown(&source, &revision);
+        assert!(downloaded.contains("    path: \"attachments/reference.png\"\n"));
+        assert!(!downloaded.contains("not_downloaded:"));
+        source.attachments[0].source_revision = Some("2".into());
+        assert_ne!(content_revision(&source), revision);
+        source.fields[0].key = "content_hash".into();
+        assert_eq!(
+            validate_asset(&source).unwrap_err().code,
+            "source_asset_invalid"
+        );
+        source.fields[0].key = "labels".into();
+        source.attachments[0].path = Some("attachments/../escape".into());
+        assert_eq!(
+            validate_asset(&source).unwrap_err().code,
+            "source_asset_invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_only_neither_initializes_nor_reads_or_changes_legacy_cache() {
+        let (service, shared, root) = service(asset("body"));
+        let cache = root.join("sources");
+        assert!(!cache.exists());
+        let fetched = service.fetch_assets(request(), false).await.unwrap();
+        assert_eq!(fetched.assets[0].body, "body");
+        assert!(fetched.hydration.is_none());
+        assert!(!cache.exists());
+        assert!(service.recent.lock().unwrap().fetches.is_empty());
+        service.prefetch_for_setup(request()).await;
+        let recent_before = service.recent.lock().unwrap().fetches.clone();
+        assert_eq!(recent_before.len(), 1);
+        std::fs::create_dir(&cache).unwrap();
+        let sentinel = cache.join(INDEX_NAME);
+        std::fs::write(&sentinel, b"legacy cache must not even be read").unwrap();
+        let before: Vec<_> = std::fs::read_dir(&cache)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let fetched = service.fetch_assets(request(), true).await.unwrap();
+        assert_eq!(fetched.assets[0].body, "body");
+        assert!(fetched.hydration.is_some());
+        let recent_after = service.recent.lock().unwrap();
+        assert_eq!(recent_after.fetches.len(), recent_before.len());
+        assert_eq!(recent_after.fetches[0].0, recent_before[0].0);
+        assert_eq!(recent_after.fetches[0].1, recent_before[0].1);
+        assert_eq!(
+            recent_after.fetches[0].2[0].body,
+            recent_before[0].2[0].body
+        );
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"legacy cache must not even be read"
+        );
+        let after: Vec<_> = std::fs::read_dir(&cache)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(after, before);
+        shared.lock().unwrap().source.provider_instance = "https://other.test".into();
+        assert_eq!(
+            service
+                .fetch_assets(request(), false)
+                .await
+                .unwrap_err()
+                .code,
+            "source_provider_contract"
+        );
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"legacy cache must not even be read"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
     fn service(asset: SourceAsset) -> (SourceService, Arc<Mutex<SourceAsset>>, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!("cockpit-source-test-{}", Uuid::new_v4()));
@@ -1929,6 +2490,9 @@ mod tests {
             complete: true,
             diagnostics: Vec::new(),
             body: body.into(),
+            container: None,
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }
     }
     fn graph_service(
@@ -2257,7 +2821,8 @@ mod tests {
     async fn concurrent_host_import_is_busy_until_publication_lease_releases() {
         let (service, _, root) = service(asset("body"));
         let lease = service
-            .cache
+            .cache()
+            .expect("cache")
             .try_acquire_named_lock(IMPORT_LOCK_NAME, "test")
             .expect("lease")
             .expect("available");
@@ -2285,7 +2850,7 @@ mod tests {
         let first = service.fetch(request()).await.expect("first");
         let hash = &first.entries[0].content_hash;
         write_json_bounded(
-            service.cache.state_dir(),
+            service.cache().expect("cache").state_dir(),
             INDEX_NAME,
             &CacheIndex {
                 schema_version: 1,
@@ -2296,7 +2861,13 @@ mod tests {
         .expect("simulate interrupted pointer publication");
         *shared.lock().expect("asset") = asset("new");
         service.fetch(request()).await.expect("next write");
-        assert!(!service.cache.state_dir().exists(cache_name(hash)));
+        assert!(
+            !service
+                .cache()
+                .expect("cache")
+                .state_dir()
+                .exists(cache_name(hash))
+        );
         assert_eq!(service.list_cached().expect("current").len(), 1);
         std::fs::remove_dir_all(root).expect("cleanup");
     }

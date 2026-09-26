@@ -873,13 +873,13 @@ fn resolve_github_artifact(
         || pieces[..2]
             .iter()
             .any(|piece| piece.is_empty() || *piece == "." || *piece == ".." || piece.contains('%'))
-        || pieces[2] != "issues"
+        || !matches!(pieces[2], "issues" | "pull")
         || pieces[3].is_empty()
         || !pieces[3].bytes().all(|byte| byte.is_ascii_digit())
     {
         return Err(InspectionError::new(
             "unsupported_artifact",
-            "GitHub artifact path must identify owner, repository, and numeric issue ID",
+            "GitHub artifact path must identify owner, repository, and numeric issue or pull request ID",
         ));
     }
     let issue_number = pieces[3].parse::<u64>().map_err(|_| {
@@ -889,12 +889,20 @@ fn resolve_github_artifact(
         )
     })?;
     let repository = format!("{}/{}", pieces[0], pieces[1]);
+    let (kind, separator) = if pieces[2] == "pull" {
+        ("review", '!')
+    } else {
+        ("issue", '#')
+    };
     Ok(ProjectArtifact {
         provider_id: provider.id.clone(),
-        kind: "issue".into(),
-        canonical_id: format!("{repository}#{issue_number}"),
+        kind: kind.into(),
+        canonical_id: format!("{repository}{separator}{issue_number}"),
         original_url: original_url.into(),
-        canonical_url: parsed.to_string(),
+        canonical_url: format!(
+            "https://github.com/{repository}/{}/{issue_number}",
+            pieces[2]
+        ),
     })
 }
 
@@ -1277,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn github_provider_resolves_only_public_issue_paths() {
+    fn github_provider_resolves_public_issues_and_pull_requests() {
         let mut config = config();
         config.providers = vec![ProjectProvider {
             id: "github".into(),
@@ -1290,6 +1298,13 @@ mod tests {
         assert_eq!(artifact.provider_id, "github");
         assert_eq!(artifact.kind, "issue");
         assert_eq!(artifact.canonical_id, "nnexai/cockpit#4");
+        let review = resolve_artifact(&config, "https://github.com/nnexai/cockpit/pull/4").unwrap();
+        assert_eq!(review.kind, "review");
+        assert_eq!(review.canonical_id, "nnexai/cockpit!4");
+        assert_eq!(
+            review.canonical_url,
+            "https://github.com/nnexai/cockpit/pull/4"
+        );
         assert_eq!(
             resolve_artifact(&config, "https://github.com/nnexai/cockpit/pulls/4")
                 .unwrap_err()

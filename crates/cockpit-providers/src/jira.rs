@@ -6,7 +6,7 @@ use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::repositories::resolve_jira_url;
 use cockpit_core::sources::{
-    SourceAsset, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProjectProvider};
 use cockpit_protocol::sources::SourceCapability;
@@ -76,6 +76,10 @@ impl JiraSourceProvider {
 
     fn key(&self, request: &SourceFetchRequest) -> Result<String, InspectionError> {
         if request.provider_id != self.provider.id
+            || request.authority.provider_instance != self.base_url.as_str().trim_end_matches('/')
+            || request.authority.origin_port != self.base_url.port()
+            || request.authority.origin_base_path.trim_end_matches('/')
+                != self.base_url.path().trim_end_matches('/')
             || !request.authority.owner.is_empty()
             || !request.authority.repository.is_empty()
             || !request
@@ -144,6 +148,24 @@ impl JiraSourceProvider {
                 url.scheme() == self.base_url.scheme()
                     && url.host_str() == self.base_url.host_str()
                     && url.port_or_known_default() == self.base_url.port_or_known_default()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && url
+                        .path()
+                        .strip_prefix(&format!(
+                            "{}/rest/api/",
+                            self.base_url.path().trim_end_matches('/')
+                        ))
+                        .is_some_and(|path| {
+                            let parts: Vec<_> = path.split('/').collect();
+                            parts.len() == 3
+                                && matches!(parts[0], "2" | "3" | "latest")
+                                && parts[1] == "issue"
+                                && (parts[2] == key
+                                    || value.get("id").and_then(Value::as_str) == Some(parts[2]))
+                        })
             });
         if !from_site {
             return Err(InspectionError::new(
@@ -195,7 +217,7 @@ impl SourceProvider for JiraSourceProvider {
         let issue = self.issue(&key).await?;
         let title = summary(&issue)?;
         let (body, complete) = issue_markdown(&issue)?;
-        let diagnostics = if complete {
+        let mut diagnostics = if complete {
             Vec::new()
         } else {
             vec![ProjectDiagnostic {
@@ -204,6 +226,17 @@ impl SourceProvider for JiraSourceProvider {
                 path: None,
             }]
         };
+        if has_wiki_markup(&issue) {
+            diagnostics.push(ProjectDiagnostic {
+                code: "source_markup_unconverted".into(),
+                message: "Jira returned wiki markup; shown unconverted".into(),
+                path: None,
+            });
+        }
+        let project_key = key
+            .rsplit_once('-')
+            .map(|(project, _)| project)
+            .unwrap_or(&key);
         Ok(vec![SourceAsset {
             source: SourceRef {
                 provider_id: self.provider.id.clone(),
@@ -218,6 +251,12 @@ impl SourceProvider for JiraSourceProvider {
             complete,
             diagnostics,
             body,
+            container: Some(SourceContainer {
+                id: project_key.into(),
+                label: project_key.into(),
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }])
     }
 }
@@ -260,6 +299,20 @@ fn summary(issue: &Value) -> Result<String, InspectionError> {
         .ok_or_else(|| {
             InspectionError::new("source_provider_contract", "Jira work item has no summary")
         })
+}
+
+fn has_wiki_markup(issue: &Value) -> bool {
+    issue
+        .pointer("/fields/description")
+        .is_some_and(Value::is_string)
+        || issue
+            .pointer("/fields/comment/comments")
+            .and_then(Value::as_array)
+            .is_some_and(|comments| {
+                comments
+                    .iter()
+                    .any(|comment| comment.get("body").is_some_and(Value::is_string))
+            })
 }
 
 /// Render the work item and its comments as Markdown. Returns whether every
@@ -335,11 +388,11 @@ fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError>
     Ok(())
 }
 
-/// Convert an Atlassian Document Format value (or legacy plain text) to
-/// Markdown. Unknown nodes keep their text; media becomes a placeholder.
+/// Convert Atlassian Document Format to Markdown. Legacy wiki markup is retained
+/// verbatim and reported separately; unknown ADF nodes keep their text.
 pub(crate) fn document_markdown(value: &Value) -> String {
     match value {
-        Value::String(text) => text.trim().to_owned(),
+        Value::String(text) => text.clone(),
         Value::Object(_) => blocks(children(value), 0),
         _ => String::new(),
     }

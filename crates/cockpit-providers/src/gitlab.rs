@@ -6,7 +6,7 @@ use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::repositories::resolve_gitlab_artifact;
 use cockpit_core::sources::{
-    SourceAsset, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::{ProjectArtifact, ProjectConfiguration, ProjectDiagnostic};
 use cockpit_protocol::sources::SourceCapability;
@@ -916,6 +916,12 @@ impl GitlabSourceProvider {
             body,
             complete,
             diagnostics,
+            container: Some(SourceContainer {
+                id: identity.project_path.clone(),
+                label: identity.project_path,
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         })
     }
 
@@ -996,6 +1002,12 @@ impl GitlabSourceProvider {
             body,
             complete,
             diagnostics,
+            container: Some(SourceContainer {
+                id: identity.project_path.clone(),
+                label: identity.project_path,
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         })
     }
 }

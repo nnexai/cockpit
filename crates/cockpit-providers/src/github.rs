@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::sources::{
-    SourceAsset, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
@@ -24,7 +24,7 @@ pub(crate) fn executable(value: &str) -> bool {
         .is_some_and(|name| name == "gh")
 }
 
-/// Read-only GitHub issue access through the owner's authenticated `gh` CLI.
+/// Read-only GitHub issue and pull request access through the owner's authenticated `gh` CLI.
 /// The provider is intentionally restricted to github.com; a configured
 /// Enterprise host must use a separately implemented provider instead of being
 /// silently sent to the public GitHub API.
@@ -124,6 +124,7 @@ impl GithubSourceProvider {
     async fn fetch_comments(
         &self,
         repository: &str,
+        kind: &str,
         number: u64,
     ) -> Result<Vec<Comment>, InspectionError> {
         let mut comments = Vec::new();
@@ -131,7 +132,7 @@ impl GithubSourceProvider {
             let response = self
                 .command(&[
                     "api".into(),
-                    format!("repos/{repository}/issues/{number}/comments"),
+                    format!("repos/{repository}/{kind}/{number}/comments"),
                     "--method".into(),
                     "GET".into(),
                     "--hostname".into(),
@@ -158,6 +159,13 @@ impl GithubSourceProvider {
 struct Issue {
     number: u64,
     title: String,
+    url: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: Option<String>,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: Option<String>,
+    #[serde(rename = "isCrossRepository")]
+    is_cross_repository: Option<bool>,
     body: Option<String>,
     #[serde(rename = "updatedAt")]
     updated_at: Option<String>,
@@ -176,6 +184,8 @@ struct Comment {
     url: Option<String>,
     #[serde(rename = "html_url")]
     html_url: Option<String>,
+    path: Option<String>,
+    line: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,10 +208,31 @@ fn provider_instance(url: &Url) -> String {
     format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default())
 }
 
-fn issue_kind(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GithubKind {
+    Issue,
+    PullRequest,
+}
+
+impl GithubKind {
+    fn command(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::PullRequest => "pr",
+        }
+    }
+    fn path(self) -> &'static str {
+        match self {
+            Self::Issue => "issues",
+            Self::PullRequest => "pull",
+        }
+    }
+}
+
+fn github_artifact(
     request: &SourceFetchRequest,
     base_url: &Url,
-) -> Result<(String, u64), InspectionError> {
+) -> Result<(String, GithubKind, u64), InspectionError> {
     let url = Url::parse(&request.artifact_url)
         .map_err(|_| InspectionError::new("source_artifact_invalid", "artifact URL is invalid"))?;
     let instance = provider_instance(base_url);
@@ -228,25 +259,89 @@ fn issue_kind(
         || pieces[..3]
             .iter()
             .any(|piece| piece.is_empty() || *piece == "." || *piece == ".." || piece.contains('%'))
-        || pieces[2] != "issues"
+        || !matches!(pieces[2], "issues" | "pull")
         || pieces[3].is_empty()
         || !pieces[3].bytes().all(|byte| byte.is_ascii_digit())
     {
         return Err(InspectionError::new(
             "source_artifact_unsupported",
-            "GitHub artifact must identify owner, repository, and numeric issue ID",
+            "GitHub artifact must identify owner, repository, and numeric issue or pull request ID",
         ));
     }
     if pieces[0] != request.authority.owner || pieces[1] != request.authority.repository {
         return Err(InspectionError::new(
             "source_artifact_mismatch",
-            "artifact does not match the verified local primary repository",
+            "artifact does not match the authorized repository",
         ));
     }
     let number = pieces[3].parse::<u64>().map_err(|_| {
         InspectionError::new("source_artifact_invalid", "GitHub issue ID is invalid")
     })?;
-    Ok((format!("{}/{}", pieces[0], pieces[1]), number))
+    let kind = if pieces[2] == "pull" {
+        GithubKind::PullRequest
+    } else {
+        GithubKind::Issue
+    };
+    Ok((format!("{}/{}", pieces[0], pieces[1]), kind, number))
+}
+
+fn verify_identity(
+    issue: &Issue,
+    repository: &str,
+    kind: GithubKind,
+    number: u64,
+) -> Result<(), InspectionError> {
+    if issue.number != number
+        || issue.url != format!("https://github.com/{repository}/{}/{number}", kind.path())
+    {
+        return Err(InspectionError::new(
+            "source_identity_mismatch",
+            "GitHub returned a different artifact URL or number",
+        ));
+    }
+    if kind == GithubKind::PullRequest
+        && issue.head_ref_oid.as_deref().is_none_or(|sha| {
+            !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(InspectionError::new(
+            "source_provider_contract",
+            "GitHub pull request has no valid current head revision",
+        ));
+    }
+    Ok(())
+}
+
+fn append_comment(
+    body: &mut String,
+    comment: Comment,
+    review: bool,
+) -> Result<(), InspectionError> {
+    let id = comment_id(&comment.id).ok_or_else(|| {
+        InspectionError::new("source_provider_contract", "GitHub comment has no ID")
+    })?;
+    let heading = if review {
+        "Review comment"
+    } else {
+        "GitHub comment"
+    };
+    append_bounded(body, &format!("\n\n## {heading} {id}\n"))?;
+    for (label, value) in [
+        ("Author", comment.author.and_then(|author| author.login)),
+        ("Created", comment.created_at),
+        ("Updated", comment.updated_at),
+        ("URL", comment.html_url.or(comment.url)),
+        ("Path", comment.path),
+        ("Line", comment.line.map(|line| line.to_string())),
+    ] {
+        if let Some(value) = value {
+            append_bounded(body, &format!("{label}: {value}\n"))?;
+        }
+    }
+    if let Some(text) = comment.body {
+        append_bounded(body, &format!("\n{text}"))?;
+    }
+    Ok(())
 }
 
 fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError> {
@@ -329,38 +424,53 @@ impl SourceProvider for GithubSourceProvider {
     }
 
     fn capabilities(&self) -> Vec<SourceCapability> {
-        vec![SourceCapability::Issue, SourceCapability::IssueComments]
+        vec![
+            SourceCapability::Issue,
+            SourceCapability::IssueComments,
+            SourceCapability::Review,
+        ]
     }
 
     async fn metadata(
         &self,
         request: &SourceFetchRequest,
     ) -> Result<SourceMetadata, InspectionError> {
-        let (repository, number) = issue_kind(request, &self.base_url)?;
+        let (repository, kind, number) = github_artifact(request, &self.base_url)?;
         let issue = parse_issue(
             &self
                 .command(&[
-                    "issue".into(),
+                    kind.command().into(),
                     "view".into(),
                     number.to_string(),
                     "--repo".into(),
-                    repository,
+                    repository.clone(),
                     "--json".into(),
-                    "number,title".into(),
+                    match kind {
+                        GithubKind::Issue => "number,title,url",
+                        GithubKind::PullRequest => {
+                            "number,title,url,headRefName,headRefOid,isCrossRepository"
+                        }
+                    }
+                    .into(),
                 ])
                 .await?,
         )?;
-        if issue.number != number {
+        verify_identity(&issue, &repository, kind, number)?;
+        if kind == GithubKind::PullRequest && issue.is_cross_repository.is_none() {
             return Err(InspectionError::new(
                 "source_provider_contract",
-                "GitHub returned a different issue number",
+                "GitHub omitted pull request fork identity",
             ));
         }
         Ok(SourceMetadata {
             title: issue.title,
-            source_branch: None,
-            source_url: None,
-            source_commit: None,
+            source_branch: if issue.is_cross_repository == Some(false) {
+                issue.head_ref_name
+            } else {
+                None
+            },
+            source_url: Some(issue.url),
+            source_commit: issue.head_ref_oid,
             description: None,
         })
     }
@@ -369,63 +479,75 @@ impl SourceProvider for GithubSourceProvider {
         &self,
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
-        let (repository, number) = issue_kind(request, &self.base_url)?;
+        let (repository, kind, number) = github_artifact(request, &self.base_url)?;
         let issue = parse_issue(
             &self
                 .command(&[
-                    "issue".into(),
+                    kind.command().into(),
                     "view".into(),
                     number.to_string(),
                     "--repo".into(),
                     repository.clone(),
                     "--json".into(),
-                    "number,title,body,updatedAt".into(),
+                    match kind {
+                        GithubKind::Issue => "number,title,body,url,updatedAt",
+                        GithubKind::PullRequest => {
+                            "number,title,body,url,updatedAt,headRefName,headRefOid,baseRefName,state,isDraft"
+                        }
+                    }
+                    .into(),
                 ])
                 .await?,
         )?;
-        if issue.number != number {
-            return Err(InspectionError::new(
-                "source_provider_contract",
-                "GitHub returned a different issue number",
-            ));
-        }
+        verify_identity(&issue, &repository, kind, number)?;
         let mut body = String::new();
         if let Some(issue_body) = issue.body.as_deref() {
             append_bounded(&mut body, issue_body)?;
         }
-        for comment in self.fetch_comments(&repository, number).await? {
-            let comment_id = comment_id(&comment.id).ok_or_else(|| {
-                InspectionError::new("source_provider_contract", "GitHub comment has no ID")
-            })?;
-            append_bounded(&mut body, &format!("\n\n## GitHub comment {comment_id}\n"))?;
-            for (label, value) in [
-                ("Author", comment.author.and_then(|author| author.login)),
-                ("Created", comment.created_at),
-                ("Updated", comment.updated_at),
-                ("URL", comment.html_url.or(comment.url)),
-            ] {
-                if let Some(value) = value {
-                    append_bounded(&mut body, &format!("{label}: {value}\n"))?;
-                }
-            }
-            if let Some(comment_body) = comment.body {
-                append_bounded(&mut body, &format!("\n{comment_body}"))?;
+        for comment in self.fetch_comments(&repository, "issues", number).await? {
+            append_comment(&mut body, comment, false)?;
+        }
+        if kind == GithubKind::PullRequest {
+            for comment in self.fetch_comments(&repository, "pulls", number).await? {
+                append_comment(&mut body, comment, true)?;
             }
         }
         Ok(vec![SourceAsset {
             source: SourceRef {
                 provider_id: self.provider_id.clone(),
                 provider_instance: request.authority.provider_instance.clone(),
-                resource_type: "issue".into(),
-                canonical_id: format!("{repository}#{number}"),
+                resource_type: if kind == GithubKind::PullRequest {
+                    "review"
+                } else {
+                    "issue"
+                }
+                .into(),
+                canonical_id: format!(
+                    "{repository}{}{number}",
+                    if kind == GithubKind::PullRequest {
+                        '!'
+                    } else {
+                        '#'
+                    }
+                ),
             },
             title: issue.title,
-            source_url: Some(request.artifact_url.clone()),
+            source_url: Some(issue.url),
             original_url: None,
-            source_revision: issue.updated_at,
+            source_revision: if kind == GithubKind::PullRequest {
+                issue.head_ref_oid
+            } else {
+                issue.updated_at
+            },
             complete: true,
             diagnostics: Vec::new(),
             body,
+            container: Some(SourceContainer {
+                id: repository.clone(),
+                label: repository,
+            }),
+            fields: Vec::new(),
+            attachments: Vec::new(),
         }])
     }
 }
@@ -433,8 +555,8 @@ impl SourceProvider for GithubSourceProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        GithubSourceProvider, MAX_COMMENT_PAGES, ensure_comment_continuation, is_supported_base,
-        issue_kind, parse_comment_page, parse_issue,
+        GithubKind, GithubSourceProvider, MAX_COMMENT_PAGES, ensure_comment_continuation,
+        github_artifact, is_supported_base, parse_comment_page, parse_issue,
     };
     use cockpit_core::sources::{SourceAuthority, SourceFetchRequest};
     use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
@@ -512,12 +634,12 @@ mod tests {
 
     #[test]
     fn parses_issue_and_preserves_repository_authority() {
-        let kind = issue_kind(
+        let kind = github_artifact(
             &request("https://github.com/nnexai/cockpit/issues/4"),
             &Url::parse("https://github.com").unwrap(),
         )
         .unwrap();
-        assert_eq!(kind, ("nnexai/cockpit".into(), 4));
+        assert_eq!(kind, ("nnexai/cockpit".into(), GithubKind::Issue, 4));
     }
 
     #[test]
@@ -525,6 +647,7 @@ mod tests {
         let issue = parse_issue(
             br#"{
                 "number": 4,
+                "url": "https://github.com/nnexai/cockpit/issues/4",
                 "title": "Fix drift",
                 "body": "Description",
                 "updatedAt": "2026-09-10T13:01:16Z"
@@ -579,7 +702,7 @@ Link: <https://api.github.com/repos/nnexai/cockpit/issues/4/comments?page=2>; re
     fn rejects_other_hosts_kinds_and_repositories() {
         let base = Url::parse("https://github.com").unwrap();
         assert_eq!(
-            issue_kind(
+            github_artifact(
                 &request("https://github.example.com/nnexai/cockpit/issues/4"),
                 &base
             )
@@ -588,13 +711,13 @@ Link: <https://api.github.com/repos/nnexai/cockpit/issues/4/comments?page=2>; re
             "source_artifact_mismatch"
         );
         assert_eq!(
-            issue_kind(&request("https://github.com/nnexai/cockpit/pulls/4"), &base)
+            github_artifact(&request("https://github.com/nnexai/cockpit/pulls/4"), &base)
                 .unwrap_err()
                 .code,
             "source_artifact_unsupported"
         );
         assert_eq!(
-            issue_kind(&request("https://github.com/other/cockpit/issues/4"), &base)
+            github_artifact(&request("https://github.com/other/cockpit/issues/4"), &base)
                 .unwrap_err()
                 .code,
             "source_artifact_mismatch"
