@@ -283,12 +283,12 @@ S4 and S5 can run in parallel once S2 and S1 respectively are done. S5 does not 
 - **Non-goals.** Space code; folder/Confluence logic.
 - **Acceptance.** `cargo test -p cockpit-core library`, with tests that exercise consumer-visible behavior:
   - (a) 70 added items are all listed after reopen (no eviction).
-  - (b) **Crash matrix.** For each fault point (J, E1, R1, R2, N1, M1, index commit, journal delete) × method (`exchange`, forced `two_rename`, `new_target`, `remove`): drop the service at the fault, reopen, then assert:
-    - for a publish retained in the index, the target directory exists and its marker revision equals the index revision; for a completed `remove`, both the item and its index record are absent, while a rollback retains the prior target and index entry;
-    - every file hash for a retained target matches its marker;
-    - journal recovery completes; operation-owned completed/failed staging is cleaned, while crash-orphan staging is retained rather than swept on open;
-    - the outcome matches the table's roll-forward/rollback and the prior or current target stays recoverable through the applicable state.
-  - The `new_target` boundary test uses a folder item: after staging→target but before index commit, reopen lists the complete `LibraryIndexEntry` including origin metadata, the folder listing reports refreshable origin metadata, and a subsequent refresh returns the expected updated content.
+  - **Crash recovery cases** (deterministic, not a Cartesian fault-point × method matrix):
+    1. First folder publish crashes after stage→target but before index commit; reopen lists the complete origin metadata, and a subsequent refresh succeeds.
+    2. Forced `two_rename` replacement crashes after the old target moves to backup but before the new rename; reopen recovers the old content and index.
+    3. Publish crashes after the new target rename but before index commit; reopen recovers the new content and index, including the complete `LibraryIndexEntry` and folder origin metadata; a subsequent refresh succeeds.
+    4. Crash after index commit but before journal deletion; reopen is idempotent.
+    Each case checks that every indexed target exists, retained target file hashes match its marker, and journal recovery reaches the specified outcome. Operation-owned completed/failed staging is cleaned; crash-orphan staging is retained rather than swept on open.
   - A test also holds the shared lock in a second thread during a forced `two_rename` publish and asserts it never sees the target missing.
   - (c) A byte edit to `document.md` → refresh yields `conflict`, bytes unchanged; replace with a stale `current_hash` → `library_conflict`.
   - (d) Concurrent `start_refresh` on the same item → `library_item_busy`; a reader holding the shared lock during a refresh sees the old or the new marker revision, never mixed files.
