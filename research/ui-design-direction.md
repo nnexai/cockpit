@@ -34,7 +34,7 @@ Herdr calls its API resources workspaces; the UI calls them Spaces, as required 
 Herdr TUI parity is the starting constraint, not Cockpit’s product destination.
 
 - Copy semantics before appearance: resource hierarchy, authoritative focus, attention priority, terminal ownership, shortcuts, and mutation behavior should remain recognizable and correct.
-- Treat Herdr's TUI and server behavior as references. Agents are ordered blocked, done, working, idle, unknown; newest state change first (whether Cockpit should follow Herdr's configured agent sort is an open question in DECISIONS.md).
+- Treat Herdr's TUI and server behavior as references. Agents are ordered as in the TUI's priority mode: blocked, done, working, idle, unknown; newest state change first.
 - Depart deliberately where a desktop surface can provide better supervision: persistent overview, direct manipulation, visible ownership, larger readable type, pointer targeting, and resource-local recovery.
 - Never trade correctness for graphical polish. A Cockpit interaction still resolves through Herdr and reconciles from authoritative state.
 - Do not preserve TUI density when it harms legibility. Typography and geometry are semantic design tokens; tune those tokens as a system instead of scattering component-local overrides.

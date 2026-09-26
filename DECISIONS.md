@@ -8,7 +8,7 @@ This file records current product and engineering rules, not the implementation 
 - Use the supported Herdr socket/schema surface for persistent session state and terminal streams. Validate protocol, schema, and every required method before advertising compatibility; fail closed on mismatch. Display-version text is diagnostic and is not an exact patch-version allowlist. The adapter currently requires protocol 22, schema 1, and its required-method set.
 - Build client state from an authoritative snapshot and ordered events. On gaps, identity changes, reconnect, or stale state, resnapshot and rebind rather than guessing. A mutation acknowledgement is not itself fresh focus or control authority; that comes from the ordered Herdr state.
 - Preserve Herdr semantics and hierarchy while presenting Cockpit's graphical workbench. The Space tree, panes and layout remain Herdr-backed; semantic focus, DOM keyboard focus, and writable terminal ownership are separate state.
-- The Agents list is ordered blocked, done, working, idle, unknown; newest state change first. Open question: whether Cockpit should instead follow the agent sort configured in Herdr.
+- Agents-list ordering is client presentation, as in the Herdr TUI: Herdr's API returns agents in workspace order, and the TUI applies its `priority` sort itself. Cockpit always uses that priority order (blocked, done, working, idle, unknown; newest state change first) and does not read Herdr's `agent_panel_sort` setting or plugin agent views.
 
 ## Terminal attachment & input
 

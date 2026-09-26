@@ -75,7 +75,7 @@ Herdr-server is the authoritative state machine for:
 - PTYs and processes;
 - terminal focus and layout;
 - agent detection and agent state;
-- Herdr-owned metadata and inbox ordering.
+- Herdr-owned metadata (agent-list ordering is client presentation; see `DECISIONS.md`).
 
 Cockpit does not create a competing session registry or duplicate Herdr lifecycle state. Its local state is a cache of authoritative Herdr data.
 
