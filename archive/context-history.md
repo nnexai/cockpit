@@ -1,0 +1,23 @@
+## 11. Next-level delivery and code maintenance
+
+The full plan is `planning/next-level/README.md`. Begin with a separately scoped maintainability increment, then implement configuration/contracts, real extension-pane detection/rendering, local worktree/companion setup, context reading/comments/paste, and source downloads. Full graphical review and previously deferred capabilities remain separately selectable stories with dependencies and tests.
+
+Keep this a personal tool that is easy to change in code. Prefer clear owning modules and small interfaces over a generic plugin/workflow framework. The cleanup plan names concrete seams and a code-tweaking guide; it must preserve current Herdr runtime behavior before feature additions.
+
+Prime the cleanup with deterministic quality infrastructure (CLEAN-05): pinned test/coverage/complexity tools, per-function CRAP with a proposed new-code ceiling of 8 and preferred target of 6, changed-code mutation tests, and machine-readable failures for implementation agents. Establish a reviewed legacy baseline rather than requiring a rewrite. Coverage mapping and tool failures must be reported as incomplete, not passed. Detailed policy and adoption probes live in `planning/next-level/11-quality-gates.md`.
+
+## 12. Stability before expansion
+
+The reported terminal redraw flicker reopens the custom protocol-22 and renderer choice. Establish a temporal reproduction and a reliable daily-use build before cleanup or feature expansion; Kitty support remains desired but must pass the same stability gate. `planning/next-level/13-terminal-stability.md` compares repair and stable-compatible alternatives without presuming a downgrade is already verified. `research/next-level-existing-code-review.md` records additional current-code failures and planned corrections. No feature, renderer repair, or installed-server change is part of this planning task.
+
+The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16.
+
+The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`.
+
+### Inline Space browser, 2026-09-13
+
+The inline browser replaces the external annotation window and extension. A Cockpit-owned split sits beside the selected Space's unchanged Herdr layout. Browser targets are Chromium tabs, never synthetic Herdr resources. The owner attaches a supervised Node helper to the existing CLI-managed Chromium/profile and streams raw `Page.startScreencast` JPEG bytes. Native and web adapters share typed control and ordered metadata, with a separate bounded binary frame lane.
+
+Core owns revisioned drafts, immutable pending captures, and feedback receipts. Hiding a view releases input and capture resources while preserving the browser. Closing the browser preserves saved feedback. The inline runtime directly replaces the extension path; legacy draft migration is out of scope. Focused verification on 2026-09-13 passed static generation/build checks, a disposable browser open/frame/annotation/hide/show/navigation pass, and an isolated Linux Tauri startup smoke. The broader A01–A25, security/performance, and native input/decode matrices remain unclaimed.
+
+The user's 2026-09-24 live-image quality amendment makes sharpness best effort: attempt a sharp image, but allow lower resolution to preserve performance and current content during animation, pointer reactions, and scrolling. Attempt refinement when safe and affordable, including after activity eases; do not hold an older sharp image over a newer eligible update. Chromium produces the stream; WebKit is the Linux-native Cockpit consumer. Lower raster density alone is not stale geometry or a failed first-frame gate. Frame identity, coordinate alignment, input ownership, pinned capture fidelity, and bounded resources remain required. The current acceptance contract is [live browser image quality](planning/stability-and-gitlab-2026-09-20/ACCEPTANCE.md#live-browser-image-quality).

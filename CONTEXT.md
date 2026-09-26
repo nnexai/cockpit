@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: architecture reference. The Herdr client, reviewed worktree setup, companion association, and bounded graphical Context source/Markdown browsing are implemented. Media rendering, reference comments/paste, repository snapshots, source ingestion, and graphical review remain planned in `planning/next-level/README.md`. Verified delivery boundaries are recorded in `DECISIONS.md`.
+Status: architecture reference. The Herdr client, workspace setup, Context browsing and media, comments/paste, source import and snapshots, graphical Review, and inline browser are implemented. Verified delivery boundaries are recorded in `DECISIONS.md`.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 
@@ -24,15 +24,15 @@ Cockpit is intended to become the developer's primary way of engaging with local
 
 ## 2. Product domains
 
-Cockpit remains one umbrella product with provider-neutral domains:
+Cockpit brings together several provider-neutral product domains:
 
 - **Forge** — repositories, branches, pull/merge requests, review material, and worktree provenance.
 - **Issue Tracker** — issues, comments, labels, parent relationships, references, and freshness checks.
 - **Wiki** — pages and related documentation fetched as static context.
-- **Telemetry** — optional static log and trace context when a provider adapter is added.
-- **Herdr Client** — a richer graphical client for Herdr sessions, intended to feel like the native Herdr TUI.
+- **Telemetry** — optional static log and trace context.
+- **Herdr Client** — a graphical client for Herdr sessions, following Herdr semantics and authority.
 
-Forge, Issue Tracker, and Wiki are domain contracts, not separate products. Provider implementations are staged behind capability-based interfaces.
+Forge, Issue Tracker, and Wiki are domain contracts served by configured provider adapters. Source import, refresh, and local repository snapshots are implemented.
 
 ## 3. Runtime architecture
 
@@ -142,19 +142,16 @@ Independent reflink snapshots are preferred where available. Normal copies prese
 
 ## 5. Herdr client UI
 
-### 5.1 Initial foundation
+### 5.1 Implemented foundation
 
-The first usable Cockpit foundation consists of:
+The implemented Cockpit foundation includes:
 
-- a real Herdr session mirror;
-- schema-gated socket connectivity;
-- read and attach behavior for terminal panes;
+- a real Herdr session mirror with schema-gated socket connectivity;
+- terminal pane read, attach, input, and output through Herdr;
 - Herdr-semantic focus and layout operations;
-- terminal input/output through Herdr;
-- a working `cockpit serve` browser client path;
-- protocol contract tests and a real native smoke test.
-
-Workspace creation, context hydration, and concrete provider ingestion follow the Herdr mirror and administration work.
+- workspace creation and context hydration;
+- provider-backed source import and refresh;
+- the `cockpit serve` browser client path.
 
 ### 5.2 Information architecture
 
@@ -168,7 +165,7 @@ The first screen uses the native Herdr TUI as a behavioral baseline:
 
 This is baseline parity, not a permanent imitation target. Cockpit preserves Herdr semantics and authority while deliberately evolving the presentation toward a dense graphical operations workbench.
 
-The UI uses Herdr-native labels such as Spaces, Agents, tabs, and panes. The Herdr API’s workspace terminology remains an internal mapping detail. Agent ordering follows Herdr priority mode—blocked, done, working, idle, then unknown—with newest state transition first inside a priority.
+The UI uses Herdr-native labels such as Spaces, Agents, tabs, and panes. The Herdr API’s workspace terminology remains an internal mapping detail. Agent ordering is blocked, done, working, idle, unknown; newest state change first.
 
 ### 5.3 State and interaction
 
@@ -191,7 +188,7 @@ The client supports Herdr-semantic hierarchy operations:
 - create, close, rename, focus, split, resize, reorder, and move tabs/panes where supported;
 - direct tree controls, context menus, and drag/drop where Herdr supports them.
 
-The behavioral authority is Herdr; the presentation is graphical. Pane/layout actions are primarily shortcut-driven, while native Herdr mouse behavior remains available. GUI controls are discoverable. The Herdr magic escape key has priority over GUI shortcuts.
+The behavioral authority is Herdr; the presentation is graphical. Pane/layout actions are primarily shortcut-driven, while native Herdr mouse behavior remains available. GUI controls are discoverable. The Herdr magic escape key should have priority over GUI shortcuts (not yet implemented; the current keymap handles only Cockpit's `Ctrl+B` prefix and Escape).
 
 ### 5.4 Terminal attachment and scalability
 
@@ -204,7 +201,7 @@ Herdr owns every PTY, process, terminal model, and terminal stream. xterm.js own
 - Terminal graphics are parked. Known auxiliary messages are consumed without exposing graphics payloads or disconnecting an otherwise usable text terminal. The image addon is not loaded.
 - Text and binary input use stable raw `Input`; wheel/page scrolling uses `AttachScroll`, gated by local control intent and attachment state. Normal xterm.js panes attached to Herdr are observed to receive wheel/scroll events.
 - Herdr's per-attachment `MouseCapture` signal enables application mouse handling automatically. Cockpit sends structured `AttachMouse` cell coordinates, and Herdr chooses the application's encoding and rejects reports when tracking is disabled. Mode-off and Shift-drag retain xterm text selection. Idle hover reports and exact pixel coordinates are not forwarded.
-- `Shift+Enter` sends a bare line-feed. The Herdr magic escape key retains higher priority.
+- `Shift+Enter` sends a bare line-feed.
 - Local xterm enables Kitty keyboard support; stable end-to-end enhanced-reporting behavior still requires TERM-03 evidence.
 - Only panes visible in the selected tab keep active xterm renderers/subscriptions. Hidden tabs detach UI renderers without stopping Herdr processes.
 - Herdr remains authoritative for scrollback and screen state. Reconnect requires a fresh full baseline before consecutive updates.
@@ -231,11 +228,9 @@ The Context browser:
 - previews a batch containing real file paths, comments, and selected original lines with line numbers;
 - pastes that batch into an explicitly selected same-tab agent without submitting it.
 
-Cockpit owns durable GUI drafts and a local Git review model for the complete Reviewr replacement. Local review includes staged, unstaged, branch, and untracked scopes with explicit revisions and side-aware anchors. It does not mutate Git or post provider comments. A future TUI backport can reuse Cockpit core logic as a separate story.
+Cockpit owns durable GUI drafts and a local Git review model for the complete Reviewr replacement. Local review includes staged, unstaged, branch, and untracked scopes with explicit revisions and side-aware anchors. It does not mutate Git or post provider comments.
 
-Preview/search/paste limits are finite and configurable. No generated index or scratchpad is required. Human-created files are discovered but are never treated as managed merely because their frontmatter claims ownership.
-
-See `planning/next-level/04-viewer-and-reference-comments.md`, `07-extension-panes.md`, and `08-ui-design.md` for the proposed implementation and UI contracts.
+The inline browser displays a supervised Chromium tab beside the selected Space. Cockpit owns browser interaction, durable drafts, and feedback; hiding the view releases capture resources without closing the browser.
 
 ### 5.6 Errors, settings, and accessibility
 
@@ -313,30 +308,20 @@ Mandatory identity/provenance/freshness fields include:
 
 The body is normalized provider data intended for human and agent reading. Raw provider payloads are not retained as the canonical snapshot.
 
-### 7.5 First concrete provider
+### 7.5 Available provider adapters
 
-After the Herdr client foundation, the first concrete adapter is Gitea issue context through a configurable Gitea CLI, defaulting to `tea` when it is available.
-
-The first adapter covers:
-
-- issue identity, title, state, and timestamps;
-- description, comments, labels, milestones, and assignees;
-- source identifiers and freshness metadata;
-- recognized local/provider references within traversal limits.
-
-If the configured CLI is missing or lacks the required capability, Cockpit reports the capability as unavailable while keeping Herdr/client workflows usable.
+Configured providers are selected by their executable and currently include Tea for Gitea, GitLab (`glab`), Jira (`jira`), and GitHub (`gh`). Source import validates provider authority, normalizes assets, tracks freshness, and preserves user edits on generated-file refresh. Provider capabilities vary; unsupported executables and operations are reported as unavailable rather than silently substituted.
 
 ## 8. CLI surface
 
-The initial CLI and core surface provide:
+The `cockpit` CLI provides:
 
-- repository discovery beneath the configured default root;
-- Herdr session connectivity and mirroring;
-- workspace create/destroy through Herdr worktree operations;
-- context hydration hooks;
-- `cockpit serve` for the browser frontend and HTTP/WebSocket API.
+- `cockpit status` to inspect the configured Herdr installation;
+- `cockpit serve` to serve the browser client and HTTP API in the foreground;
+- `cockpit configuration` to inspect effective non-secret project configuration;
+- `cockpit browser` to control the browser associated with a Herdr Space.
 
-Provider-specific mutation commands, automatic OMP setup, and broad provider implementations are deferred.
+Workspace lifecycle and context operations are provided through core and host services, not separate CLI subcommands.
 
 ## 9. Verification strategy
 
@@ -364,26 +349,3 @@ Verification uses the actual changed surface:
 - unbounded file previews;
 - formal WCAG 2.2 AA release compliance.
 
-## 11. Next-level delivery and code maintenance
-
-The full plan is `planning/next-level/README.md`. Begin with a separately scoped maintainability increment, then implement configuration/contracts, real extension-pane detection/rendering, local worktree/companion setup, context reading/comments/paste, and source downloads. Full graphical review and previously deferred capabilities remain separately selectable stories with dependencies and tests.
-
-Keep this a personal tool that is easy to change in code. Prefer clear owning modules and small interfaces over a generic plugin/workflow framework. The cleanup plan names concrete seams and a code-tweaking guide; it must preserve current Herdr runtime behavior before feature additions.
-
-Prime the cleanup with deterministic quality infrastructure (CLEAN-05): pinned test/coverage/complexity tools, per-function CRAP with a proposed new-code ceiling of 8 and preferred target of 6, changed-code mutation tests, and machine-readable failures for implementation agents. Establish a reviewed legacy baseline rather than requiring a rewrite. Coverage mapping and tool failures must be reported as incomplete, not passed. Detailed policy and adoption probes live in `planning/next-level/11-quality-gates.md`.
-
-## 12. Stability before expansion
-
-The reported terminal redraw flicker reopens the custom protocol-22 and renderer choice. Establish a temporal reproduction and a reliable daily-use build before cleanup or feature expansion; Kitty support remains desired but must pass the same stability gate. `planning/next-level/13-terminal-stability.md` compares repair and stable-compatible alternatives without presuming a downgrade is already verified. `research/next-level-existing-code-review.md` records additional current-code failures and planned corrections. No feature, renderer repair, or installed-server change is part of this planning task.
-
-The subsequent user decision selects stable Herdr as the default and parks protocol 22, while preserving mouse click/input/scroll support. Current evidence separates physical direct-attach pointer delivery, CLI-injected SGR, normal xterm.js wheel delivery, and structured app-mode pointer routing; do not collapse these into a single “mouse unsupported” result. Follow `planning/next-level/13-terminal-stability.md`; do not silently disable mouse. The final implementation order and verifiable goals are in plans 15 and 16.
-
-The user downgrades Herdr to stable before implementation begins. Astra runs inside protected session `default`; it must leave that server/session and its focus/layout untouched. BOOT-01 restores actual frontend transport compatibility before frontend-dependent smoke tests. All runtime test effects target explicit run-owned disposable sessions. Start implementation from `IMPLEMENTATION_HANDOFF.md`.
-
-### Inline Space browser, 2026-09-13
-
-The inline browser replaces the external annotation window and extension. A Cockpit-owned split sits beside the selected Space's unchanged Herdr layout. Browser targets are Chromium tabs, never synthetic Herdr resources. The owner attaches a supervised Node helper to the existing CLI-managed Chromium/profile and streams raw `Page.startScreencast` JPEG bytes. Native and web adapters share typed control and ordered metadata, with a separate bounded binary frame lane.
-
-Core owns revisioned drafts, immutable pending captures, and feedback receipts. Hiding a view releases input and capture resources while preserving the browser. Closing the browser preserves saved feedback. The inline runtime directly replaces the extension path; legacy draft migration is out of scope. Focused verification on 2026-09-13 passed static generation/build checks, a disposable browser open/frame/annotation/hide/show/navigation pass, and an isolated Linux Tauri startup smoke. The broader A01–A25, security/performance, and native input/decode matrices remain unclaimed.
-
-The user's 2026-09-24 live-image quality amendment makes sharpness best effort: attempt a sharp image, but allow lower resolution to preserve performance and current content during animation, pointer reactions, and scrolling. Attempt refinement when safe and affordable, including after activity eases; do not hold an older sharp image over a newer eligible update. Chromium produces the stream; WebKit is the Linux-native Cockpit consumer. Lower raster density alone is not stale geometry or a failed first-frame gate. Frame identity, coordinate alignment, input ownership, pinned capture fidelity, and bounded resources remain required. The current acceptance contract is [live browser image quality](planning/stability-and-gitlab-2026-09-20/ACCEPTANCE.md#live-browser-image-quality).

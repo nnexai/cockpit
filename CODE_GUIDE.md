@@ -44,7 +44,6 @@ Use the repository's Rust toolchain and pinned Bun dependencies. Run `cargo fmt 
 
 Create a uniquely named Herdr session with isolated XDG config/state, a fixture repository and a resource ledger. `scripts/verify/resource_guard.py` checks executable, session, socket and ownership before fixture Herdr commands run. Never automate the default session or use the user's manual gateway. Browser and Tauri must point to the same owned session and configuration. Preserve evidence before stopping only recorded processes.
 
-The current run's commands and resource identities are in `planning/next-level/execution/run-20260904T214621Z/CONTINUATION.md` and `WORKFLOW_ACCEPTANCE.md`. Temporary fixture names and ports are evidence, not product defaults.
 
 ## Local provider configuration
 

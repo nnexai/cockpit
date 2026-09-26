@@ -1,10 +1,10 @@
 # Cockpit UI implementation constraints
 
-Current-authority note, 2026-09-04: protocol-22 client-shell behavior in `../DECISIONS.md` overrides historical ownership/renderer details below. The next Context/Review design is `../planning/next-level/08-ui-design.md`: detect real extension panes and replace their renderer, with no extension IPC or separate dock/tab authority. The current implemented workbench remains the baseline; these plans add future behavior.
+This document records implementation requirements, not guarantees that every requirement is already satisfied. Current behavior is described only where explicitly noted.
 
 ## Scope and authority
 
-This is an implementation constraint note, not a visual direction. Cockpit is a dense desktop developer tool: the first screen is a graphical mirror of a live Herdr session (Spaces, Agents, tabs, panes, and terminals), not a landing page or a locally invented workspace model.
+This is an implementation constraint note, not visual direction. Cockpit presents a Herdr-backed session alongside Cockpit surfaces such as browser, Context, and Review.
 
 **Herdr-server is authoritative** for named sessions, Spaces/workspaces, tabs, panes, PTYs/processes, focus, layout, agent state, and Herdr metadata/inbox ordering. Cockpit state is a cache and presentation projection; it must not become a second registry or lifecycle owner ([CONTEXT.md §3.2–3.3](../CONTEXT.md), [DECISIONS.md “Herdr authority and transport”](../DECISIONS.md)). The installed Herdr schema/capability surface is checked before use. Unsupported operations must be represented explicitly, never approximated silently. The documented socket API is the source for persistent interaction and subscriptions; CLI wrappers remain appropriate for one-shot/debug/setup operations ([Herdr Socket API](https://herdr.dev/docs/socket-api/)).
 
@@ -43,7 +43,7 @@ There is one writable attachment owner for a terminal. Cockpit keeps three conce
 - **DOM focus** — the browser element currently receiving keyboard or pointer events;
 - **control intent** — whether the local user has asked Cockpit to own the selected terminal.
 
-The initially focused pane and a local selection or terminal click may request writable takeover. If another client subsequently takes semantic focus or terminal ownership, Cockpit must clear local control intent, reopen or retain an observer attachment, and continue rendering. It must not request control again until another local user action. Implementers must:
+The initially focused pane and a local selection or terminal click may request writable takeover. If another client subsequently takes semantic focus or terminal ownership, Cockpit should clear local control intent, reopen or retain an observer attachment, and continue rendering. It must not request control again until another local user action. Implementers should:
 
 - make ownership/attachment status observable in resource state;
 - focus xterm before forwarding the pointer gesture that requested control;
@@ -68,7 +68,7 @@ The stable DOM renderer must be initialized before its stream:
 4. only then attach to Herdr using the fitted rows and columns;
 5. refit from `ResizeObserver` when pane geometry changes.
 
-Use the final terminal metrics baseline: native system monospace first (`ui-monospace`, then FiraCode Nerd Font Mono, Hack Nerd Font Mono, IBM Plex Mono, Noto Sans Mono, `monospace`), line height `1`, and an explicit visible 8 px scrollbar. Keep the DOM renderer and existing xterm beta/addon versions; do not add Canvas or other renderer dependencies. Verify continuous box-drawing glyphs at zoom when renderer or font metrics change.
+These ordering and fitting requirements are implemented. Current font metrics are defined in `src/app/styles.css` and `src/app/TerminalPane.tsx`; the earlier exact family/line-height baseline is not a current contract. An explicit visible scrollbar is not implemented; the scrollbar is hidden. Verify continuous box-drawing glyphs at zoom when renderer or font metrics change; this remains a requirement, not a proven guarantee. Keep the DOM renderer and existing xterm beta/addon versions; do not add Canvas or other renderer dependencies.
 
 ### 4. Visible-pane subscription lifetime
 
@@ -84,11 +84,11 @@ Visibility is a lifecycle contract, not a CSS optimization:
 
 A pane can remain visible in the hierarchy while its terminal view is stale/disconnected. That distinction must be represented in state.
 
-### 5. Magic escape has priority
+### 5. Magic escape priority — not implemented
 
-Herdr’s magic escape key has priority over GUI shortcuts and ordinary terminal input. The global key-routing policy must recognize and consume the magic escape before dispatching pane input, browser shortcuts implemented by Cockpit, or command/palette actions. Do not let an xterm `onData` callback, focused text field, composition path, or bubbling click/keyboard handler bypass this priority. Preserve normal text entry and IME behavior for all non-magic input, and avoid claiming browser-reserved behavior unless the Herdr contract requires it.
+Herdr’s magic escape key should have priority over GUI shortcuts and ordinary terminal input. The current global key-routing behavior does not implement this priority. When implemented, it must recognize and consume the magic escape before dispatching pane input, browser shortcuts implemented by Cockpit, or command/palette actions. Do not let xterm callbacks or GUI handlers bypass this priority. Preserve normal text entry and IME behavior for non-magic input.
 
-The exact key encoding/binding comes from the installed, schema-gated Herdr capability surface; do not hard-code undocumented prefix strings. Herdr’s documented key APIs accept semantic key-combo values such as `esc`, modifiers, function keys, and named punctuation, and reject `prefix+` binding strings ([Herdr Socket API, pane key methods](https://herdr.dev/docs/socket-api/)).
+The exact key encoding/binding must come from the installed, schema-gated Herdr capability surface; do not hard-code undocumented prefix strings. Herdr’s documented key APIs accept semantic key-combo values such as `esc`, modifiers, function keys, and named punctuation, and reject `prefix+` binding strings ([Herdr Socket API, pane key methods](https://herdr.dev/docs/socket-api/)).
 
 ### 6. Hierarchy operations are Herdr operations
 
@@ -100,7 +100,7 @@ For reorder blocks, use Herdr’s atomic operation where available rather than i
 
 ### 7. Inline stale and error behavior
 
-When attach, focus, mutation, subscription, reconnect, or resync fails, keep the affected Space/tab/pane/Agent visible with its last-known authoritative state and an inline stale/disconnected/error indication. Explain what failed and expose an actionable retry and/or resync operation. Toasts may supplement this, but a toast alone is forbidden because it disappears and lacks resource context. Do not disable unrelated resources and do not silently close a pane/process.
+The UI should keep affected resources visible with last-known state and a contextual stale, disconnected, or error indication when operations fail. Explain what failed and expose an actionable retry or resync operation where available. Toasts may supplement this, but should not be the only explanation when resource context is available. These guarantees are requirements and are not verified for every operation.
 
 Distinguish at least:
 
@@ -130,7 +130,7 @@ Events must be applied by type and stable resource identity, including workspace
 
 ## `CockpitClient` boundary
 
-Components, stores, and terminal views consume one transport-neutral, versioned `CockpitClient` interface. They must not import Tauri APIs, call `fetch`/WebSocket directly, know Herdr socket framing, or branch on native versus browser transport.
+Components, stores, and terminal views should consume a transport-neutral, versioned `CockpitClient` interface. Avoid direct transport imports and transport-specific presentation logic.
 
 The contract should cover task-level operations and typed streams for:
 
@@ -140,18 +140,15 @@ The contract should cover task-level operations and typed streams for:
 - ordered lifecycle/status events with cursors and cancellation/disposal;
 - typed errors distinguishing stale, disconnected, unsupported, rejected, and ownership failures.
 
-The native adapter maps request/response calls to Tauri commands and ordered streams to Tauri channels; the browser adapter maps calls to HTTP and streams to WebSocket. Adapter selection happens once at startup. Tauri documents commands for typed argument/return/error calls and recommends channels for ordered/high-throughput streams ([Tauri calling Rust](https://v2.tauri.app/develop/calling-rust/#channels)); this supports keeping terminal/status streams out of ad hoc global events. Tauri handlers remain thin transport adapters and must delegate business rules to the shared core.
-
-The interface must make subscription disposal explicit and safe, and all adapters must expose equivalent observable semantics. UI code cannot rely on a Tauri-only event, a browser-only reconnect behavior, or transport-specific error text.
+Native and browser adapters should expose equivalent observable semantics. The current UI evidence does not establish full adapter parity, reconnect behavior, error mapping, or cancellation/disposal guarantees; treat these as requirements until verified.
 
 ## Forbidden shortcuts
 
 - Maintaining a Cockpit-owned session, workspace, focus, agent, PTY, process, or inbox registry.
 - Treating local selection, optimistic layout, or an xterm buffer as authoritative.
 - Keeping live terminal subscriptions/renderers for every pane or hidden tab.
-- Creating a browser-side or Tauri-side PTY, shell, raw socket forwarder, or process lifecycle owner.
-- Sending terminal input without focused-pane and writable-owner checks.
-- Bypassing magic-escape priority through xterm callbacks or GUI shortcut handlers.
+- Sending terminal input or resize without `CockpitClient` pane/session/owner checks.
+- Bypassing magic-escape priority through xterm callbacks or GUI shortcuts. Magic-escape priority is not yet implemented.
 - Faking unsupported Herdr operations, silently falling back to a different operation, or assuming undocumented protocol fields.
 - Applying stale events after session switch, reconnect, move, close, or resnapshot.
 - Replacing inline resource errors with toasts only, hiding failed resources, or killing processes on attach failure.
@@ -161,32 +158,34 @@ The interface must make subscription disposal explicit and safe, and all adapter
 
 ## Minimal accessibility behaviors
 
-Accessibility is best effort in this proof of concept, but these behaviors are still implementation requirements where practical:
+Accessibility is best effort in this proof of concept, but these behaviors remain implementation requirements where practical:
 
-- Every interactive Space, Agent, tab, pane, hierarchy action, retry, resync, and takeover/ownership status has a meaningful accessible name.
-- Keyboard navigation reaches the session selector, tree, tabs, panes, controls, and inline error actions; current selection and focus are visibly indicated.
-- Tree expand/collapse, selected/active resource, stale/disconnected state, agent state, and ownership are conveyed with text or semantics, not color alone.
-- Inline errors are programmatically associated with the affected resource/control and contain actionable text; focus moves to or is intentionally preserved near an error without trapping the user.
-- Terminal panes expose a usable label and a non-terminal status summary (for example, disconnected or read-only); terminal keyboard handling must not make the surrounding application unreachable.
-- Dynamic state changes that matter to task completion (connection loss, takeover result, operation failure) are announced without flooding live terminal output into an accessibility announcement channel.
+- Interactive resources and actions should have meaningful accessible names.
+- Keyboard navigation should reach core workbench controls; current selection and focus should be visibly indicated.
+- Tree expansion, selected resources, stale/disconnected state, agent state, and ownership should not rely on color alone.
+- Inline errors should be associated with the affected resource/control and contain actionable text.
+- Terminal panes should expose a usable label and a non-terminal status summary.
+- Dynamic state changes that matter to task completion should be announced without flooding announcements with live terminal output.
 
 ## Implementation acceptance checklist
 
-- [ ] First screen mirrors one authoritative Herdr session: selector, hierarchical Spaces, Agents, selected Space tabs, and Herdr pane layout.
+The acceptance checklist below is a set of requirements, not a statement that every item is currently satisfied.
+
+- [ ] First screen presents one authoritative Herdr session, Spaces, Agents, tabs, and Herdr pane layout.
 - [ ] Startup/session switch performs snapshot → subscription, detaches old streams/renderers, and rejects late old-session events.
 - [ ] Snapshot/event cursor, gap detection, reconnect, and resnapshot/resubscription behavior are explicit.
 - [ ] Space/tab/pane/Agent selection sends Herdr focus and updates from authoritative result/event; DOM focus is not treated as semantic focus.
 - [ ] Hierarchy/layout mutations use capability-gated Herdr operations, stable IDs, authoritative ordering, and no local layout algorithm.
 - [ ] Exactly one writable terminal attachment is honored per pane; external ownership loss falls back to observation without a reclaim loop, and an explicit local action can take control again.
 - [ ] xterm.js is renderer/input glue only; no Cockpit PTY/process or authoritative scrollback exists.
-- [ ] Stable DOM renderer and Fit initialize before stream attachment; initial rows/columns match pane bounds, terminal metrics use the explicit baseline, and box-drawing glyphs remain continuous at zoom.
+- [ ] Stable DOM renderer and Fit initialize before stream attachment; initial rows/columns match pane bounds. Exact metrics, visible scrollbar, and glyph continuity at zoom are not implemented/proven requirements.
 - [ ] Terminal renderers and live subscriptions exist only for visible panes in the selected tab; disposal is idempotent and remount resyncs.
 - [ ] Ordinary input/resize is routed through `CockpitClient` with pane/session/owner checks.
-- [ ] Magic escape is intercepted with Herdr priority before terminal input or GUI shortcuts.
-- [ ] Attach/reconnect/mutation errors remain inline on the affected resource with last-known state, stale/disconnected classification, retry, and resync.
+- [ ] Magic escape is intercepted with Herdr priority before terminal input or GUI shortcuts. Not yet implemented.
+- [ ] Attach/reconnect/mutation errors remain inline on the affected resource with last-known state, stale/disconnected classification, retry, and resync. This is a requirement, not a verified guarantee for all operations.
 - [ ] Unsupported capabilities are explicit and do not silently degrade into another operation.
 - [ ] Components use only the shared `CockpitClient`; Tauri commands/channels and browser HTTP/WebSocket are adapter concerns.
-- [ ] Native and browser builds exercise the same observable contract, including event ordering, cancellation/disposal, reconnect, and error mapping.
+- [ ] Native and browser builds provide the same observable contract, including event ordering, cancellation/disposal, reconnect, and error mapping. Parity is a requirement, not established current fact.
 - [ ] Keyboard access, visible focus, meaningful labels, non-color-only state, and actionable error text are present for the core surface.
 
 ## Sources
