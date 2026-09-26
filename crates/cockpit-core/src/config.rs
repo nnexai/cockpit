@@ -51,6 +51,7 @@ struct TomlConfiguration {
     state_root: Option<String>,
     branch_template: Option<String>,
     checkout_template: Option<String>,
+    library_root: Option<String>,
     providers: Option<Vec<ProjectProvider>>,
     limits: Option<TomlLimits>,
     window: Option<TomlWindow>,
@@ -88,7 +89,15 @@ struct TomlLimits {
     context_preview_lines: Option<u32>,
     context_directory_entries: Option<u32>,
     context_tree_depth: Option<u32>,
+    library_folder_files: Option<u32>,
+    library_folder_bytes: Option<u64>,
+    library_file_bytes: Option<u64>,
+    library_space_pages: Option<u32>,
+    library_attachment_bytes: Option<u64>,
+    library_item_attachment_bytes: Option<u64>,
+    library_max_items: Option<u32>,
 }
+
 
 /// Load the effective project policy. Explicit arguments override environment,
 /// which overrides the versioned TOML file, which overrides safe defaults.
@@ -187,6 +196,26 @@ pub fn load_project_configuration(
     origins.insert("worktree_root".into(), worktree_origin.into());
     origins.insert("companion_root".into(), companion_origin.into());
     origins.insert("state_root".into(), state_origin.into());
+    let default_library = xdg_directory("XDG_DATA_HOME", ".local/share")?.join("cockpit/library");
+    let (library_root, library_origin) = choose_path(
+        "COCKPIT_LIBRARY_ROOT",
+        file.library_root.clone(),
+        &path_text(&default_library, "library_root")?,
+    )?;
+    validate_paths(&[library_root.clone()], "library_root")?;
+    for (field, root) in [
+        ("state_root", state_root.as_str()),
+        ("companion_root", companion_root.as_str()),
+        ("worktree_root", worktree_root.as_str()),
+    ] {
+        if paths_overlap_lexically(&library_root, root) {
+            return Err(InspectionError::new(
+                "invalid_library_root",
+                format!("library_root must not overlap {field}"),
+            ));
+        }
+    }
+    origins.insert("library_root".into(), library_origin.into());
 
     let branch_template = file
         .branch_template
@@ -244,6 +273,13 @@ pub fn load_project_configuration(
             "context_tree_depth",
             limits_file.context_tree_depth.is_some(),
         ),
+        ("library_folder_files", limits_file.library_folder_files.is_some()),
+        ("library_folder_bytes", limits_file.library_folder_bytes.is_some()),
+        ("library_file_bytes", limits_file.library_file_bytes.is_some()),
+        ("library_space_pages", limits_file.library_space_pages.is_some()),
+        ("library_attachment_bytes", limits_file.library_attachment_bytes.is_some()),
+        ("library_item_attachment_bytes", limits_file.library_item_attachment_bytes.is_some()),
+        ("library_max_items", limits_file.library_max_items.is_some()),
     ];
     let limits = ProjectLimits {
         catalog_depth: bounded_limit(
@@ -300,6 +336,13 @@ pub fn load_project_configuration(
             64,
             "context_tree_depth",
         )?,
+        library_folder_files: bounded_limit(limits_file.library_folder_files.unwrap_or(512), 1, 100_000, "library_folder_files")?,
+        library_folder_bytes: bounded_limit_u64(limits_file.library_folder_bytes.unwrap_or(32 * 1024 * 1024), 1024 * 1024, 4 * 1024 * 1024 * 1024 - 1, "library_folder_bytes")?,
+        library_file_bytes: bounded_limit_u64(limits_file.library_file_bytes.unwrap_or(4 * 1024 * 1024), 1024, 1024 * 1024 * 1024, "library_file_bytes")?,
+        library_space_pages: bounded_limit(limits_file.library_space_pages.unwrap_or(200), 1, 20_000, "library_space_pages")?,
+        library_attachment_bytes: bounded_limit_u64(limits_file.library_attachment_bytes.unwrap_or(25 * 1024 * 1024), 1024, 1024 * 1024 * 1024, "library_attachment_bytes")?,
+        library_item_attachment_bytes: bounded_limit_u64(limits_file.library_item_attachment_bytes.unwrap_or(100 * 1024 * 1024), 1024 * 1024, 4 * 1024 * 1024 * 1024 - 1, "library_item_attachment_bytes")?,
+        library_max_items: bounded_limit(limits_file.library_max_items.unwrap_or(20_000), 100, 1_000_000, "library_max_items")?,
     };
     for (field, from_file) in limits_origins {
         origins.insert(
@@ -356,6 +399,7 @@ pub fn load_project_configuration(
         worktree_root,
         companion_root,
         state_root,
+        library_root,
         branch_template,
         checkout_template,
         providers,
@@ -572,6 +616,22 @@ fn bounded_limit(value: u32, min: u32, max: u32, field: &str) -> Result<u32, Ins
         ))
     }
 }
+fn bounded_limit_u64(value: u64, min: u64, max: u64, field: &str) -> Result<u64, InspectionError> {
+    if (min..=max).contains(&value) {
+        Ok(value)
+    } else {
+        Err(InspectionError::new(
+            format!("invalid_{field}"),
+            format!("{field} must be between {min} and {max}"),
+        ))
+    }
+}
+
+fn paths_overlap_lexically(first: &str, second: &str) -> bool {
+    let first = Path::new(first);
+    let second = Path::new(second);
+    first.starts_with(second) || second.starts_with(first)
+}
 
 fn validate_template(
     template: &str,
@@ -786,6 +846,61 @@ mod tests {
                 .code,
             "invalid_provider_login"
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn library_root_rejects_lexical_overlap_with_configured_roots() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("cockpit-library-root-{nonce}"));
+        let path = std::env::temp_dir().join(format!("cockpit-library-root-{nonce}.toml"));
+        let config = |library: &str, companion: &str| {
+            format!(
+                "version = 1\nworktree_root = '{}'\ncompanion_root = '{}'\nstate_root = '{}'\nlibrary_root = '{}'\n",
+                base.join("worktrees").display(),
+                companion,
+                base.join("state").display(),
+                library,
+            )
+        };
+        let inside_state = base.join("state/nested");
+        fs::write(&path, config(&inside_state.to_string_lossy(), &base.join("companions").to_string_lossy()))
+            .expect("write overlapping state roots");
+        assert_eq!(
+            load_project_configuration(Some(&path), None).expect_err("state overlap").code,
+            "invalid_library_root"
+        );
+
+        let library = base.join("library");
+        let companion = library.join("companions");
+        fs::write(&path, config(&library.to_string_lossy(), &companion.to_string_lossy()))
+            .expect("write overlapping companion roots");
+        assert_eq!(
+            load_project_configuration(Some(&path), None).expect_err("companion overlap").code,
+            "invalid_library_root"
+        );
+        let _ = fs::remove_file(path);
+    }
+    #[test]
+    fn library_root_defaults_to_xdg_data_directory() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cockpit-library-default-{nonce}.toml"));
+        fs::write(&path, "version = 1\n").expect("write configuration");
+        let configuration = load_project_configuration(Some(&path), None).expect("configuration defaults");
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".local/share"));
+        assert_eq!(
+            configuration.library_root,
+            data_home.join("cockpit/library").to_string_lossy()
+        );
+        assert_eq!(configuration.origins.get("library_root").map(String::as_str), Some("default"));
         let _ = fs::remove_file(path);
     }
 }

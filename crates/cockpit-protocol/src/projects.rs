@@ -17,6 +17,17 @@ pub struct ProjectLimits {
     pub context_preview_lines: u32,
     pub context_directory_entries: u32,
     pub context_tree_depth: u32,
+    pub library_folder_files: u32,
+    #[ts(type = "number")]
+    pub library_folder_bytes: u64,
+    #[ts(type = "number")]
+    pub library_file_bytes: u64,
+    pub library_space_pages: u32,
+    #[ts(type = "number")]
+    pub library_attachment_bytes: u64,
+    #[ts(type = "number")]
+    pub library_item_attachment_bytes: u64,
+    pub library_max_items: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -38,6 +49,7 @@ pub struct ProjectConfiguration {
     pub worktree_root: String,
     pub companion_root: String,
     pub state_root: String,
+    pub library_root: String,
     pub branch_template: String,
     pub checkout_template: String,
     pub providers: Vec<ProjectProvider>,

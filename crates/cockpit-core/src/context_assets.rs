@@ -1734,6 +1734,7 @@ mod tests {
             worktree_root: "worktrees".to_owned(),
             companion_root: "companions".to_owned(),
             state_root: "state".to_owned(),
+            library_root: "library".to_owned(),
             branch_template: "{repo}/{task_id}".to_owned(),
             checkout_template: "{repo}-{task_id}".to_owned(),
             providers: vec![ProjectProvider {
@@ -1752,6 +1753,13 @@ mod tests {
                 context_preview_lines: 100,
                 context_directory_entries: 100,
                 context_tree_depth: 16,
+                library_folder_files: 512,
+                library_folder_bytes: 32 * 1024 * 1024,
+                library_file_bytes: 4 * 1024 * 1024,
+                library_space_pages: 200,
+                library_attachment_bytes: 25 * 1024 * 1024,
+                library_item_attachment_bytes: 100 * 1024 * 1024,
+                library_max_items: 20_000,
             },
             origins: BTreeMap::new(),
         }

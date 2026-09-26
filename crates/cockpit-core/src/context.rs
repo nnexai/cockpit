@@ -253,6 +253,12 @@ impl ContextService {
                 )
             })?,
             ContextRootKind::Folder => root.root_id.clone(),
+            ContextRootKind::Library => {
+                return Err(InspectionError::new(
+                    "comments_detached",
+                    "comments require the file-viewer's verified browsing root",
+                ));
+            }
             ContextRootKind::Repository => {
                 return Err(InspectionError::new(
                     "comments_detached",
@@ -952,6 +958,7 @@ impl ContextService {
                     ContextRootKind::Repository => 0u8,
                     ContextRootKind::Companion => 1u8,
                     ContextRootKind::Folder => 2u8,
+                    ContextRootKind::Library => 3u8,
                 },
                 root.root.root_id.clone(),
             )
@@ -2081,6 +2088,7 @@ mod review_checkout_tests {
             worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
             companion_root: root.join("companions").to_string_lossy().into_owned(),
             state_root: root.join("state").to_string_lossy().into_owned(),
+            library_root: root.join("library").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".to_owned(),
             checkout_template: "{repo}-{task_id}".to_owned(),
             providers: vec![ProjectProvider {
@@ -2099,6 +2107,13 @@ mod review_checkout_tests {
                 context_preview_lines: 2_000,
                 context_directory_entries: 64,
                 context_tree_depth: 8,
+                library_folder_files: 512,
+                library_folder_bytes: 32 * 1024 * 1024,
+                library_file_bytes: 4 * 1024 * 1024,
+                library_space_pages: 200,
+                library_attachment_bytes: 25 * 1024 * 1024,
+                library_item_attachment_bytes: 100 * 1024 * 1024,
+                library_max_items: 20_000,
             },
             origins: BTreeMap::new(),
         }

@@ -283,11 +283,107 @@ export type TerminalOwnershipState = "pending" | "observing" | "owned" | "confli
 
 export type TerminalStreamMessage = { "type": "mouse_mode", session_id: string, pane_id: string, stream_id: string, enabled: boolean, } | { "type": "ownership", session_id: string, pane_id: string, stream_id: string, state: TerminalOwnershipState, message: string | null, } | { "type": "frame", session_id: string, pane_id: string, stream_id: string, seq: string, encoding: string, width: number, height: number, full: boolean, bytes: string, } | { "type": "closed", session_id: string, pane_id: string, stream_id: string, reason: string, } | { "type": "disconnected", session_id: string, pane_id: string, stream_id: string, code: string, message: string, } | { "type": "error", session_id: string, pane_id: string, stream_id: string, code: string, message: string, };
 
-export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, context_preview_bytes: number, context_preview_lines: number, context_directory_entries: number, context_tree_depth: number, };
+export type ProjectLimits = { catalog_depth: number, catalog_entries: number, git_timeout_ms: number, git_output_bytes: number, operation_timeout_ms: number, context_preview_bytes: number, context_preview_lines: number, context_directory_entries: number, context_tree_depth: number, library_folder_files: number, library_folder_bytes: number, library_file_bytes: number, library_space_pages: number, library_attachment_bytes: number, library_item_attachment_bytes: number, library_max_items: number, };
 
 export type ProjectProvider = { id: string, base_url: string, executable: string, login?: string, };
 
-export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
+export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, library_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
+
+export type LibraryItemKind = "provider_snapshot" | "folder_copy";
+
+export type LibraryItemState = "fresh" | "changed" | "unknown" | "removed_at_source" | "conflict" | "failed" | "partial";
+
+export type LibraryContainer = { container_id: string, label: string, };
+
+export type LibraryAncestor = { id: string, title: string, };
+
+export type LibraryPartial = { unit: string, have: number, total: number | null, reason: string, };
+
+export type LibraryConflictFile = { path: string, current_hash: string, };
+
+export type LibraryAttachmentState = "not_downloaded" | "downloaded" | "over_limit" | "failed";
+
+export type LibraryAttachment = { attachment_id: string, original_name: string, stored_name: string, media_type: string | null, bytes: number | null, version: string | null, state: LibraryAttachmentState, relative_path: string | null, };
+
+export type LibraryFolderInfo = { origin_path: string, git_working_tree: boolean, files: number, bytes: number, skipped_symlinks: number, skipped_special: number, skipped_ignored: number, skipped_other: number, };
+
+export type LibraryItemSummary = { item_id: string, logical_id: string, kind: LibraryItemKind, provider_id: string | null, provider_instance: string | null, resource_type: string | null, canonical_id: string | null, container: LibraryContainer | null, parent_item_id: string | null, ancestors: Array<LibraryAncestor>, order: number | null, title: string, document_path: string | null, item_path: string, source_url: string | null, original_url: string | null, source_revision: string | null, revision: string, state: LibraryItemState, partial: LibraryPartial | null, conflict: Array<LibraryConflictFile>, fetched_at: string | null, checked_at: string | null, follow_id: string | null, attachments: Array<LibraryAttachment>, folder: LibraryFolderInfo | null, diagnostics: Array<ProjectDiagnostic>, };
+
+export type LibraryFollowSummary = { follow_id: string, provider_id: string, provider_instance: string, space_key: string, space_name: string, include_attachments: boolean, page_count: number, partial: LibraryPartial | null, excluded_page_ids: Array<string>, last_refreshed_at: string | null, state: LibraryItemState, };
+
+export type LibraryListing = { root: ContextRoot, generation: string, items: Array<LibraryItemSummary>, follows: Array<LibraryFollowSummary>, next_offset: number | null, diagnostics: Array<ProjectDiagnostic>, };
+
+export type SpaceTarget = { session_id: string, space_id: string, };
+
+export type LibraryInputKind = "artifact" | "confluence_page" | "confluence_space" | "folder";
+
+export type LibraryResolveRequest = { input: string, provider_id: string | null, };
+
+export type LibraryResolution = { kind: LibraryInputKind, provider_id: string | null, provider_instance: string | null, title: string, canonical_id: string | null, container_label: string | null, existing_item_id: string | null, existing_follow_id: string | null, page_count: number | null, git_working_tree: boolean | null, file_count: number | null, diagnostics: Array<ProjectDiagnostic>, };
+
+export type LibraryAddRequest = { input: string, provider_id: string | null, hydrate_references: boolean, follow_space: boolean, download_attachments: boolean, refresh_existing: boolean, label: string | null, target: SpaceTarget | null, };
+
+export type LibraryRefreshRequest = { "scope": "items", item_ids: Array<string>, } | { "scope": "follow", follow_id: string, } | { "scope": "container", provider_instance: string, container_id: string, } | { "scope": "all" };
+
+export type LibraryReplaceRequest = { item_id: string, confirmed: Array<LibraryConflictFile>, };
+
+export type LibraryRemoveRequest = { "mode": "item", item_id: string, expected_revision: string, } | { "mode": "stop_following", follow_id: string, } | { "mode": "follow", follow_id: string, };
+
+export type LibraryAttachmentAction = "download" | "remove_downloaded";
+
+export type LibraryAttachmentRequest = { item_id: string, attachment_ids: Array<string>, action: LibraryAttachmentAction, };
+
+export type LibraryOperationKind = "add" | "refresh" | "space_add" | "space_update" | "attachments";
+
+export type LibraryPhaseName = "library" | "space";
+
+export type LibraryPhaseState = "pending" | "running" | "done" | "partial" | "failed" | "cancelled";
+
+export type LibraryPhase = { phase: LibraryPhaseName, state: LibraryPhaseState, done: number, total: number | null, message: string | null, error: ErrorResponse | null, };
+
+export type LibraryReportOutcome = "new" | "updated" | "unchanged" | "removed_at_source" | "partial" | "failed" | "conflict";
+
+export type LibraryReportRow = { item_id: string | null, follow_id: string | null, title: string, outcome: LibraryReportOutcome, reason: string | null, };
+
+export type LibraryRefreshReport = { new: number, updated: number, unchanged: number, removed_at_source: number, partial: number, failed: number, conflict: number, rows: Array<LibraryReportRow>, truncated_rows: boolean, };
+
+export type SpaceCopyMode = "reflink" | "copy" | "mixed";
+
+export type SpacePhaseResult = { space_id: string, copy_mode: SpaceCopyMode | null, written: Array<string>, skipped_edited: Array<string>, companion_root_id: string | null, };
+
+export type LibraryOperation = { operation_id: string, kind: LibraryOperationKind, phases: Array<LibraryPhase>, item_ids: Array<string>, report: LibraryRefreshReport | null, space: SpacePhaseResult | null, target: SpaceTarget | null, cancel_requested: boolean, finished: boolean, created_at: string, updated_at: string, };
+
+export type LibraryDirectoryRequest = { path: string, offset: number | null, revision: string | null, };
+
+export type LibraryDocumentRequest = { path: string, expected_revision: string | null, offset: number | null, };
+
+export type LibraryMediaRequest = { path: string, expected_revision: string | null, };
+
+export type SpaceCopyState = "up_to_date" | "library_newer" | "edited_in_space" | "removed_at_source" | "missing_in_space" | "not_in_library" | "not_linked";
+
+export type SpaceFollowSummary = { follow_id: string, space_key: string, page_count: number, new_pages: number, changed_pages: number, edited_pages: number, removed_at_source_pages: number, };
+
+export type SpaceCopyRow = { item_id: string | null, logical_id: string, title: string, provider_id: string | null, resource_type: string | null, kind: LibraryItemKind, state: SpaceCopyState, library_newer: boolean, paths: Array<string>, edited: Array<LibraryConflictFile>, copy_mode: SpaceCopyMode | null, library_revision_copied: string | null, current_library_revision: string | null, follow: SpaceFollowSummary | null, };
+
+export type SpaceAddAttemptState = "pending" | "failed";
+
+export type SpaceAddAttempt = { target: SpaceTarget, space_label: string | null, item_id: string | null, follow_id: string | null, title: string, state: SpaceAddAttemptState, error: ErrorResponse | null, operation_id: string, updated_at: string, };
+
+export type SpaceCompanionStatus = { "status": "available", companion_root_id: string, companion_label: string, } | { "status": "unavailable", error: ErrorResponse, };
+
+export type SpaceContextRequest = { target: SpaceTarget, };
+
+export type SpaceContextListing = { target: SpaceTarget, companion: SpaceCompanionStatus, attempts: Array<SpaceAddAttempt>, rows: Array<SpaceCopyRow>, behind: number, diagnostics: Array<ProjectDiagnostic>, };
+
+export type SpaceAddRequest = { target: SpaceTarget, item_ids: Array<string>, follow_ids: Array<string>, };
+
+export type SpaceAttemptsDismissRequest = { target: SpaceTarget, item_ids: Array<string>, follow_ids: Array<string>, };
+
+export type SpaceUpdateScope = { "scope": "selection", item_ids: Array<string>, follow_ids: Array<string>, } | { "scope": "all" };
+
+export type SpaceUpdateRequest = { target: SpaceTarget, scope: SpaceUpdateScope, replace_edited: Array<LibraryConflictFile>, };
+
+export type SpaceRemoveRequest = { target: SpaceTarget, logical_id: string, confirmed: Array<LibraryConflictFile>, };
 
 export type RepositoryCandidate = { repository_id: string, name: string, root: string, checkout_path: string, common_dir: string, branch: string | null, is_linked_worktree: boolean, is_detached: boolean, provenance: string, };
 
@@ -345,7 +441,7 @@ export type ExtensionKind = "context" | "review";
 
 export type DetectionConfidence = "verified_launch" | "verified_process" | "candidate" | "none" | "unsupported";
 
-export type ContextRootKind = "repository" | "companion" | "folder";
+export type ContextRootKind = "repository" | "companion" | "folder" | "library";
 
 export type ContextRoot = { root_id: string, kind: ContextRootKind, label: string, path: string, repository_id: string, checkout_path: string, companion_id: string | null, };
 

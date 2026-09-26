@@ -26,6 +26,7 @@ pub enum ContextRootKind {
     Repository,
     Companion,
     Folder,
+    Library,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

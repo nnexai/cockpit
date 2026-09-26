@@ -10,6 +10,7 @@ const text = (value: unknown): value is string => typeof value === "string";
 const nullableText = (value: unknown): value is string | null => value === null || text(value);
 const bool = (value: unknown): value is boolean => typeof value === "boolean";
 const u32 = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+const u64 = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
 const mode = (value: unknown) => value === "create" || value === "open";
 
@@ -32,12 +33,16 @@ function isArtifact(value: unknown): value is ProjectArtifact {
 
 export function parseProjectConfiguration(value: unknown): ProjectConfiguration {
   if (!record(value) || !u32(value.version) || !texts(value.repository_roots)
-    || !text(value.worktree_root) || !text(value.companion_root) || !text(value.state_root)
+    || !text(value.worktree_root) || !text(value.companion_root) || !text(value.state_root) || !text(value.library_root)
     || !text(value.branch_template) || !text(value.checkout_template)
     || !record(value.limits) || !u32(value.limits.catalog_depth) || !u32(value.limits.catalog_entries)
     || !u32(value.limits.git_timeout_ms) || !u32(value.limits.git_output_bytes) || !u32(value.limits.operation_timeout_ms)
     || !u32(value.limits.context_preview_bytes) || !u32(value.limits.context_preview_lines)
     || !u32(value.limits.context_directory_entries) || !u32(value.limits.context_tree_depth)
+    || !u32(value.limits.library_folder_files) || !u64(value.limits.library_folder_bytes)
+    || !u64(value.limits.library_file_bytes) || !u32(value.limits.library_space_pages)
+    || !u64(value.limits.library_attachment_bytes) || !u64(value.limits.library_item_attachment_bytes)
+    || !u32(value.limits.library_max_items)
     || !record(value.origins) || !Object.values(value.origins).every(text)
     || !Array.isArray(value.providers) || !value.providers.every((provider) => record(provider)
       && text(provider.id) && text(provider.base_url) && text(provider.executable) && (provider.login === undefined || (text(provider.login) && provider.login.length > 0 && provider.login.length <= 256)))) {
