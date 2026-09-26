@@ -11,7 +11,7 @@ Browser-extension annotation tools, page geometry checks, capture controls, and 
 
 ## Establish the oracle
 
-1. Read `research/ui-design-direction.md` and `research/ui-implementation-constraints.md` for the affected surface.
+1. Read the sections of `research/ui-design-direction.md` and `research/ui-implementation-constraints.md` that cover the affected surface (list headings first; don't read the whole files).
 2. Observe the current behavior in the running Herdr TUI using a disposable named session. Capture hierarchy, ordering, selection, semantic focus, keyboard ownership, action placement, and failure behavior relevant to the increment.
 3. Use the installed schema or upstream Herdr source when the UI observation does not expose the contract.
 4. State whether the increment preserves, clarifies, or replaces the Herdr behavior. A replacement requires an explicit `DECISIONS.md` entry.

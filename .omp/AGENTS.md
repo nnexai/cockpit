@@ -2,17 +2,13 @@
 
 ## Authorities
 
-- Read `CONTEXT.md` and `DECISIONS.md` before changing architecture or domain behavior.
-- Read the active phase plan before defining an increment. `NEXT_PHASE_PLAN.md` is historical when its status says complete.
-- Read `research/ui-design-direction.md` and `research/ui-implementation-constraints.md` before changing UI structure, styling, terminal rendering, focus, or interaction.
+- `CONTEXT.md`, `DECISIONS.md`, `research/ui-design-direction.md` and `research/ui-implementation-constraints.md` are authoritative. They are long: list their headings (`grep -n '^#'`) and read only the sections relevant to the change.
+- Herdr-server is the runtime authority. When Herdr behavior is ambiguous, compare with the running Herdr TUI, then upstream Herdr source or schema.
+- Planning folders are history unless the user names one.
 
-## Project verification
+## Verification
 
-- Herdr-server is runtime authority. Test mutations and terminal control only in uniquely named disposable Herdr sessions, never the user's active session.
-- Reuse a defined real-surface acceptance scenario to verify the complete user action, authoritative response or event, rendered result, and relevant failure state. UI changes need browser proof for shared frontend behavior. Changes to Tauri commands, channels, startup, window behavior, or native-only rendering also need a real native smoke.
-- Compare hierarchy, ordering, focus, ownership, and interaction semantics with the running Herdr TUI. Use upstream Herdr source or schema when observed behavior is ambiguous.
-- Reuse owned fixtures and clean up on every exit. Verify owned browser roots, helpers and services exited and ports/sockets were released; closing tabs or receiving a successful stop response is not proof. Never kill shared/user resources.
+- UI changes: exercise the changed interaction in the browser build against a disposable fixture (`scripts/verify/ui_polish_runtime.py`) and look at the result. Native-only changes (Tauri commands, channels, startup, window behavior, native rendering) also need one native run.
+- Reuse a running fixture across checks; stop it when done.
 
-## Delivery
-
-Execution and delivery policy lives in `.omp/RULES.md`; campaign-specific scope and acceptance live in its active plan. Do not duplicate execution rules in handoffs.
+Delivery rules live in `.omp/RULES.md`.
