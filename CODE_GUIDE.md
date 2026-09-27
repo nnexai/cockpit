@@ -22,7 +22,7 @@ Herdr owns live sessions, Spaces, tabs, panes, focus and layout. Cockpit project
 | Comment text and delivery | `crates/cockpit-core/src/comments/` | Exact payload bytes, CAS recovery and acknowledged paste tests |
 | Markdown and media display | `src/app/context/`, `context_media.rs` | Source mapping, hostile input, byte/pixel caps and browser/native rendering |
 | Host request decoding and composition | `crates/cockpit-host/src/server/`, `src-tauri/src/` | Equivalent browser/native DTOs and real native startup |
-| Library view and tree | `src/app/library/`, `src/app/context/contextSource.ts` | Library interaction and data-source tests |
+| Library view, Space copies and Context resources | `src/app/library/`, `src/app/context/ContextViewer.tsx`, `src/app/context/ContextResources.tsx` | Library and Space-copy actions, refresh state, and Context viewer tests |
 
 The core depends on narrow adapter traits. Hosts compose concrete adapters; provider behavior belongs in the provider crate. Keep stable error codes with a useful message at the module owning the failure. Clients decode and match response identities before frontend state accepts them.
 
@@ -85,7 +85,9 @@ library_root = "/data/cockpit/library"
 library_max_items = 20000
 ```
 
-The Library root must be absolute, contain no `..`, and must not overlap the state, companion, or worktree roots. The limits shown are defaults; configured values are bounded. The S1 interface stores and browses Library items only; it does not expose Space-copy, folder, Confluence, follow, or attachment actions.
+The Library root must be absolute, contain no `..`, and must not overlap the state, companion, or worktree roots. The limits shown are defaults; configured values are bounded. The S2 interface stores and browses Library items, refreshes providers, and adds saved items into a live Space; it does not expose updating, replacing, or removing Space copies, Confluence, follow, or attachment actions.
+
+Setup passes `Arc<LibraryService>` and validated fetch results through `ProjectService::start` and its execution boundary; `resume` passes the Library dependency without retaining provider results. Do not store LibraryService on ProjectService: LibraryService already owns ProjectService for fresh Space/companion authorization. Both HTTP and Tauri compose the same acyclic graph. Pre-start validation fetches without persistence, and `add_fetched_and_copy` commits the validated primary and linked assets plus their pending attempts in one Library operation before any companion copy starts. A failed copy is durable and resumes through `start_space_add`, without provider refetch. `SourceService` has no disk cache or persisted import/list/refresh routes, and the old `<state_root>/sources` contents must remain untouched.
 
 ## Boundaries worth preserving
 

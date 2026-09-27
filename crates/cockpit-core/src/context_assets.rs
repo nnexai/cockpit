@@ -9,7 +9,10 @@ use cockpit_protocol::context_assets::{
     ContextSnapshotCopyMode, ContextSnapshotMode, ContextSnapshotResponse,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, RepositoryCandidate};
-use cockpit_protocol::sources::{SourceFreshness, SourceMaterializationStatus};
+use cockpit_protocol::library::{
+    LibraryConflictFile, LibraryItemKind, LibraryItemState, LibraryItemSummary,
+    SpaceCopyMode, SpaceCopyRow, SpaceCopyState,
+};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,7 +24,7 @@ use crate::process::run_bounded_command;
 use crate::project_store::{CompanionManifest, atomic_write_json, read_json_bounded, timestamp};
 
 const MANIFEST_NAME: &str = "context-manifest.json";
-const MANIFEST_SCHEMA_VERSION: u32 = 1;
+const MANIFEST_SCHEMA_VERSION: u32 = 2;
 const PENDING_SOURCE_INTENT_SCHEMA_VERSION: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES: usize = 512;
@@ -37,9 +40,36 @@ struct ContextManifest {
     owner_worktree_path: String,
     primary_repository_identity: String,
     entries: Vec<ContextManifestEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    library_follows: Vec<SpaceFollowRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    library_copies: Vec<LibraryCopyRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_source_intent: Option<PendingSourceIntent>,
     updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceFollowRecord {
+    follow_id: String,
+    known_page_item_ids: Vec<String>,
+    added_at: String,
+    updated_at: String,
+}
+
+/// The complete item inventory is persisted with the first file's write-ahead
+/// intent, so an interrupted multi-file copy cannot masquerade as complete.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LibraryCopyRecord {
+    item_id: String,
+    files: Vec<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LIBRARY_COPY_FAIL_AFTER_FILES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +91,14 @@ struct ContextManifestEntry {
     source_identity: String,
     source_hash_before: String,
     source_hash_after: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    library_item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    library_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    library_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    library_follow_id: Option<String>,
 }
 
 /// A durable, in-manifest write-ahead record for one generated source
@@ -76,8 +114,269 @@ struct PendingSourceIntent {
     intended_entry: ContextManifestEntry,
 }
 
+/// A verified Library revision, held under the caller's shared Library lock.
+pub(crate) struct LibraryItemView<'a> {
+    pub root: &'a Dir,
+    pub summary: &'a LibraryItemSummary,
+    pub files: &'a [crate::library::store::MarkerFile],
+}
+
+impl LibraryItemView<'_> {
+    fn files(&self) -> impl Iterator<Item = &crate::library::store::MarkerFile> {
+        self.files.iter().filter(|file| file.path != ".cockpit-item.json" && file.hash != "directory")
+    }
+}
+
+pub(crate) enum LibraryCopyMode { NewOnly }
+
+pub(crate) struct LibraryCopyResult {
+    pub written: Vec<String>,
+    pub copy_mode: Option<SpaceCopyMode>,
+}
+
+fn aggregate_copy_mode(modes: impl Iterator<Item = SpaceCopyMode>) -> Option<SpaceCopyMode> {
+    modes.reduce(|left, right| if left == right { left } else { SpaceCopyMode::Mixed })
+}
+
+fn library_destination(item: &LibraryItemView<'_>, file: &str, file_count: usize) -> String {
+    let summary = item.summary;
+    let canonical = readable_name(summary.canonical_id.as_deref().unwrap_or(&summary.item_id));
+    if summary.kind == LibraryItemKind::FolderCopy {
+        return format!("folders/{}-{}/{}", readable_name(&summary.title),
+            short_hash(summary.item_id.as_bytes()), file);
+    }
+    let base = format!("sources/{}/{}",
+        readable_name(summary.provider_id.as_deref().unwrap_or("unknown")),
+        readable_name(summary.resource_type.as_deref().unwrap_or("document")));
+    if file_count == 1 && summary.resource_type.as_deref() != Some("page") {
+        format!("{base}/{canonical}.md")
+    } else {
+        let container = summary.container.as_ref()
+            .map(|c| format!("{}/", readable_name(&c.container_id))).unwrap_or_default();
+        format!("{base}/{container}{canonical}-{}/{file}", readable_name(&summary.title))
+    }
+}
+
+/// NewOnly never updates an existing linked revision. Explicit re-add can link
+/// a legacy source or restore a missing file. Copies use the durable intent path.
+pub(crate) fn materialize_library_item(
+    root: &Dir, companion_id: &str, item: &LibraryItemView<'_>, _mode: LibraryCopyMode,
+) -> Result<LibraryCopyResult, InspectionError> {
+    let _lock = acquire_companion_lock(root)?;
+    let association = read_companion_association(root)?;
+    let mut manifest = read_manifest(root, companion_id, &association)?;
+    recover_pending_source_intent(root, &mut manifest)?;
+    let mut written = Vec::new();
+    let mut modes = Vec::new();
+    let file_count = item.files().count();
+    if !manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id
+        && copy.files.iter().map(String::as_str).eq(item.files().map(|file| file.path.as_str())))
+    {
+        manifest.library_copies.retain(|copy| copy.item_id != item.summary.item_id);
+        manifest.library_copies.push(LibraryCopyRecord {
+            item_id: item.summary.item_id.clone(),
+            files: item.files().map(|file| file.path.clone()).collect(),
+        });
+    }
+    for file in item.files() {
+        let logical_id = if file.path == "document.md" || file_count == 1 {
+            item.summary.logical_id.clone()
+        } else { format!("{}#{}", item.summary.logical_id, file.path) };
+        let previous = manifest.entries.iter().find(|entry| entry.logical_id == logical_id).cloned();
+        let mut missing = false;
+        if let Some(entry) = &previous {
+            match read_stable_source(root, &safe_companion_relative(&entry.relative_path)?) {
+                Ok(current) => {
+                    if current.hash != entry.content_hash {
+                        return Err(InspectionError::new("source_sync_conflict", "An edited Space copy will not be overwritten"));
+                    }
+                    if entry.library_item_id.is_some() {
+                        if entry.library_item_id.as_deref() != Some(item.summary.item_id.as_str())
+                            || entry.library_revision.as_deref() != Some(item.summary.revision.as_str())
+                            || entry.content_hash != file.hash
+                        {
+                            return Err(InspectionError::new("source_sync_conflict", "An existing Space revision requires an explicit update"));
+                        }
+                        modes.extend(match entry.copy_mode.as_str() {
+                            "reflink" => Some(SpaceCopyMode::Reflink),
+                            "copy" => Some(SpaceCopyMode::Copy), _ => None,
+                        });
+                        continue;
+                    }
+                }
+                Err(error) if error.code == "context_snapshot_file_missing" => missing = true,
+                Err(error) => return Err(error),
+            }
+        }
+        let source_path = safe_source_relative(&file.path)?;
+        let source = read_stable_source(item.root, &source_path)?;
+        if source.hash != file.hash || source.bytes.len() as u64 != file.bytes {
+            return Err(InspectionError::new("library_conflict", "Library file differs from its recorded revision"));
+        }
+        let relative = if let Some(entry) = &previous { entry.relative_path.clone() } else {
+            let candidate = library_destination(item, &file.path, file_count);
+            if manifest.entries.iter().any(|entry| entry.relative_path == candidate)
+                || root.symlink_metadata(&candidate).is_ok()
+            {
+                if file_count != 1 { return Err(source_publish_conflict()); }
+                format!("{}-{}.md", candidate.trim_end_matches(".md"), short_hash(logical_id.as_bytes()))
+            } else { candidate }
+        };
+        let path = safe_companion_relative(&relative)?;
+        let (parent, leaf) = create_parent(root, &path)?;
+        let temporary = format!(".source-{}.tmp", Uuid::new_v4());
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).follow(cap_fs_ext::FollowSymlinks::No);
+        let mut destination = parent.open_with(&temporary, &options)
+            .map_err(io_error("source_materialize_failed"))?;
+        let cloned = (|| {
+            let source_file = open_source_for_clone(item.root, &source_path, &source.identity)?;
+            let mode = match reflink(&destination, &source_file) {
+                Ok(()) => SpaceCopyMode::Reflink,
+                Err(error) if reflink_fallback(&error) => {
+                    destination.write_all(&source.bytes).map_err(io_error("source_materialize_failed"))?;
+                    SpaceCopyMode::Copy
+                }
+                Err(error) => return Err(io_error("source_materialize_failed")(error)),
+            };
+            destination.sync_all().map_err(io_error("source_materialize_failed"))?;
+            if read_regular(&parent, Path::new(&temporary))?.hash != file.hash {
+                return Err(InspectionError::new("library_conflict", "Library source changed during copy"));
+            }
+            Ok(mode)
+        })();
+        let copy_mode = match cloned {
+            Ok(mode) => mode,
+            Err(error) => { let _ = parent.remove_file(&temporary); return Err(error); }
+        };
+        let intended = ContextManifestEntry {
+            logical_id, relative_path: relative.clone(),
+            kind: item.summary.resource_type.clone().unwrap_or_else(|| "folder".into()),
+            source: item.summary.provider_id.clone().unwrap_or_else(|| "local".into()),
+            generated: true, revision: item.summary.revision.clone(),
+            content_hash: file.hash.clone(), bytes: file.bytes,
+            copy_mode: match copy_mode { SpaceCopyMode::Reflink => "reflink", _ => "copy" }.into(),
+            status: "complete".into(), updated_at: timestamp(),
+            source_repository_id: item.summary.provider_instance.clone().unwrap_or_default(),
+            source_checkout_path: String::new(),
+            source_identity: item.summary.canonical_id.clone().unwrap_or_default(),
+            source_hash_before: file.hash.clone(), source_hash_after: file.hash.clone(),
+            library_item_id: Some(item.summary.item_id.clone()),
+            library_revision: Some(item.summary.revision.clone()),
+            library_file: Some(file.path.clone()), library_follow_id: item.summary.follow_id.clone(),
+        };
+        manifest.pending_source_intent = Some(PendingSourceIntent {
+            schema_version: PENDING_SOURCE_INTENT_SCHEMA_VERSION, relative_path: relative.clone(),
+            previous_written_hash: previous.as_ref().map(|entry| entry.content_hash.clone()),
+            previous_entry: previous.clone(), new_written_hash: file.hash.clone(),
+            intended_entry: intended.clone(),
+        });
+        write_manifest_durable(root, &manifest)?;
+        let recheck = if missing {
+            recheck_source_destination(root, &path, &parent, &leaf, &None)
+        } else { recheck_source_destination(root, &path, &parent, &leaf, &previous) };
+        if let Err(error) = recheck {
+            discard_pending_source_intent(root, &mut manifest, &parent, &temporary)?;
+            return Err(error);
+        }
+        parent.rename(&temporary, &parent, &leaf).map_err(io_error("source_materialize_failed"))?;
+        sync_directory(&parent).map_err(io_error("source_materialize_failed"))?;
+        replace_source_manifest_entry(&mut manifest, intended);
+        manifest.pending_source_intent = None;
+        manifest.updated_at = timestamp();
+        write_manifest_durable(root, &manifest)?;
+        written.push(relative);
+        modes.push(copy_mode);
+        #[cfg(test)]
+        if LIBRARY_COPY_FAIL_AFTER_FILES.with(|fault| {
+            if fault.get() == Some(written.len()) { fault.set(None); true } else { false }
+        }) {
+            return Err(InspectionError::new("library_test_crash", "Space file published before remaining files"));
+        }
+    }
+    Ok(LibraryCopyResult { written, copy_mode: aggregate_copy_mode(modes.into_iter()) })
+}
+
+/// D23 precedence applies identically to a file and the multi-file aggregate.
+fn space_copy_state(
+    missing: bool, edited: bool, linked: bool,
+    library: Option<&LibraryItemSummary>, library_newer: bool,
+) -> SpaceCopyState {
+    if missing { SpaceCopyState::MissingInSpace }
+    else if edited { SpaceCopyState::EditedInSpace }
+    else if !linked { SpaceCopyState::NotLinked }
+    else if library.is_none() { SpaceCopyState::NotInLibrary }
+    else if library.is_some_and(|item| item.state == LibraryItemState::RemovedAtSource) {
+        SpaceCopyState::RemovedAtSource
+    } else if library_newer { SpaceCopyState::LibraryNewer }
+    else { SpaceCopyState::UpToDate }
+}
+
+pub(crate) fn library_space_rows(
+    root: &Dir, companion_id: &str, library: &[LibraryItemSummary],
+) -> Result<Vec<SpaceCopyRow>, InspectionError> {
+    let association = read_companion_association(root)?;
+    // Listing never writes, including v1 manifests and interrupted intents.
+    let manifest = read_manifest(root, companion_id, &association)?;
+    let mut groups = std::collections::BTreeMap::<String, Vec<&ContextManifestEntry>>::new();
+    for entry in &manifest.entries {
+        if entry.status == "skipped_gitlink" { continue; }
+        let key = entry.library_item_id.clone().unwrap_or_else(|| entry.logical_id.clone());
+        groups.entry(key).or_default().push(entry);
+    }
+    let mut rows = Vec::new();
+    for entries in groups.values() {
+        let first = entries.iter().copied().find(|entry| entry.library_file.as_deref() == Some("document.md"))
+            .unwrap_or(entries[0]);
+        let current = first.library_item_id.as_ref()
+            .and_then(|id| library.iter().find(|item| &item.item_id == id));
+        let newer = current.is_some_and(|item| entries.iter()
+            .any(|entry| entry.library_revision.as_deref() != Some(item.revision.as_str())));
+        let mut missing = manifest.library_copies.iter()
+            .find(|copy| Some(&copy.item_id) == first.library_item_id.as_ref())
+            .is_some_and(|copy| copy.files.iter().any(|file| !entries.iter()
+                .any(|entry| entry.library_file.as_ref() == Some(file))));
+        let mut edited = Vec::new();
+        for entry in entries {
+            match read_stable_source(root, &safe_companion_relative(&entry.relative_path)?) {
+                Ok(file) if file.hash != entry.content_hash => edited.push(LibraryConflictFile {
+                    path: entry.relative_path.clone(), current_hash: file.hash,
+                }),
+                Ok(_) => {}
+                Err(error) if error.code == "context_snapshot_file_missing" => missing = true,
+                Err(error) => return Err(error),
+            }
+        }
+        rows.push(SpaceCopyRow {
+            item_id: first.library_item_id.clone(),
+            logical_id: current.map(|item| item.logical_id.clone()).unwrap_or_else(|| {
+                first.library_file.as_ref()
+                    .and_then(|file| first.logical_id.strip_suffix(file.as_str()).and_then(|prefix| prefix.strip_suffix('#')))
+                    .unwrap_or(&first.logical_id).into()
+            }),
+            title: current.map(|item| item.title.clone()).unwrap_or_else(|| first.source_identity.clone()),
+            provider_id: Some(first.source.clone()), resource_type: Some(first.kind.clone()),
+            kind: current.map(|item| item.kind).unwrap_or(LibraryItemKind::ProviderSnapshot),
+            state: space_copy_state(missing, !edited.is_empty(), first.library_item_id.is_some(), current, newer),
+            library_newer: newer,
+            paths: entries.iter().map(|entry| entry.relative_path.clone()).collect(), edited,
+            copy_mode: aggregate_copy_mode(entries.iter().filter_map(|entry| match entry.copy_mode.as_str() {
+                "reflink" => Some(SpaceCopyMode::Reflink), "copy" => Some(SpaceCopyMode::Copy), _ => None,
+            })),
+            library_revision_copied: first.library_revision.clone(),
+            current_library_revision: current.map(|item| item.revision.clone()), follow: None,
+        });
+    }
+    rows.sort_by(|a, b| {
+        let rank = |state| match state { SpaceCopyState::UpToDate => 1, SpaceCopyState::NotLinked => 2, _ => 0 };
+        (rank(a.state), &a.title, &a.logical_id).cmp(&(rank(b.state), &b.title, &b.logical_id))
+    });
+    Ok(rows)
+}
+
 /// Materialize one immutable provider payload through the same companion lock,
 /// manifest, and no-follow descriptor policy used by repository snapshots.
+#[cfg(test)]
 pub(crate) fn materialize_source_markdown(
     root: &Dir,
     companion_id: &str,
@@ -185,6 +484,10 @@ pub(crate) fn materialize_source_markdown(
         source_identity: canonical_id.to_owned(),
         source_hash_before: content_hash.to_owned(),
         source_hash_after: materialized_hash,
+        library_item_id: None,
+        library_revision: None,
+        library_file: None,
+        library_follow_id: None,
     };
     manifest.pending_source_intent = Some(PendingSourceIntent {
         schema_version: PENDING_SOURCE_INTENT_SCHEMA_VERSION,
@@ -214,63 +517,6 @@ pub(crate) fn materialize_source_markdown(
     Ok((relative, true))
 }
 
-/// Resolve a cached source against this exact companion manifest. This does
-/// not inspect arbitrary source files: only a manifest-owned generated path is
-/// eligible for a materialized result.
-pub(crate) fn source_materialization_state(
-    root: &Dir,
-    companion_id: &str,
-    provider_id: &str,
-    provider_instance: &str,
-    resource_type: &str,
-    canonical_id: &str,
-    current_hash: &str,
-) -> Result<(SourceFreshness, SourceMaterializationStatus, Option<String>), InspectionError> {
-    let _lock = acquire_companion_lock(root)?;
-    let association = read_companion_association(root)?;
-    let manifest = read_manifest(root, companion_id, &association)?;
-    let logical_id =
-        format!("source:{provider_id}:{provider_instance}:{resource_type}:{canonical_id}");
-    let Some(entry) = manifest
-        .entries
-        .iter()
-        .find(|entry| entry.logical_id == logical_id)
-    else {
-        return Ok((
-            SourceFreshness::Unknown,
-            SourceMaterializationStatus::Unchanged,
-            None,
-        ));
-    };
-    let path = safe_companion_relative(&entry.relative_path)?;
-    let current = match read_stable_source(root, &path) {
-        Ok(current) => current,
-        Err(_) => {
-            return Ok((
-                SourceFreshness::Unavailable,
-                SourceMaterializationStatus::Failed,
-                Some(entry.relative_path.clone()),
-            ));
-        }
-    };
-    if current.hash != entry.content_hash {
-        return Ok((
-            SourceFreshness::Conflict,
-            SourceMaterializationStatus::Conflict,
-            Some(entry.relative_path.clone()),
-        ));
-    }
-    let freshness = if entry.source_hash_before == current_hash {
-        SourceFreshness::Fresh
-    } else {
-        SourceFreshness::Changed
-    };
-    Ok((
-        freshness,
-        SourceMaterializationStatus::Unchanged,
-        Some(entry.relative_path.clone()),
-    ))
-}
 
 #[derive(Debug)]
 struct SourceBytes {
@@ -564,6 +810,10 @@ fn snapshot_into_staging(
             source_identity: source.identity,
             source_hash_before: source.hash.clone(),
             source_hash_after: source.hash,
+            library_item_id: None,
+            library_revision: None,
+            library_file: None,
+            library_follow_id: None,
         });
         total_bytes += entries.last().expect("pushed entry").bytes;
     }
@@ -593,6 +843,10 @@ fn snapshot_into_staging(
             source_identity: "gitlink".to_owned(),
             source_hash_before: hash(gitlink.commit.as_bytes()),
             source_hash_after: hash(gitlink.commit.as_bytes()),
+            library_item_id: None,
+            library_revision: None,
+            library_file: None,
+            library_follow_id: None,
         });
         diagnostics.push(diagnostic(
             "context_snapshot_gitlink",
@@ -791,9 +1045,9 @@ fn read_manifest(
 ) -> Result<ContextManifest, InspectionError> {
     match root.symlink_metadata(MANIFEST_NAME) {
         Ok(_) => {
-            let manifest: ContextManifest =
+            let mut manifest: ContextManifest =
                 read_json_bounded(root, MANIFEST_NAME, MAX_MANIFEST_BYTES)?;
-            if manifest.schema_version != MANIFEST_SCHEMA_VERSION
+            if !matches!(manifest.schema_version, 1 | MANIFEST_SCHEMA_VERSION)
                 || manifest.companion_id != companion_id
                 || manifest.owner_workspace_id != association.herdr_workspace_id
                 || manifest.owner_worktree_path != association.checkout_path
@@ -804,6 +1058,8 @@ fn read_manifest(
                     "the context manifest is not owned by this authorized companion",
                 ));
             }
+            // Upgrade only in memory; reads never rewrite legacy manifests.
+            manifest.schema_version = MANIFEST_SCHEMA_VERSION;
             Ok(manifest)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(ContextManifest {
@@ -813,6 +1069,8 @@ fn read_manifest(
             owner_worktree_path: association.checkout_path.clone(),
             primary_repository_identity: association.repository_key.clone(),
             entries: Vec::new(),
+            library_follows: Vec::new(),
+            library_copies: Vec::new(),
             pending_source_intent: None,
             updated_at: timestamp(),
         }),
@@ -1316,7 +1574,13 @@ fn open_directory(root: &Dir, path: &Path) -> Result<Dir, InspectionError> {
         };
         current = current
             .open_dir_nofollow(Path::new(name))
-            .map_err(io_error("context_snapshot_destination_unavailable"))?;
+            .map_err(|error| {
+                if error.kind() == ErrorKind::NotFound {
+                    InspectionError::new("context_snapshot_file_missing", error.to_string())
+                } else {
+                    io_error("context_snapshot_destination_unavailable")(error)
+                }
+            })?;
     }
     Ok(current)
 }
@@ -1935,6 +2199,8 @@ mod tests {
             owner_worktree_path: "/worktree-a".to_owned(),
             primary_repository_identity: "primary-repository".to_owned(),
             entries: Vec::new(),
+            library_follows: Vec::new(),
+            library_copies: Vec::new(),
             pending_source_intent: None,
             updated_at: timestamp(),
         };
@@ -2235,42 +2501,6 @@ mod tests {
             fs::read(root.join(&second.0)).expect("preserved"),
             b"user edit\n"
         );
-        let conflict = source_materialization_state(
-            &dir,
-            "companion-a",
-            "tea",
-            "https://forge.test",
-            "issue",
-            "acme/repo#1",
-            "three",
-        )
-        .expect("conflict state");
-        assert_eq!(conflict.0, SourceFreshness::Conflict);
-        assert_eq!(conflict.2.as_deref(), Some(second.0.as_str()));
-        let absent = source_materialization_state(
-            &dir,
-            "companion-a",
-            "tea",
-            "https://forge.test",
-            "issue",
-            "acme/repo#2",
-            "other",
-        )
-        .expect("other source");
-        assert!(absent.2.is_none());
-        fs::remove_file(root.join(&second.0)).expect("remove generated file");
-        let missing = source_materialization_state(
-            &dir,
-            "companion-a",
-            "tea",
-            "https://forge.test",
-            "issue",
-            "acme/repo#1",
-            "three",
-        )
-        .expect("missing state");
-        assert_eq!(missing.0, SourceFreshness::Unavailable);
-        assert_eq!(missing.2.as_deref(), Some(second.0.as_str()));
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -2316,20 +2546,6 @@ mod tests {
             read_manifest(&dir, "companion-a", &association).expect("recovered manifest");
         assert_eq!(recovered_manifest.entries, vec![intended]);
         assert!(recovered_manifest.pending_source_intent.is_none());
-        assert_eq!(
-            source_materialization_state(
-                &dir,
-                "companion-a",
-                "tea",
-                "https://forge.test",
-                "issue",
-                "acme/repo#1",
-                "two",
-            )
-            .expect("fresh state")
-            .0,
-            SourceFreshness::Fresh
-        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -2395,5 +2611,189 @@ mod tests {
             .1
         );
         fs::remove_dir_all(root).expect("cleanup");
+    }
+}
+
+#[cfg(test)]
+mod library_copy_tests {
+    use super::*;
+
+    fn item() -> LibraryItemSummary {
+        LibraryItemSummary {
+            item_id: "source:item".into(), logical_id: "source:tea:https://forge.test:issue:acme/repo#1".into(),
+            kind: LibraryItemKind::ProviderSnapshot, provider_id: Some("tea".into()),
+            provider_instance: Some("https://forge.test".into()), resource_type: Some("issue".into()),
+            canonical_id: Some("acme/repo#1".into()), container: None, parent_item_id: None,
+            ancestors: vec![], order: None, title: "Issue".into(), document_path: Some("item/document.md".into()),
+            item_path: "item".into(), source_url: None, original_url: None, source_revision: Some("1".into()),
+            revision: "revision-one".into(), state: LibraryItemState::Fresh, partial: None,
+            conflict: vec![], fetched_at: None, checked_at: None, follow_id: None, attachments: vec![],
+            folder: None, diagnostics: vec![],
+        }
+    }
+
+    struct Fixture { path: PathBuf, library: Dir, first: Dir, second: Dir }
+    impl Fixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("cockpit-space-copy-{}", Uuid::new_v4()));
+            for name in ["library", "first", "second"] { std::fs::create_dir_all(path.join(name)).unwrap(); }
+            let open = |name| Dir::open_ambient_dir(path.join(name), cap_std::ambient_authority()).unwrap();
+            let library = open("library");
+            let first = open("first");
+            let second = open("second");
+            for dir in [&first, &second] {
+                atomic_write_json(dir, "manifest.json", &CompanionManifest {
+                    schema_version: 1, cockpit_operation_id: "companion".into(),
+                    herdr_session_identity: "endpoint".into(), herdr_workspace_id: "space".into(),
+                    repository_key: String::new(), repository_root: String::new(),
+                    checkout_path: "/checkout".into(), artifact: None, created_at: timestamp(),
+                    updated_at: timestamp(), ownership: "cockpit".into(),
+                }).unwrap();
+            }
+            Self { path, library, first, second }
+        }
+        fn file(&self, path: &str, bytes: &[u8]) -> crate::library::store::MarkerFile {
+            if let Some(parent) = Path::new(path).parent() { self.library.create_dir_all(parent).unwrap(); }
+            self.library.write(path, bytes).unwrap();
+            crate::library::store::MarkerFile { path: path.into(), hash: hash(bytes), bytes: bytes.len() as u64 }
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+    }
+
+    #[test]
+    fn independent_inodes_current_no_write_and_edit_protection() {
+        let f = Fixture::new();
+        let summary = item();
+        let files = [f.file("document.md", b"saved bytes")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let copy = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let path = &copy.written[0];
+        materialize_library_item(&f.second, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        #[cfg(unix)] {
+            use cap_std::fs::MetadataExt;
+            let original = f.library.metadata("document.md").unwrap().ino();
+            let first = f.first.metadata(path).unwrap().ino();
+            let second = f.second.metadata(path).unwrap().ino();
+            assert_ne!(original, first); assert_ne!(original, second); assert_ne!(first, second);
+        }
+        let before = f.first.read(MANIFEST_NAME).unwrap();
+        let metadata = f.first.metadata(path).unwrap();
+        let current = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        assert!(current.written.is_empty());
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
+        assert_eq!(identity(&f.first.metadata(path).unwrap()), identity(&metadata));
+        f.first.write(path, b"user edit").unwrap();
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "source_sync_conflict");
+        assert_eq!(f.second.read(path).unwrap(), b"saved bytes");
+        assert_eq!(f.library.read("document.md").unwrap(), b"saved bytes");
+    }
+
+    #[test]
+    fn multi_file_precedence_and_missing_parent_restore() {
+        let f = Fixture::new();
+        let mut summary = item();
+        let files = [f.file("document.md", b"body"), f.file("attachments/image.png", b"image bytes")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        assert!(copied.written[0].ends_with("/document.md"));
+        assert!(copied.written[1].ends_with("/attachments/image.png"));
+        let rows = |item: &LibraryItemSummary| library_space_rows(&f.first, "companion", std::slice::from_ref(item)).unwrap();
+        assert_eq!(rows(&summary)[0].state, SpaceCopyState::UpToDate);
+        summary.revision = "revision-two".into();
+        assert_eq!(rows(&summary)[0].state, SpaceCopyState::LibraryNewer);
+        summary.state = LibraryItemState::RemovedAtSource;
+        assert_eq!(rows(&summary)[0].state, SpaceCopyState::RemovedAtSource);
+        f.first.write(&copied.written[0], b"edited").unwrap();
+        assert_eq!(rows(&summary)[0].state, SpaceCopyState::EditedInSpace);
+        assert!(rows(&summary)[0].library_newer);
+        assert_eq!(library_space_rows(&f.first, "companion", &[]).unwrap()[0].state, SpaceCopyState::EditedInSpace);
+        let parent = Path::new(&copied.written[1]).parent().unwrap();
+        f.first.remove_dir_all(parent).unwrap();
+        assert_eq!(rows(&summary)[0].state, SpaceCopyState::MissingInSpace);
+        f.first.write(&copied.written[0], b"body").unwrap();
+        summary.revision = "revision-one".into();
+        summary.state = LibraryItemState::Fresh;
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let restored = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        assert_eq!(restored.written, vec![copied.written[1].clone()]);
+        assert_eq!(rows(&summary)[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(library_space_rows(&f.first, "companion", &[]).unwrap()[0].state, SpaceCopyState::NotInLibrary);
+    }
+
+    #[test]
+    fn legacy_manifest_is_inert_until_explicit_readd() {
+        let f = Fixture::new();
+        let summary = item();
+        let (legacy_path, _) = materialize_source_markdown(&f.first, "companion",
+            "tea", "https://forge.test", "issue", "acme/repo#1", Some("old"), "old-hash", b"legacy bytes").unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_slice(&f.first.read(MANIFEST_NAME).unwrap()).unwrap();
+        legacy["schema_version"] = 1.into();
+        let bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+        f.first.write(MANIFEST_NAME, &bytes).unwrap();
+        let old_entry = legacy["entries"][0].clone();
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::NotLinked);
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), bytes);
+        assert_eq!(f.first.read(&legacy_path).unwrap(), b"legacy bytes");
+        // Another item's v2 write preserves every field of the unlinked entry.
+        materialize_source_markdown(&f.first, "companion", "tea", "https://forge.test",
+            "issue", "acme/repo#2", None, "two", b"another").unwrap();
+        let upgraded: serde_json::Value = serde_json::from_slice(&f.first.read(MANIFEST_NAME).unwrap()).unwrap();
+        assert_eq!(upgraded["schema_version"], 2);
+        assert_eq!(upgraded["entries"][0], old_entry);
+        let files = [f.file("document.md", b"Library bytes")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let linked = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        assert_eq!(linked.written, vec![legacy_path.clone()]);
+        let rows = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap();
+        assert_eq!(rows.iter().find(|row| row.item_id.is_some()).unwrap().state, SpaceCopyState::UpToDate);
+        let untouched = rows.iter().find(|row| row.item_id.is_none()).unwrap();
+        assert_eq!(untouched.state, SpaceCopyState::NotLinked);
+        assert_eq!(f.first.read(&untouched.paths[0]).unwrap(), b"another");
+        assert_eq!(f.first.read(legacy_path).unwrap(), b"Library bytes");
+    }
+
+    #[test]
+    fn interrupted_multi_file_copy_stays_missing_without_any_attempt_record() {
+        let f = Fixture::new();
+        let summary = item();
+        let files = [f.file("document.md", b"body"), f.file("attachments/image.png", b"image")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        LIBRARY_COPY_FAIL_AFTER_FILES.with(|fault| fault.set(Some(1)));
+        let failure = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap();
+        assert_eq!(failure.code, "library_test_crash");
+        // This listing uses a reopened companion and no Library-side attempt
+        // storage at all: dismissing an attempt cannot turn the partial copy green.
+        let reopened = Dir::open_ambient_dir(f.path.join("first"), cap_std::ambient_authority()).unwrap();
+        let before = reopened.read(MANIFEST_NAME).unwrap();
+        let rows = library_space_rows(&reopened, "companion", std::slice::from_ref(&summary)).unwrap();
+        assert_eq!(rows[0].paths.len(), 1);
+        assert_eq!(rows[0].state, SpaceCopyState::MissingInSpace);
+        assert_eq!(library_space_rows(&reopened, "companion", &[]).unwrap()[0].state, SpaceCopyState::MissingInSpace);
+        assert_eq!(reopened.read(MANIFEST_NAME).unwrap(), before);
+        let completed = materialize_library_item(&reopened, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        assert_eq!(completed.written.len(), 1);
+        assert!(completed.written[0].ends_with("/attachments/image.png"));
+        let rows = library_space_rows(&reopened, "companion", std::slice::from_ref(&summary)).unwrap();
+        assert_eq!(rows[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(rows[0].paths.len(), 2);
+    }
+
+    #[test]
+    fn unsafe_library_source_cannot_escape_or_be_hardlinked() {
+        let f = Fixture::new();
+        let summary = item();
+        let mut files = [f.file("document.md", b"bytes")];
+        files[0].path = "../outside".into();
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "context_snapshot_path");
+        #[cfg(unix)] {
+            files[0].path = "document.md".into();
+            std::fs::hard_link(f.path.join("library/document.md"), f.path.join("alias")).unwrap();
+            let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+            assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "context_snapshot_hardlink");
+        }
+        assert!(!f.first.exists(MANIFEST_NAME));
     }
 }

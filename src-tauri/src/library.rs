@@ -6,7 +6,8 @@ use cockpit_protocol::{
     library::{
         LibraryAddRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing,
         LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest,
-        LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest,
+        LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, SpaceAddRequest,
+        SpaceAttemptsDismissRequest, SpaceContextListing, SpaceContextRequest,
     },
     v1::ErrorResponse,
 };
@@ -22,6 +23,32 @@ fn bounded_operation(mut operation: LibraryOperation) -> LibraryOperation {
         report.truncated_rows = true;
     }
     operation
+}
+
+fn validate_space_request(
+    target: &cockpit_protocol::library::SpaceTarget,
+    items: usize,
+) -> Result<(), ErrorResponse> {
+    if target.session_id.is_empty()
+        || target.session_id.len() > 96
+        || !target
+            .session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        || target.space_id.is_empty()
+        || target.space_id.len() > 128
+        || !target
+            .space_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-'))
+        || items > 5_000
+    {
+        return Err(super::stream_error(
+            "invalid_library_request",
+            "Expected a valid bounded Space request",
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -57,6 +84,9 @@ pub async fn cockpit_library_add(
     service: State<'_, CockpitService>,
 ) -> Result<LibraryOperation, ErrorResponse> {
     let request: LibraryAddRequest = decode_request(request, "library add")?;
+    if let Some(target) = &request.target {
+        validate_space_request(target, 0)?;
+    }
     let operation = service
         .library()
         .map_err(inspection_error_response)?
@@ -176,6 +206,59 @@ pub async fn cockpit_library_media(
         .library()
         .map_err(inspection_error_response)?
         .media(request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_library_space_list(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<SpaceContextListing, ErrorResponse> {
+    let request: SpaceContextRequest = decode_request(request, "library space list")?;
+    validate_space_request(&request.target, 0)?;
+    service
+        .library()
+        .map_err(inspection_error_response)?
+        .space_listing(request.target)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_library_space_add(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<LibraryOperation, ErrorResponse> {
+    let request: SpaceAddRequest = decode_request(request, "library space add")?;
+    validate_space_request(
+        &request.target,
+        request.item_ids.len() + request.follow_ids.len(),
+    )?;
+    let operation = service
+        .library()
+        .map_err(inspection_error_response)?
+        .start_space_add(request)
+        .await
+        .map_err(inspection_error_response)?;
+    Ok(bounded_operation(operation))
+}
+
+#[tauri::command]
+pub async fn cockpit_library_space_attempts_dismiss(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<(), ErrorResponse> {
+    let request: SpaceAttemptsDismissRequest =
+        decode_request(request, "library space attempts dismiss")?;
+    validate_space_request(
+        &request.target,
+        request.item_ids.len() + request.follow_ids.len(),
+    )?;
+    service
+        .library()
+        .map_err(inspection_error_response)?
+        .dismiss_space_attempts(request)
         .await
         .map_err(inspection_error_response)
 }

@@ -19,8 +19,11 @@ import type {
   PanePresentation,
   CommentDraft,
   LibraryItemSummary,
+  LibraryOperation,
   LibraryRefreshRequest,
   ReviewComparison,
+  SpaceContextListing,
+  SpaceTarget,
 } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "./CommentDrafts";
 import { ContextSearch } from "./ContextSearch";
@@ -33,11 +36,13 @@ import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerL
 import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
 import { AddContextDialog } from "../library/AddContextDialog";
 import { LibraryConfirmDialog } from "../library/LibraryConfirmDialog";
-import { LibraryItemHeader } from "../library/LibraryItemHeader";
+import { LibraryItemHeader, type ItemSpaceState } from "../library/LibraryItemHeader";
 import { LibraryMenu, LibraryTree, menuAnchor, type LibraryItemActions } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
-import { providerFamily } from "../library/libraryState";
-import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, type LibraryListingState } from "../library/useLibraryOperation";
+import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
+import { headerSpaceAction } from "../library/spaceCopyPresentation";
+import { spaceAddFailure } from "../library/SpaceContextList";
+import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
 import "./context.css";
 
 export type ContextViewMode = "auto" | "source" | "markdown" | "html";
@@ -143,6 +148,11 @@ export type ContextViewerProps = {
   /** The Library view's listing; a pane reads its own only while its Library root is shown. */
   library?: LibraryListingState;
   libraryCommand?: LibraryCommand | null;
+  /**
+   * The Space `Add to <Space>` and `Resources` act on: the pane's own Space, or
+   * the selected Space in the Library view. Null with no session or Space.
+   */
+  space?: LibrarySpace | null;
 };
 
 const NO_PENDING_ITEMS: ReadonlySet<string> = new Set();
@@ -593,7 +603,7 @@ function contextTreeRows(root: ContextRoot, directories: Record<string, Director
   return rows;
 }
 
-export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView, library: viewLibrary, libraryCommand = null }: ContextViewerProps) {
+export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView, library: viewLibrary, libraryCommand = null, space = null }: ContextViewerProps) {
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
   const [documentPageLoading, setDocumentPageLoading] = useState<string | null>(null);
@@ -973,6 +983,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const refresh = () => {
     if (!root) return;
     setRefreshGeneration((generation) => generation + 1);
+    // Space copies edited or deleted on disk change their state; reread it with the files.
+    spaceListing.reload();
     if (isLibrary) { library.reload(); return; }
     const path = selectedPath ? directoryPathForFile : "";
     void loadDirectory(root, path, true);
@@ -1053,7 +1065,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const [libraryPendingIds, setLibraryPendingIds] = useState<ReadonlySet<string>>(NO_PENDING_ITEMS);
   const [libraryReportVerb, setLibraryReportVerb] = useState<"Refresh" | "Replace">("Refresh");
   const [libraryReportDismissed, setLibraryReportDismissed] = useState(false);
-  const [libraryAddOpen, setLibraryAddOpen] = useState(false);
+  const [libraryAdd, setLibraryAdd] = useState<"library" | "space" | null>(null);
   const [libraryConfirm, setLibraryConfirm] = useState<{ kind: "remove" | "replace"; item: LibraryItemSummary } | null>(null);
   const [libraryToolbarMenu, setLibraryToolbarMenu] = useState<{ x: number; y: number } | null>(null);
   const [libraryOpenRequest, setLibraryOpenRequest] = useState<string | null>(null);
@@ -1068,10 +1080,66 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const selectedLibraryItem = isLibrary && selectedPath ? libraryItems?.find((item) => item.document_path === selectedPath) ?? null : null;
   useEffect(() => {
     if (!isLibrary) return;
-    const changed = () => setRefreshGeneration((generation) => generation + 1);
+    // A Space add copies saved items out of the Library without changing them; rereading
+    // the open document would replace its header, and the Space action's focus, with `Loading source…`.
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<LibraryOperation | null>).detail?.kind === "space_add") return;
+      setRefreshGeneration((generation) => generation + 1);
+    };
     window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
   }, [isLibrary]);
+  // A Space copy into this companion root expands the folders it wrote, as snapshot imports do.
+  const companionRoot = root?.kind === "companion" ? root : null;
+  useEffect(() => {
+    if (!companionRoot) return;
+    const changed = (event: Event) => {
+      const result = (event as CustomEvent<LibraryOperation | null>).detail?.space;
+      if (!result || result.companion_root_id !== companionRoot.root_id || result.written.length === 0) return;
+      const paths = result.written.flatMap((file) => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
+      setExpanded((current) => new Set([...current, ...paths]));
+      void loadDirectory(companionRoot, "", true);
+      for (const path of new Set(paths)) void loadDirectory(companionRoot, path, true);
+    };
+    window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
+  }, [companionRoot, loadDirectory]);
+  // Space-targeted actions need a live Herdr session (design §4.1).
+  const spaceLive = space?.live ? space : null;
+  const spaceListing = useSpaceContextListing(client, spaceLive?.target ?? null, spaceLive !== null && (isLibrary || companionRoot !== null));
+  // A finished add reads as adding until the listing reread after it arrives.
+  const spaceListingRef = useRef(spaceListing.listing);
+  spaceListingRef.current = spaceListing.listing;
+  const [listingBeforeSpaceAdd, setListingBeforeSpaceAdd] = useState<SpaceContextListing | null | undefined>(undefined);
+  const spaceAdd = useLibraryOperation(client, () => setListingBeforeSpaceAdd(spaceListingRef.current));
+  const startSpaceOperation = spaceAdd.start;
+  const [spaceAddRequest, setSpaceAddRequest] = useState<{ itemId: string; target: SpaceTarget } | null>(null);
+  const startSpaceAdd = (item: LibraryItemSummary) => {
+    if (!spaceLive) return;
+    const target = spaceLive.target;
+    setSpaceAddRequest({ itemId: item.item_id, target });
+    void startSpaceOperation(() => client.librarySpaceAdd({ target, item_ids: [item.item_id], follow_ids: [] }));
+  };
+  // A copy can fail before its durable attempt is written (attempt limit, interrupted worker).
+  const stoppedPhase = spaceAdd.operation?.finished ? spaceAdd.operation.phases.find((phase) => phase.phase === "space" && phase.state === "failed") : undefined;
+  const spaceAddStopped = stoppedPhase && spaceLive ? spaceAddFailure(stoppedPhase.error, spaceLive.label) : null;
+  const itemSpace = (item: LibraryItemSummary): ItemSpaceState | null => {
+    const listing = spaceListing.listing;
+    if (!spaceLive || !listing) return null;
+    const mine = spaceAddRequest?.itemId === item.item_id && sameSpaceTarget(spaceAddRequest.target, spaceLive.target);
+    const settling = listingBeforeSpaceAdd !== undefined && listing === listingBeforeSpaceAdd && spaceListing.status !== "error";
+    const row = listing.rows.find((candidate) => candidate.item_id === item.item_id);
+    // A local failure stands only while the Space still lacks the copy; another surface may have added it since.
+    const stillMissing = headerSpaceAction(row, spaceLive.label).actions.some((action) => action.kind === "add");
+    return {
+      label: spaceLive.label,
+      row,
+      attempt: listing.attempts.find((attempt) => attempt.item_id === item.item_id),
+      adding: mine && (spaceAdd.starting || spaceAdd.running || settling),
+      error: mine && stillMissing ? spaceAdd.error ?? spaceAddStopped : null,
+      onAdd: () => startSpaceAdd(item),
+    };
+  };
   useEffect(() => {
     if (!isLibrary || library.status !== "ready" || !library.listing || !selectedPath) return;
     if (library.listing.items.some((item) => item.document_path === selectedPath)) return;
@@ -1105,6 +1173,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     },
     canCopyLink: typeof navigator !== "undefined" && Boolean(navigator.clipboard),
     refreshBusy: libraryBusy,
+    spaceEntry: (item) => {
+      const state = itemSpace(item);
+      const add = state ? headerSpaceAction(state.row, state.label).actions.find((action) => action.kind === "add") : undefined;
+      return state && add ? { label: add.label, onSelect: state.onAdd, disabled: state.adding || state.attempt?.state === "pending" } : null;
+    },
   };
   // Palette commands and `Open in Library` wait until the listing can serve them.
   useEffect(() => {
@@ -1231,12 +1304,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         }
         if (!library.listing) return <div className="context-empty">Loading…</div>;
         if (library.listing.items.length === 0) {
-          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request or Jira issue. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAddOpen(true)}>Add context…</button></div></div>;
+          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request or Jira issue. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add context…</button></div></div>;
         }
         return <div className="context-empty">Select a Library item to read it.</div>;
       }
       if (!selectedPath && rootEmpty) {
-        return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Import a source or snapshot from Resources to add files." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
+        return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Add Library context or import a snapshot from Resources." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
       }
       if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
       if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
@@ -1273,7 +1346,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       );
       return (
         <>
-          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} /> : <div className="context-document-header">
+          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} space={itemSpace(selectedLibraryItem)} /> : <div className="context-document-header">
             {metadata.canonicalId ? <span className="document-source-kind">{metadata.provider ?? "Issue"}</span> : null}<strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
 
@@ -1341,9 +1414,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         {roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
         <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={overviewId} aria-label="Toggle file overview"><UiIcon name="sidebar" /> Files</button>
         <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file"><UiIcon name="search" /></button>
-        {root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)} aria-expanded={resourcesOpen}>Resources</button> : null}
+        {root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)} aria-expanded={resourcesOpen}>{spaceListing.listing && spaceListing.listing.behind > 0 ? `Resources · ${spaceListing.listing.behind} behind` : "Resources"}</button> : null}
         {isLibrary && !compactToolbar ? <>
-          <button type="button" onClick={() => setLibraryAddOpen(true)}>Add…</button>
+          <button type="button" onClick={() => setLibraryAdd("library")}>Add…</button>
           <button type="button" onClick={refreshLibrary} disabled={libraryBusy || !library.listing || library.listing.items.length === 0} title="Refresh every item from its source">Refresh all</button>
         </> : null}
         {isLibrary && compactToolbar ? <button type="button" aria-label="More Library actions" aria-haspopup="menu" aria-expanded={libraryToolbarMenu !== null} onClick={(event) => setLibraryToolbarMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button> : null}
@@ -1401,12 +1474,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           {renderDocument()}
         </main>
       </div>
-      {resourcesOpen && presentation ? <ContextResources client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} bindingId={presentation.binding_id} root={root} onClose={() => setResourcesOpen(false)} onChanged={files => {
-          const paths = files.flatMap(file => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
-          setExpanded(current => new Set([...current, ...paths]));
-          void loadDirectory(root, "", true);
-          for (const path of new Set(paths)) void loadDirectory(root, path, true);
-        }} onImported={(result) => {
+      {resourcesOpen && presentation ? <ContextResources client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} bindingId={presentation.binding_id} root={root} space={space} spaceListing={spaceListing} onAdd={() => setLibraryAdd("space")} onClose={() => setResourcesOpen(false)} onImported={(result) => {
           const parts = result.snapshot_path.split("/");
           const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
           setExpanded(current => new Set([...current, ...paths]));
@@ -1414,10 +1482,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           for (const path of paths) void loadDirectory(root, path, true);
         }} /> : null}
       {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={[
-        { label: "Add…", onSelect: () => setLibraryAddOpen(true) },
+        { label: "Add…", onSelect: () => setLibraryAdd("library") },
         { label: "Refresh all", onSelect: refreshLibrary, disabled: libraryBusy || !library.listing || library.listing.items.length === 0 },
       ]} /> : null}
-      {libraryAddOpen ? <AddContextDialog client={client} onClose={() => setLibraryAddOpen(false)} onOpenItem={setLibraryOpenRequest} /> : null}
+      {libraryAdd ? <AddContextDialog client={client} onClose={() => setLibraryAdd(null)} space={space}
+        onOpenItem={(itemId) => { setLibraryOpenRequest(itemId); if (!isLibrary) chooseRoot(libraryRoot); }} defaultDestination={libraryAdd}
+        openInSpace={companionRoot ? { companionRootId: companionRoot.root_id, open: (path) => { setResourcesOpen(false); openFile(path, null); } } : null} /> : null}
       {libraryConfirm?.kind === "remove" ? <LibraryConfirmDialog title={`Remove "${libraryConfirm.item.title}" from the Library?`} safeLabel="Cancel" confirmLabel="Remove from Library" destructive
         body={<p>Deletes the Library copy. Copies already in Spaces stay as they are and stop receiving updates. {providerFamily(library.providers, libraryConfirm.item.provider_id).name} isn't changed. You can add it again from its link.</p>}
         onClose={() => setLibraryConfirm(null)}

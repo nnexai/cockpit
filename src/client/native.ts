@@ -1,11 +1,12 @@
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
-import { parseSourceScope, parseSourceImport, parseSourceRefresh, parseSourceResponse, matchSourceResponse } from "./sourceProtocol";
 import {
   matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
   parseLibraryAddRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
   parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
   parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+  parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
+  parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
 } from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
@@ -721,7 +722,8 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     },
     async libraryAdd(value) {
       const request = parseLibraryAddRequest(value);
-      return invokeAndParse(invoke, "cockpit_library_add", { request }, "Library add", parseLibraryOperation);
+      const response = await invokeAndParse(invoke, "cockpit_library_add", { request }, "Library add", parseLibraryOperation);
+      return request.target ? matchSpaceOperation(response, request.target) : response;
     },
     async libraryRefresh(value) {
       const request = parseLibraryRefreshRequest(value);
@@ -764,26 +766,21 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       signal?.throwIfAborted();
       return matchLibraryMedia(response, request);
     },
-    async sourceImport(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const body = parseSourceImport(value);
-      const response = await invokeAndParse(invoke, "cockpit_source_import", { sessionId, paneId, request: body }, "source import", parseSourceResponse);
+    async librarySpaceList(value, signal) {
       signal?.throwIfAborted();
-      return matchSourceResponse(response, body);
+      const request = parseSpaceContextRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_space_list", { request }, "Space context", parseSpaceContextListing);
+      signal?.throwIfAborted();
+      return matchSpaceContextListing(response, request);
     },
-    async sourceRefresh(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const body = parseSourceRefresh(value);
-      const response = await invokeAndParse(invoke, "cockpit_source_refresh", { sessionId, paneId, request: body }, "source refresh", parseSourceResponse);
-      signal?.throwIfAborted();
-      return matchSourceResponse(response, body);
+    async librarySpaceAdd(value) {
+      const request = parseSpaceAddRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_space_add", { request }, "Space add", parseLibraryOperation);
+      return matchSpaceOperation(response, request.target);
     },
-    async sourceList(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const body = parseSourceScope(value);
-      const response = await invokeAndParse(invoke, "cockpit_source_list", { sessionId, paneId, request: body }, "source list", parseSourceResponse);
-      signal?.throwIfAborted();
-      return matchSourceResponse(response, body);
+    async librarySpaceAttemptsDismiss(value) {
+      const request = parseSpaceAttemptsDismissRequest(value);
+      await invokeAndParse(invoke, "cockpit_library_space_attempts_dismiss", { request }, "Space attempt dismissal", parseSpaceAttemptsDismissed);
     },
     async openReview(sessionId, value) {
       validateSessionId(sessionId);

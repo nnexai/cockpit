@@ -71,6 +71,53 @@ pub(crate) fn create(
     persist(store, &record)?;
     Ok((record, lease))
 }
+pub(crate) fn set_target(
+    store: &Store, id: &str, target: SpaceTarget,
+) -> Result<LibraryOperation, InspectionError> {
+    let _lock = store.exclusive()?;
+    let mut record = load(store, id)?;
+    record.target = Some(target);
+    if record.kind == LibraryOperationKind::SpaceAdd {
+        record.phases.clear();
+    }
+    record.phases.push(LibraryPhase {
+        phase: LibraryPhaseName::Space,
+        state: LibraryPhaseState::Pending,
+        done: 0, total: None, message: None, error: None,
+    });
+    persist(store, &record)?;
+    Ok(record)
+}
+
+pub(crate) fn begin_space(store: &Store, id: &str, total: u32) -> Result<(), InspectionError> {
+    let _lock = store.exclusive()?;
+    let mut record = load(store, id)?;
+    let partial = record.report.as_ref().is_some_and(|r| r.failed + r.conflict + r.partial > 0);
+    for phase in &mut record.phases {
+        if phase.phase == LibraryPhaseName::Library {
+            phase.state = if record.cancel_requested { LibraryPhaseState::Cancelled }
+                else if partial { LibraryPhaseState::Partial } else { LibraryPhaseState::Done };
+        } else {
+            phase.state = LibraryPhaseState::Running;
+            phase.total = Some(total);
+        }
+    }
+    record.updated_at = timestamp();
+    persist(store, &record)
+}
+
+pub(crate) fn space_result(
+    store: &Store, id: &str, result: SpacePhaseResult, done: u32,
+) -> Result<(), InspectionError> {
+    let _lock = store.exclusive()?;
+    let mut record = load(store, id)?;
+    record.space = Some(result);
+    if let Some(phase) = record.phases.iter_mut().find(|p| p.phase == LibraryPhaseName::Space) {
+        phase.done = done;
+    }
+    record.updated_at = timestamp();
+    persist(store, &record)
+}
 fn persist(store: &Store, record: &LibraryOperation) -> Result<(), InspectionError> {
     bounded_write(
         &store.operations,
@@ -100,7 +147,7 @@ fn reconcile(store: &Store, record: &mut LibraryOperation) -> Result<(), Inspect
         Err(e) => return Err(e),
     };
     for phase in &mut record.phases {
-        if phase.state == LibraryPhaseState::Running {
+        if matches!(phase.state, LibraryPhaseState::Running | LibraryPhaseState::Pending) {
             phase.state = LibraryPhaseState::Failed;
             phase.error = Some(ErrorResponse {
                 code: "library_operation_interrupted".into(),
@@ -141,7 +188,9 @@ pub(crate) fn row(
 ) -> Result<(), InspectionError> {
     let _lock = store.exclusive()?;
     let mut record = load(store, id)?;
-    record.phases[0].done += 1;
+    if let Some(phase) = record.phases.iter_mut().find(|phase| phase.state == LibraryPhaseState::Running) {
+        phase.done += 1;
+    }
     if let Some(entry) = entry {
         if !record.item_ids.contains(&entry.item_id) {
             record.item_ids.push(entry.item_id.clone());
@@ -179,24 +228,34 @@ pub(crate) fn finish(
 ) -> Result<(), InspectionError> {
     let _lock = store.exclusive()?;
     let mut record = load(store, id)?;
-    let phase = &mut record.phases[0];
+    if record.target.is_some() {
+        if let Err(failure) = &result {
+            super::space::fail_pending_attempts_locked(store, id, failure)?;
+        }
+    }
+    let active = record.phases.iter().rposition(|phase| phase.state == LibraryPhaseState::Running)
+        .unwrap_or(0);
+    let phase = &mut record.phases[active];
     phase.state = if let Err(e) = result {
         phase.error = Some(ErrorResponse {
             code: e.code,
             message: e.message,
         });
         LibraryPhaseState::Failed
-    } else if record.cancel_requested {
+    } else if record.cancel_requested && phase.phase == LibraryPhaseName::Library {
         LibraryPhaseState::Cancelled
-    } else if record
-        .report
-        .as_ref()
-        .is_some_and(|r| r.failed + r.conflict + r.partial > 0)
+    } else if (phase.phase == LibraryPhaseName::Library || record.kind == LibraryOperationKind::SpaceAdd)
+        && record.report.as_ref().is_some_and(|r| r.failed + r.conflict + r.partial > 0)
     {
         LibraryPhaseState::Partial
     } else {
         LibraryPhaseState::Done
     };
+    for phase in &mut record.phases {
+        if phase.state == LibraryPhaseState::Pending {
+            phase.state = LibraryPhaseState::Cancelled;
+        }
+    }
     record.finished = true;
     record.updated_at = timestamp();
     persist(store, &record)?;
@@ -329,5 +388,26 @@ mod tests {
             interrupted.phases[0].error.as_ref().unwrap().code,
             "library_operation_interrupted"
         );
+    }
+}
+
+#[cfg(test)]
+mod space_phase_tests {
+    use super::*;
+
+    #[test]
+    fn library_partial_does_not_mask_successful_space_phase() {
+        let fixture = super::super::tests::fixture();
+        let store = fixture.service.open().unwrap();
+        let (operation, _lease) = create(&store, LibraryOperationKind::Add, None).unwrap();
+        set_target(&store, &operation.operation_id, SpaceTarget {
+            session_id: "session".into(), space_id: "space".into(),
+        }).unwrap();
+        row(&store, &operation.operation_id, None, LibraryReportOutcome::Partial, Some("Linked source unavailable".into())).unwrap();
+        begin_space(&store, &operation.operation_id, 1).unwrap();
+        finish(&store, &operation.operation_id, Ok(())).unwrap();
+        let operation = get(&store, &operation.operation_id).unwrap();
+        assert_eq!(operation.phases[0].state, LibraryPhaseState::Partial);
+        assert_eq!(operation.phases[1].state, LibraryPhaseState::Done);
     }
 }

@@ -13,9 +13,6 @@ use cockpit_protocol::context::{
 };
 use cockpit_protocol::context_assets::{ContextSnapshotRequest, ContextSnapshotResponse};
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
-use cockpit_protocol::sources::{
-    SourceImportRequest, SourceImportResponse, SourceListRequest, SourceRefreshRequest,
-};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tokio::sync::Semaphore;
@@ -24,7 +21,6 @@ use crate::InspectionError;
 use crate::extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 use crate::projects::ProjectService;
 use crate::repositories::RepositoryCatalog;
-use crate::sources::{SourceFetchRequest, SourceService, source_authority_for_checkout};
 const MAX_DIRECTORY_SCAN: usize = 100_000;
 
 #[derive(Clone)]
@@ -32,7 +28,6 @@ pub struct ContextService {
     pub(crate) configuration: ProjectConfiguration,
     adapter: Arc<dyn ExtensionHerdrAdapter>,
     projects: Arc<ProjectService>,
-    sources: Option<Arc<SourceService>>,
     /// Shared across transient host handlers so bounded searches cannot exhaust blocking workers.
     pub(crate) search_permits: Arc<Semaphore>,
 }
@@ -69,125 +64,8 @@ impl ContextService {
             configuration,
             adapter,
             projects,
-            sources: None,
             search_permits: Arc::new(Semaphore::new(2)),
         }
-    }
-    pub fn with_sources(mut self, sources: Arc<SourceService>) -> Self {
-        self.sources = Some(sources);
-        self
-    }
-
-    pub async fn import_source(
-        &self,
-        session_id: &str,
-        pane_id: &str,
-        request: &SourceImportRequest,
-    ) -> Result<SourceImportResponse, InspectionError> {
-        let authorized = self
-            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
-            .await?;
-        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
-            InspectionError::new(
-                "source_companion_unavailable",
-                "the authorized companion has no durable identity",
-            )
-        })?;
-        let service = self.sources.as_ref().ok_or_else(|| {
-            InspectionError::new(
-                "source_provider_unsupported",
-                "source import is not configured",
-            )
-        })?;
-        let authority = source_authority_for_checkout(
-            &self.configuration,
-            Path::new(&authorized.root.checkout_path),
-            &request.provider_id,
-        )
-        .await?;
-        let mut response = service
-            .fetch_to_companion_hydrated(
-                SourceFetchRequest {
-                    provider_id: request.provider_id.clone(),
-                    artifact_url: request.artifact_url.clone(),
-                    authority,
-                },
-                Some((&authorized.dir, companion_id)),
-                request.hydrate_references,
-            )
-            .await?;
-        response.binding_id = request.binding_id.clone();
-        response.root_id = authorized.root.root_id;
-        Ok(response)
-    }
-    pub async fn refresh_source(
-        &self,
-        session_id: &str,
-        pane_id: &str,
-        request: &SourceRefreshRequest,
-    ) -> Result<SourceImportResponse, InspectionError> {
-        let authorized = self
-            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
-            .await?;
-        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
-            InspectionError::new(
-                "source_companion_unavailable",
-                "the authorized companion has no durable identity",
-            )
-        })?;
-        let service = self.sources.as_ref().ok_or_else(|| {
-            InspectionError::new(
-                "source_provider_unsupported",
-                "source import is not configured",
-            )
-        })?;
-        let cached = service.find_provider_id(&request.source_id)?;
-        let authority = source_authority_for_checkout(
-            &self.configuration,
-            Path::new(&authorized.root.checkout_path),
-            &cached,
-        )
-        .await?;
-        let mut response = service
-            .refresh_cached_hydrated(
-                &request.source_id,
-                authority,
-                Some((&authorized.dir, companion_id)),
-                request.hydrate_references,
-            )
-            .await?;
-        response.binding_id = request.binding_id.clone();
-        response.root_id = authorized.root.root_id;
-        Ok(response)
-    }
-    pub async fn list_sources(
-        &self,
-        session_id: &str,
-        pane_id: &str,
-        request: &SourceListRequest,
-    ) -> Result<SourceImportResponse, InspectionError> {
-        let authorized = self
-            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
-            .await?;
-        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
-            InspectionError::new(
-                "source_companion_unavailable",
-                "the authorized companion has no durable identity",
-            )
-        })?;
-        let service = self.sources.as_ref().ok_or_else(|| {
-            InspectionError::new(
-                "source_provider_unsupported",
-                "source import is not configured",
-            )
-        })?;
-        let (entries, diagnostics) = service.list_for_companion(&authorized.dir, companion_id)?;
-        Ok(SourceImportResponse {
-            binding_id: request.binding_id.clone(),
-            root_id: authorized.root.root_id,
-            entries,
-            diagnostics,
-        })
     }
     /// Resolve the current Context pane and its companion-only source
     /// association. This is deliberately crate-visible: comments must use
@@ -1991,6 +1869,7 @@ mod review_checkout_tests {
     use uuid::Uuid;
 
     use crate::{
+        sources::SourceService,
         HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
         project_adapter::{
             ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,

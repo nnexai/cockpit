@@ -5,7 +5,6 @@ mod context_search;
 mod projects;
 mod requests;
 mod review;
-mod sources;
 mod library;
 
 use std::{
@@ -1662,7 +1661,7 @@ pub fn run() {
             cockpit_providers::configured_providers(&project_config)
                 .expect("invalid configured source providers"),
         )
-        .expect("failed to initialize source cache"),
+        .expect("failed to initialize source providers"),
     );
     let project_service =
         cockpit_core::projects::ProjectService::new(project_config.clone(), inspector.clone())
@@ -1698,9 +1697,9 @@ pub fn run() {
         inspector.extension_adapter(),
         shutdown_projects.clone(),
     );
-    let contexts = contexts.with_sources(sources.clone());
     let service = service.with_contexts(contexts);
-    let library = cockpit_core::library::LibraryService::new(project_config.clone(), sources);
+    let library = cockpit_core::library::LibraryService::new(project_config.clone(), sources)
+        .with_projects(shutdown_projects.clone(), inspector.clone());
     let service = service.with_library(library);
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),
@@ -1785,9 +1784,9 @@ pub fn run() {
             library::cockpit_library_directory,
             library::cockpit_library_document,
             library::cockpit_library_media,
-            sources::cockpit_source_import,
-            sources::cockpit_source_refresh,
-            sources::cockpit_source_list,
+            library::cockpit_library_space_list,
+            library::cockpit_library_space_add,
+            library::cockpit_library_space_attempts_dismiss,
             review::cockpit_review_snapshot,
             review::cockpit_review_file,
             review::cockpit_review_open,

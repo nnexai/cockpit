@@ -1,15 +1,34 @@
-import { Fragment, useState, type ReactNode } from "react";
-import type { LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
+import { Fragment, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
+import type { LibraryItemSummary, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { instanceHost, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip } from "./libraryState";
 import { LibraryMenu, itemMenuEntries, menuAnchor, type LibraryItemActions } from "./LibraryTree";
+import { headerSpaceAction } from "./spaceCopyPresentation";
+import { spaceAddFailure } from "./SpaceContextList";
+
+/** The item's standing in the target Space (design §4.4); absent without a live target Space. */
+export type ItemSpaceState = {
+  label: string;
+  /** The Space row whose `item_id` is this item; undefined when the Space holds no copy. */
+  row: SpaceCopyRow | undefined;
+  /** A durable add attempt for this item in that Space (D10). */
+  attempt: SpaceAddAttempt | undefined;
+  adding: boolean;
+  /**
+   * Why this surface's last `Add to <Space>` failed when no durable attempt
+   * records it: the request didn't start, or the copy stopped first.
+   */
+  error: string | null;
+  onAdd: () => void;
+};
 
 /**
  * Library item header (design §4.4): kind chip and container path, title,
- * state chip with its freshness phrase and actions, then `Metadata`. S1 has no
- * Space action. At pane width ≤ 520 px `Refresh` moves into `⋯`.
+ * state chip with its freshness phrase and actions, then `Metadata`. The one
+ * Space action comes from `headerSpaceAction`; S2 offers only `Add to <Space>`.
+ * At pane width ≤ 520 px `Refresh` and the Space action move into `⋯`.
  */
-export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details }: {
+export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null }: {
   item: LibraryItemSummary;
   providers: readonly ProjectProvider[];
   narrow: boolean;
@@ -20,6 +39,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   onReplace: (item: LibraryItemSummary) => void;
   /** The viewer's document details disclosure, kept at the end of line 1. */
   details: ReactNode;
+  space?: ItemSpaceState | null;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const now = Date.now();
@@ -27,6 +47,20 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   const freshness = libraryFreshness(item, now);
   const container = item.container?.label ?? null;
   const refresh = () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]);
+  const spaceAction = space ? headerSpaceAction(space.row, space.label) : null;
+  const spaceAdding = Boolean(space && (space.adding || space.attempt?.state === "pending"));
+  const addLabel = spaceAction?.actions.find((action) => action.kind === "add")?.label;
+  const spaceFailure = !space || spaceAdding ? null : space.attempt?.state === "failed" ? spaceAddFailure(space.attempt.error, space.label) : space.error;
+  // `Add to <Space>` and its retry give way to progress, then to the result; focus stays in the Space slot.
+  const spaceSlotRef = useRef<HTMLSpanElement>(null);
+  const spaceFocused = useRef(false);
+  const trackSpaceFocus = {
+    onFocus: () => { spaceFocused.current = true; },
+    onBlur: (event: FocusEvent) => { if (event.relatedTarget) spaceFocused.current = false; },
+  };
+  useLayoutEffect(() => {
+    if (spaceFocused.current && (document.activeElement === null || document.activeElement === document.body)) spaceSlotRef.current?.focus({ preventScroll: true });
+  });
   return <div className="library-item-header">
     <div className="library-item-line">
       <span className="document-source-kind library-kind-chip">{itemKindLabel(item, providers)}</span>
@@ -42,12 +76,21 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
       <span className="library-item-phrase">{freshness.phrase}</span>
       <span className="context-toolbar-spacer" />
       {narrow ? null : <button type="button" onClick={refresh} disabled={actions.refreshBusy}>Refresh</button>}
+      {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
+        {spaceAdding ? <span className="context-source-chip library-state is-muted" role="status"><span className="library-spinner" aria-hidden="true" />{`Adding to ${space.label}…`}</span> : null}
+        {!spaceAdding && !narrow && spaceAction?.text ? <span className={`library-state library-space-state is-${spaceAction.tone}`}>{spaceAction.text}</span> : null}
+        {!spaceAdding && !narrow && addLabel && !spaceFailure ? <button type="button" onClick={space.onAdd}>{addLabel}</button> : null}
+      </span> : null}
       <button type="button" className="library-more" aria-label={`More actions for ${item.title}`} aria-haspopup="menu" aria-expanded={menu !== null} onClick={(event) => setMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
     </div>
     {freshness.notice && !pending ? <div className={`context-notice library-item-notice${item.state === "failed" ? " context-notice-error" : item.state === "conflict" || item.state === "partial" ? " context-notice-warning" : ""}`} role={item.state === "failed" ? "alert" : "status"}>
       <span>{freshness.notice}</span>
       {item.state === "conflict" ? <button type="button" onClick={() => onReplace(item)} disabled={actions.refreshBusy}>Replace with source version…</button> : null}
       {item.state === "failed" ? <button type="button" onClick={refresh} disabled={actions.refreshBusy}>Retry</button> : null}
+    </div> : null}
+    {space && spaceFailure ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
+      <span>{spaceFailure}</span>
+      <button type="button" onClick={space.onAdd}>{`Retry adding to ${space.label}`}</button>
     </div> : null}
     <details className="library-metadata">
       <summary>Metadata</summary>

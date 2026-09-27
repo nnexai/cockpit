@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import { ContextViewer, createContextViewState, type LibraryCommand } from "../context/ContextViewer";
+import type { LibrarySpace } from "./libraryState";
 import { useLibraryListing } from "./useLibraryOperation";
 import "./library.css";
 
@@ -27,10 +28,12 @@ function restoreWorkbenchFocus(invoker: HTMLElement | null): void {
  * it is open; on close, DOM focus returns to the invoker if it is still
  * mounted, otherwise to a safe workbench target, before the panes attach again.
  */
-export function LibraryView({ client, onClose, command = null, fullScreen = false }: {
+export function LibraryView({ client, onClose, command = null, fullScreen = false, space = null }: {
   client: CockpitClient;
   onClose: () => void;
   command?: LibraryCommand | null;
+  /** Herdr's selected Space: the `Add to <Space>` target. Null with no session or Space. */
+  space?: LibrarySpace | null;
   /** No session: the view fills the window and is Library-only. */
   fullScreen?: boolean;
 }) {
@@ -72,6 +75,6 @@ export function LibraryView({ client, onClose, command = null, fullScreen = fals
       <span className="context-toolbar-spacer" />
       <button type="button" className="library-view-close" onClick={onClose} aria-label="Close Library">Close</button>
     </header>
-    <ContextViewer client={client} presentation={null} value={view} onChange={setView} controlAllowed onRequestControl={() => undefined} library={library} libraryCommand={command} />
+    <ContextViewer client={client} presentation={null} value={view} onChange={setView} controlAllowed onRequestControl={() => undefined} library={library} libraryCommand={command} space={space} />
   </section>;
 }

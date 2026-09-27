@@ -625,25 +625,6 @@ export type WorkspaceTeardownRecoveryList = { recoveries: Array<WorkspaceTeardow
 
 export type SourceCapability = "issue" | "issue_comments" | "review" | "wiki";
 
-export type SourceFreshness = "fresh" | "changed" | "unknown" | "unavailable" | "conflict";
-
-export type SourceMaterializationStatus = "materialized" | "unchanged" | "conflict" | "unsupported" | "failed";
-
-export type SourceImportRequest = { binding_id: string, root_id: string, provider_id: string, artifact_url: string,
-/**
- * Reference traversal is opt-in because following even same-repository
- * links can produce surprising context expansion.
- */
-hydrate_references: boolean, };
-
-export type SourceListRequest = { binding_id: string, root_id: string, };
-
-export type SourceRefreshRequest = { binding_id: string, root_id: string, source_id: string, hydrate_references: boolean, };
-
-export type SourceEntry = { source_id: string, provider_id: string, provider_instance: string, resource_type: string, canonical_id: string, title: string, source_url: string | null, original_url: string | null, source_revision: string | null, content_hash: string, freshness: SourceFreshness, status: SourceMaterializationStatus, relative_path: string | null, };
-
-export type SourceImportResponse = { binding_id: string, root_id: string, entries: Array<SourceEntry>, diagnostics: Array<ProjectDiagnostic>, };
-
 export type ReviewSide = "old" | "new";
 
 export type ReviewComparison = "all_local" | "staged" | "unstaged" | "branch" | "untracked";

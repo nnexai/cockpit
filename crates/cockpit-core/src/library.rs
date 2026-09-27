@@ -2,13 +2,14 @@
 mod operations;
 mod reader;
 pub(crate) mod store;
+pub mod space;
 
 use crate::{
     InspectionError,
     project_store::timestamp,
     repositories::resolve_artifact,
     sources::{
-        SourceAsset, SourceFetchRequest, SourceRef, SourceService, content_revision,
+        FetchedAssets, SourceAsset, SourceFetchRequest, SourceRef, SourceService, content_revision,
         instance_authority,
     },
 };
@@ -27,6 +28,8 @@ use store::{Lease, LibraryIndexEntry, Store, error};
 pub struct LibraryService {
     configuration: ProjectConfiguration,
     sources: Arc<SourceService>,
+    projects: Option<Arc<crate::projects::ProjectService>>,
+    herdr: Option<Arc<dyn crate::HerdrAdapter>>,
     store: Arc<OnceLock<Arc<Store>>>,
 }
 impl LibraryService {
@@ -34,13 +37,25 @@ impl LibraryService {
         Self {
             configuration,
             sources,
+            projects: None,
+            herdr: None,
             store: Arc::new(OnceLock::new()),
         }
+    }
+    pub fn with_projects(
+        mut self,
+        projects: Arc<crate::projects::ProjectService>,
+        herdr: Arc<dyn crate::HerdrAdapter>,
+    ) -> Self {
+        self.projects = Some(projects);
+        self.herdr = Some(herdr);
+        self
     }
     /// Lazy and independent of ContextService, companions and the obsolete cache.
     pub(crate) fn open(&self) -> Result<Arc<Store>, InspectionError> {
         if let Some(store) = self.store.get() {
             store.recover_pending()?;
+            space::recover_attempts(store)?;
             return Ok(store.clone());
         }
         let store = Store::open(
@@ -48,6 +63,7 @@ impl LibraryService {
             self.configuration.limits.library_max_items as usize,
         )?;
         let _ = self.store.set(store);
+        space::recover_attempts(self.store.get().expect("Library store initialized"))?;
         Ok(self.store.get().expect("Library store initialized").clone())
     }
     pub async fn listing(&self, offset: Option<u32>) -> Result<LibraryListing, InspectionError> {
@@ -142,10 +158,10 @@ impl LibraryService {
         &self,
         request: LibraryAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.target.is_some() || request.follow_space || request.download_attachments {
+        if request.follow_space || request.download_attachments {
             return Err(error(
                 "source_capability_unavailable",
-                "This provider snapshot operation does not support Space copies, follows or downloads",
+                "This provider snapshot operation does not support follows or downloads",
             ));
         }
         let handle = operations::runtime()?;
@@ -161,6 +177,9 @@ impl LibraryService {
         let lease = store.lease(&primary_id)?;
         let (record, operation_lease) =
             operations::create(&store, LibraryOperationKind::Add, None)?;
+        let record = if let Some(target) = &request.target {
+            operations::set_target(&store, &record.operation_id, target.clone())?
+        } else { record };
         let service = self.clone();
         let id = record.operation_id.clone();
         let worker_store = store.clone();
@@ -228,6 +247,9 @@ impl LibraryService {
                 }
                 let old = service.entry(&worker_store, &asset_id)?;
                 if old.is_some() && !request.refresh_existing {
+                    if let Some(target) = &request.target {
+                        space::prepare_saved_item(&worker_store, &id, target, &old.as_ref().expect("existing item").summary)?;
+                    }
                     operations::row(
                         &worker_store,
                         &id,
@@ -237,11 +259,78 @@ impl LibraryService {
                     )?;
                     continue;
                 }
-                service.save_asset(&worker_store, &id, asset, old, None)?;
+                service.save_asset(&worker_store, &id, asset, old, None, request.target.as_ref())?;
+            }
+            if let Some(target) = &request.target {
+                let saved = operations::get(&worker_store, &id)?.item_ids;
+                if saved.is_empty() && operations::cancelled(&worker_store, &id)? {
+                    return Ok(());
+                }
+                service.copy_saved_items(&worker_store, &id, target, &saved).await?;
             }
             Ok(())
         });
         Ok(record)
+    }
+
+    /// Setup commits every prevalidated artifact before starting any Space copy.
+    /// `saved_ids` identifies durable items reused on a resumed setup; no provider
+    /// request is performed here or while retrying their companion copies.
+    pub(crate) async fn add_fetched_and_copy(
+        &self,
+        target: SpaceTarget,
+        fetched: Vec<FetchedAssets>,
+        saved_ids: Vec<String>,
+    ) -> Result<LibraryOperation, InspectionError> {
+        let handle = operations::runtime()?;
+        let store = self.open()?;
+        let mut assets = std::collections::BTreeMap::new();
+        for fetched in fetched {
+            for asset in fetched.assets {
+                assets.entry(item_id(&asset.source)).or_insert(asset);
+            }
+        }
+        let mut ids = saved_ids;
+        ids.extend(assets.keys().cloned());
+        ids.sort();
+        ids.dedup();
+        let leases = ids.iter().map(|id| store.lease(id)).collect::<Result<Vec<_>, _>>()?;
+        for id in &ids {
+            if !assets.contains_key(id) && self.entry(&store, id)?.is_none() {
+                return Err(error("library_item_not_found", "Saved setup item no longer exists"));
+            }
+        }
+        let (record, operation_lease) =
+            operations::create(&store, LibraryOperationKind::Add, Some(ids.len() as u32))?;
+        let record = operations::set_target(&store, &record.operation_id, target.clone())?;
+        let service = self.clone();
+        let operation_id = record.operation_id.clone();
+        let worker_id = operation_id.clone();
+        let worker_store = store.clone();
+        operations::spawn(handle, store, operation_id.clone(), operation_lease, async move {
+            let _leases = leases;
+            for id in &ids {
+                if operations::cancelled(&worker_store, &worker_id)? { return Ok(()); }
+                let old = service.entry(&worker_store, id)?;
+                if let Some(old) = old {
+                    space::prepare_saved_item(&worker_store, &worker_id, &target, &old.summary)?;
+                    operations::row(&worker_store, &worker_id, Some(&old.summary),
+                        LibraryReportOutcome::Unchanged, Some("Already saved in Library".into()))?;
+                } else {
+                    let asset = assets.remove(id).ok_or_else(||
+                        error("library_item_not_found", "Saved setup item no longer exists"))?;
+                    service.save_asset(&worker_store, &worker_id, asset, None, None, Some(&target))?;
+                }
+            }
+            // Every item and its pending attempt are now durable. Companion
+            // authorization/publication cannot prevent another item being saved.
+            service.copy_saved_items(&worker_store, &worker_id, &target, &ids).await
+        });
+        loop {
+            let record = self.operation(&operation_id).await?;
+            if record.finished { return Ok(record); }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
     }
     fn entry(&self, store: &Store, id: &str) -> Result<Option<LibraryIndexEntry>, InspectionError> {
         let _lock = store.shared()?;
@@ -420,6 +509,7 @@ impl LibraryService {
                         asset,
                         Some(entry.clone()),
                         confirmed.as_deref(),
+                        None,
                     ) {
                         Ok(()) => Ok(()),
                         Err(e) => self.fetch_failed(store, operation, entry, e),
@@ -478,6 +568,7 @@ impl LibraryService {
         mut asset: SourceAsset,
         old: Option<LibraryIndexEntry>,
         confirmed: Option<&[LibraryConflictFile]>,
+        target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
@@ -524,11 +615,17 @@ impl LibraryService {
         if equal && confirmed.is_none() {
             // Preserve the snapshot timestamp: provenance refreshes do not rewrite files.
             entry.summary.fetched_at = old.as_ref().and_then(|e| e.summary.fetched_at.clone());
+            if let Some(target) = target {
+                space::prepare_saved_item(store, operation, target, &entry.summary)?;
+            }
             store.update(entry.clone())?;
         } else {
             let stage = store.stage_asset(&mut entry, &asset)?;
             if operations::cancelled(store, operation)? {
                 return Ok(());
+            }
+            if let Some(target) = target {
+                space::prepare_saved_item(store, operation, target, &entry.summary)?;
             }
             if let Err(e) = store.publish(
                 stage,
@@ -542,6 +639,17 @@ impl LibraryService {
                     }
                 }
                 return Err(e);
+            }
+        }
+        #[cfg(test)] {
+            let mut fault = store.fault.lock().unwrap_or_else(|e| e.into_inner());
+            if *fault == Some("space_after_library_publish") {
+                *fault = None;
+                return Err(error("library_test_crash", "space_after_library_publish"));
+            }
+            if *fault == Some("space_cancel_after_library_publish") {
+                *fault = None;
+                operations::cancel(store, operation)?;
             }
         }
         operations::row(
@@ -735,6 +843,7 @@ mod tests {
         block: AtomicBool,
         entered: Notify,
         release: Semaphore,
+        pub(super) fetches: std::sync::atomic::AtomicUsize,
     }
     #[async_trait]
     impl SourceProvider for Provider {
@@ -760,6 +869,7 @@ mod tests {
             &self,
             request: &SourceFetchRequest,
         ) -> Result<Vec<SourceAsset>, InspectionError> {
+            self.fetches.fetch_add(1, Ordering::SeqCst);
             if self.block.load(Ordering::SeqCst) {
                 self.entered.notify_one();
                 self.release
@@ -875,6 +985,7 @@ mod tests {
             block: AtomicBool::new(false),
             entered: Notify::new(),
             release: Semaphore::new(0),
+            fetches: std::sync::atomic::AtomicUsize::new(0),
         });
         let sources = Arc::new(SourceService::new(&configuration, vec![provider.clone()]).unwrap());
         Fixture {
@@ -883,7 +994,7 @@ mod tests {
             provider,
         }
     }
-    fn add(n: u32) -> LibraryAddRequest {
+    pub(super) fn add(n: u32) -> LibraryAddRequest {
         LibraryAddRequest {
             input: format!("https://forge.test/gitea/acme/repo/issues/{n}"),
             provider_id: None,
@@ -895,7 +1006,7 @@ mod tests {
             target: None,
         }
     }
-    async fn finished(service: &LibraryService, operation: LibraryOperation) -> LibraryOperation {
+    pub(super) async fn finished(service: &LibraryService, operation: LibraryOperation) -> LibraryOperation {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let current = service.operation(&operation.operation_id).await.unwrap();
@@ -908,7 +1019,7 @@ mod tests {
         .await
         .expect("operation terminates")
     }
-    async fn saved(f: &Fixture, n: u32) -> LibraryItemSummary {
+    pub(super) async fn saved(f: &Fixture, n: u32) -> LibraryItemSummary {
         let operation = finished(&f.service, f.service.start_add(add(n)).await.unwrap()).await;
         assert_eq!(
             operation.phases[0].state,
@@ -1103,6 +1214,72 @@ mod tests {
         );
         assert_store_valid(&f.service.open().unwrap());
     }
+    pub(super) fn linked_add(f: &Fixture) -> LibraryAddRequest {
+        f.provider.state.lock().unwrap_or_else(|e| e.into_inner()).body =
+            "See https://forge.test/gitea/acme/repo/issues/2".into();
+        let mut request = add(1);
+        request.hydrate_references = true;
+        request
+    }
+
+    #[tokio::test]
+    async fn later_linked_lease_failure_retains_saved_primary_attempt() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let _linked_lease = store.lease(&item_id(&asset(2, "").source)).unwrap();
+        let target = SpaceTarget { session_id: "session".into(), space_id: "space".into() };
+        let mut request = linked_add(&f);
+        request.target = Some(target.clone());
+        let operation = finished(&f.service, f.service.start_add(request).await.unwrap()).await;
+        assert_eq!(operation.phases[0].error.as_ref().unwrap().code, "library_item_busy");
+        let reopened = reopen(&f);
+        let saved = reopened.listing(None).await.unwrap().items;
+        assert_eq!(saved.iter().map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>(), vec![Some("acme/repo#1")]);
+        let attempts = reopened.space_listing(target).await.unwrap().attempts;
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].item_id.as_ref(), Some(&saved[0].item_id));
+        assert_eq!(attempts[0].state, SpaceAddAttemptState::Failed);
+        assert_eq!(attempts[0].error.as_ref().unwrap().code, "library_item_busy");
+    }
+
+    #[tokio::test]
+    async fn crash_after_library_publish_before_report_recovers_retry_intent() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let target = SpaceTarget { session_id: "session".into(), space_id: "space".into() };
+        let (operation, lease) = operations::create(&store, LibraryOperationKind::Add, None).unwrap();
+        operations::set_target(&store, &operation.operation_id, target.clone()).unwrap();
+        *store.fault.lock().unwrap_or_else(|e| e.into_inner()) = Some("space_after_library_publish");
+        let failure = f.service.save_asset(&store, &operation.operation_id, asset(1, "published"),
+            None, None, Some(&target)).unwrap_err();
+        assert_eq!(failure.code, "library_test_crash");
+        assert!(operations::get(&store, &operation.operation_id).unwrap().item_ids.is_empty());
+        drop(lease);
+        let reopened = reopen(&f);
+        let saved = reopened.listing(None).await.unwrap().items;
+        assert_eq!(saved[0].canonical_id.as_deref(), Some("acme/repo#1"));
+        let attempts = reopened.space_listing(target).await.unwrap().attempts;
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].item_id.as_ref(), Some(&saved[0].item_id));
+        assert_eq!(attempts[0].state, SpaceAddAttemptState::Failed);
+        assert_eq!(attempts[0].error.as_ref().unwrap().code, "space_add_interrupted");
+    }
+
+    #[tokio::test]
+    async fn interrupted_write_ahead_attempt_without_library_publish_is_discarded() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let target = SpaceTarget { session_id: "session".into(), space_id: "space".into() };
+        let (operation, lease) = operations::create(&store, LibraryOperationKind::Add, None).unwrap();
+        operations::set_target(&store, &operation.operation_id, target.clone()).unwrap();
+        let entry = asset_entry(&asset(1, "not published"), None);
+        space::prepare_saved_item(&store, &operation.operation_id, &target, &entry.summary).unwrap();
+        drop(lease);
+        let reopened = reopen(&f);
+        assert!(reopened.listing(None).await.unwrap().items.is_empty());
+        assert!(reopened.space_listing(target).await.unwrap().attempts.is_empty());
+    }
+
     #[tokio::test]
     async fn linked_fetch_failure_persists_partial_report_with_omitted_path() {
         let f = fixture();
@@ -1161,6 +1338,24 @@ mod tests {
             f.service.listing(None).await.unwrap().items[0].diagnostics[0].code,
             "source_markup_unconverted"
         );
+    }
+
+    #[tokio::test]
+    async fn target_add_cancelled_before_publish_does_not_start_space_phase() {
+        let f = fixture();
+        f.provider.block.store(true, Ordering::SeqCst);
+        let mut request = add(1);
+        request.target = Some(SpaceTarget { session_id: "session".into(), space_id: "space".into() });
+        let operation = f.service.start_add(request).await.unwrap();
+        f.provider.entered.notified().await;
+        f.service.cancel(&operation.operation_id).await.unwrap();
+        f.provider.release.add_permits(1);
+        let operation = finished(&f.service, operation).await;
+        assert_eq!(operation.phases[0].state, LibraryPhaseState::Cancelled);
+        assert_eq!(operation.phases[1].state, LibraryPhaseState::Cancelled);
+        assert!(f.service.listing(None).await.unwrap().items.is_empty());
+        assert!(f.service.space_listing(SpaceTarget { session_id: "session".into(), space_id: "space".into() })
+            .await.unwrap().attempts.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

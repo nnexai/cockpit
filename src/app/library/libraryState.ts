@@ -5,7 +5,19 @@ import type {
   LibraryReportOutcome,
   LibraryResolution,
   ProjectProvider,
+  SpaceTarget,
 } from "../../protocol/generated/v1";
+
+/**
+ * The Space a Library surface can add to: the selected Space in the Library
+ * view, or a Context pane's own Space. `live` is false while Herdr isn't live,
+ * when Space-targeted actions are unavailable (design §4.1).
+ */
+export type LibrarySpace = { target: SpaceTarget; label: string; live: boolean };
+
+export function sameSpaceTarget(left: SpaceTarget | null | undefined, right: SpaceTarget | null | undefined): boolean {
+  return Boolean(left && right && left.session_id === right.session_id && left.space_id === right.space_id);
+}
 
 /** Provider families Cockpit can snapshot into the Library in S1, keyed by CLI executable. */
 export type ProviderFamily = { key: "gitlab" | "github" | "gitea" | "jira" | "other"; name: string; review: string };

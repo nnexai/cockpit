@@ -51,7 +51,6 @@ mod context;
 mod context_media;
 mod projects;
 mod review;
-mod sources;
 mod library;
 
 // The enclosing guard verifies the exact bound Host and Origin.
@@ -212,7 +211,6 @@ fn build_router_with_validated_root(
         )
         .merge(comments::routes())
         .merge(review::routes())
-        .merge(sources::routes())
         .merge(context_media::routes())
         .merge(projects::routes())
         .merge(context::routes())

@@ -58,10 +58,7 @@ use crate::review::{
     ReviewFileRequest, ReviewFileStatus, ReviewHunk, ReviewSide, ReviewSnapshot,
     ReviewSnapshotRequest,
 };
-use crate::sources::{
-    SourceCapability, SourceEntry, SourceFreshness, SourceImportRequest, SourceImportResponse,
-    SourceListRequest, SourceMaterializationStatus, SourceRefreshRequest,
-};
+use crate::sources::SourceCapability;
 use crate::library::{
     LibraryAddRequest, LibraryAncestor, LibraryAttachment, LibraryAttachmentAction,
     LibraryAttachmentRequest, LibraryAttachmentState, LibraryConflictFile, LibraryContainer,
@@ -372,13 +369,6 @@ pub fn render_v1() -> String {
         WorkspaceTeardownRecovery::decl(&config),
         WorkspaceTeardownRecoveryList::decl(&config),
         SourceCapability::decl(&config),
-        SourceFreshness::decl(&config),
-        SourceMaterializationStatus::decl(&config),
-        SourceImportRequest::decl(&config),
-        SourceListRequest::decl(&config),
-        SourceRefreshRequest::decl(&config),
-        SourceEntry::decl(&config),
-        SourceImportResponse::decl(&config),
         ReviewSide::decl(&config),
         ReviewComparison::decl(&config),
         ReviewFileStatus::decl(&config),

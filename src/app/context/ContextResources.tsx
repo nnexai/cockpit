@@ -2,15 +2,24 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { ContextRoot, ContextSnapshotResponse } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
+import type { LibrarySpace } from "../library/libraryState";
+import { SpaceContextList } from "../library/SpaceContextList";
+import type { SpaceListingState } from "../library/useLibraryOperation";
 import { SnapshotImport } from "./SnapshotImport";
-import { SourceImport } from "./SourceImport";
+
+/**
+ * The companion root's `Context resources` overlay (design §4.8): the Library
+ * context held by this pane's Space, then the local snapshot import.
+ */
 export function ContextResources({
   client,
   sessionId,
   paneId,
   bindingId,
   root,
-  onChanged,
+  space,
+  spaceListing,
+  onAdd,
   onImported,
   onClose,
 }: {
@@ -19,7 +28,10 @@ export function ContextResources({
   paneId: string;
   bindingId: string;
   root: ContextRoot;
-  onChanged: (paths: string[]) => void;
+  /** The pane's own Space; its listing is read only while Herdr is live. */
+  space: LibrarySpace | null;
+  spaceListing: SpaceListingState;
+  onAdd: () => void;
   onImported: (result: ContextSnapshotResponse) => void;
   onClose: () => void;
 }) {
@@ -59,7 +71,8 @@ export function ContextResources({
   return <section className="context-resources" role="dialog" aria-modal="true" aria-label="Context resources" ref={dialogRef} onKeyDown={onKeyDown}>
     <header><strong>Context resources</strong><button type="button" className="context-resources-close" aria-label="Close Context resources" title="Close Context resources" onClick={onClose}><UiIcon name="close" /></button></header>
     <div className="context-resources-body">
-      <SourceImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onChanged={onChanged} />
+      {space?.live ? <SpaceContextList client={client} space={space} state={spaceListing} onAdd={onAdd} /> : null}
+      {space && !space.live ? <p className="context-resource-empty space-context-offline">Herdr isn't live, so {space.label}'s Library context can't be checked.</p> : null}
       <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={onImported} />
     </div>
   </section>;

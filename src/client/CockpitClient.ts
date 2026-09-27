@@ -1,5 +1,5 @@
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
-import type { SourceImportRequest, SourceRefreshRequest, SourceImportResponse } from "../protocol/generated/v1";
+import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest } from "../protocol/generated/v1";
 import type { ReviewLaunchRequest, ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
 import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
@@ -302,9 +302,9 @@ export interface CockpitClient {
   contextSearch(sessionId: string, paneId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
   contextInvalidate(sessionId: string, paneId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
   contextMedia(sessionId: string, paneId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
-  sourceImport(sessionId: string, paneId: string, request: SourceImportRequest, signal?: AbortSignal): Promise<SourceImportResponse>;
-  sourceRefresh(sessionId: string, paneId: string, request: SourceRefreshRequest, signal?: AbortSignal): Promise<SourceImportResponse>;
-  sourceList(sessionId: string, paneId: string, request: { binding_id: string; root_id: string }, signal?: AbortSignal): Promise<SourceImportResponse>;
+  librarySpaceList(request: SpaceContextRequest, signal?: AbortSignal): Promise<SpaceContextListing>;
+  librarySpaceAdd(request: SpaceAddRequest): Promise<LibraryOperation>;
+  librarySpaceAttemptsDismiss(request: SpaceAttemptsDismissRequest): Promise<void>;
   openReview(sessionId: string, request: ReviewLaunchRequest): Promise<PanePresentation>;
   openContext(sessionId: string, request: ContextLaunchRequest): Promise<PanePresentation>;
   commentBatches(sessionId: string, paneId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;

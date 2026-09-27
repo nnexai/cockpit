@@ -78,7 +78,7 @@ pub async fn cockpit_workspace_start(
     service
         .projects()
         .map_err(inspection_error_response)?
-        .start(&session_id, &request)
+        .start(&session_id, &request, service.library().map_err(inspection_error_response)?.clone())
         .await
         .map_err(inspection_error_response)
 }
@@ -107,7 +107,7 @@ pub async fn cockpit_workspace_resume(
     service
         .projects()
         .map_err(inspection_error_response)?
-        .resume(&session_id, &request)
+        .resume(&session_id, &request, service.library().map_err(inspection_error_response)?.clone())
         .await
         .map_err(inspection_error_response)
 }

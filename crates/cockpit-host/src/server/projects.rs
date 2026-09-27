@@ -144,7 +144,11 @@ async fn start(
         Ok(projects) => projects,
         Err(error) => return inspection_error(error),
     };
-    match projects.start(&session_id, &request).await {
+    let library = match service.library() {
+        Ok(library) => library.clone(),
+        Err(error) => return inspection_error(error),
+    };
+    match projects.start(&session_id, &request, library).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }
@@ -183,7 +187,11 @@ async fn resume(
         Ok(projects) => projects,
         Err(error) => return inspection_error(error),
     };
-    match projects.resume(&session_id, &request).await {
+    let library = match service.library() {
+        Ok(library) => library.clone(),
+        Err(error) => return inspection_error(error),
+    };
+    match projects.resume(&session_id, &request, library).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

@@ -31,16 +31,18 @@ use crate::project_adapter::{
 };
 use crate::project_store::{
     CompanionManifest, ProjectStore, TeardownReceipt, TeardownReceiptState, prepare_project_root,
-    prepare_root, timestamp, validate_project_root,
+    timestamp, validate_project_root,
 };
 use crate::project_teardown::{
     self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree,
 };
 use crate::repositories::{self, RepositoryCatalog};
 use crate::sources::{
-    SourceFetchRequest, SourceMetadata, SourceService, source_authority_for_checkout,
+    FetchedAssets, SourceFetchRequest, SourceMetadata, SourceService, instance_authority,
 };
 use crate::{InspectionError, ProjectHerdrAdapter};
+use crate::library::LibraryService;
+use cockpit_protocol::library::{LibraryPhaseName, LibraryPhaseState, SpaceTarget, SpaceAddRequest};
 /// sessions, workspaces, tabs, panes, and worktrees; this service only journals
 /// its own effects and the companion association.
 pub struct ProjectService {
@@ -150,6 +152,11 @@ impl ProjectService {
         self.configuration.clone()
     }
 
+    /// Fresh endpoint authority for Space-scoped Library operations.
+    pub async fn project_endpoint_identity(&self, session_id: &str) -> Result<String, InspectionError> {
+        self.adapter.project_endpoint_identity(session_id).await
+    }
+
     pub fn with_sources(mut self, sources: Arc<SourceService>) -> Self {
         self.sources = Some(sources);
         self
@@ -224,12 +231,9 @@ impl ProjectService {
                             "source validation is not configured in this host",
                         )
                     })?;
-                    let authority = source_authority_for_checkout(
-                        &self.configuration,
-                        Path::new(&repository.checkout_path),
-                        &artifact.provider_id,
-                    )
-                    .await?;
+                    let authority = instance_authority(
+                        &self.configuration, &artifact.provider_id, &artifact.original_url,
+                    )?;
                     let request = SourceFetchRequest {
                         provider_id: artifact.provider_id.clone(),
                         artifact_url: artifact.original_url.clone(),
@@ -267,7 +271,7 @@ impl ProjectService {
                 }
                 if let Some(primary) = artifact.as_ref() {
                     linked_artifacts = self
-                        .validate_linked_artifacts(&repository, primary, linked_artifact_urls)
+                        .validate_linked_artifacts(primary, linked_artifact_urls)
                         .await?;
                 }
                 let source_base = if artifact
@@ -486,7 +490,6 @@ impl ProjectService {
     /// is reported before setup starts, not after the worktree exists.
     async fn validate_linked_artifacts(
         &self,
-        repository: &RepositoryCandidate,
         primary: &ProjectArtifact,
         urls: &[String],
     ) -> Result<Vec<ProjectArtifact>, InspectionError> {
@@ -508,12 +511,9 @@ impl ProjectService {
                     "source validation is not configured in this host",
                 )
             })?;
-            let authority = source_authority_for_checkout(
-                &self.configuration,
-                Path::new(&repository.checkout_path),
-                &artifact.provider_id,
-            )
-            .await?;
+            let authority = instance_authority(
+                &self.configuration, &artifact.provider_id, &artifact.original_url,
+            )?;
             let validated = sources
                 .validate_artifact_for_setup(SourceFetchRequest {
                     provider_id: artifact.provider_id.clone(),
@@ -537,6 +537,7 @@ impl ProjectService {
         self: &Arc<Self>,
         session: &str,
         request: &WorkspaceOperationRequest,
+        library: Arc<LibraryService>,
     ) -> Result<WorkspaceOperation, InspectionError> {
         validate_session(session)?;
         validate_operation_request(session, request)?;
@@ -571,15 +572,10 @@ impl ProjectService {
         // execution lease. A changed repository, endpoint, path, or source
         // authority must force a fresh plan rather than silently executing a
         // different operation.
-        if let Err(error) = self.preflight_plan(session, &operation.plan).await {
-            if error.code.starts_with("source_") {
-                return Err(error);
-            }
-            return Err(InspectionError::new(
-                "stale_plan",
-                format!("reviewed setup is no longer valid: {}", error.message),
-            ));
-        }
+        let (_, fetched) = self.preflight_plan(session, &operation.plan, true).await.map_err(|error| {
+            if error.code.starts_with("source_") { error }
+            else { InspectionError::new("stale_plan", format!("reviewed setup is no longer valid: {}", error.message)) }
+        })?;
         let lease = self
             .store
             .acquire_execution_lease(&operation.operation_id)?;
@@ -606,7 +602,7 @@ impl ProjectService {
         let id = started.operation_id.clone();
         let sid = session.to_owned();
         tokio::spawn(async move {
-            service.execute(&sid, &id, lease).await;
+            service.execute(&sid, &id, lease, library, Some(fetched)).await;
         });
         Ok(started)
     }
@@ -1285,6 +1281,7 @@ impl ProjectService {
         self: &Arc<Self>,
         session: &str,
         request: &WorkspaceOperationRequest,
+        library: Arc<LibraryService>,
     ) -> Result<WorkspaceOperation, InspectionError> {
         validate_session(session)?;
         validate_operation_request(session, request)?;
@@ -1353,7 +1350,7 @@ impl ProjectService {
         let id = resumed.operation_id.clone();
         let sid = session.to_owned();
         tokio::spawn(async move {
-            service.execute(&sid, &id, lease).await;
+            service.execute(&sid, &id, lease, library, None).await;
         });
         Ok(resumed)
     }
@@ -1594,11 +1591,32 @@ impl ProjectService {
         }
         Ok(operation)
     }
+    async fn fetch_setup_artifact(&self, artifact: &ProjectArtifact) -> Result<FetchedAssets, InspectionError> {
+        let sources = self.sources.as_ref().ok_or_else(||
+            InspectionError::new("source_provider_unsupported", "source validation is not configured in this host"))?;
+        let authority = instance_authority(&self.configuration, &artifact.provider_id, &artifact.original_url)?;
+        let mut fetched = sources.validate_artifact_for_setup(SourceFetchRequest {
+            provider_id: artifact.provider_id.clone(), artifact_url: artifact.original_url.clone(), authority,
+        }).await?;
+        if reviewed_artifact_url(artifact, &fetched)? != artifact.canonical_url {
+            return Err(InspectionError::new("stale_plan", "source provenance changed; review a fresh setup plan before starting"));
+        }
+        for asset in &mut fetched.assets {
+            if asset.source.provider_id == artifact.provider_id && asset.source.resource_type == artifact.kind
+                && asset.source.canonical_id == artifact.canonical_id
+            {
+                asset.original_url = Some(artifact.original_url.clone());
+            }
+        }
+        Ok(fetched)
+    }
+
     async fn preflight_plan(
         &self,
         session: &str,
         plan: &WorkspaceSetupPlan,
-    ) -> Result<Option<ProjectInventory>, InspectionError> {
+        validate_sources: bool,
+    ) -> Result<(Option<ProjectInventory>, Vec<FetchedAssets>), InspectionError> {
         validate_project_root(Path::new(&self.configuration.worktree_root))?;
         self.store
             .preflight_companion_publication(&self.configuration.companion_root)?;
@@ -1640,39 +1658,18 @@ impl ProjectService {
             }
             None
         };
-        if let Some(artifact) = plan.artifact.as_ref() {
+        let mut fetched = Vec::new();
+        if validate_sources && let Some(artifact) = plan.artifact.as_ref() {
             let repository = plan.repository.as_ref().ok_or_else(|| {
                 InspectionError::new(
                     "source_repository_missing",
                     "source setup requires a reviewed repository",
                 )
             })?;
-            let sources = self.sources.as_ref().ok_or_else(|| {
-                InspectionError::new(
-                    "source_provider_unsupported",
-                    "source validation is not configured in this host",
-                )
-            })?;
-            let authority = source_authority_for_checkout(
-                &self.configuration,
-                Path::new(&repository.checkout_path),
-                &artifact.provider_id,
-            )
-            .await?;
-            let validated = sources
-                .validate_artifact_for_setup(SourceFetchRequest {
-                    provider_id: artifact.provider_id.clone(),
-                    artifact_url: artifact.original_url.clone(),
-                    authority: authority.clone(),
-                })
-                .await?;
-            if reviewed_artifact_url(artifact, &validated)? != artifact.canonical_url {
-                return Err(InspectionError::new(
-                    "stale_plan",
-                    "source provenance changed; review a fresh setup plan before starting",
-                ));
-            }
+            let validated = self.fetch_setup_artifact(artifact).await?;
             if artifact.kind == "review" {
+                let sources = self.sources.as_ref().expect("source validation succeeded");
+                let authority = instance_authority(&self.configuration, &artifact.provider_id, &artifact.original_url)?;
                 let metadata = sources
                     .metadata_for_setup(SourceFetchRequest {
                         provider_id: artifact.provider_id.clone(),
@@ -1699,12 +1696,16 @@ impl ProjectService {
                     }
                 })?;
             }
+            fetched.push(validated);
+            for linked in &plan.linked_artifacts {
+                fetched.push(self.fetch_setup_artifact(linked).await?);
+            }
         }
-        Ok(before)
+        Ok((before, fetched))
     }
 
-    async fn execute(&self, session: &str, id: &str, _lease: crate::project_store::ExecutionLease) {
-        let result = self.execute_inner(session, id).await;
+    async fn execute(&self, session: &str, id: &str, _lease: crate::project_store::ExecutionLease, library: Arc<LibraryService>, fetched: Option<Vec<FetchedAssets>>) {
+        let result = self.execute_inner(session, id, &library, fetched).await;
         match result {
             Ok(()) => {}
             Err(error) if error.code == "shutdown" => {
@@ -1717,12 +1718,13 @@ impl ProjectService {
         self.workers.lock().await.remove(id);
     }
 
-    async fn execute_inner(&self, session: &str, id: &str) -> Result<(), InspectionError> {
+    async fn execute_inner(&self, session: &str, id: &str, library: &LibraryService, fetched: Option<Vec<FetchedAssets>>) -> Result<(), InspectionError> {
         self.boundary(id).await?;
         let mut operation = self.store.load(id)?;
         let plan = operation.plan.clone();
         let repository = plan.repository.as_ref();
-        let before = self.preflight_plan(session, &plan).await?;
+        let (before, preflight_assets) = self.preflight_plan(session, &plan, fetched.is_none() && operation.workspace_id.is_none()).await?;
+        let mut fetched = fetched.unwrap_or(preflight_assets);
         let borrowed = operation
             .owned_resources
             .iter()
@@ -2051,93 +2053,58 @@ impl ProjectService {
                 let Some(artifact) = plan.artifact.as_ref() else {
                     return Ok::<(), InspectionError>(());
                 };
-                let sources = self.sources.as_ref().ok_or_else(|| {
-                    InspectionError::new(
-                        "source_provider_unsupported",
-                        "source materialization is not configured in this host",
-                    )
-                })?;
-                let authority = source_authority_for_checkout(
-                    &self.configuration,
-                    Path::new(
-                        &repository
-                            .expect("artifact plans require a repository")
-                            .checkout_path,
-                    ),
-                    &artifact.provider_id,
-                )
-                .await?;
-                let (_, companion_root) =
-                    prepare_root(Path::new(&plan.companion_path), "companion")?;
-                let response = sources
-                    .fetch_to_companion_for_setup(
-                        SourceFetchRequest {
-                            provider_id: artifact.provider_id.clone(),
-                            artifact_url: artifact.original_url.clone(),
-                            authority,
-                        },
-                        Some((&companion_root, companion_id)),
-                    )
-                    .await?;
-                if response.entries.iter().any(|entry| {
-                    matches!(
-                        entry.status,
-                        cockpit_protocol::sources::SourceMaterializationStatus::Conflict
-                            | cockpit_protocol::sources::SourceMaterializationStatus::Failed
-                    )
-                }) {
-                    return Err(InspectionError::new(
-                        "source_sync_conflict",
-                        "source materialization preserved companion edits and needs retry",
-                    ));
-                }
-                if response.entries.is_empty() {
-                    return Err(InspectionError::new(
-                        "source_provider_contract",
-                        "source provider returned no primary artifact",
-                    ));
-                }
-                let checkout = &repository
-                    .expect("artifact plans require a repository")
-                    .checkout_path;
-                for linked in &plan.linked_artifacts {
-                    let authority = source_authority_for_checkout(
-                        &self.configuration,
-                        Path::new(checkout),
-                        &linked.provider_id,
-                    )
-                    .await?;
-                    let response = sources
-                        .fetch_to_companion_for_setup(
-                            SourceFetchRequest {
-                                provider_id: linked.provider_id.clone(),
-                                artifact_url: linked.original_url.clone(),
-                                authority,
-                            },
-                            Some((&companion_root, companion_id)),
-                        )
-                        .await
-                        .map_err(|error| {
-                            InspectionError::new(
-                                error.code,
-                                format!("linked {}: {}", linked.canonical_id, error.message),
-                            )
-                        })?;
-                    if response.entries.iter().any(|entry| {
-                        matches!(
-                            entry.status,
-                            cockpit_protocol::sources::SourceMaterializationStatus::Conflict
-                                | cockpit_protocol::sources::SourceMaterializationStatus::Failed
-                        )
-                    }) {
-                        return Err(InspectionError::new(
-                            "source_sync_conflict",
-                            format!(
-                                "linked {} preserved companion edits and needs retry",
-                                linked.canonical_id
-                            ),
-                        ));
+                let target = SpaceTarget {
+                    session_id: session.to_owned(),
+                    space_id: result.workspace_id.clone(),
+                };
+                let mut expected_ids = Vec::new();
+                let mut saved_ids = Vec::new();
+                for artifact in std::iter::once(artifact).chain(plan.linked_artifacts.iter()) {
+                    let authority = instance_authority(&self.configuration, &artifact.provider_id, &artifact.canonical_url)?;
+                    let item_id = crate::sources::source_id(&crate::sources::SourceRef {
+                        provider_id: artifact.provider_id.clone(),
+                        provider_instance: authority.provider_instance,
+                        resource_type: artifact.kind.clone(), canonical_id: artifact.canonical_id.clone(),
+                    });
+                    let prevalidated = fetched.iter().any(|batch| batch.assets.iter().any(|asset|
+                        asset.source.provider_id == artifact.provider_id && asset.source.resource_type == artifact.kind
+                            && asset.source.canonical_id == artifact.canonical_id));
+                    if !prevalidated {
+                        // Resuming copies saved items without another provider read.
+                        // Only an item never saved in phase 1 needs to be fetched.
+                        let mut offset = None;
+                        let saved = loop {
+                            let listing = library.listing(offset).await?;
+                            if listing.items.iter().any(|item| item.item_id == item_id) { break true; }
+                            match listing.next_offset { Some(next) => offset = Some(next), None => break false }
+                        };
+                        if saved { saved_ids.push(item_id.clone()); }
+                        else { fetched.push(self.fetch_setup_artifact(artifact).await?); }
                     }
+                    expected_ids.push(item_id);
+                }
+                let response = if fetched.is_empty() {
+                    let operation = library.start_space_add(SpaceAddRequest {
+                        target, item_ids: saved_ids, follow_ids: vec![],
+                    }).await?;
+                    loop {
+                        let response = library.operation(&operation.operation_id).await?;
+                        if response.finished { break response; }
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    }
+                } else {
+                    library.add_fetched_and_copy(target, fetched, saved_ids).await?
+                };
+                if let Some(phase) = response.phases.iter().find(|phase| phase.state != LibraryPhaseState::Done) {
+                    return Err(InspectionError::new(
+                        if phase.phase == LibraryPhaseName::Space { "source_sync_conflict" }
+                        else { phase.error.as_ref().map(|error| error.code.as_str()).unwrap_or("source_provider_contract") },
+                        phase.error.as_ref().map(|error| error.message.clone()).unwrap_or_else(||
+                            "Setup artifacts were not copied to the Space; retry the saved Library items".into()),
+                    ));
+                }
+                if expected_ids.iter().any(|id| !response.item_ids.contains(id)) {
+                    return Err(InspectionError::new("source_provider_contract", "source provider returned no reviewed artifact"));
                 }
                 Ok::<(), InspectionError>(())
             }
@@ -2415,15 +2382,15 @@ fn step_at_least(current: WorkspaceOperationStep, wanted: WorkspaceOperationStep
 
 fn reviewed_artifact_url<'a>(
     artifact: &'a ProjectArtifact,
-    response: &'a cockpit_protocol::sources::SourceImportResponse,
+    response: &'a FetchedAssets,
 ) -> Result<&'a str, InspectionError> {
     let primary = response
-        .entries
+        .assets
         .iter()
         .find(|entry| {
-            entry.provider_id == artifact.provider_id
-                && entry.resource_type == artifact.kind
-                && entry.canonical_id == artifact.canonical_id
+            entry.source.provider_id == artifact.provider_id
+                && entry.source.resource_type == artifact.kind
+                && entry.source.canonical_id == artifact.canonical_id
         })
         .ok_or_else(|| {
             InspectionError::new(
@@ -2959,6 +2926,8 @@ mod tests {
         worktree_requests: StdMutex<Vec<ProjectWorktreeRequest>>,
         terminal_requests: StdMutex<Vec<ProjectTerminalRequest>>,
         closed_workspaces: StdMutex<Vec<String>>,
+        repository: std::sync::OnceLock<RepositoryCandidate>,
+        copy_available: AtomicBool,
     }
 
     fn unused<T>() -> Result<T, InspectionError> {
@@ -2984,9 +2953,20 @@ mod tests {
 
         async fn session_snapshot(
             &self,
-            _: &str,
+            session: &str,
         ) -> Result<SessionSnapshotResponse, InspectionError> {
-            unused()
+            if !self.copy_available.load(Ordering::SeqCst) {
+                return Err(InspectionError::new("disconnected", "fixture unavailable"));
+            }
+            Ok(SessionSnapshotResponse {
+                session_id: session.into(), version: "test".into(), protocol: 1,
+                focused_space_id: None, focused_tab_id: None, focused_pane_id: None,
+                spaces: vec![cockpit_protocol::v1::SpaceSummary {
+                    id: "workspace".into(), label: "Setup".into(), number: 1,
+                    tab_count: 0, pane_count: 0, focused: false, agent_status: "none".into(), git: None,
+                }],
+                tabs: vec![], panes: vec![], layouts: vec![], agents: vec![],
+            })
         }
 
         async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> {
@@ -3029,7 +3009,20 @@ mod tests {
             _: &str,
         ) -> Result<ProjectInventory, InspectionError> {
             self.inventory_calls.fetch_add(1, Ordering::Relaxed);
-            unused()
+            let repository = self.repository.get().cloned();
+            let Some(repository) = repository else { return unused(); };
+            Ok(ProjectInventory {
+                endpoint_identity: "endpoint".into(),
+                repository_key: repository.common_dir,
+                repository_root: repository.root,
+                supported_methods: vec![],
+                worktrees: self.worktree_requests.lock().unwrap().iter().map(|request|
+                    crate::project_adapter::ProjectWorktreeEntry {
+                        checkout_path: request.checkout_path.clone(), branch: request.branch.clone(),
+                        open_workspace_id: Some("workspace".into()), is_primary: false,
+                        is_linked_worktree: true, dirty: Some(false),
+                    }).collect(),
+            })
         }
 
         async fn project_worktree(
@@ -3037,6 +3030,11 @@ mod tests {
             _: &str,
             request: &ProjectWorktreeRequest,
         ) -> Result<ProjectWorktreeResult, InspectionError> {
+            if request.mode == WorkspaceSetupMode::Create {
+                git(Path::new(&request.source_cwd), &[
+                    "worktree", "add", "-b", request.branch.as_deref().unwrap(), &request.checkout_path,
+                ]);
+            }
             self.worktree_requests
                 .lock()
                 .expect("worktree requests")
@@ -3046,7 +3044,7 @@ mod tests {
                 tab_id: Some("workspace:root".to_owned()),
                 pane_id: Some("workspace:pane".to_owned()),
                 checkout_path: request.checkout_path.clone(),
-                branch: None,
+                branch: request.branch.clone(),
                 already_open: false,
             })
         }
@@ -3144,6 +3142,134 @@ mod tests {
         );
     }
 
+    struct SetupProvider {
+        configuration: ProjectConfiguration,
+        provider_id: String,
+        calls: Arc<AtomicUsize>,
+    }
+    #[async_trait::async_trait]
+    impl crate::sources::SourceProvider for SetupProvider {
+        fn provider_id(&self) -> &str { &self.provider_id }
+        fn capabilities(&self) -> Vec<cockpit_protocol::sources::SourceCapability> {
+            vec![cockpit_protocol::sources::SourceCapability::Issue]
+        }
+        async fn fetch(&self, request: &SourceFetchRequest) -> Result<Vec<crate::sources::SourceAsset>, InspectionError> {
+            let read = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            let artifact = repositories::resolve_artifact(&self.configuration, &request.artifact_url)?;
+            assert_eq!(request.authority, instance_authority(&self.configuration, &self.provider_id, &request.artifact_url)?);
+            Ok(vec![crate::sources::SourceAsset {
+                source: crate::sources::SourceRef {
+                    provider_id: self.provider_id.clone(), provider_instance: request.authority.provider_instance.clone(),
+                    resource_type: artifact.kind, canonical_id: artifact.canonical_id.clone(),
+                },
+                title: artifact.canonical_id, source_url: Some(artifact.canonical_url),
+                original_url: Some(request.artifact_url.clone()), source_revision: Some("1".into()),
+                complete: true, diagnostics: vec![], body: format!("Setup context body: fetch {read}"),
+                container: None, fields: vec![], attachments: vec![],
+            }])
+        }
+    }
+
+    async fn settled_setup(service: &ProjectService, id: &str) -> WorkspaceOperation {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let operation = service.get("session", id).await.unwrap();
+                if !matches!(operation.state, WorkspaceOperationState::Planned | WorkspaceOperationState::Running) {
+                    break operation;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.expect("setup settles")
+    }
+
+    #[tokio::test]
+    async fn setup_saves_primary_and_linked_artifacts_centrally_and_retries_copy_without_fetch() {
+        for fail_copy in [false, true] {
+            let root = std::env::temp_dir().join(format!("cockpit-setup-library-{}", Uuid::new_v4()));
+            let repository = root.join("repository");
+            std::fs::create_dir_all(&repository).unwrap();
+            git(&repository, &["init"]);
+            git(&repository, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "fixture"]);
+            git(&repository, &["remote", "add", "origin", "https://unrelated.test/local/repo.git"]);
+            let mut configuration = configuration(&root);
+            configuration.providers = vec![
+                cockpit_protocol::projects::ProjectProvider { id: "tea".into(), base_url: "https://forge.test".into(), executable: "tea".into(), login: None },
+                cockpit_protocol::projects::ProjectProvider { id: "jira".into(), base_url: "https://jira.test".into(), executable: "jira".into(), login: None },
+            ];
+            let calls = Arc::new(AtomicUsize::new(0));
+            let providers = configuration.providers.iter().map(|provider| Arc::new(SetupProvider {
+                configuration: configuration.clone(), provider_id: provider.id.clone(), calls: calls.clone(),
+            }) as Arc<dyn crate::sources::SourceProvider>).collect();
+            let sources = Arc::new(SourceService::new(&configuration, providers).unwrap());
+            let adapter = Arc::new(NestedDirectoryAdapter::default());
+            adapter.copy_available.store(!fail_copy, Ordering::SeqCst);
+            let service = Arc::new(ProjectService::new(configuration.clone(), adapter.clone()).unwrap().with_sources(sources.clone()));
+            let candidate = service.repositories().await.unwrap().repositories.into_iter()
+                .find(|candidate| candidate.checkout_path == repository.to_string_lossy()).unwrap();
+            adapter.repository.set(candidate.clone()).unwrap();
+            let library = Arc::new(LibraryService::new(configuration.clone(), sources).with_projects(service.clone(), adapter.clone()));
+            let legacy = Path::new(&configuration.state_root).join("sources");
+            std::fs::create_dir_all(&legacy).unwrap();
+            let sentinel = legacy.join("source-current.json");
+            std::fs::write(&sentinel, b"opaque legacy fixture").unwrap();
+            let plan = service.plan("session", &WorkspaceSetupRequest::Create {
+                repository_id: candidate.repository_id, artifact_url: Some("https://forge.test/other/service/issues/7".into()),
+                linked_artifact_urls: vec!["https://jira.test/browse/OPS-3".into()],
+                branch: Some("setup-library".into()), base_ref: None, checkout_path: None,
+                label: Some("Setup".into()), task_name: None, focus: false,
+            }).await.unwrap();
+            assert!(!Path::new(&configuration.library_root).exists(), "planning must not persist provider content");
+            assert_eq!(calls.load(Ordering::SeqCst), 2, "planning validates both artifacts");
+            service.start("session", &WorkspaceOperationRequest {
+                operation_id: plan.operation_id.clone(), expected_generation: plan.generation,
+            }, library.clone()).await.unwrap();
+            let mut operation = settled_setup(&service, &plan.operation_id).await;
+            assert_eq!(calls.load(Ordering::SeqCst), 2, "Library must save the validated assets without another fetch");
+            let target = SpaceTarget { session_id: "session".into(), space_id: "workspace".into() };
+            if fail_copy {
+                assert_eq!(operation.state, WorkspaceOperationState::Partial);
+                assert_eq!(operation.error.as_ref().unwrap().code, "source_sync_conflict");
+                assert!(operation.resume_allowed);
+                let saved = library.listing(None).await.unwrap();
+                let mut identities = saved.items.iter().filter_map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>();
+                identities.sort();
+                assert_eq!(identities, vec!["OPS-3", "other/service#7"], "all linked assets must survive a copy failure");
+                let failed = library.space_listing(target.clone()).await.unwrap();
+                assert_eq!(failed.attempts.len(), 2);
+                for item in &saved.items {
+                    let attempt = failed.attempts.iter().find(|attempt| attempt.item_id.as_ref() == Some(&item.item_id)).unwrap();
+                    assert_eq!(attempt.state, cockpit_protocol::library::SpaceAddAttemptState::Failed);
+                    assert_eq!(attempt.operation_id, failed.attempts[0].operation_id, "setup artifacts share one Library operation");
+                }
+                let fetched = calls.load(Ordering::SeqCst);
+                adapter.copy_available.store(true, Ordering::SeqCst);
+                service.resume("session", &WorkspaceOperationRequest {
+                    operation_id: operation.operation_id.clone(), expected_generation: operation.generation,
+                }, library.clone()).await.unwrap();
+                operation = settled_setup(&service, &plan.operation_id).await;
+                assert_eq!(calls.load(Ordering::SeqCst), fetched, "copy retry must never ask the provider");
+            }
+            assert_eq!(operation.state, WorkspaceOperationState::Completed, "{operation:?}");
+            let items = library.listing(None).await.unwrap().items;
+            let mut identities = items.iter().filter_map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>();
+            identities.sort();
+            assert_eq!(identities, vec!["OPS-3", "other/service#7"]);
+            let listing = library.space_listing(target).await.unwrap();
+            assert!(listing.attempts.is_empty());
+            for item in &items {
+                let row = listing.rows.iter().find(|row| row.item_id.as_ref() == Some(&item.item_id)).unwrap();
+                assert_eq!(row.state, cockpit_protocol::library::SpaceCopyState::UpToDate);
+                let bytes = std::fs::read_to_string(Path::new(&plan.companion_path).join(&row.paths[0])).unwrap();
+                let expected_read = if item.canonical_id.as_deref() == Some("other/service#7") { 1 } else { 2 };
+                assert!(bytes.contains(&format!("Setup context body: fetch {expected_read}")), "copy must contain the validated provider result");
+                assert!(bytes.contains(&item.item_id));
+            }
+            assert_eq!(std::fs::read(&sentinel).unwrap(), b"opaque legacy fixture");
+            assert_eq!(std::fs::read_dir(&legacy).unwrap().count(), 1);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn service_opens_and_closes_nested_git_directory_without_worktree_inventory() {
         let root = std::env::temp_dir().join(format!("cockpit-project-open-{}", Uuid::new_v4()));
@@ -3172,7 +3298,10 @@ mod tests {
             .await
             .expect("plan nested directory");
         service
-            .execute_inner("session", &plan.operation_id)
+            .execute_inner("session", &plan.operation_id, &LibraryService::new(
+                service.configuration.clone(),
+                Arc::new(SourceService::new(&service.configuration, vec![]).unwrap()),
+            ), None)
             .await
             .expect("open nested directory");
 

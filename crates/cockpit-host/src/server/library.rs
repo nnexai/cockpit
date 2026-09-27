@@ -12,11 +12,14 @@ use cockpit_core::CockpitService;
 use cockpit_protocol::library::{
     LibraryAddRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryMediaRequest,
     LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
-    LibraryResolveRequest,
+    LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceContextRequest,
 };
 use serde::Deserialize;
 
-use super::{MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, require_origin};
+use super::{
+    MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, require_origin, valid_resource_id,
+    valid_session_id,
+};
 
 const MAX_LIBRARY_PAGE_ITEMS: usize = 5_000;
 const MAX_LIBRARY_REPORT_ROWS: usize = 256;
@@ -34,6 +37,12 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route("/api/v1/library/directory", post(directory))
         .route("/api/v1/library/document", post(document))
         .route("/api/v1/library/media", post(media))
+        .route("/api/v1/library/space/list", post(space_list))
+        .route("/api/v1/library/space/add", post(space_add))
+        .route(
+            "/api/v1/library/space/attempts/dismiss",
+            post(space_attempts_dismiss),
+        )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
 }
@@ -55,6 +64,10 @@ fn invalid_request() -> Response {
         "invalid_library_request",
         "Expected a valid bounded Library request",
     )
+}
+
+fn valid_target(target: &cockpit_protocol::library::SpaceTarget) -> bool {
+    valid_session_id(&target.session_id) && valid_resource_id(&target.space_id)
 }
 
 fn invalid_path(path: &str) -> bool {
@@ -113,6 +126,13 @@ async fn add(
         Ok(request) => request,
         Err(response) => return response,
     };
+    if request
+        .target
+        .as_ref()
+        .is_some_and(|target| !valid_target(target))
+    {
+        return invalid_request();
+    }
     match service.library() {
         Ok(library) => match library.start_add(request).await {
             Ok(value) => operation_response(value),
@@ -254,6 +274,70 @@ async fn media(
     match service.library() {
         Ok(library) => match library.media(request).await {
             Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn space_list(
+    State(service): State<CockpitService>,
+    body: Result<Json<SpaceContextRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_target(&request.target) {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.space_listing(request.target).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn space_add(
+    State(service): State<CockpitService>,
+    body: Result<Json<SpaceAddRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_target(&request.target)
+        || request.item_ids.len() + request.follow_ids.len() > MAX_LIBRARY_PAGE_ITEMS
+    {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.start_space_add(request).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn space_attempts_dismiss(
+    State(service): State<CockpitService>,
+    body: Result<Json<SpaceAttemptsDismissRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_target(&request.target)
+        || request.item_ids.len() + request.follow_ids.len() > MAX_LIBRARY_PAGE_ITEMS
+    {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.dismiss_space_attempts(request).await {
+            Ok(()) => Json(()).into_response(),
             Err(error) => inspection_error(error),
         },
         Err(error) => inspection_error(error),

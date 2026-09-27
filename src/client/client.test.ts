@@ -105,7 +105,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    contextMedia: vi.fn(), sourceImport: vi.fn(), sourceRefresh: vi.fn(), sourceList: vi.fn(async () => ({ binding_id: "binding", root_id: "root", entries: [], diagnostics: [] })), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -291,6 +291,26 @@ describe("library client validation", () => {
     await expect(client.libraryResolve(libraryRequests.resolve)).resolves.toMatchObject({ provider_id: null, canonical_id: null });
     await expect(client.libraryOperation("op/1")).resolves.toMatchObject({ phases: [{ message: null }], item_ids: operation.item_ids });
     await expect(client.libraryDirectory(libraryRequests.directory)).resolves.toMatchObject({ entries: directory.entries });
+  });
+  it("rejects cross-Space replies, unsafe Space paths and oversized selections in both transports", async () => {
+    const target = { session_id: "session", space_id: "space" };
+    const other = { ...target, space_id: "other-space" };
+    const listing = { target, companion: { status: "unavailable", error: { code: "source_companion_unavailable", message: "Disconnected" } }, attempts: [], rows: [], behind: 0, diagnostics: [] };
+    let payload: unknown = listing;
+    for (const client of [
+      createBrowserClient(vi.fn(async () => jsonResponse(payload))),
+      createNativeClient(vi.fn(async () => payload)),
+    ]) {
+      payload = { ...listing, target: other };
+      await expect(client.librarySpaceList({ target })).rejects.toMatchObject({ code: "malformed_response" });
+      payload = { ...listing, attempts: [{ target: other, space_label: null, item_id: "source:1", follow_id: null, title: "Saved", state: "failed", error: null, operation_id: "operation", updated_at: "now" }] };
+      await expect(client.librarySpaceList({ target })).rejects.toMatchObject({ code: "malformed_response" });
+      payload = { ...listing, rows: [{ item_id: "source:1", logical_id: "logical", title: "Saved", provider_id: null, resource_type: null, kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["../escape"], edited: [], copy_mode: null, library_revision_copied: null, current_library_revision: null, follow: null }] };
+      await expect(client.librarySpaceList({ target })).rejects.toMatchObject({ code: "malformed_response" });
+      payload = { ...libraryOperation, kind: "space_add", target: other };
+      await expect(client.librarySpaceAdd({ target, item_ids: ["source:1"], follow_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceAttemptsDismiss({ target, item_ids: Array(5001).fill("item"), follow_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
+    }
   });
 });
 

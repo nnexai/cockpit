@@ -282,9 +282,11 @@ Provider failures leave successful assets in place, record retryable per-asset s
 
 The global Context Library is the durable, Cockpit-owned source for provider snapshots. It is stored under the configured `library_root`, independently of any Herdr session, Space, or companion. Adding or refreshing an item updates the Library; it does not automatically fan out changes to companion copies.
 
-Where a per-Space copy/update operation is available, it is an explicit action for that Space: the Library item is saved first, then copied or reflinked into the freshly verified companion. A later Library refresh does not silently update that copy. The current S1 Library interface is Library-only; it does not yet offer Add to Space or per-Space update actions.
+Space adds save the Library item first, then copy or reflink it into a freshly verified companion. Setup passes its prevalidated primary and linked assets into one Library operation without fetching them again; every item and pending attempt becomes durable before any companion copy starts. A companion failure leaves all saved items and their durable Space-add attempts; setup reports `source_sync_conflict` and can resume by copying saved content without asking the provider again. A later Library refresh never silently updates a Space copy. In the UI, a live target Space (the Library view's selected Space, or a Context pane's own Space) adds `Add to <Space>` to Library item headers and menus and a `Library and <Space>` destination to the Add dialog, whose progress shows the Library and Space phases separately. A companion's `Resources` lists that Space's Library copies with read-only states, failed adds first with `Retry adding to <Space>` (copying the saved item, never fetching again) and `Dismiss`; its toolbar button reads `Resources · N behind` when copies are behind. Updating, replacing, and removing Space copies are not offered yet.
 
-The old `<state_root>/sources` cache is separate and inert with respect to Library operations: Cockpit does not inspect, import, or modify it. There is no automatic cache migration.
+`SourceService` is fetch-only: provider lookup, bounded metadata/fetch, setup's short-lived `RecentReads`, and optional hydration. `LibraryService` is the persistence authority. The legacy pane-scoped source import/list/refresh transports are removed in favor of Library operations and the explicit Space list/add/attempt-dismiss transports.
+
+The old `<state_root>/sources` cache is inert: Cockpit never reads, imports, reports, modifies, or deletes it. There is no migration. It remains on disk for manual user removal after confirmation.
 
 ### 7.4 Library Markdown format
 

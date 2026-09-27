@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryItemSummary, LibraryListing, LibraryOperation, ProjectProvider } from "../../protocol/generated/v1";
-import { errorText } from "./libraryState";
+import type { LibraryItemSummary, LibraryListing, LibraryOperation, ProjectProvider, SpaceContextListing, SpaceTarget } from "../../protocol/generated/v1";
+import { errorText, sameSpaceTarget } from "./libraryState";
 
-/** Every mounted Library surface rereads its listing when any of them finishes an operation. */
+/**
+ * Every mounted Library surface rereads its listing when any of them finishes an
+ * operation. The event's `detail` is the finished operation, or null for a
+ * change without one (a removal), so a Context pane can expand the files a
+ * Space copy wrote into its companion root.
+ */
 export const LIBRARY_CHANGED_EVENT = "cockpit:library-changed";
 
-export function announceLibraryChanged(): void {
-  window.dispatchEvent(new Event(LIBRARY_CHANGED_EVENT));
+export function announceLibraryChanged(operation: LibraryOperation | null = null): void {
+  window.dispatchEvent(new CustomEvent<LibraryOperation | null>(LIBRARY_CHANGED_EVENT, { detail: operation }));
 }
 
 const POLL_MS = 750;
@@ -21,8 +26,9 @@ function notifyTracker(): void {
   for (const listener of trackerListeners) listener();
 }
 
+// A Space add copies saved items into a Space; the Library items themselves don't change.
 function pendingLibraryItemIds(): Set<string> {
-  return new Set([...tracked.values()].filter(({ operation }) => !operation.finished).flatMap(({ operation }) => operation.item_ids));
+  return new Set([...tracked.values()].filter(({ operation }) => !operation.finished && operation.kind !== "space_add").flatMap(({ operation }) => operation.item_ids));
 }
 
 function storeOperation(operation: LibraryOperation): void {
@@ -31,7 +37,7 @@ function storeOperation(operation: LibraryOperation): void {
   entry.operation = operation;
   tracked.set(operation.operation_id, entry);
   notifyTracker();
-  if (operation.finished && !previous?.finished) announceLibraryChanged();
+  if (operation.finished && !previous?.finished) announceLibraryChanged(operation);
   if (operation.finished) entry.stop?.();
   let finishedCount = 0;
   for (const [id, current] of tracked) {
@@ -80,6 +86,8 @@ export type LibraryOperationState = {
   running: boolean;
   pendingItemIds: ReadonlySet<string>;
   start: (begin: () => Promise<LibraryOperation>) => Promise<LibraryOperation | null>;
+  /** Follows an operation this surface accepted before it last unmounted. */
+  resume: (operation: LibraryOperation) => void;
   cancel: () => void;
   reset: () => void;
 };
@@ -134,6 +142,16 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
       if (token === generation.current) setStarting(false);
     }
   }, [client]);
+  const resume = useCallback((previous: LibraryOperation) => {
+    generation.current += 1;
+    setError(null);
+    setStarting(false);
+    const latest = tracked.get(previous.operation_id)?.operation;
+    // A finished record that aged out of tracking was already announced once.
+    if (!latest && previous.finished) { setOperation(previous); return; }
+    setOperation(latest ?? previous);
+    startTracking(client, latest ?? previous);
+  }, [client]);
   const operationId = operation?.operation_id ?? null;
   const cancel = useCallback(() => {
     if (!operationId) return;
@@ -148,7 +166,7 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
     setError(null);
     setStarting(false);
   }, []);
-  return { operation, error, starting, running: operation !== null && !operation.finished, pendingItemIds, start, cancel, reset };
+  return { operation, error, starting, running: operation !== null && !operation.finished, pendingItemIds, start, resume, cancel, reset };
 }
 
 export type LibraryListingState = {
@@ -213,4 +231,56 @@ export function useLibraryListing(client: CockpitClient, active: boolean): Libra
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, reload);
   }, [active, reload]);
   return { ...state, providers, reload };
+}
+
+export type SpaceListingState = {
+  status: "idle" | "loading" | "ready" | "error";
+  /** Always the listing of the requested Space; never another Space's rows. */
+  listing: SpaceContextListing | null;
+  error: string | null;
+  /** Counts listings received, so a surface can wait for one read after it opened. */
+  received: number;
+  reload: () => void;
+};
+
+/**
+ * Reads one Space's Library copies and durable add attempts while `active`
+ * (design §4.8, D10). A listing is kept only for the Space that asked for it:
+ * changing the target drops it, and a late response for another Space is
+ * ignored. While an attempt is pending it rereads until the attempt settles.
+ */
+export function useSpaceContextListing(client: CockpitClient, target: SpaceTarget | null, active: boolean): SpaceListingState {
+  const sessionId = target?.session_id ?? null;
+  const spaceId = target?.space_id ?? null;
+  const [state, setState] = useState<{ status: SpaceListingState["status"]; listing: SpaceContextListing | null; error: string | null; received: number }>({ status: "idle", listing: null, error: null, received: 0 });
+  const [revision, setRevision] = useState(0);
+  const reload = useCallback(() => setRevision((value) => value + 1), []);
+  useEffect(() => {
+    if (!active || !sessionId || !spaceId) return;
+    const request = { target: { session_id: sessionId, space_id: spaceId } };
+    const controller = new AbortController();
+    setState((previous) => ({ ...previous, status: "loading" }));
+    client.librarySpaceList(request, controller.signal).then((listing) => {
+      if (controller.signal.aborted) return;
+      if (sameSpaceTarget(listing.target, request.target)) setState((previous) => ({ status: "ready", listing, error: null, received: previous.received + 1 }));
+      else setState((previous) => ({ ...previous, status: "error", error: "Cockpit answered for a different Space." }));
+    }, (cause: unknown) => {
+      if (!controller.signal.aborted) setState((previous) => ({ ...previous, status: "error", error: errorText(cause, "This Space's context could not be read.") }));
+    });
+    return () => controller.abort();
+  }, [active, client, sessionId, spaceId, revision]);
+  useEffect(() => {
+    if (!active || !sessionId || !spaceId) return;
+    window.addEventListener(LIBRARY_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, reload);
+  }, [active, reload, sessionId, spaceId]);
+  const listing = state.listing && target && sameSpaceTarget(state.listing.target, target) ? state.listing : null;
+  const attemptPending = listing?.attempts.some((attempt) => attempt.state === "pending") ?? false;
+  useEffect(() => {
+    if (!active || !attemptPending) return;
+    const timer = window.setTimeout(reload, POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [active, attemptPending, listing, reload]);
+  const status = !listing && state.status === "ready" ? "loading" : state.status;
+  return { status, listing, error: state.error, received: state.received, reload };
 }

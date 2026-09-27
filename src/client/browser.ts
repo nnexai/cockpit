@@ -1,11 +1,12 @@
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
-import { parseSourceScope, parseSourceImport, parseSourceRefresh, parseSourceResponse, matchSourceResponse } from "./sourceProtocol";
 import {
   matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
   parseLibraryAddRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
   parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
   parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+  parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
+  parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
 } from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
@@ -789,7 +790,8 @@ export function createBrowserClient(
     },
     async libraryAdd(value) {
       const body = parseLibraryAddRequest(value);
-      return getJson(request, "/api/v1/library/add", "Library add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const response = await getJson(request, "/api/v1/library/add", "Library add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return body.target ? matchSpaceOperation(response, body.target) : response;
     },
     async libraryRefresh(value) {
       const body = parseLibraryRefreshRequest(value);
@@ -832,23 +834,21 @@ export function createBrowserClient(
       signal?.throwIfAborted();
       return matchLibraryMedia(response, body);
     },
-    async sourceImport(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const body = parseSourceImport(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/sources/import`, "source import", parseSourceResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      return matchSourceResponse(response, body);
+    async librarySpaceList(value, signal) {
+      signal?.throwIfAborted();
+      const body = parseSpaceContextRequest(value);
+      const response = await getJson(request, "/api/v1/library/space/list", "Space context", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      signal?.throwIfAborted();
+      return matchSpaceContextListing(response, body);
     },
-    async sourceRefresh(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const body = parseSourceRefresh(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/sources/refresh`, "source refresh", parseSourceResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      return matchSourceResponse(response, body);
+    async librarySpaceAdd(value) {
+      const body = parseSpaceAddRequest(value);
+      const response = await getJson(request, "/api/v1/library/space/add", "Space add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return matchSpaceOperation(response, body.target);
     },
-    async sourceList(sessionId, paneId, value, signal) {
-      signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);
-      const body = parseSourceScope(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/sources/list`, "source list", parseSourceResponse, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      return matchSourceResponse(response, body);
+    async librarySpaceAttemptsDismiss(value) {
+      const body = parseSpaceAttemptsDismissRequest(value);
+      await getJson(request, "/api/v1/library/space/attempts/dismiss", "Space attempt dismissal", parseSpaceAttemptsDismissed, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     },
     async openReview(sessionId, value) {
       validateSessionId(sessionId);

@@ -184,7 +184,9 @@ class AppFixture {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    contextMedia: vi.fn(), sourceImport: vi.fn(), sourceRefresh: vi.fn(), sourceList: vi.fn(async () => ({ binding_id: "binding", root_id: "root", entries: [], diagnostics: [] })), openReview: this.openReview, openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    contextMedia: vi.fn(),
+    librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available" as const, companion_root_id: "companion:fixture", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
+    librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), openReview: this.openReview, openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -972,6 +974,8 @@ describe("Library view presentation lifecycle", () => {
     await openLibraryFromPalette();
     expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
     expect(terminal("pane-1")).toBeNull();
+    // The selected Space is the view's `Add to <Space>` target; reading its copies asks Herdr for nothing.
+    expect(fixture.client.librarySpaceList).toHaveBeenCalledWith({ target: { session_id: "session-1", space_id: "space-1" } }, expect.any(AbortSignal));
     expect(container.contains(document.activeElement)).toBe(true);
     expect(document.activeElement).not.toBe(invoker);
 

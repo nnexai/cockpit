@@ -208,3 +208,19 @@
 
 /* No-session notices: `Open Library` sits beside the notice's own action. */
 .notice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Space action beside the item header's state (design §4.4). */
+.library-space-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Two-phase progress and destination choices (design §4.5, §4.7). */
+.library-progress-steps { display: flex; flex-direction: column; gap: 6px; }
+.library-progress-actions { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.library-destination-choices { display: flex; flex-direction: column; gap: 2px; }
+.library-destination-choices .task-setup-check { margin: 0; }
+.task-setup-row .library-destination-choices input[type="radio"] { display: inline-block; width: auto; min-height: 0; flex: 0 0 auto; margin: 0; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+.library-destination-choices .task-setup-check { min-height: 28px; }
+.library-space-slot { display: inline-flex; min-width: 0; align-items: center; gap: 8px; }
+.library-space-slot:focus { outline: none; }
+.library-space-slot:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+.library-progress-files { width: 100%; max-height: 96px; margin: 0; padding: 0 0 0 16px; overflow: auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.library-progress-files code { overflow-wrap: anywhere; user-select: text; }

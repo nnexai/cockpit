@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use cockpit_protocol::project_defaults::{
@@ -11,8 +10,7 @@ use cockpit_protocol::projects::{
 use crate::InspectionError;
 use crate::repositories::{self, RepositoryCatalog};
 use crate::sources::{
-    SourceFetchRequest, SourceMetadata, SourceService, site_authority,
-    source_authority_for_checkout,
+    SourceFetchRequest, SourceMetadata, SourceService, instance_authority,
 };
 
 const MAX_LINKED_ARTIFACTS: usize = 4;
@@ -63,29 +61,9 @@ impl ProjectService {
             let selected = select_repository(&repositories, request.repository_id.as_deref())?;
             (repositories, selected)
         };
-        let authority = match (&selected, independent) {
-            (_, true) => site_authority(&self.configuration, &artifact.provider_id)?,
-            (Some(repository), false) => {
-                source_authority_for_checkout(
-                    &self.configuration,
-                    Path::new(&repository.checkout_path),
-                    &artifact.provider_id,
-                )
-                .await?
-            }
-            (None, false) => {
-                return Ok(WorkspaceDefaults {
-                    artifact,
-                    repositories,
-                    repository_id: None,
-                    branch: None,
-                    label: None,
-                    checkout_path: None,
-                    title: None,
-                    linked_artifacts: Vec::new(),
-                });
-            }
-        };
+        let authority = instance_authority(
+            &self.configuration, &artifact.provider_id, &artifact.canonical_url,
+        )?;
         let sources = self.sources.as_ref().ok_or_else(|| {
             InspectionError::new(
                 "source_provider_unsupported",
@@ -219,7 +197,7 @@ async fn linked_work_items(
     let mut lookups = tokio::task::JoinSet::new();
     for (index, (artifact, explicit)) in candidates.into_iter().enumerate() {
         let sources = Arc::clone(sources);
-        let authority = site_authority(configuration, &artifact.provider_id);
+        let authority = instance_authority(configuration, &artifact.provider_id, &artifact.canonical_url);
         lookups.spawn(async move {
             let result = match authority {
                 Ok(authority) => {
@@ -324,40 +302,50 @@ async fn matching_repositories(
     artifact: &ProjectArtifact,
     repositories: Vec<RepositoryCandidate>,
 ) -> Vec<RepositoryCandidate> {
-    let Some(expected_repository) = artifact_repository(artifact) else {
+    let Ok(authority) = instance_authority(configuration, &artifact.provider_id, &artifact.canonical_url) else {
         return Vec::new();
     };
     let mut matches = Vec::new();
+    let instance = url::Url::parse(&authority.provider_instance).expect("validated instance");
+    let expected = format!("{}/{}/{}", authority.origin_base_path, authority.owner, authority.repository);
     for repository in repositories {
-        let Ok(authority) = source_authority_for_checkout(
-            configuration,
-            Path::new(&repository.checkout_path),
-            &artifact.provider_id,
-        )
-        .await
-        else {
-            continue;
+        // Repository suggestions still match the checkout remote. This is only
+        // setup selection evidence, never authority for fetching an artifact.
+        let mut command = tokio::process::Command::new("git");
+        command.current_dir(&repository.checkout_path)
+            .args(["-c", "core.hooksPath=/dev/null", "remote", "get-url", "origin"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE");
+        let Ok(output) = crate::process::run_bounded_command(
+            command, configuration.limits.git_output_bytes as usize,
+            configuration.limits.git_output_bytes as usize,
+            std::time::Duration::from_millis(configuration.limits.git_timeout_ms as u64),
+            "setup repository origin",
+        ).await else { continue; };
+        if !output.status.success() { continue; }
+        let Ok(origin) = std::str::from_utf8(&output.stdout) else { continue; };
+        let origin = origin.trim();
+        let parsed = if origin.contains("://") {
+            url::Url::parse(origin).ok()
+        } else {
+            origin.rsplit_once('@').map(|(_, tail)| tail).unwrap_or(origin)
+                .split_once(':')
+                .and_then(|(host, path)| url::Url::parse(&format!("ssh://{host}/{path}")).ok())
         };
-        if format!("{}/{}", authority.owner, authority.repository) == expected_repository {
+        let Some(parsed) = parsed else { continue; };
+        let transport_matches = !origin.contains("://") || (
+            parsed.scheme() == instance.scheme()
+            && parsed.port() == authority.origin_port
+        );
+        if transport_matches && parsed.host_str() == Some(authority.origin_host.as_str())
+            && parsed.path().trim_end_matches('/').trim_end_matches(".git") == expected
+        {
             matches.push(repository);
         }
     }
     matches
 }
 
-fn artifact_repository(artifact: &ProjectArtifact) -> Option<&str> {
-    match artifact.kind.as_str() {
-        "issue" => artifact
-            .canonical_id
-            .rsplit_once('#')
-            .map(|(repository, _)| repository),
-        "review" => artifact
-            .canonical_id
-            .rsplit_once('!')
-            .map(|(repository, _)| repository),
-        _ => None,
-    }
-}
 
 fn select_repository(
     repositories: &[RepositoryCandidate],
@@ -384,9 +372,7 @@ fn select_repository(
 
 #[cfg(test)]
 mod tests {
-    use cockpit_protocol::projects::ProjectArtifact;
-
-    use super::{artifact_repository, key_candidates, select_repository, url_candidates};
+    use super::{key_candidates, select_repository, url_candidates};
 
     #[test]
     fn finds_work_item_keys_in_titles_branches_and_prose() {
@@ -407,31 +393,6 @@ mod tests {
         );
     }
 
-    fn artifact(kind: &str, canonical_id: &str) -> ProjectArtifact {
-        ProjectArtifact {
-            provider_id: "provider".into(),
-            kind: kind.into(),
-            canonical_id: canonical_id.into(),
-            original_url: "https://forge.test/acme/app/issues/1".into(),
-            canonical_url: "https://forge.test/acme/app/issues/1".into(),
-        }
-    }
-
-    #[test]
-    fn extracts_issue_and_review_repository_identity() {
-        assert_eq!(
-            artifact_repository(&artifact("issue", "acme/app#42")),
-            Some("acme/app")
-        );
-        assert_eq!(
-            artifact_repository(&artifact("review", "acme/app!42")),
-            Some("acme/app")
-        );
-        assert_eq!(
-            artifact_repository(&artifact("wiki", "acme/app/wiki/start")),
-            None
-        );
-    }
 
     #[test]
     fn no_match_and_ambiguous_matches_do_not_select_a_repository() {

@@ -150,10 +150,12 @@ fn make_service(
                 )
                 .map_err(|error| error.to_string())?,
             );
-            let library = LibraryService::new(config.clone(), sources.clone());
             let projects = ProjectService::new(config.clone(), adapter.clone())
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.to_string())?
+                .with_sources(sources.clone());
             let service = service.with_projects(projects);
+            let library = LibraryService::new(config.clone(), sources.clone())
+                .with_projects(service.projects().map_err(|error| error.to_string())?.clone(), adapter.clone());
             let contexts = cockpit_core::context::ContextService::new(
                 config.clone(),
                 adapter.extension_adapter(),
@@ -162,7 +164,6 @@ fn make_service(
                     .map_err(|error| error.to_string())?
                     .clone(),
             );
-            let contexts = contexts.with_sources(sources);
             let service = service.with_contexts(contexts);
             let reviews = cockpit_core::review::ReviewService::new(
                 config.clone(),

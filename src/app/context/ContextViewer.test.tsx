@@ -4,7 +4,7 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation } from "../../protocol/generated/v1";
+import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, SourceLines } from "./ContextViewer";
 
 async function settle(): Promise<void> {
@@ -457,6 +457,300 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     await flush();
     expect(host.querySelector(".library-kind-chip")).toBeNull();
     expect(host.textContent).toContain("The Library is empty");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("lists this Space's Library context in Resources, failed adds first, and retries from the saved item into the companion", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const target = { session_id: "session", space_id: "space-1" };
+  const row = (title: string, state: SpaceCopyRow["state"]): SpaceCopyRow => ({
+    item_id: `source:${title}`, logical_id: `logical:${title}`, title, provider_id: "github", resource_type: "issue", kind: "provider_snapshot", state, library_newer: state === "library_newer",
+    paths: [`sources/github/issue/${title}.md`], edited: [], copy_mode: "reflink", library_revision_copied: "r1", current_library_revision: state === "library_newer" ? "r2" : "r1", follow: null,
+  });
+  const failed: SpaceAddAttempt = {
+    target, space_label: null, item_id: "source:pr-7", follow_id: null, title: "Fix token refresh race", state: "failed",
+    error: { code: "source_companion_unavailable", message: "Exactly one verified companion is required" }, operation_id: "op-failed", updated_at: "",
+  };
+  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
+  let listing: SpaceContextListing = { target, companion, attempts: [failed], rows: [row("alpha", "up_to_date"), row("zeta", "library_newer")], behind: 1, diagnostics: [] };
+  const copied: LibraryOperation = {
+    operation_id: "op-resources-retry", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:pr-7"],
+    report: null, space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/github/review/acme-api-7.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const client = {
+    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { root_id: string; path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: request.root_id, path: request.path, truncated: false, diagnostics: [], entries: [] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
+    repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
+    librarySpaceList: vi.fn(async () => listing),
+    librarySpaceAdd: vi.fn(async () => {
+      listing = { ...listing, attempts: [], rows: [...listing.rows, { ...row("Fix token refresh race", "up_to_date"), item_id: "source:pr-7" }] };
+      return copied;
+    }),
+  } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  const space = { target, label: "api-review", live: true };
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn(), space });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    expect(client.librarySpaceList).toHaveBeenCalledWith({ target }, expect.any(AbortSignal));
+    const resources = [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!;
+    expect(resources.textContent).toBe("Resources · 1 behind");
+    await act(async () => resources.click());
+    await flush();
+    const dialog = host.querySelector<HTMLElement>(".context-resources")!;
+    expect(dialog.querySelector(".space-context-summary")?.textContent).toBe("In api-review · 2 items · 1 behind");
+    expect([...dialog.querySelectorAll("[role='listitem'] .context-source-title")].map((title) => title.textContent)).toEqual(["Fix token refresh race", "zeta", "alpha"]);
+    const attempt = dialog.querySelector<HTMLElement>("[role='listitem']")!;
+    expect(attempt.textContent).toContain("✕ Not added — Retry");
+    expect(attempt.querySelector("[role='alert']")?.textContent).toBe("Saved to the Library, but api-review's context folder couldn't be verified. Nothing was written to api-review.");
+    expect(dialog.textContent).toContain("↑ Library newer");
+    expect(dialog.textContent).toContain("✓ Up to date");
+    // S2 renders no S3 update/replace/remove actions.
+    expect([...dialog.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Update");
+
+    const retry = [...attempt.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry adding to api-review")!;
+    retry.focus();
+    await act(async () => retry.click());
+    await flush();
+    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:pr-7"], follow_ids: [] });
+    const paths = vi.mocked(client.contextDirectory).mock.calls.map(([, , request]) => request.path);
+    expect(paths).toEqual(expect.arrayContaining(["sources", "sources/github", "sources/github/review"]));
+    expect(dialog.textContent).not.toContain("Not added");
+    expect([...dialog.querySelectorAll("[role='listitem'] .context-source-title")].map((title) => title.textContent)).toEqual(["zeta", "alpha", "Fix token refresh race"]);
+    expect(document.activeElement?.textContent).toBe("Add…");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("offers Add to <Space> on a Library item header and shows the copy once the Space lists it", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const target = { session_id: "session", space_id: "space-1" };
+  const item: LibraryItemSummary = {
+    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
+    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
+    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+  };
+  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
+  let rows: SpaceCopyRow[] = [];
+  const copied: LibraryOperation = {
+    operation_id: "op-header-add", kind: "space_add", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:ops-311"],
+    report: null, space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const client = {
+    libraryListing: vi.fn(async () => library),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
+    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion, attempts: [], rows, behind: 0, diagnostics: [] })),
+    librarySpaceAdd: vi.fn(async () => {
+      rows = [{ item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r1", follow: null }];
+      return copied;
+    }),
+  } as unknown as CockpitClient;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
+    await flush();
+    const header = host.querySelector<HTMLElement>(".library-item-header")!;
+    const add = [...header.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Add to api-review")!;
+    const documentReads = vi.mocked(client.libraryDocument).mock.calls.length;
+    add.focus();
+    await act(async () => add.click());
+    await flush();
+    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: ["source:ops-311"], follow_ids: [] });
+    // Copying into the Space leaves the Library item alone: the open document and its header stay mounted.
+    expect(vi.mocked(client.libraryDocument).mock.calls.length).toBe(documentReads);
+    expect(header.isConnected).toBe(true);
+    expect(header.querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
+    expect([...header.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Add to api-review");
+    expect(document.activeElement).toBe(header.querySelector(".library-space-slot"));
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("rereads the Space's copies when Context files are refreshed and when Resources reopens", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const target = { session_id: "session", space_id: "space-1" };
+  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
+  const copy = (state: SpaceCopyRow["state"], libraryNewer = false): SpaceCopyRow => ({
+    item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state, library_newer: libraryNewer,
+    paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "r1", current_library_revision: libraryNewer ? "r2" : "r1", follow: null,
+  });
+  let listing: SpaceContextListing = { target, companion, attempts: [], rows: [copy("up_to_date")], behind: 0, diagnostics: [] };
+  const client = {
+    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { root_id: string; path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: request.root_id, path: request.path, truncated: false, diagnostics: [], entries: [] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
+    librarySpaceList: vi.fn(async () => ({ ...listing })),
+  } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn(), space: { target, label: "api-review", live: true } });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const toolbarButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith(label) || candidate.getAttribute("aria-label") === label);
+  const openResources = async () => { await act(async () => toolbarButton("Resources")!.click()); await flush(); };
+  const closeResources = async () => { await act(async () => host.querySelector<HTMLButtonElement>(".context-resources-close")!.click()); await flush(); };
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    expect(toolbarButton("Resources")?.textContent).toBe("Resources");
+
+    // The user edits the copy outside Cockpit, then refreshes the files.
+    listing = { ...listing, rows: [copy("edited_in_space", true)], behind: 1 };
+    await act(async () => toolbarButton("Refresh Context files")!.click());
+    await flush();
+    expect(toolbarButton("Resources")?.textContent).toBe("Resources · 1 behind");
+    await openResources();
+    expect(host.querySelector(".context-resources")?.textContent).toContain("✎ Edited in Space · Library newer");
+    await closeResources();
+
+    // Deleted on disk while Resources is closed: reopening shows it without another refresh.
+    listing = { ...listing, rows: [copy("missing_in_space")], behind: 0 };
+    await openResources();
+    const resources = host.querySelector(".context-resources")!;
+    expect(resources.textContent).toContain("○ Missing in Space");
+    expect(resources.textContent).not.toContain("Edited in Space");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps a failed Add to <Space> visible with its retry when no durable attempt records it", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const target = { session_id: "session", space_id: "space-1" };
+  const item: LibraryItemSummary = {
+    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
+    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
+    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+  };
+  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  // The copy stopped before its attempt was written: the reread listing has no attempt for it.
+  const stopped: LibraryOperation = {
+    operation_id: "op-header-stopped", kind: "space_add", item_ids: [], report: null, space: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "library_item_busy", message: "Too many pending Space adds" } }],
+  };
+  const client = {
+    libraryListing: vi.fn(async () => library),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
+    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
+    librarySpaceAdd: vi.fn(async () => stopped),
+  } as unknown as CockpitClient;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const headerButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-item-header button")].find((button) => button.textContent === label);
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
+    await flush();
+    const listReads = vi.mocked(client.librarySpaceList).mock.calls.length;
+    await act(async () => headerButton("Add to api-review")!.click());
+    await flush();
+    expect(vi.mocked(client.librarySpaceList).mock.calls.length).toBeGreaterThan(listReads);
+    const notice = host.querySelector(".library-item-header [role='alert']");
+    expect(notice?.textContent).toContain("Saved to the Library, but not added to api-review. Too many pending Space adds");
+    expect(headerButton("Add to api-review")).toBeUndefined();
+    await act(async () => headerButton("Retry adding to api-review")!.click());
+    await flush();
+    expect(client.librarySpaceAdd).toHaveBeenCalledTimes(2);
+    expect(client.librarySpaceAdd).toHaveBeenLastCalledWith({ target, item_ids: ["source:ops-311"], follow_ids: [] });
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("clears a header's failed Add to <Space> once another surface copies the item into that Space", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const target = { session_id: "session", space_id: "space-1" };
+  const item: LibraryItemSummary = {
+    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
+    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
+    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+  };
+  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const stopped: LibraryOperation = {
+    operation_id: "op-header-stopped-then-added", kind: "space_add", item_ids: [], report: null, space: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "space", state: "failed", done: 0, total: 1, message: null, error: { code: "library_item_busy", message: "Too many pending Space adds" } }],
+  };
+  let rows: SpaceCopyRow[] = [];
+  const client = {
+    libraryListing: vi.fn(async () => library),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
+    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows, behind: 0, diagnostics: [] })),
+    librarySpaceAdd: vi.fn(async () => stopped),
+  } as unknown as CockpitClient;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const headerButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".library-item-header button")].find((button) => button.textContent === label);
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
+    await flush();
+    await act(async () => headerButton("Add to api-review")!.click());
+    await flush();
+    expect(headerButton("Retry adding to api-review")).toBeDefined();
+
+    // The Add dialog (another surface) copies the item; its finished operation rereads the Space.
+    rows = [{ item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r1", follow: null }];
+    const addedElsewhere: LibraryOperation = { ...stopped, operation_id: "op-added-elsewhere", item_ids: ["source:ops-311"], phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], space: { space_id: "space-1", copy_mode: "copy", written: ["sources/jira/issue/ops-311.md"], skipped_edited: [], companion_root_id: "companion:c1" } };
+    await act(async () => window.dispatchEvent(new CustomEvent("cockpit:library-changed", { detail: addedElsewhere })));
+    await flush();
+    const header = host.querySelector<HTMLElement>(".library-item-header")!;
+    expect(header.querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
+    expect(header.querySelector("[role='alert']")).toBeNull();
+    expect(headerButton("Retry adding to api-review")).toBeUndefined();
+    expect(header.textContent).not.toContain("Too many pending Space adds");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

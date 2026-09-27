@@ -367,6 +367,45 @@ async fn library_routes_are_session_independent_and_reject_unknown_add_fields() 
 
     std::fs::remove_dir_all(root).expect("cleanup");
 }
+
+#[tokio::test]
+async fn space_library_routes_fail_closed_and_list_unavailable_companions() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).unwrap();
+    let target = serde_json::json!({"session_id": "session", "space_id": "space"});
+    for (path, body) in [
+        ("/api/v1/library/space/list", serde_json::json!({"target": target})),
+        ("/api/v1/library/space/add", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
+        ("/api/v1/library/space/attempts/dismiss", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
+    ] {
+        let response = router.clone().oneshot(Request::builder()
+            .method("POST").uri(path).header("host", authority.to_string())
+            .header("origin", "http://untrusted.test").header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 403);
+        let mut invalid = body.clone();
+        invalid["target"]["space_id"] = serde_json::json!("../invalid");
+        let response = router.clone().oneshot(Request::builder()
+            .method("POST").uri(path).header("host", authority.to_string())
+            .header("origin", format!("http://{authority}")).header("content-type", "application/json")
+            .body(axum::body::Body::from(invalid.to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 400);
+    }
+    let response = router.oneshot(Request::builder()
+        .method("POST").uri("/api/v1/library/space/list").header("host", authority.to_string())
+        .header("origin", format!("http://{authority}")).header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::json!({"target": target}).to_string())).unwrap()).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(listing["target"], target);
+    assert_eq!(listing["companion"]["status"], "unavailable");
+    assert_eq!(listing["companion"]["error"]["code"], "source_companion_unavailable");
+    assert_eq!(listing["attempts"], serde_json::json!([]));
+    assert!(!root.join("state/sources").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
 #[tokio::test]
 async fn serves_root_spa_assets_and_precise_fallbacks() {
     let root = fixture_root();

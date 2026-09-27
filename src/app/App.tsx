@@ -35,6 +35,7 @@ import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
 import { ContextViewer, type ContextViewState, type LibraryCommand } from "./context/ContextViewer";
 import { AddContextDialog } from "./library/AddContextDialog";
 import { LibraryView } from "./library/LibraryView";
+import type { LibrarySpace } from "./library/libraryState";
 import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
 import { BrowserPane, type BrowserPaneRecoveryRegistration } from "./browser/BrowserPane";
 
@@ -521,7 +522,7 @@ function viewerTitle(renderer: PaneRendererState): { title: string; subtitle: st
   return { title: "Files", subtitle: label, path: root?.path };
 }
 
-function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, focusOnAttach, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
+function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, focusOnAttach, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady, space }: {
   pane: Pane;
   label: string;
   /** The only Herdr pane in its tab; like Herdr, a lone terminal needs no header row. */
@@ -555,6 +556,8 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
   onTerminalView: () => void;
   onRefreshRenderer: () => void;
   onReady: () => void;
+  /** The pane's own Space, which its Context viewer's `Resources` and `Add to <Space>` act on. */
+  space: LibrarySpace | null;
 }) {
   const title = pane.title || label;
   const closePane = () => { if (window.confirm(`Close ${title}?`)) mutate(`pane:${pane.id}`, { type: "pane_close", pane_id: pane.id }); };
@@ -614,7 +617,7 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
       }}>
       {isGraphicalReview(renderer) ? <ReviewViewer client={client} presentation={renderer.presentation} value={renderer.view} onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)} onRequestControl={onRequestControl} onTerminalView={onTerminalView} /> : <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
         onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)}
-        controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} />}
+        controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} space={space} />}
     </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} focusEpoch={focusEpoch} focusToken={focusToken} terminalMouseInput={terminalMouseInput} deferAttachment={deferTerminal} focusOnAttach={focusOnAttach} onRequestControl={onRequestControl} onSelect={onSelect} onReady={reportTerminalReady} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
     {renderer?.actionError || (graphical && renderer?.inspectionError) ? <div className="pane-presentation-error" role="status"><span>{renderer.actionError ?? renderer.inspectionError}</span><button type="button" onClick={onRefreshRenderer}>Refresh</button>{graphical ? <button type="button" onClick={onTerminalView}>Terminal</button> : null}</div> : null}
   </section>;
@@ -892,6 +895,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const snapshot = state.snapshot;
   const spaces = snapshot?.spaces ?? [];
   const selectedSpace = byId(spaces, selection.spaceId);
+  // Herdr's selected Space is the Library view's and palette add's target; no focus or selection request follows from it.
+  const librarySpace: LibrarySpace | null = state.sessionId && selectedSpace
+    ? { target: { session_id: state.sessionId, space_id: selectedSpace.id }, label: selectedSpace.label, live: state.sync === "live" }
+    : null;
   const setupParent = setupParentFor(selectedSpace, snapshot?.panes ?? [], snapshot?.focused_pane_id ?? null);
   const allTabs = snapshot?.tabs ?? [];
   const tabs = tabsForSpace(allTabs, selection.spaceId);
@@ -1562,7 +1569,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const deferTerminal = !incoming || !sessionAttachable || snapshot?.focused_tab_id !== pane.tab_id
       || state.focusPending?.kind === "tab" || state.focusPending?.kind === "space";
     if (!deferTerminal) nextAttachedTerminals.add(pane.id);
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} focusOnAttach={!attachFocusSuppressed} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setAttachFocusSuppressed(false); setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
+    const paneSpace = state.sessionId ? spaces.find((space) => space.id === pane.space_id) : undefined;
+    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} space={state.sessionId && paneSpace ? { target: { session_id: state.sessionId, space_id: paneSpace.id }, label: paneSpace.label, live: state.sync === "live" } : null} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} focusOnAttach={!attachFocusSuppressed} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setAttachFocusSuppressed(false); setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
   const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
     "--sidebar-width": `${sidebarWidth}px`,
@@ -1592,7 +1600,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={() => { if (selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open"); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="workarea-content">
-        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} /> : <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}>
+        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}>
           {paneProjection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : paneInstances}
           {outgoingProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
         </div>}
@@ -1607,7 +1615,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {renderMenu()}
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
     {commandsOpen ? <CommandOverlay actions={commandActions.map((action) => ({ ...action, run: () => { setCommandsOpen(false); action.run(); } }))} statusContent={commandStatus} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} /> : null}
-    {libraryAddOpen ? <AddContextDialog client={client} onClose={() => setLibraryAddOpen(false)} onOpenItem={(itemId) => openLibrary({ kind: "open", itemId })} /> : null}
+    {libraryAddOpen ? <AddContextDialog client={client} onClose={() => setLibraryAddOpen(false)} onOpenItem={(itemId) => openLibrary({ kind: "open", itemId })} space={librarySpace} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
