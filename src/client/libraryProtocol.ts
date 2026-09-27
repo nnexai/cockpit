@@ -3,7 +3,7 @@ import type {
   LibraryAddRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFollowSummary,
   LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
   LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
-  SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest,
+  SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest,
 } from "../protocol/generated/v1";
 import { CockpitClientError, validateSessionId, validateResourceId } from "./CockpitClient";
 import { parseContextDirectory, parseContextDocument } from "./contextProtocol";
@@ -144,6 +144,21 @@ export function parseSpaceAddRequest(value: unknown): SpaceAddRequest {
 }
 export function parseSpaceAttemptsDismissRequest(value: unknown): SpaceAttemptsDismissRequest {
   return parseSpaceAddRequest(value);
+}
+export function parseSpaceUpdateRequest(value: unknown): SpaceUpdateRequest {
+  const r = record(value);
+  const s = record(r.scope);
+  const scope = s.scope === "all"
+    ? { scope: "all" as const }
+    : s.scope === "selection"
+      ? { scope: "selection" as const, item_ids: array(s.item_ids, 5000, id), follow_ids: array(s.follow_ids, 5000, id) }
+      : fail();
+  if (scope.scope === "selection" && scope.item_ids.length + scope.follow_ids.length > 5000) return fail();
+  return { target: parseSpaceTarget(r.target), scope, replace_edited: array(r.replace_edited, 5000, conflict) };
+}
+export function parseSpaceRemoveRequest(value: unknown): SpaceRemoveRequest {
+  const r = record(value);
+  return { target: parseSpaceTarget(r.target), logical_id: id(r.logical_id), confirmed: array(r.confirmed, 5000, conflict) };
 }
 export function parseSpaceContextListing(value: unknown): SpaceContextListing {
   const r = record(value);

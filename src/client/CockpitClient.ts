@@ -1,5 +1,5 @@
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
-import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest } from "../protocol/generated/v1";
+import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
 import type { ReviewLaunchRequest, ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
 import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
@@ -305,6 +305,10 @@ export interface CockpitClient {
   librarySpaceList(request: SpaceContextRequest, signal?: AbortSignal): Promise<SpaceContextListing>;
   librarySpaceAdd(request: SpaceAddRequest): Promise<LibraryOperation>;
   librarySpaceAttemptsDismiss(request: SpaceAttemptsDismissRequest): Promise<void>;
+  /** Writes the selected (or all eligible) Library copies into one Space only; edited copies are skipped unless listed in `replace_edited`. */
+  librarySpaceUpdate(request: SpaceUpdateRequest): Promise<LibraryOperation>;
+  /** Deletes one Space copy; edited files are removed only when `confirmed` matches their current hashes. Returns the Space's listing afterwards. */
+  librarySpaceRemove(request: SpaceRemoveRequest): Promise<SpaceContextListing>;
   openReview(sessionId: string, request: ReviewLaunchRequest): Promise<PanePresentation>;
   openContext(sessionId: string, request: ContextLaunchRequest): Promise<PanePresentation>;
   commentBatches(sessionId: string, paneId: string, request: CommentRequestScope, signal?: AbortSignal): Promise<CommentBatchList>;

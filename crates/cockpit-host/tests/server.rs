@@ -378,6 +378,8 @@ async fn space_library_routes_fail_closed_and_list_unavailable_companions() {
         ("/api/v1/library/space/list", serde_json::json!({"target": target})),
         ("/api/v1/library/space/add", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
         ("/api/v1/library/space/attempts/dismiss", serde_json::json!({"target": target, "item_ids": [], "follow_ids": []})),
+        ("/api/v1/library/space/update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": []})),
+        ("/api/v1/library/space/remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []})),
     ] {
         let response = router.clone().oneshot(Request::builder()
             .method("POST").uri(path).header("host", authority.to_string())
@@ -406,6 +408,39 @@ async fn space_library_routes_fail_closed_and_list_unavailable_companions() {
     assert!(!root.join("state/sources").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
+#[tokio::test]
+async fn space_update_and_remove_validate_scope_confirmation_and_authority() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).unwrap();
+    let target = serde_json::json!({"session_id": "session", "space_id": "space"});
+    for (route, body, status, code) in [
+        ("update", serde_json::json!({"target": target, "scope": {"scope": "selection", "item_ids": [], "follow_ids": ["follow:one"]}, "replace_edited": []}), 503, "source_capability_unavailable"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "follow:one", "confirmed": []}), 503, "source_capability_unavailable"),
+        ("update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": []}), 503, "source_companion_unavailable"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []}), 503, "source_companion_unavailable"),
+        ("update", serde_json::json!({"target": target, "scope": {"scope": "all", "unexpected": true}, "replace_edited": []}), 400, "invalid_library_request"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [], "unexpected": true}), 400, "invalid_library_request"),
+        ("update", serde_json::json!({"target": target, "scope": {"scope": "selection", "item_ids": vec!["item"; 5001], "follow_ids": []}, "replace_edited": []}), 400, "invalid_library_request"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [{"path": "../outside", "current_hash": format!("sha256:{}", "0".repeat(64))}]}), 400, "invalid_library_request"),
+        ("update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": [{"path": "sources/file.md", "current_hash": "invalid"}]}), 400, "invalid_library_request"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [{"path": "sources/file.md", "current_hash": format!("sha256:{}", "0".repeat(64))}]}), 503, "source_companion_unavailable"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": [{"path": "sources/file.md", "current_hash": "0".repeat(64)}]}), 400, "invalid_library_request"),
+    ] {
+        let response = router.clone().oneshot(Request::builder()
+            .method("POST").uri(format!("/api/v1/library/space/{route}"))
+            .header("host", authority.to_string()).header("origin", format!("http://{authority}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), status, "{route}: {body}");
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], code);
+    }
+    assert!(!root.join("companions").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn serves_root_spa_assets_and_precise_fallbacks() {
     let root = fixture_root();

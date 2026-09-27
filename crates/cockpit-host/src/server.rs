@@ -505,6 +505,7 @@ fn inspection_error(error: InspectionError) -> Response {
     } else if error.code == "focus_conflict"
         || error.code == "terminal_ownership_conflict"
         || error.code == "stale_generation"
+        || error.code == "space_copy_conflict"
     {
         StatusCode::CONFLICT
     } else {

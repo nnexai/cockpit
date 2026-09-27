@@ -7,6 +7,7 @@ import {
   parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
+  parseSpaceUpdateRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
@@ -849,6 +850,16 @@ export function createBrowserClient(
     async librarySpaceAttemptsDismiss(value) {
       const body = parseSpaceAttemptsDismissRequest(value);
       await getJson(request, "/api/v1/library/space/attempts/dismiss", "Space attempt dismissal", parseSpaceAttemptsDismissed, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async librarySpaceUpdate(value) {
+      const body = parseSpaceUpdateRequest(value);
+      const response = await getJson(request, "/api/v1/library/space/update", "Space update", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return matchSpaceOperation(response, body.target);
+    },
+    async librarySpaceRemove(value) {
+      const body = parseSpaceRemoveRequest(value);
+      const response = await getJson(request, "/api/v1/library/space/remove", "Space removal", parseSpaceContextListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return matchSpaceContextListing(response, body);
     },
     async openReview(sessionId, value) {
       validateSessionId(sessionId);

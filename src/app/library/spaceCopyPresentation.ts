@@ -6,7 +6,8 @@ import type { StateTone } from "./libraryState";
  * §4.8). No state other than `up_to_date` ever reads `Up to date`.
  *
  * Actions are named here so every surface offers the same verbs; a surface
- * renders only the kinds its slice implements (S2: `add`).
+ * renders only the kinds its slice implements (S2: `add`; S3: `update`,
+ * `restore`, `replace`, `remove`, and `view_library` in the document notice).
  */
 export type SpaceCopyActionKind = "add" | "update" | "restore" | "replace" | "view_library" | "remove" | "add_to_library_again" | "readd_to_library";
 export type SpaceCopyAction = { kind: SpaceCopyActionKind; label: string };

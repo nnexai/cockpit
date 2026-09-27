@@ -845,6 +845,14 @@ mod tests {
         release: Semaphore,
         pub(super) fetches: std::sync::atomic::AtomicUsize,
     }
+    impl Provider {
+        pub(super) fn set_body(&self, body: &str) {
+            self.state.lock().unwrap_or_else(|e| e.into_inner()).body = body.into();
+        }
+        pub(super) fn set_failure(&self, failure: Option<&str>) {
+            self.state.lock().unwrap_or_else(|e| e.into_inner()).failure = failure.map(str::to_owned);
+        }
+    }
     #[async_trait]
     impl SourceProvider for Provider {
         fn provider_id(&self) -> &str {

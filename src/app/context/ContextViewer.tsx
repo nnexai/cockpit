@@ -35,13 +35,13 @@ import { highlightLines } from "../viewer/highlight";
 import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
 import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
 import { AddContextDialog } from "../library/AddContextDialog";
-import { LibraryConfirmDialog } from "../library/LibraryConfirmDialog";
+import { LibraryConfirmDialog, SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "../library/LibraryConfirmDialog";
 import { LibraryItemHeader, type ItemSpaceState } from "../library/LibraryItemHeader";
 import { LibraryMenu, LibraryTree, menuAnchor, type LibraryItemActions } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
-import { headerSpaceAction } from "../library/spaceCopyPresentation";
-import { spaceAddFailure } from "../library/SpaceContextList";
+import { headerSpaceAction, spaceCopyChip } from "../library/spaceCopyPresentation";
+import { spaceAddFailure, spaceCopyActions, spaceUpdateOutcome, spaceUpdateUnconfirmed, useSpaceUpdate } from "../library/SpaceContextList";
 import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
 import "./context.css";
 
@@ -608,6 +608,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
   const [documentPageLoading, setDocumentPageLoading] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
   const protectedDirectoryKeysRef = useRef<Set<string>>(new Set());
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [invalidationGeneration, setInvalidationGeneration] = useState(0);
@@ -1080,26 +1082,36 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const selectedLibraryItem = isLibrary && selectedPath ? libraryItems?.find((item) => item.document_path === selectedPath) ?? null : null;
   useEffect(() => {
     if (!isLibrary) return;
-    // A Space add copies saved items out of the Library without changing them; rereading
+    // A Space add or update copies saved items out of the Library without changing them; rereading
     // the open document would replace its header, and the Space action's focus, with `Loading source…`.
     const changed = (event: Event) => {
-      if ((event as CustomEvent<LibraryOperation | null>).detail?.kind === "space_add") return;
+      const kind = (event as CustomEvent<LibraryOperation | null>).detail?.kind;
+      if (kind === "space_add" || kind === "space_update") return;
       setRefreshGeneration((generation) => generation + 1);
     };
     window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
   }, [isLibrary]);
-  // A Space copy into this companion root expands the folders it wrote, as snapshot imports do.
+  // A Space copy into this companion root expands the folders it wrote, as snapshot imports do;
+  // an update rereads the folders on show and leaves navigation as it was.
   const companionRoot = root?.kind === "companion" ? root : null;
   useEffect(() => {
     if (!companionRoot) return;
     const changed = (event: Event) => {
-      const result = (event as CustomEvent<LibraryOperation | null>).detail?.space;
+      const operation = (event as CustomEvent<LibraryOperation | null>).detail;
+      // A removal (a Space copy or a Library item) may have deleted files shown here.
+      if (!operation) {
+        void loadDirectory(companionRoot, "", true);
+        for (const path of expandedRef.current) void loadDirectory(companionRoot, path, true);
+        return;
+      }
+      const result = operation.space;
       if (!result || result.companion_root_id !== companionRoot.root_id || result.written.length === 0) return;
       const paths = result.written.flatMap((file) => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
-      setExpanded((current) => new Set([...current, ...paths]));
+      const updating = operation.kind === "space_update";
+      if (!updating) setExpanded((current) => new Set([...current, ...paths]));
       void loadDirectory(companionRoot, "", true);
-      for (const path of new Set(paths)) void loadDirectory(companionRoot, path, true);
+      for (const path of new Set(paths)) if (!updating || expandedRef.current.has(path)) void loadDirectory(companionRoot, path, true);
     };
     window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
@@ -1139,6 +1151,56 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       error: mine && stillMissing ? spaceAdd.error ?? spaceAddStopped : null,
       onAdd: () => startSpaceAdd(item),
     };
+  };
+  // The open companion file's Space copy (design §4.6): its notice offers `Update`, a confirmed replace, and the Library version.
+  const spaceCompanion = spaceListing.listing?.companion;
+  const openSpaceCopy = companionRoot && selectedPath && spaceCompanion?.status === "available" && spaceCompanion.companion_root_id === companionRoot.root_id
+    ? spaceListing.listing?.rows.find((row) => row.paths.includes(selectedPath)) ?? null
+    : null;
+  const spaceCopyUpdate = useSpaceUpdate(client, spaceListing);
+  const [spaceCopyConfirm, setSpaceCopyConfirm] = useState<SpaceCopyConfirmation | null>(null);
+  // The copy this notice last acted on, so a result or conflict never shows on another file.
+  const [spaceCopyAction, setSpaceCopyAction] = useState<{ logicalId: string; conflict: boolean } | null>(null);
+  const spaceCopyNoticeRef = useRef<HTMLDivElement>(null);
+  const spaceCopyNoticeFocused = useRef(false);
+  // Once the reread copy needs no notice, focus moves to the document rather than the page.
+  useLayoutEffect(() => {
+    const active = window.document.activeElement;
+    if (!spaceCopyNoticeFocused.current || (active !== null && active !== window.document.body)) return;
+    const next = spaceCopyNoticeRef.current?.querySelector("button");
+    if (next) next.focus({ preventScroll: true });
+    else { spaceCopyNoticeFocused.current = false; documentRef.current?.focus({ preventScroll: true }); }
+  });
+  const renderSpaceCopyNotice = (): ReactNode => {
+    if (!openSpaceCopy || !spaceLive) return null;
+    const chip = spaceCopyChip(openSpaceCopy);
+    const actions = spaceCopyActions(openSpaceCopy).filter((action) => action.kind === "update" || action.kind === "replace");
+    const itemId = openSpaceCopy.item_id;
+    const viewLibrary = itemId && chip.actions.some((action) => action.kind === "view_library") ? itemId : null;
+    const mine = spaceCopyAction?.logicalId === openSpaceCopy.logical_id;
+    const busy = mine && spaceCopyUpdate.busy;
+    const working = mine && spaceCopyUpdate.working;
+    const unconfirmed = mine && spaceCopyUpdate.unconfirmed;
+    const outcome = mine && spaceCopyUpdate.operation && !spaceCopyUpdate.busy ? spaceUpdateOutcome(spaceCopyUpdate.operation, spaceLive.label, spaceCopyUpdate.itemPaths) : null;
+    const failure = !mine || working ? null : spaceCopyAction?.conflict ? spaceCopyConflict(spaceLive.label) : spaceCopyUpdate.error ?? (unconfirmed ? `${spaceUpdateUnconfirmed(spaceLive.label)} ${spaceListing.error ?? ""}`.trim() : outcome?.failed ? outcome.text : null);
+    const skipped = outcome && !outcome.failed && outcome.skipped > 0 ? outcome.text : null;
+    const text = working ? `Updating ${spaceLive.label}…` : failure ?? skipped ?? chip.notice;
+    if (!text) return null;
+    const act = (kind: "update" | "replace") => {
+      if (busy) return;
+      setSpaceCopyAction({ logicalId: openSpaceCopy.logical_id, conflict: false });
+      if (kind === "replace") { setSpaceCopyConfirm({ kind, row: openSpaceCopy }); return; }
+      if (itemId) void spaceCopyUpdate.start(() => client.librarySpaceUpdate({ target: spaceLive.target, scope: { scope: "selection", item_ids: [itemId], follow_ids: [] }, replace_edited: [] }));
+    };
+    return <div ref={spaceCopyNoticeRef} className={`context-notice${failure ? " context-notice-error" : chip.tone === "working" ? " context-notice-warning" : ""}`} role={failure ? "alert" : "status"}
+      onFocus={() => { spaceCopyNoticeFocused.current = true; }} onBlur={(event) => { if (event.relatedTarget) spaceCopyNoticeFocused.current = false; }}>
+      <strong>{working ? <span className="library-spinner" aria-hidden="true" /> : <span aria-hidden="true">{chip.glyph} </span>}{chip.word}</strong>
+      <span>{text}</span>
+      {/* aria-disabled keeps focus on the pressed button while the update runs. */}
+      {actions.map((action) => <button key={action.kind} type="button" aria-disabled={busy} onClick={() => act(action.kind === "replace" ? "replace" : "update")}>{action.label}</button>)}
+      {unconfirmed ? <button type="button" onClick={spaceListing.reload}>Retry</button> : null}
+      {viewLibrary ? <button type="button" onClick={() => { setLibraryOpenRequest(viewLibrary); chooseRoot(libraryRoot); }}>View Library version</button> : null}
+    </div>;
   };
   useEffect(() => {
     if (!isLibrary || library.status !== "ready" || !library.listing || !selectedPath) return;
@@ -1352,6 +1414,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
 
             {documentDetails}
           </div>}
+          {renderSpaceCopyNotice()}
           {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
           {document.text !== null && document.diagnostics.some(isShownDiagnostic) ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.filter(isShownDiagnostic).map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
           {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && reader && (root.kind === "companion" || root.kind === "folder" || root.kind === "library") && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage media={reader.media} request={{ root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
@@ -1509,6 +1572,10 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           setLibraryPendingIds(new Set([item.item_id]));
           await startLibraryOperation(() => client.libraryReplace({ item_id: item.item_id, confirmed: item.conflict }));
         }} /> : null}
+      {spaceCopyConfirm && spaceLive ? <SpaceCopyConfirmDialog client={client} space={spaceLive} confirmation={spaceCopyConfirm}
+        onReplacing={(operation) => void spaceCopyUpdate.start(async () => operation)}
+        onConflict={() => { setSpaceCopyAction({ logicalId: spaceCopyConfirm.row.logical_id, conflict: true }); spaceListing.reload(); }}
+        onClose={() => setSpaceCopyConfirm(null)} /> : null}
       {pickerOpen ? <FilePicker candidates={[...pickerIndex.entries.values()].map((entry) => ({ id: entry.entry_id, path: entry.path!, detail: entry.bytes === null ? undefined : `${entry.bytes} B` } satisfies FileNavigationCandidate))} loading={pickerIndex.loading} incomplete={pickerIndex.incomplete} onChoose={(candidate) => { const entry = pickerIndex.entries.get(candidate.path); if (entry) chooseEntry(entry); closeFilePicker(); focusContent(); }} onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
     </section>
   );

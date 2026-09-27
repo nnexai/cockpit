@@ -51,7 +51,7 @@ This file records current product and engineering rules, not the implementation 
 - Prefer explicit, bounded hydration and canonical snapshots with source identity/revision where available. Freshness checks use provider metadata when available and canonical content otherwise. A failed optional import should not erase successful assets or silently become a successful import.
 - Configuration comes from supported file, environment, and invocation options. Do not persist or export secrets through context snapshots or generated environment values; external tools own credential handling.
 - Provider imports are authorized by the selected configured provider instance and the artifact's validated canonical identity/URL, not by a checkout's Git origin. Provider credentials remain external to Cockpit.
-- The Library is the durable global source: add and refresh save there first. A companion copy changes only through an explicit operation targeting that Space; Library refresh never automatically fans out or synchronizes companion copies. S2 exposes explicit per-Space add/list/retry/dismiss actions; Space update, replace, and remove remain deferred.
+- The Library is the durable global source: add and refresh save there first. A companion copy changes only through an explicit operation targeting that Space; Library refresh never automatically fans out or synchronizes companion copies. S2 exposes explicit per-Space add/list/retry/dismiss actions. S3 adds selected-item/All update, confirmed compare-and-swap replacement of edited copies, and confirmed per-Space removal; removals and source disappearance keep other Space copies unchanged.
 
 ## Deferred scope
 

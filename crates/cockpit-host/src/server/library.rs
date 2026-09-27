@@ -13,6 +13,7 @@ use cockpit_protocol::library::{
     LibraryAddRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryMediaRequest,
     LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
     LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceContextRequest,
+    SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
 };
 use serde::Deserialize;
 
@@ -39,6 +40,8 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route("/api/v1/library/media", post(media))
         .route("/api/v1/library/space/list", post(space_list))
         .route("/api/v1/library/space/add", post(space_add))
+        .route("/api/v1/library/space/update", post(space_update))
+        .route("/api/v1/library/space/remove", post(space_remove))
         .route(
             "/api/v1/library/space/attempts/dismiss",
             post(space_attempts_dismiss),
@@ -338,6 +341,50 @@ async fn space_attempts_dismiss(
     match service.library() {
         Ok(library) => match library.dismiss_space_attempts(request).await {
             Ok(()) => Json(()).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn space_update(
+    State(service): State<CockpitService>,
+    body: Result<Json<SpaceUpdateRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let count = match &request.scope {
+        SpaceUpdateScope::Selection { item_ids, follow_ids } => item_ids.len() + follow_ids.len(),
+        SpaceUpdateScope::All {} => 0,
+    };
+    if !valid_target(&request.target) || count > MAX_LIBRARY_PAGE_ITEMS {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.start_space_update(request).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn space_remove(
+    State(service): State<CockpitService>,
+    body: Result<Json<SpaceRemoveRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_target(&request.target) {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.space_remove(request).await {
+            Ok(value) => Json(value).into_response(),
             Err(error) => inspection_error(error),
         },
         Err(error) => inspection_error(error),

@@ -186,7 +186,7 @@ class AppFixture {
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(),
     librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available" as const, companion_root_id: "companion:fixture", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),
-    librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), openReview: this.openReview, openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(), openReview: this.openReview, openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),

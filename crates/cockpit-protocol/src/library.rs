@@ -451,7 +451,8 @@ pub enum SpaceUpdateScope {
         item_ids: Vec<String>,
         follow_ids: Vec<String>,
     },
-    All,
+    // An empty struct enforces deny_unknown_fields; Serde's tagged unit variant does not.
+    All {},
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]

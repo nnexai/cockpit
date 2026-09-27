@@ -1786,6 +1786,8 @@ pub fn run() {
             library::cockpit_library_media,
             library::cockpit_library_space_list,
             library::cockpit_library_space_add,
+            library::cockpit_library_space_update,
+            library::cockpit_library_space_remove,
             library::cockpit_library_space_attempts_dismiss,
             review::cockpit_review_snapshot,
             review::cockpit_review_file,

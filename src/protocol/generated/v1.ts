@@ -379,7 +379,7 @@ export type SpaceAddRequest = { target: SpaceTarget, item_ids: Array<string>, fo
 
 export type SpaceAttemptsDismissRequest = { target: SpaceTarget, item_ids: Array<string>, follow_ids: Array<string>, };
 
-export type SpaceUpdateScope = { "scope": "selection", item_ids: Array<string>, follow_ids: Array<string>, } | { "scope": "all" };
+export type SpaceUpdateScope = { "scope": "selection", item_ids: Array<string>, follow_ids: Array<string>, } | { "scope": "all", };
 
 export type SpaceUpdateRequest = { target: SpaceTarget, scope: SpaceUpdateScope, replace_edited: Array<LibraryConflictFile>, };
 

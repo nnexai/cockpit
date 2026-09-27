@@ -77,7 +77,7 @@ pub(crate) fn set_target(
     let _lock = store.exclusive()?;
     let mut record = load(store, id)?;
     record.target = Some(target);
-    if record.kind == LibraryOperationKind::SpaceAdd {
+    if matches!(record.kind, LibraryOperationKind::SpaceAdd | LibraryOperationKind::SpaceUpdate) {
         record.phases.clear();
     }
     record.phases.push(LibraryPhase {
@@ -242,9 +242,9 @@ pub(crate) fn finish(
             message: e.message,
         });
         LibraryPhaseState::Failed
-    } else if record.cancel_requested && phase.phase == LibraryPhaseName::Library {
+    } else if record.cancel_requested && (phase.phase == LibraryPhaseName::Library || record.kind == LibraryOperationKind::SpaceUpdate) {
         LibraryPhaseState::Cancelled
-    } else if (phase.phase == LibraryPhaseName::Library || record.kind == LibraryOperationKind::SpaceAdd)
+    } else if (phase.phase == LibraryPhaseName::Library || matches!(record.kind, LibraryOperationKind::SpaceAdd | LibraryOperationKind::SpaceUpdate))
         && record.report.as_ref().is_some_and(|r| r.failed + r.conflict + r.partial > 0)
     {
         LibraryPhaseState::Partial

@@ -7,6 +7,7 @@ import {
   parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
+  parseSpaceUpdateRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
@@ -781,6 +782,16 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     async librarySpaceAttemptsDismiss(value) {
       const request = parseSpaceAttemptsDismissRequest(value);
       await invokeAndParse(invoke, "cockpit_library_space_attempts_dismiss", { request }, "Space attempt dismissal", parseSpaceAttemptsDismissed);
+    },
+    async librarySpaceUpdate(value) {
+      const request = parseSpaceUpdateRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_space_update", { request }, "Space update", parseLibraryOperation);
+      return matchSpaceOperation(response, request.target);
+    },
+    async librarySpaceRemove(value) {
+      const request = parseSpaceRemoveRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_space_remove", { request }, "Space removal", parseSpaceContextListing);
+      return matchSpaceContextListing(response, request);
     },
     async openReview(sessionId, value) {
       validateSessionId(sessionId);

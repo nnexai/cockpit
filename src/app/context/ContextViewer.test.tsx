@@ -3,8 +3,8 @@ import "../input/viewerTestLayout";
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { CockpitClient } from "../../client/CockpitClient";
-import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow } from "../../protocol/generated/v1";
+import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
+import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, SourceLines } from "./ContextViewer";
 
 async function settle(): Promise<void> {
@@ -517,8 +517,6 @@ it("lists this Space's Library context in Resources, failed adds first, and retr
     expect(attempt.querySelector("[role='alert']")?.textContent).toBe("Saved to the Library, but api-review's context folder couldn't be verified. Nothing was written to api-review.");
     expect(dialog.textContent).toContain("↑ Library newer");
     expect(dialog.textContent).toContain("✓ Up to date");
-    // S2 renders no S3 update/replace/remove actions.
-    expect([...dialog.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Update");
 
     const retry = [...attempt.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry adding to api-review")!;
     retry.focus();
@@ -536,7 +534,353 @@ it("lists this Space's Library context in Resources, failed adds first, and retr
   }
 });
 
-it("offers Add to <Space> on a Library item header and shows the copy once the Space lists it", async () => {
+function spaceResourcesFixture(initialRows: SpaceCopyRow[]) {
+  const target = { session_id: "session", space_id: "space-1" };
+  const companion = { status: "available" as const, companion_root_id: "companion:c1", companion_label: "Context" };
+  const state = { rows: initialRows };
+  const client = {
+    contextDirectory: vi.fn(async (_session: string, _pane: string, request: { root_id: string; path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: request.root_id, path: request.path, truncated: false, diagnostics: [], entries: [] })),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "github", base_url: "https://github.com", executable: "gh" }] })),
+    repositories: vi.fn(async () => ({ repositories: [], diagnostics: [] })),
+    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion, attempts: [], rows: state.rows, behind: state.rows.filter((row) => row.library_newer).length, diagnostics: [] })),
+    librarySpaceUpdate: vi.fn(),
+    librarySpaceRemove: vi.fn(),
+  } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion:c1", roots: [{ root_id: "companion:c1", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  const space = { target, label: "api-review", live: true };
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn(), space });
+  }
+  return { target, state, client, Harness };
+}
+
+function spaceRow(title: string, state: SpaceCopyRow["state"], overrides: Partial<SpaceCopyRow> = {}): SpaceCopyRow {
+  return {
+    item_id: `source:${title}`, logical_id: `logical:${title}`, title, provider_id: "github", resource_type: "issue", kind: "provider_snapshot", state, library_newer: state === "library_newer",
+    paths: [`sources/github/issue/${title}.md`], edited: [], copy_mode: "reflink", library_revision_copied: "r1", current_library_revision: "r1", follow: null, ...overrides,
+  };
+}
+
+function spaceUpdated(operationId: string, target: { session_id: string; space_id: string }, itemIds: string[], written: string[], skipped: string[] = []): LibraryOperation {
+  return {
+    operation_id: operationId, kind: "space_update", phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: itemIds,
+    report: null, space: { space_id: "space-1", copy_mode: "reflink", written, skipped_edited: skipped, companion_root_id: "companion:c1" },
+    target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+}
+
+it("updates only the selected copy in this Space, counts Update all from behind and missing copies, reports skipped edits, and never offers Update on kept copies", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const edited = { path: "sources/github/issue/delta.md", current_hash: "sha256:edited" };
+  const fixture = spaceResourcesFixture([
+    spaceRow("alpha", "library_newer"),
+    spaceRow("beta", "library_newer"),
+    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [edited] }),
+    spaceRow("gamma", "missing_in_space"),
+    spaceRow("kept", "removed_at_source"),
+    spaceRow("orphan", "not_in_library", { item_id: null }),
+    spaceRow("legacy", "not_linked", { item_id: null }),
+    spaceRow("current", "up_to_date"),
+  ]);
+  const { target, state, client, Harness } = fixture;
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const actions = (title: string) => {
+    const entry = [...host.querySelectorAll<HTMLElement>(".context-resources [role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent === title)!;
+    return [...entry.querySelectorAll<HTMLButtonElement>(".space-context-actions button")];
+  };
+  const updateAll = () => [...host.querySelectorAll<HTMLButtonElement>(".space-context-bar button")].find((button) => button.textContent?.startsWith("Update all"))!;
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    const resources = [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!;
+    await act(async () => resources.click());
+    await flush();
+    // Rows needing action first, by title; then up-to-date and unlinked copies.
+    expect([...host.querySelectorAll(".context-resources [role='listitem'] .context-source-title")].map((title) => title.textContent))
+      .toEqual(["alpha", "beta", "delta", "gamma", "kept", "orphan", "current", "legacy"]);
+    expect(updateAll().textContent).toBe("Update all (3)");
+    expect(actions("alpha").map((button) => button.textContent)).toEqual(["Update"]);
+    expect(actions("gamma").map((button) => button.textContent)).toEqual(["Restore from Library"]);
+    expect(actions("delta").map((button) => button.textContent)).toEqual(["Replace with Library version…"]);
+    expect(actions("kept").map((button) => button.textContent)).toEqual(["Remove from this Space…"]);
+    expect(actions("orphan").map((button) => button.textContent)).toEqual(["Remove from this Space…"]);
+    expect(actions("legacy")).toEqual([]);
+    expect(actions("current").map((button) => button.textContent)).toEqual(["Remove from this Space…"]);
+
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "alpha" ? { ...row, state: "up_to_date", library_newer: false } : row);
+      return spaceUpdated("op-s3-selected", target, ["source:alpha"], ["sources/github/issue/alpha.md"]);
+    });
+    const update = actions("alpha")[0];
+    update.focus();
+    await act(async () => update.click());
+    await flush();
+    expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: ["source:alpha"], follow_ids: [] }, replace_edited: [] });
+    // The reread listing, not the click, decides the row: alpha is current, beta is still behind, and the row kept its place.
+    expect(host.querySelector(".context-resources [role='listitem']")?.textContent).toContain("✓ Up to date");
+    expect(actions("beta").map((button) => button.textContent)).toEqual(["Update"]);
+    expect(updateAll().textContent).toBe("Update all (2)");
+    expect(document.activeElement).toBe(actions("alpha")[0]);
+    expect(document.activeElement?.textContent).toBe("Remove from this Space…");
+
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "beta" || row.title === "gamma" ? { ...row, state: "up_to_date", library_newer: false } : row);
+      return spaceUpdated("op-s3-all", target, ["source:beta", "source:delta", "source:gamma"], ["sources/github/issue/beta.md", "sources/github/issue/gamma.md"], [edited.path]);
+    });
+    await act(async () => updateAll().click());
+    await flush();
+    expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ target, scope: { scope: "all" }, replace_edited: [] });
+    expect(host.querySelector(".space-context [role='status']")?.textContent).toBe("Updated 2 items in api-review. Skipped 1 edited copy.");
+    // Only the edited copy is left: N stays 0, but Update all still runs so it can report the skipped edit.
+    expect(updateAll().textContent).toBe("Update all (0)");
+    expect(updateAll().getAttribute("aria-disabled")).toBe("false");
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => spaceUpdated("op-s3-all-edited", target, ["source:delta"], [], [edited.path]));
+    await act(async () => updateAll().click());
+    await flush();
+    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(3);
+    expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ target, scope: { scope: "all" }, replace_edited: [] });
+    expect(host.querySelector(".space-context [role='status']")?.textContent).toBe("Nothing updated in api-review. Skipped 1 edited copy.");
+    expect(host.querySelector(".context-resources")?.textContent).toContain("✎ Edited in Space · Library newer");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("replaces an edited copy only after confirmation with the listed hashes, keeps it on a conflict, and removes a copy from this Space", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const path = "sources/github/issue/delta.md";
+  const { target, state, client, Harness } = spaceResourcesFixture([
+    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [{ path, current_hash: "sha256:first" }], paths: [path] }),
+    spaceRow("kept", "removed_at_source"),
+  ]);
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const entry = (title: string) => [...host.querySelectorAll<HTMLElement>(".context-resources [role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent === title);
+  const button = (root: ParentNode | undefined, label: string) => [...(root?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent === label);
+  const confirmDialog = () => document.body.querySelector<HTMLElement>(".library-confirm");
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
+    await flush();
+
+    const replace = button(entry("delta"), "Replace with Library version…")!;
+    replace.focus();
+    await act(async () => replace.click());
+    expect(confirmDialog()?.querySelector("h2")?.textContent).toBe('Replace your edited copy of "delta"?');
+    expect(confirmDialog()?.textContent).toContain(path);
+    expect(document.activeElement?.textContent).toBe("Keep my copy");
+    await act(async () => button(confirmDialog()!, "Keep my copy")!.click());
+    expect(confirmDialog()).toBeNull();
+    expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(replace);
+
+    // The copy was edited again after the listing was read: the confirmed hash no longer matches.
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row) => row.title === "delta" ? { ...row, edited: [{ path, current_hash: "sha256:second" }] } : row);
+      throw new CockpitClientError("http_error", "The Space copy changed", { status: 409, operationCode: "space_copy_conflict" });
+    });
+    const listReads = vi.mocked(client.librarySpaceList).mock.calls.length;
+    await act(async () => replace.click());
+    await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
+    await flush();
+    const firstReplace: SpaceUpdateRequest = { target, scope: { scope: "selection", item_ids: ["source:delta"], follow_ids: [] }, replace_edited: [{ path, current_hash: "sha256:first" }] };
+    expect(client.librarySpaceUpdate).toHaveBeenCalledWith(firstReplace);
+    expect(confirmDialog()).toBeNull();
+    expect(vi.mocked(client.librarySpaceList).mock.calls.length).toBeGreaterThan(listReads);
+    expect(entry("delta")?.querySelector("[role='alert']")?.textContent).toBe("api-review's copy changed since it was checked, so nothing was changed. Review it and try again.");
+    expect(entry("delta")?.textContent).toContain("✎ Edited in Space · Library newer");
+
+    // Retrying confirms the reread hash, never the stale one.
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "delta" ? { ...row, state: "up_to_date", library_newer: false, edited: [] } : row);
+      return spaceUpdated("op-s3-replace", target, ["source:delta"], [path]);
+    });
+    await act(async () => button(entry("delta"), "Replace with Library version…")!.click());
+    await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
+    await flush();
+    expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ ...firstReplace, replace_edited: [{ path, current_hash: "sha256:second" }] });
+    expect(entry("delta")?.textContent).toContain("✓ Up to date");
+    expect(entry("delta")?.querySelector("[role='alert']")).toBeNull();
+
+    const remove = button(entry("kept"), "Remove from this Space…")!;
+    remove.focus();
+    await act(async () => remove.click());
+    expect(confirmDialog()?.querySelector("h2")?.textContent).toBe('Remove "kept" from api-review?');
+    expect(confirmDialog()?.textContent).toContain("Deletes api-review's copy. The Library item stays.");
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    vi.mocked(client.librarySpaceRemove).mockImplementationOnce(async () => {
+      state.rows = state.rows.filter((row) => row.title !== "kept");
+      return { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: state.rows, behind: 0, diagnostics: [] };
+    });
+    await act(async () => button(confirmDialog()!, "Remove from api-review")!.click());
+    await flush();
+    expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, logical_id: "logical:kept", confirmed: [] });
+    expect(entry("kept")).toBeUndefined();
+    expect(document.activeElement?.textContent).toBe("Add…");
+    // Nothing behind, missing or edited is left: Update all has nothing to do.
+    const updateAll = [...host.querySelectorAll<HTMLButtonElement>(".space-context-bar button")].find((candidate) => candidate.textContent?.startsWith("Update all"))!;
+    expect(updateAll.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => updateAll.click());
+    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps Tab and Shift+Tab inside a Space copy confirmation opened over Resources, and Escape still cancels it", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const path = "sources/github/issue/delta.md";
+  const { client, Harness } = spaceResourcesFixture([spaceRow("delta", "edited_in_space", { library_newer: true, edited: [{ path, current_hash: "sha256:first" }], paths: [path] })]);
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const confirmDialog = () => document.body.querySelector<HTMLElement>(".library-confirm");
+  const press = async (target: Element, key: string, shiftKey = false) => {
+    await act(async () => target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, shiftKey })));
+  };
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
+    await flush();
+    const replace = [...host.querySelectorAll<HTMLButtonElement>(".context-resources button")].find((candidate) => candidate.textContent === "Replace with Library version…")!;
+    replace.focus();
+    await act(async () => replace.click());
+    expect(document.activeElement?.textContent).toBe("Keep my copy");
+    const buttons = [...confirmDialog()!.querySelectorAll<HTMLButtonElement>("button")];
+    const first = buttons[0];
+    const last = buttons.at(-1)!;
+    first.focus();
+    await press(first, "Tab", true);
+    expect(document.activeElement).toBe(last);
+    expect(confirmDialog()?.contains(document.activeElement)).toBe(true);
+    await press(last, "Tab");
+    expect(document.activeElement).toBe(first);
+    await press(first, "Escape");
+    expect(confirmDialog()).toBeNull();
+    expect(host.querySelector(".context-resources")).not.toBeNull();
+    expect(document.activeElement).toBe(replace);
+    expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("holds an update's result and its conflicting actions until the Space is reread, and offers a reread when that fails", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const edited = { path: "sources/github/issue/delta.md", current_hash: "sha256:edited" };
+  const { target, state, client, Harness } = spaceResourcesFixture([
+    spaceRow("alpha", "library_newer"),
+    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [edited], paths: [edited.path] }),
+  ]);
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const updateAll = () => [...host.querySelectorAll<HTMLButtonElement>(".space-context-bar button")].find((button) => button.textContent?.startsWith("Update all"))!;
+  const report = () => host.querySelector(".space-context > p[role='status']");
+  const listingError = () => host.querySelector<HTMLElement>(".space-context > .context-resource-error");
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
+    await flush();
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "alpha" ? { ...row, state: "up_to_date", library_newer: false } : row);
+      return spaceUpdated("op-s3-unconfirmed", target, ["source:alpha", "source:delta"], ["sources/github/issue/alpha.md"], [edited.path]);
+    });
+    vi.mocked(client.librarySpaceList).mockRejectedValueOnce(new Error("Space offline"));
+    await act(async () => updateAll().click());
+    await flush();
+    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
+    // The update finished but nothing confirmed it: no result, no spinner, and Update all stays held.
+    expect(host.textContent).not.toMatch(/Updated \d/);
+    expect(report()).toBeNull();
+    expect(host.querySelector(".context-resources .library-spinner")).toBeNull();
+    expect(listingError()?.querySelector("strong")?.textContent).toBe("The update finished, but api-review's copies couldn't be reread, so its result isn't shown yet.");
+    expect(listingError()?.textContent).toContain("Space offline");
+    expect(updateAll().getAttribute("aria-disabled")).toBe("true");
+    const alphaUpdate = [...host.querySelectorAll<HTMLButtonElement>(".context-resources [role='listitem'] .space-context-actions button")].find((button) => button.textContent === "Update")!;
+    expect(alphaUpdate.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => updateAll().click());
+    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
+
+    await act(async () => [...listingError()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry")!.click());
+    await flush();
+    expect(listingError()).toBeNull();
+    expect(report()?.textContent).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
+    expect(updateAll().getAttribute("aria-disabled")).toBe("false");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps an Update all report as it finished after the skipped copy is replaced and then removed", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const edited = { path: "sources/github/issue/delta.md", current_hash: "sha256:edited" };
+  const { target, state, client, Harness } = spaceResourcesFixture([
+    spaceRow("alpha", "library_newer"),
+    spaceRow("delta", "edited_in_space", { library_newer: true, edited: [edited], paths: [edited.path] }),
+  ]);
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const entry = (title: string) => [...host.querySelectorAll<HTMLElement>(".context-resources [role='listitem']")].find((candidate) => candidate.querySelector(".context-source-title")?.textContent === title);
+  const button = (root: ParentNode | undefined, label: string) => [...(root?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent === label);
+  const confirmDialog = () => document.body.querySelector<HTMLElement>(".library-confirm");
+  const report = () => host.querySelector(".space-context > p[role='status']")?.textContent;
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent?.startsWith("Resources"))!.click());
+    await flush();
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "alpha" ? { ...row, state: "up_to_date", library_newer: false } : row);
+      return spaceUpdated("op-s3-all-history", target, ["source:alpha", "source:delta"], ["sources/github/issue/alpha.md"], [edited.path]);
+    });
+    await act(async () => button(host.querySelector(".space-context-bar") ?? undefined, "Update all (1)")!.click());
+    await flush();
+    expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
+
+    vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
+      state.rows = state.rows.map((row): SpaceCopyRow => row.title === "delta" ? { ...row, state: "up_to_date", library_newer: false, edited: [] } : row);
+      return spaceUpdated("op-s3-replace-history", target, ["source:delta"], [edited.path]);
+    });
+    await act(async () => button(entry("delta"), "Replace with Library version…")!.click());
+    await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
+    await flush();
+    expect(entry("delta")?.textContent).toContain("✓ Up to date");
+    expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
+
+    vi.mocked(client.librarySpaceRemove).mockImplementationOnce(async () => {
+      state.rows = state.rows.filter((row) => row.title !== "delta");
+      return { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: state.rows, behind: 0, diagnostics: [] };
+    });
+    await act(async () => button(entry("delta"), "Remove from this Space…")!.click());
+    await act(async () => button(confirmDialog()!, "Remove from api-review")!.click());
+    await flush();
+    expect(entry("delta")).toBeUndefined();
+    expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("adds a Library item to the Space and rereads its standing after provider refresh without updating its copy", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const host = document.createElement("div");
   document.body.append(host);
@@ -559,12 +903,26 @@ it("offers Add to <Space> on a Library item header and shows the copy once the S
   const client = {
     libraryListing: vi.fn(async () => library),
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
-    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
-    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion, attempts: [], rows, behind: 0, diagnostics: [] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: library.items[0].revision, content_hash: null, bytes: 7, media_type: "text/markdown", text: library.generation === "1" ? "# Keys" : "# Refreshed keys", truncated: false, diagnostics: [] })),
+    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion, attempts: [], rows, behind: rows.filter((row) => row.library_newer).length, diagnostics: [] })),
     librarySpaceAdd: vi.fn(async () => {
       rows = [{ item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state: "up_to_date", library_newer: false, paths: ["sources/jira/issue/ops-311.md"], edited: [], copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r1", follow: null }];
       return copied;
     }),
+    libraryRefresh: vi.fn(async (): Promise<LibraryOperation> => ({
+      ...copied, operation_id: "op-header-source-refresh", kind: "refresh", target: null, space: null, finished: false,
+      phases: [{ phase: "library", state: "running", done: 0, total: 1, message: null, error: null }],
+    })),
+    libraryOperation: vi.fn(async (): Promise<LibraryOperation> => {
+      library.generation = "2";
+      library.items = [{ ...item, revision: "sha256:r2" }];
+      rows = rows.map((row) => ({ ...row, state: "library_newer", library_newer: true, current_library_revision: "sha256:r2" }));
+      return {
+        ...copied, operation_id: "op-header-source-refresh", kind: "refresh", target: null, space: null,
+        phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }],
+      };
+    }),
+    librarySpaceUpdate: vi.fn(),
   } as unknown as CockpitClient;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
@@ -589,9 +947,20 @@ it("offers Add to <Space> on a Library item header and shows the copy once the S
     expect(header.querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
     expect([...header.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Add to api-review");
     expect(document.activeElement).toBe(header.querySelector(".library-space-slot"));
+
+    vi.useFakeTimers();
+    await act(async () => [...header.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Refresh")!.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+    await flush();
+    expect(client.libraryRefresh).toHaveBeenCalledWith({ scope: "items", item_ids: [item.item_id] });
+    expect(host.textContent).toContain("Refreshed keys");
+    expect(host.querySelector(".library-space-state")?.textContent).toBe("In api-review · ↑ Library newer");
+    expect(client.librarySpaceAdd).toHaveBeenCalledTimes(1);
+    expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
+    vi.useRealTimers();
   }
 });
 

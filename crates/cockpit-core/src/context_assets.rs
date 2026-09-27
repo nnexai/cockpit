@@ -46,6 +46,8 @@ struct ContextManifest {
     library_copies: Vec<LibraryCopyRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_source_intent: Option<PendingSourceIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_library_remove: Option<ContextManifestEntry>,
     updated_at: String,
 }
 
@@ -112,6 +114,8 @@ struct PendingSourceIntent {
     previous_entry: Option<ContextManifestEntry>,
     new_written_hash: String,
     intended_entry: ContextManifestEntry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_previous_hash: Option<String>,
 }
 
 /// A verified Library revision, held under the caller's shared Library lock.
@@ -127,10 +131,15 @@ impl LibraryItemView<'_> {
     }
 }
 
-pub(crate) enum LibraryCopyMode { NewOnly }
+pub(crate) enum LibraryCopyMode<'a> {
+    NewOnly,
+    Update,
+    Replace { expected_hash: &'a LibraryConflictFile },
+}
 
 pub(crate) struct LibraryCopyResult {
     pub written: Vec<String>,
+    pub skipped_edited: Vec<String>,
     pub copy_mode: Option<SpaceCopyMode>,
 }
 
@@ -160,15 +169,40 @@ fn library_destination(item: &LibraryItemView<'_>, file: &str, file_count: usize
 /// NewOnly never updates an existing linked revision. Explicit re-add can link
 /// a legacy source or restore a missing file. Copies use the durable intent path.
 pub(crate) fn materialize_library_item(
-    root: &Dir, companion_id: &str, item: &LibraryItemView<'_>, _mode: LibraryCopyMode,
+    root: &Dir, companion_id: &str, item: &LibraryItemView<'_>, mode: LibraryCopyMode<'_>,
 ) -> Result<LibraryCopyResult, InspectionError> {
     let _lock = acquire_companion_lock(root)?;
     let association = read_companion_association(root)?;
     let mut manifest = read_manifest(root, companion_id, &association)?;
     recover_pending_source_intent(root, &mut manifest)?;
+    let updating = !matches!(mode, LibraryCopyMode::NewOnly);
+    let file_count = item.files().count();
+    if updating {
+        let mut entries = manifest.entries.iter()
+            .filter(|entry| entry.library_item_id.as_deref() == Some(item.summary.item_id.as_str()));
+        let entry = entries.next();
+        if item.summary.state == LibraryItemState::RemovedAtSource || entry.is_none() {
+            return Ok(LibraryCopyResult { written: vec![], skipped_edited: vec![], copy_mode: None });
+        }
+        let entry = entry.expect("linked update");
+        if file_count != 1 || entries.next().is_some()
+            || entry.library_file.as_deref() != item.files().next().map(|file| file.path.as_str())
+            || entry.library_follow_id.is_some()
+            || manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id && copy.files.len() != 1)
+        {
+            return Err(InspectionError::new("source_capability_unavailable", "Multi-file and followed Space updates are not available"));
+        }
+        if let LibraryCopyMode::Replace { expected_hash } = &mode {
+            if expected_hash.path != entry.relative_path
+                || read_stable_source(root, &safe_companion_relative(&expected_hash.path)?)
+                    .map(|file| file.hash != expected_hash.current_hash).unwrap_or(true)
+            {
+                return Err(space_copy_conflict());
+            }
+        }
+    }
     let mut written = Vec::new();
     let mut modes = Vec::new();
-    let file_count = item.files().count();
     if !manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id
         && copy.files.iter().map(String::as_str).eq(item.files().map(|file| file.path.as_str())))
     {
@@ -184,10 +218,21 @@ pub(crate) fn materialize_library_item(
         } else { format!("{}#{}", item.summary.logical_id, file.path) };
         let previous = manifest.entries.iter().find(|entry| entry.logical_id == logical_id).cloned();
         let mut missing = false;
+        let mut expected_previous_hash = None;
         if let Some(entry) = &previous {
             match read_stable_source(root, &safe_companion_relative(&entry.relative_path)?) {
                 Ok(current) => {
-                    if current.hash != entry.content_hash {
+                    if let LibraryCopyMode::Replace { expected_hash } = &mode {
+                        if expected_hash.path != entry.relative_path || expected_hash.current_hash != current.hash {
+                            return Err(space_copy_conflict());
+                        }
+                        expected_previous_hash = Some(current.hash.clone());
+                    } else if current.hash != entry.content_hash {
+                        if updating {
+                            return Ok(LibraryCopyResult {
+                                written: vec![], skipped_edited: vec![entry.relative_path.clone()], copy_mode: None,
+                            });
+                        }
                         return Err(InspectionError::new("source_sync_conflict", "An edited Space copy will not be overwritten"));
                     }
                     if entry.library_item_id.is_some() {
@@ -195,16 +240,22 @@ pub(crate) fn materialize_library_item(
                             || entry.library_revision.as_deref() != Some(item.summary.revision.as_str())
                             || entry.content_hash != file.hash
                         {
-                            return Err(InspectionError::new("source_sync_conflict", "An existing Space revision requires an explicit update"));
+                            if !updating {
+                                return Err(InspectionError::new("source_sync_conflict", "An existing Space revision requires an explicit update"));
+                            }
+                        } else if current.hash == file.hash {
+                            modes.extend(match entry.copy_mode.as_str() {
+                                "reflink" => Some(SpaceCopyMode::Reflink),
+                                "copy" => Some(SpaceCopyMode::Copy), _ => None,
+                            });
+                            continue;
                         }
-                        modes.extend(match entry.copy_mode.as_str() {
-                            "reflink" => Some(SpaceCopyMode::Reflink),
-                            "copy" => Some(SpaceCopyMode::Copy), _ => None,
-                        });
-                        continue;
                     }
                 }
-                Err(error) if error.code == "context_snapshot_file_missing" => missing = true,
+                Err(error) if error.code == "context_snapshot_file_missing" => {
+                    if matches!(mode, LibraryCopyMode::Replace { .. }) { return Err(space_copy_conflict()); }
+                    missing = true;
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -270,14 +321,19 @@ pub(crate) fn materialize_library_item(
             previous_written_hash: previous.as_ref().map(|entry| entry.content_hash.clone()),
             previous_entry: previous.clone(), new_written_hash: file.hash.clone(),
             intended_entry: intended.clone(),
+            expected_previous_hash: expected_previous_hash.clone(),
         });
         write_manifest_durable(root, &manifest)?;
+        let mut expected_entry = previous.clone();
+        if let (Some(entry), Some(expected)) = (&mut expected_entry, expected_previous_hash) {
+            entry.content_hash = expected;
+        }
         let recheck = if missing {
             recheck_source_destination(root, &path, &parent, &leaf, &None)
-        } else { recheck_source_destination(root, &path, &parent, &leaf, &previous) };
+        } else { recheck_source_destination(root, &path, &parent, &leaf, &expected_entry) };
         if let Err(error) = recheck {
             discard_pending_source_intent(root, &mut manifest, &parent, &temporary)?;
-            return Err(error);
+            return Err(if updating && error.code == "source_sync_conflict" { space_copy_conflict() } else { error });
         }
         parent.rename(&temporary, &parent, &leaf).map_err(io_error("source_materialize_failed"))?;
         sync_directory(&parent).map_err(io_error("source_materialize_failed"))?;
@@ -294,9 +350,71 @@ pub(crate) fn materialize_library_item(
             return Err(InspectionError::new("library_test_crash", "Space file published before remaining files"));
         }
     }
-    Ok(LibraryCopyResult { written, copy_mode: aggregate_copy_mode(modes.into_iter()) })
+    Ok(LibraryCopyResult { written, skipped_edited: vec![], copy_mode: aggregate_copy_mode(modes.into_iter()) })
 }
 
+fn space_copy_conflict() -> InspectionError {
+    InspectionError::new("space_copy_conflict", "The Space copy changed; reload it before confirming")
+}
+
+/// Remove only a manifest-owned file; edited bytes require an exact confirmation.
+/// Multi-file removal is refused until it can journal the complete inventory.
+pub(crate) fn remove_library_copy(
+    root: &Dir, companion_id: &str, logical_id: &str, confirmed: &[LibraryConflictFile],
+) -> Result<(), InspectionError> {
+    let _lock = acquire_companion_lock(root)?;
+    let association = read_companion_association(root)?;
+    let mut manifest = read_manifest(root, companion_id, &association)?;
+    recover_pending_source_intent(root, &mut manifest)?;
+    let entry = manifest.entries.iter().find(|entry| entry.logical_id == logical_id
+        || entry.library_file.as_deref().is_some_and(|file| entry.logical_id.strip_suffix(file)
+            .and_then(|prefix| prefix.strip_suffix('#')) == Some(logical_id)))
+        .cloned().ok_or_else(|| InspectionError::new("library_item_not_found", "Space copy does not exist"))?;
+    if entry.library_follow_id.is_some() || entry.library_item_id.as_ref().is_some_and(|id|
+        manifest.entries.iter().filter(|entry| entry.library_item_id.as_ref() == Some(id)).count() != 1
+        || manifest.library_copies.iter().any(|copy| &copy.item_id == id && copy.files.len() != 1))
+    {
+        return Err(InspectionError::new("source_capability_unavailable", "Multi-file and followed Space removal is not available"));
+    }
+    if confirmed.len() > 1 || confirmed.first().is_some_and(|file| file.path != entry.relative_path) {
+        return Err(space_copy_conflict());
+    }
+    let path = safe_companion_relative(&entry.relative_path)?;
+    let current = match read_stable_source(root, &path) {
+        Ok(file) => Some(file),
+        Err(error) if error.code == "context_snapshot_file_missing" => None,
+        Err(error) => return Err(error),
+    };
+    let expected = confirmed.first().map(|file| file.current_hash.as_str()).unwrap_or(&entry.content_hash);
+    if current.as_ref().is_some_and(|file| file.hash != expected)
+        || (current.is_none() && !confirmed.is_empty())
+    {
+        return Err(space_copy_conflict());
+    }
+    manifest.pending_library_remove = Some(entry.clone());
+    write_manifest_durable(root, &manifest)?;
+    if current.is_some() {
+        let (parent, leaf) = resolve_parent(root, &path).map_err(|_| space_copy_conflict())?;
+        let mut expected_entry = entry.clone();
+        expected_entry.content_hash = expected.into();
+        if recheck_source_destination(root, &path, &parent, &leaf, &Some(expected_entry)).is_err() {
+            manifest.pending_library_remove = None;
+            write_manifest_durable(root, &manifest)?;
+            return Err(space_copy_conflict());
+        }
+        parent.remove_file(&leaf).map_err(io_error("source_materialize_failed"))?;
+        sync_directory(&parent).map_err(io_error("source_materialize_failed"))?;
+    }
+    finish_library_remove(&mut manifest, &entry);
+    write_manifest_durable(root, &manifest)
+}
+
+fn finish_library_remove(manifest: &mut ContextManifest, entry: &ContextManifestEntry) {
+    manifest.entries.retain(|candidate| candidate.logical_id != entry.logical_id);
+    manifest.library_copies.retain(|copy| Some(&copy.item_id) != entry.library_item_id.as_ref());
+    manifest.pending_library_remove = None;
+    manifest.updated_at = timestamp();
+}
 /// D23 precedence applies identically to a file and the multi-file aggregate.
 fn space_copy_state(
     missing: bool, edited: bool, linked: bool,
@@ -498,6 +616,7 @@ pub(crate) fn materialize_source_markdown(
         previous_entry: previous_entry.clone(),
         new_written_hash: intended_entry.content_hash.clone(),
         intended_entry: intended_entry.clone(),
+        expected_previous_hash: None,
     });
     write_manifest_durable(root, &manifest)?;
     // Recheck after the intent is durable and immediately before replacement.
@@ -1072,6 +1191,7 @@ fn read_manifest(
             library_follows: Vec::new(),
             library_copies: Vec::new(),
             pending_source_intent: None,
+            pending_library_remove: None,
             updated_at: timestamp(),
         }),
         Err(error) => Err(InspectionError::new(
@@ -1085,6 +1205,14 @@ fn recover_pending_source_intent(
     root: &Dir,
     manifest: &mut ContextManifest,
 ) -> Result<(), InspectionError> {
+    if let Some(entry) = manifest.pending_library_remove.clone() {
+        let path = safe_companion_relative(&entry.relative_path)?;
+        match read_stable_source(root, &path) {
+            Err(error) if error.code == "context_snapshot_file_missing" => finish_library_remove(manifest, &entry),
+            _ => manifest.pending_library_remove = None,
+        }
+        write_manifest_durable(root, manifest)?;
+    }
     let Some(intent) = manifest.pending_source_intent.clone() else {
         return Ok(());
     };
@@ -1126,8 +1254,9 @@ fn recover_pending_source_intent(
         return write_manifest_durable(root, manifest);
     }
     if intent
-        .previous_written_hash
+        .expected_previous_hash
         .as_deref()
+        .or(intent.previous_written_hash.as_deref())
         .is_some_and(|expected| current.hash == expected)
     {
         // The intent persisted but the rename did not. It is safe to discard
@@ -2065,6 +2194,7 @@ mod tests {
             previous_entry: Some(previous),
             new_written_hash: intended.content_hash.clone(),
             intended_entry: intended.clone(),
+            expected_previous_hash: None,
         });
         write_manifest_durable(dir, manifest).expect("persist source publish intent");
         intended
@@ -2202,6 +2332,7 @@ mod tests {
             library_follows: Vec::new(),
             library_copies: Vec::new(),
             pending_source_intent: None,
+            pending_library_remove: None,
             updated_at: timestamp(),
         };
         atomic_write_json(&root_dir, MANIFEST_NAME, &manifest).expect("content manifest");
@@ -2795,5 +2926,91 @@ mod library_copy_tests {
             assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "context_snapshot_hardlink");
         }
         assert!(!f.first.exists(MANIFEST_NAME));
+    }
+
+    #[test]
+    fn unsupported_multi_file_mutations_do_not_partially_change_bytes_or_inventory() {
+        let f = Fixture::new();
+        let mut summary = item();
+        let files = [f.file("document.md", b"body"), f.file("attachments/image.png", b"image")];
+        let copied = materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let manifest = f.first.read(MANIFEST_NAME).unwrap();
+        summary.revision = "new-revision".into();
+        let changed = [f.file("document.md", b"new body")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &changed };
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update)
+            .err().unwrap().code, "source_capability_unavailable");
+        assert_eq!(remove_library_copy(&f.first, "companion", &summary.logical_id, &[])
+            .unwrap_err().code, "source_capability_unavailable");
+        assert_eq!(f.first.read(&copied.written[0]).unwrap(), b"body");
+        assert_eq!(f.first.read(&copied.written[1]).unwrap(), b"image");
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), manifest);
+    }
+
+    #[test]
+    fn confirmed_replace_recovery_preserves_baseline_and_adopts_only_published_bytes() {
+        let f = Fixture::new();
+        let mut summary = item();
+        let files = [f.file("document.md", b"body")];
+        let copied = materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let path = &copied.written[0];
+        f.first.write(path, b"my edit").unwrap();
+        summary.revision = "revision-two".into();
+        let files = [f.file("document.md", b"new body")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let wrong = LibraryConflictFile { path: path.clone(), current_hash: hash(b"stale edit") };
+        assert_eq!(materialize_library_item(&f.first, "companion", &view,
+            LibraryCopyMode::Replace { expected_hash: &wrong }).err().unwrap().code, "space_copy_conflict");
+        assert_eq!(f.first.read(path).unwrap(), b"my edit");
+
+        let association = read_companion_association(&f.first).unwrap();
+        let mut manifest = read_manifest(&f.first, "companion", &association).unwrap();
+        let previous = manifest.entries[0].clone();
+        let mut intended = previous.clone();
+        intended.content_hash = files[0].hash.clone();
+        intended.library_revision = Some(summary.revision.clone());
+        manifest.pending_source_intent = Some(PendingSourceIntent {
+            schema_version: PENDING_SOURCE_INTENT_SCHEMA_VERSION, relative_path: path.clone(),
+            previous_written_hash: Some(previous.content_hash.clone()), previous_entry: Some(previous.clone()),
+            new_written_hash: intended.content_hash.clone(), intended_entry: intended.clone(),
+            expected_previous_hash: Some(hash(b"my edit")),
+        });
+        write_manifest_durable(&f.first, &manifest).unwrap();
+        recover_pending_source_intent(&f.first, &mut manifest).unwrap();
+        assert_eq!(manifest.entries[0], previous);
+        assert_eq!(f.first.read(path).unwrap(), b"my edit");
+        let confirmed = LibraryConflictFile { path: path.clone(), current_hash: hash(b"my edit") };
+        materialize_library_item(&f.first, "companion", &view,
+            LibraryCopyMode::Replace { expected_hash: &confirmed }).unwrap();
+        assert_eq!(f.first.read(path).unwrap(), b"new body");
+        assert_eq!(library_space_rows(&f.first, "companion", &[summary]).unwrap()[0].state, SpaceCopyState::UpToDate);
+    }
+
+    #[test]
+    fn removal_intent_recovery_never_deletes_new_user_bytes() {
+        let f = Fixture::new();
+        let summary = item();
+        let files = [f.file("document.md", b"body")];
+        let copied = materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let path = &copied.written[0];
+        let association = read_companion_association(&f.first).unwrap();
+        let mut manifest = read_manifest(&f.first, "companion", &association).unwrap();
+        let entry = manifest.entries[0].clone();
+        manifest.pending_library_remove = Some(entry.clone());
+        write_manifest_durable(&f.first, &manifest).unwrap();
+        f.first.write(path, b"edit after intent").unwrap();
+        recover_pending_source_intent(&f.first, &mut manifest).unwrap();
+        assert_eq!(f.first.read(path).unwrap(), b"edit after intent");
+        assert_eq!(manifest.entries, vec![entry.clone()]);
+        manifest.pending_library_remove = Some(entry);
+        write_manifest_durable(&f.first, &manifest).unwrap();
+        f.first.remove_file(path).unwrap();
+        recover_pending_source_intent(&f.first, &mut manifest).unwrap();
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.library_copies.is_empty());
+        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
     }
 }

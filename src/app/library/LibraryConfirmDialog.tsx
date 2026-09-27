@@ -1,14 +1,21 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import type { CockpitClient } from "../../client/CockpitClient";
+import type { LibraryOperation, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { errorText } from "./libraryState";
+import { errorCode, errorText, type LibrarySpace } from "./libraryState";
+import { announceLibraryChanged } from "./useLibraryOperation";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
 import "./library.css";
 
 const FOCUSABLE = "button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex]:not([tabindex='-1'])";
 
-/** Escape closes, Tab stays inside, and focus returns to the opener on close. */
+/**
+ * Escape closes, Tab stays inside, and focus returns to the opener on close.
+ * A dialog portalled out of another trap (a confirmation over `Context
+ * resources`) still bubbles through it in React, so neither key goes further.
+ */
 export function trapDialogKeys(event: KeyboardEvent<HTMLElement>, onClose: () => void): void {
   if (event.nativeEvent.isComposing) return;
   if (event.key === "Escape") {
@@ -18,6 +25,7 @@ export function trapDialogKeys(event: KeyboardEvent<HTMLElement>, onClose: () =>
     return;
   }
   if (event.key !== "Tab") return;
+  event.stopPropagation();
   const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)];
   if (focusable.length === 0) return;
   const current = focusable.indexOf(document.activeElement as HTMLElement);
@@ -78,4 +86,59 @@ export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, des
       </footer>
     </section>
   </div>, document.body);
+}
+
+export type SpaceCopyConfirmation = { kind: "replace" | "remove"; row: SpaceCopyRow };
+
+/** Why a confirmed replace or removal changed nothing: the copy's files no longer match what was confirmed. */
+export function spaceCopyConflict(space: string): string {
+  return `${space}'s copy changed since it was checked, so nothing was changed. Review it and try again.`;
+}
+
+/**
+ * Replace an edited Space copy or remove a copy from one Space (design §4.10).
+ * The request confirms exactly the edited files and hashes listed here; if the
+ * copy changed since, Cockpit refuses it, the files are kept, and `onConflict`
+ * lets the surface reread the Space before the user tries again.
+ */
+export function SpaceCopyConfirmDialog({ client, space, confirmation, onReplacing, onConflict, onClose }: {
+  client: CockpitClient;
+  space: LibrarySpace;
+  confirmation: SpaceCopyConfirmation;
+  /** The replace Cockpit just accepted; the surface tracks it like an update it started, so its finish rereads the Space. */
+  onReplacing: (operation: LibraryOperation) => void;
+  onConflict: () => void;
+  onClose: () => void;
+}) {
+  const { kind, row } = confirmation;
+  const edited = row.edited.length > 0;
+  const files = edited ? <ul className="library-progress-files">{row.edited.map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul> : null;
+  const confirm = async () => {
+    try {
+      if (kind === "replace") {
+        if (!row.item_id) throw new Error("This copy has no Library item to replace it from.");
+        onReplacing(await client.librarySpaceUpdate({ target: space.target, scope: { scope: "selection", item_ids: [row.item_id], follow_ids: [] }, replace_edited: row.edited }));
+      } else {
+        await client.librarySpaceRemove({ target: space.target, logical_id: row.logical_id, confirmed: row.edited });
+        // Every surface rereads this Space's copies and its companion files.
+        announceLibraryChanged();
+      }
+      onClose();
+    } catch (cause) {
+      if (errorCode(cause) !== "space_copy_conflict") throw cause;
+      onConflict();
+      onClose();
+    }
+  };
+  if (kind === "replace") {
+    return <LibraryConfirmDialog title={`Replace your edited copy of "${row.title}"?`} safeLabel="Keep my copy" confirmLabel="Replace with Library version" destructive
+      body={<><p>{space.label}'s copy has edits. Replacing it with the Library version discards those edits.</p>{files}</>}
+      onConfirm={confirm} onClose={onClose} />;
+  }
+  const effect = edited
+    ? `Deletes ${space.label}'s copy, including your edits.${row.item_id ? " The Library item stays, but your edits can't be restored from it." : ""}`
+    : `Deletes ${space.label}'s copy.${row.item_id ? " The Library item stays." : ""}`;
+  return <LibraryConfirmDialog title={`Remove "${row.title}" from ${space.label}?`} safeLabel="Cancel" confirmLabel={`Remove from ${space.label}`} destructive
+    body={<><p>{effect}</p>{files}</>}
+    onConfirm={confirm} onClose={onClose} />;
 }

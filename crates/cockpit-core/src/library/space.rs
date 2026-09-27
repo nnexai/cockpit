@@ -426,6 +426,123 @@ impl LibraryService {
         Ok(record)
     }
 
+    pub async fn start_space_update(
+        &self,
+        request: SpaceUpdateRequest,
+    ) -> Result<LibraryOperation, InspectionError> {
+        let selected = match &request.scope {
+            SpaceUpdateScope::Selection { item_ids, follow_ids } => {
+                if !follow_ids.is_empty() {
+                    return Err(error("source_capability_unavailable", "Follow updates are not available"));
+                }
+                if item_ids.len() > 5_000 {
+                    return Err(error("invalid_library_request", "Too many selected items"));
+                }
+                Some(item_ids)
+            }
+            SpaceUpdateScope::All {} => None,
+        };
+        validate_confirmed(&request.replace_edited)?;
+        let handle = operations::runtime()?;
+        let store = self.open()?;
+        let authorized = self.authorize_space(&request.target).await?;
+        let rows = {
+            let _lock = store.shared()?;
+            let items = store.index()?.items.into_iter().map(|entry| entry.summary).collect::<Vec<_>>();
+            context_assets::library_space_rows(&authorized.dir,
+                authorized.root.companion_id.as_deref().expect("authorized companion"), &items)?
+                .into_iter().filter(|row| {
+                    row.item_id.as_ref().is_some_and(|id| selected.is_none_or(|ids| ids.contains(id)))
+                        && row.current_library_revision.is_some()
+                        && row.item_id.as_ref().is_some_and(|id| items.iter().any(|item|
+                            &item.item_id == id && item.state != LibraryItemState::RemovedAtSource))
+                        && matches!(row.state, SpaceCopyState::LibraryNewer | SpaceCopyState::MissingInSpace | SpaceCopyState::EditedInSpace)
+                }).collect::<Vec<_>>()
+        };
+        // Confirmation is bound to this selection, target, and authoritative hash.
+        // A stale dialog must fail before any other selected row can be written.
+        for confirmed in &request.replace_edited {
+            if !rows.iter().any(|row| row.edited.iter().any(|file|
+                file.path == confirmed.path && file.current_hash == confirmed.current_hash))
+            {
+                return Err(error("space_copy_conflict", "The Space copy changed; reload before confirming"));
+            }
+        }
+        let leases = rows.iter().filter_map(|row| row.item_id.as_deref())
+            .map(|id| store.lease(id)).collect::<Result<Vec<_>, _>>()?;
+        let (record, lease) = operations::create(&store, LibraryOperationKind::SpaceUpdate, Some(rows.len() as u32))?;
+        let record = operations::set_target(&store, &record.operation_id, request.target.clone())?;
+        let service = self.clone();
+        let id = record.operation_id.clone();
+        let worker_store = store.clone();
+        operations::spawn(handle, store, id.clone(), lease, async move {
+            let _leases = leases;
+            operations::begin_space(&worker_store, &id, rows.len() as u32)?;
+            let mut phase = SpacePhaseResult {
+                space_id: request.target.space_id.clone(), copy_mode: None,
+                written: vec![], skipped_edited: vec![], companion_root_id: None,
+            };
+            operations::space_result(&worker_store, &id, phase.clone(), 0)?;
+            let mut first_error = None;
+            for (position, row) in rows.iter().enumerate() {
+                if operations::cancelled(&worker_store, &id)? { break; }
+                let item_id = row.item_id.as_deref().expect("selected linked row");
+                let confirmation = request.replace_edited.iter().find(|file| row.paths.contains(&file.path));
+                let mode = match confirmation {
+                    Some(expected_hash) => LibraryCopyMode::Replace { expected_hash },
+                    None => LibraryCopyMode::Update,
+                };
+                let result = service.copy_saved_item_mode(&worker_store, &request.target, item_id, mode).await;
+                let (outcome, reason) = match result {
+                    Ok((authorized, copied)) => {
+                        phase.companion_root_id = Some(authorized.root.root_id);
+                        phase.copy_mode = match (phase.copy_mode, copied.copy_mode) {
+                            (None, mode) | (mode, None) => mode,
+                            (Some(a), Some(b)) => Some(if a == b { a } else { SpaceCopyMode::Mixed }),
+                        };
+                        let outcome = if !copied.skipped_edited.is_empty() { LibraryReportOutcome::Partial }
+                            else if copied.written.is_empty() { LibraryReportOutcome::Unchanged }
+                            else { LibraryReportOutcome::Updated };
+                        phase.written.extend(copied.written);
+                        phase.skipped_edited.extend(copied.skipped_edited);
+                        (outcome, None)
+                    }
+                    Err(failure) => {
+                        let outcome = if failure.code == "space_copy_conflict" {
+                            LibraryReportOutcome::Conflict
+                        } else { LibraryReportOutcome::Failed };
+                        let reason = Some(failure.message.clone());
+                        if first_error.is_none() { first_error = Some(failure); }
+                        (outcome, reason)
+                    }
+                };
+                let entry = service.entry(&worker_store, item_id)?;
+                operations::row(&worker_store, &id, entry.as_ref().map(|entry| &entry.summary), outcome, reason)?;
+                operations::space_result(&worker_store, &id, phase.clone(), (position + 1) as u32)?;
+            }
+            match first_error { Some(failure) => Err(failure), None => Ok(()) }
+        });
+        Ok(record)
+    }
+
+    pub async fn space_remove(
+        &self,
+        request: SpaceRemoveRequest,
+    ) -> Result<SpaceContextListing, InspectionError> {
+        validate_confirmed(&request.confirmed)?;
+        if request.logical_id.starts_with("follow:") {
+            return Err(error("source_capability_unavailable", "Follow removal is not available"));
+        }
+        if request.logical_id.is_empty() || request.logical_id.len() > 4096 {
+            return Err(error("invalid_library_request", "Invalid Space copy identity"));
+        }
+        let authorized = self.authorize_space(&request.target).await?;
+        context_assets::remove_library_copy(&authorized.dir,
+            authorized.root.companion_id.as_deref().expect("authorized companion"),
+            &request.logical_id, &request.confirmed)?;
+        self.space_listing(request.target).await
+    }
+
     /// Setup/cutover entry point: run the same central-first operation to completion.
     /// Phase-2 errors stay in the returned operation and durable attempts, not in
     /// the Result, so callers retain the successfully saved Library identities.
@@ -597,6 +714,16 @@ impl LibraryService {
         target: &SpaceTarget,
         id: &str,
     ) -> Result<(AuthorizedSpace, context_assets::LibraryCopyResult), InspectionError> {
+        self.copy_saved_item_mode(store, target, id, LibraryCopyMode::NewOnly).await
+    }
+
+    async fn copy_saved_item_mode(
+        &self,
+        store: &Store,
+        target: &SpaceTarget,
+        id: &str,
+        mode: LibraryCopyMode<'_>,
+    ) -> Result<(AuthorizedSpace, context_assets::LibraryCopyResult), InspectionError> {
         let authorized = self.authorize_space(target).await?;
         let _lock = store.shared()?;
         let index = store.index()?;
@@ -625,10 +752,24 @@ impl LibraryService {
                 .as_deref()
                 .expect("authorized companion"),
             &view,
-            LibraryCopyMode::NewOnly,
+            mode,
         )?;
         Ok((authorized, copied))
     }
+}
+
+fn validate_confirmed(files: &[LibraryConflictFile]) -> Result<(), InspectionError> {
+    let mut paths = std::collections::BTreeSet::new();
+    if files.len() > 512 || files.iter().any(|file|
+        file.path.is_empty() || file.path.len() > 4096 || file.path.contains('\\')
+        || Path::new(&file.path).components().any(|part| !matches!(part, std::path::Component::Normal(_)))
+        || !file.current_hash.strip_prefix("sha256:").is_some_and(|digest|
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        || !paths.insert(&file.path))
+    {
+        return Err(error("invalid_library_request", "Invalid Space confirmation files"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -653,6 +794,7 @@ mod tests {
         reachable: AtomicBool,
         space_present: AtomicBool,
         endpoint_changed: AtomicBool,
+        space_id: String,
     }
     fn unused<T>() -> Result<T, InspectionError> {
         Err(error("unused", "Unexpected adapter call"))
@@ -684,7 +826,7 @@ mod tests {
                 focused_pane_id: None,
                 spaces: if self.space_present.load(Ordering::SeqCst) {
                     vec![SpaceSummary {
-                        id: "space".into(),
+                        id: self.space_id.clone(),
                         label: "Test Space".into(),
                         number: 1,
                         tab_count: 0,
@@ -749,7 +891,7 @@ mod tests {
             request: &ProjectWorktreeRequest,
         ) -> Result<ProjectWorktreeResult, InspectionError> {
             Ok(ProjectWorktreeResult {
-                workspace_id: "space".into(),
+                workspace_id: self.space_id.clone(),
                 tab_id: None,
                 pane_id: None,
                 checkout_path: request.checkout_path.clone(),
@@ -800,15 +942,19 @@ mod tests {
         }
     }
     async fn companion(f: &Fixture) -> (Arc<ProjectService>, Arc<Adapter>, std::path::PathBuf) {
+        companion_named(f, "space").await
+    }
+    async fn companion_named(f: &Fixture, space: &str) -> (Arc<ProjectService>, Arc<Adapter>, std::path::PathBuf) {
         let adapter = Arc::new(Adapter {
             reachable: AtomicBool::new(true),
             space_present: AtomicBool::new(true),
             endpoint_changed: AtomicBool::new(false),
+            space_id: space.into(),
         });
         let projects = Arc::new(
             ProjectService::new(f.service.configuration.clone(), adapter.clone()).unwrap(),
         );
-        let checkout = f.root.join("checkout");
+        let checkout = f.root.join(format!("checkout-{space}"));
         std::fs::create_dir_all(&checkout).unwrap();
         let plan = projects
             .plan(
@@ -1222,5 +1368,132 @@ mod tests {
         assert!(!outside.join("sources").exists());
         assert!(!outside.join("context-manifest.json").exists());
         assert!(!detached.join("sources").exists());
+    }
+
+    #[tokio::test]
+    async fn explicit_update_is_selected_space_only_and_confirmed_edits_are_cas() {
+        let f = fixture();
+        let (projects_x, adapter_x, x) = companion(&f).await;
+        let (projects_y, adapter_y, y) = companion_named(&f, "other-space").await;
+        let service_x = reopen(&f).with_projects(projects_x, adapter_x);
+        let service_y = reopen(&f).with_projects(projects_y, adapter_y);
+        let target_y = SpaceTarget { session_id: "session".into(), space_id: "other-space".into() };
+        let a = saved(&f, 1).await;
+        let b = saved(&f, 2).await;
+        for (service, target) in [(&service_x, target()), (&service_y, target_y.clone())] {
+            let result = finished(service, service.start_space_add(SpaceAddRequest {
+                target, item_ids: vec![a.item_id.clone(), b.item_id.clone()], follow_ids: vec![],
+            }).await.unwrap()).await;
+            assert_eq!(result.phases[0].state, LibraryPhaseState::Done);
+        }
+        let rows = service_x.space_listing(target()).await.unwrap().rows;
+        let a_path = rows.iter().find(|row| row.item_id.as_ref() == Some(&a.item_id)).unwrap().paths[0].clone();
+        let b_path = rows.iter().find(|row| row.item_id.as_ref() == Some(&b.item_id)).unwrap().paths[0].clone();
+        let before_a = std::fs::read(x.join(&a_path)).unwrap();
+        let before_b = std::fs::read(x.join(&b_path)).unwrap();
+        f.provider.set_body("new provider revision");
+        let refresh = finished(&f.service, f.service.start_refresh(LibraryRefreshRequest::All).await.unwrap()).await;
+        assert_eq!(refresh.report.unwrap().updated, 2);
+        for (service, target, root) in [(&service_x, target(), &x), (&service_y, target_y.clone(), &y)] {
+            assert_eq!(std::fs::read(root.join(&a_path)).unwrap(), before_a);
+            assert_eq!(std::fs::read(root.join(&b_path)).unwrap(), before_b);
+            assert!(service.space_listing(target).await.unwrap().rows.iter().all(|row| row.state == SpaceCopyState::LibraryNewer));
+        }
+        let update = finished(&service_x, service_x.start_space_update(SpaceUpdateRequest {
+            target: target(), scope: SpaceUpdateScope::Selection { item_ids: vec![a.item_id.clone()], follow_ids: vec![] },
+            replace_edited: vec![],
+        }).await.unwrap()).await;
+        assert_eq!(update.kind, LibraryOperationKind::SpaceUpdate);
+        assert_eq!(update.phases.len(), 1);
+        assert_eq!(update.phases[0].state, LibraryPhaseState::Done);
+        assert_eq!(update.space.unwrap().written, vec![a_path.clone()]);
+        let rows = service_x.space_listing(target()).await.unwrap().rows;
+        assert_eq!(rows.iter().find(|row| row.item_id.as_ref() == Some(&a.item_id)).unwrap().state, SpaceCopyState::UpToDate);
+        assert_eq!(rows.iter().find(|row| row.item_id.as_ref() == Some(&b.item_id)).unwrap().state, SpaceCopyState::LibraryNewer);
+        assert_eq!(std::fs::read(x.join(&b_path)).unwrap(), before_b);
+        assert_eq!(std::fs::read(y.join(&a_path)).unwrap(), before_a);
+        assert_eq!(std::fs::read(y.join(&b_path)).unwrap(), before_b);
+
+        std::fs::write(y.join(&a_path), b"edited in Y").unwrap();
+        let edited = service_y.space_listing(target_y.clone()).await.unwrap().rows.into_iter()
+            .find(|row| row.item_id.as_ref() == Some(&a.item_id)).unwrap();
+        assert_eq!(edited.state, SpaceCopyState::EditedInSpace);
+        assert!(edited.library_newer);
+        let all = finished(&service_y, service_y.start_space_update(SpaceUpdateRequest {
+            target: target_y.clone(), scope: SpaceUpdateScope::All {}, replace_edited: vec![],
+        }).await.unwrap()).await;
+        assert_eq!(all.space.unwrap().skipped_edited, vec![a_path.clone()]);
+        assert_eq!(std::fs::read(y.join(&a_path)).unwrap(), b"edited in Y");
+        let replacement = |confirmed| SpaceUpdateRequest {
+            target: target_y.clone(),
+            scope: SpaceUpdateScope::Selection { item_ids: vec![a.item_id.clone()], follow_ids: vec![] },
+            replace_edited: confirmed,
+        };
+        assert_eq!(service_y.start_space_update(replacement(vec![LibraryConflictFile {
+            path: a_path.clone(), current_hash: super::super::store::hash(b"stale edit"),
+        }])).await.unwrap_err().code, "space_copy_conflict");
+        assert_eq!(std::fs::read(y.join(&a_path)).unwrap(), b"edited in Y");
+        let replaced = finished(&service_y, service_y.start_space_update(replacement(edited.edited)).await.unwrap()).await;
+        assert_eq!(replaced.phases[0].state, LibraryPhaseState::Done);
+        assert_eq!(std::fs::read(y.join(&a_path)).unwrap(), std::fs::read(x.join(&a_path)).unwrap());
+
+        std::fs::remove_file(x.join(&b_path)).unwrap();
+        let restored = finished(&service_x, service_x.start_space_update(SpaceUpdateRequest {
+            target: target(), scope: SpaceUpdateScope::All {}, replace_edited: vec![],
+        }).await.unwrap()).await;
+        assert_eq!(restored.space.unwrap().written, vec![b_path.clone()]);
+        assert_eq!(std::fs::read(x.join(&b_path)).unwrap(), std::fs::read(y.join(&b_path)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn removed_source_and_library_removal_keep_space_bytes_and_remove_requires_cas() {
+        let f = fixture();
+        let (projects, adapter, root) = companion(&f).await;
+        let service = reopen(&f).with_projects(projects, adapter.clone());
+        let item = saved(&f, 1).await;
+        finished(&service, service.start_space_add(SpaceAddRequest {
+            target: target(), item_ids: vec![item.item_id.clone()], follow_ids: vec![],
+        }).await.unwrap()).await;
+        let row = service.space_listing(target()).await.unwrap().rows.remove(0);
+        let path = root.join(&row.paths[0]);
+        let original = std::fs::read(&path).unwrap();
+        f.provider.set_failure(Some("source_not_found"));
+        finished(&service, service.start_refresh(LibraryRefreshRequest::All).await.unwrap()).await;
+        assert_eq!(service.space_listing(target()).await.unwrap().rows[0].state, SpaceCopyState::RemovedAtSource);
+        let request = || SpaceUpdateRequest {
+            target: target(), scope: SpaceUpdateScope::Selection { item_ids: vec![item.item_id.clone()], follow_ids: vec![] },
+            replace_edited: vec![],
+        };
+        let update = finished(&service, service.start_space_update(request()).await.unwrap()).await;
+        assert!(update.space.unwrap().written.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        service.remove(LibraryRemoveRequest::Item {
+            item_id: item.item_id.clone(), expected_revision: item.revision.clone(),
+        }).await.unwrap();
+        assert_eq!(service.space_listing(target()).await.unwrap().rows[0].state, SpaceCopyState::NotInLibrary);
+        finished(&service, service.start_space_update(request()).await.unwrap()).await;
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::write(&path, b"my edits").unwrap();
+        let remove = |confirmed| SpaceRemoveRequest { target: target(), logical_id: row.logical_id.clone(), confirmed };
+        assert_eq!(service.space_remove(remove(vec![])).await.unwrap_err().code, "space_copy_conflict");
+        let edited = service.space_listing(target()).await.unwrap().rows.remove(0).edited;
+        std::fs::write(&path, b"later edits").unwrap();
+        assert_eq!(service.space_remove(remove(edited)).await.unwrap_err().code, "space_copy_conflict");
+        assert_eq!(std::fs::read(&path).unwrap(), b"later edits");
+        let edited = service.space_listing(target()).await.unwrap().rows.remove(0).edited;
+        adapter.reachable.store(false, Ordering::SeqCst);
+        assert_eq!(service.space_remove(remove(edited.clone())).await.unwrap_err().code, "source_companion_unavailable");
+        assert_eq!(std::fs::read(&path).unwrap(), b"later edits");
+        adapter.reachable.store(true, Ordering::SeqCst);
+        let listing = service.space_remove(remove(edited)).await.unwrap();
+        assert!(listing.rows.is_empty());
+        assert!(!path.exists());
+        assert_eq!(service.start_space_update(SpaceUpdateRequest {
+            target: target(), scope: SpaceUpdateScope::Selection { item_ids: vec![], follow_ids: vec!["follow".into()] },
+            replace_edited: vec![],
+        }).await.unwrap_err().code, "source_capability_unavailable");
+        assert_eq!(service.space_remove(SpaceRemoveRequest {
+            target: target(), logical_id: "follow:one".into(), confirmed: vec![],
+        }).await.unwrap_err().code, "source_capability_unavailable");
     }
 }

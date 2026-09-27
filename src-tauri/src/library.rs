@@ -8,6 +8,7 @@ use cockpit_protocol::{
         LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest,
         LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, SpaceAddRequest,
         SpaceAttemptsDismissRequest, SpaceContextListing, SpaceContextRequest,
+        SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
     },
     v1::ErrorResponse,
 };
@@ -261,4 +262,31 @@ pub async fn cockpit_library_space_attempts_dismiss(
         .dismiss_space_attempts(request)
         .await
         .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_library_space_update(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<LibraryOperation, ErrorResponse> {
+    let request: SpaceUpdateRequest = decode_request(request, "library space update")?;
+    let count = match &request.scope {
+        SpaceUpdateScope::Selection { item_ids, follow_ids } => item_ids.len() + follow_ids.len(),
+        SpaceUpdateScope::All {} => 0,
+    };
+    validate_space_request(&request.target, count)?;
+    let operation = service.library().map_err(inspection_error_response)?
+        .start_space_update(request).await.map_err(inspection_error_response)?;
+    Ok(bounded_operation(operation))
+}
+
+#[tauri::command]
+pub async fn cockpit_library_space_remove(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<SpaceContextListing, ErrorResponse> {
+    let request: SpaceRemoveRequest = decode_request(request, "library space remove")?;
+    validate_space_request(&request.target, 0)?;
+    service.library().map_err(inspection_error_response)?
+        .space_remove(request).await.map_err(inspection_error_response)
 }

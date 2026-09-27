@@ -105,7 +105,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
-    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
+    contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),
     commentBatch: vi.fn(async () => { throw new Error("Unexpected comment batch in terminal fixture"); }),
     commentUpsert: vi.fn(async () => { throw new Error("Unexpected comment upsert in terminal fixture"); }),
@@ -310,6 +310,43 @@ describe("library client validation", () => {
       payload = { ...libraryOperation, kind: "space_add", target: other };
       await expect(client.librarySpaceAdd({ target, item_ids: ["source:1"], follow_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
       await expect(client.librarySpaceAttemptsDismiss({ target, item_ids: Array(5001).fill("item"), follow_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+  it("sends per-Space update and removal only for this Space and refuses unsafe confirmations in both transports", async () => {
+    const target = { session_id: "session", space_id: "space" };
+    const other = { ...target, space_id: "other-space" };
+    const listing = { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] };
+    const updated = { ...libraryOperation, kind: "space_update", target };
+    const confirmed = [{ path: "sources/github/issue/acme-api-3.md", current_hash: "sha256:edited" }];
+    const request = vi.fn(async (path: string, _init?: RequestInit) => jsonResponse(path.endsWith("/space/update") ? updated : listing));
+    const invoke = vi.fn(async (command: string, _args?: Record<string, unknown>) => command === "cockpit_library_space_update" ? updated : listing);
+    const browser = createBrowserClient(request);
+    const native = createNativeClient(invoke);
+    const update = { target, scope: { scope: "selection" as const, item_ids: ["source:a"], follow_ids: [] }, replace_edited: confirmed };
+    const remove = { target, logical_id: "source:github:acme/api#3", confirmed };
+    await expect(browser.librarySpaceUpdate(update)).resolves.toMatchObject({ kind: "space_update", target });
+    await expect(browser.librarySpaceRemove(remove)).resolves.toMatchObject({ target });
+    expect(request.mock.calls.map(([path, init]) => [path, JSON.parse(String(init?.body))])).toEqual([
+      ["/api/v1/library/space/update", update],
+      ["/api/v1/library/space/remove", remove],
+    ]);
+    await expect(native.librarySpaceUpdate({ target, scope: { scope: "all" }, replace_edited: [] })).resolves.toMatchObject({ kind: "space_update" });
+    await expect(native.librarySpaceRemove(remove)).resolves.toMatchObject({ target });
+    expect(invoke.mock.calls).toEqual([
+      ["cockpit_library_space_update", { request: { target, scope: { scope: "all" }, replace_edited: [] } }],
+      ["cockpit_library_space_remove", { request: remove }],
+    ]);
+    for (const client of [browser, native]) {
+      await expect(client.librarySpaceRemove({ ...remove, confirmed: [{ path: "../escape", current_hash: "sha256:edited" }] })).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceUpdate({ ...update, scope: { scope: "every" } } as never)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    updated.target = other;
+    listing.target = other;
+    for (const client of [browser, native]) {
+      await expect(client.librarySpaceUpdate(update)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.librarySpaceRemove(remove)).rejects.toMatchObject({ code: "malformed_response" });
     }
   });
 });

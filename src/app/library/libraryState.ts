@@ -286,7 +286,7 @@ export function resolutionNote(resolution: LibraryResolution, providers: readonl
 
 export type LookupFailure = { title: string; detail: string; retry: boolean };
 
-function errorCode(error: unknown): string | null {
+export function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null) return null;
   if ("operationCode" in error && typeof error.operationCode === "string") return error.operationCode;
   return "code" in error && typeof error.code === "string" ? error.code : null;

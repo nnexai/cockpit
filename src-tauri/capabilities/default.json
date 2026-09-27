@@ -49,6 +49,8 @@
     "allow-cockpit-stream-cancel",
     "allow-cockpit-library-space-list",
     "allow-cockpit-library-space-add",
+    "allow-cockpit-library-space-update",
+    "allow-cockpit-library-space-remove",
     "allow-cockpit-library-space-attempts-dismiss",
     "allow-cockpit-context-media",
     "allow-cockpit-library-listing",

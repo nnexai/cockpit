@@ -44,6 +44,8 @@ fn main() {
             "cockpit_library_media",
             "cockpit_library_space_list",
             "cockpit_library_space_add",
+            "cockpit_library_space_update",
+            "cockpit_library_space_remove",
             "cockpit_library_space_attempts_dismiss",
             "cockpit_review_snapshot",
             "cockpit_review_file",

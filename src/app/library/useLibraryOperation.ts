@@ -26,9 +26,9 @@ function notifyTracker(): void {
   for (const listener of trackerListeners) listener();
 }
 
-// A Space add copies saved items into a Space; the Library items themselves don't change.
+// Space adds and updates copy saved items into a Space; the Library items themselves don't change.
 function pendingLibraryItemIds(): Set<string> {
-  return new Set([...tracked.values()].filter(({ operation }) => !operation.finished && operation.kind !== "space_add").flatMap(({ operation }) => operation.item_ids));
+  return new Set([...tracked.values()].filter(({ operation }) => !operation.finished && operation.kind !== "space_add" && operation.kind !== "space_update").flatMap(({ operation }) => operation.item_ids));
 }
 
 function storeOperation(operation: LibraryOperation): void {
