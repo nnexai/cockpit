@@ -400,155 +400,9 @@ impl ContextService {
         let presentation = self.inspect_pane(session_id, pane_id).await?;
         require_binding(&presentation, &request.binding_id)?;
         let authorized = find_root(&presentation.roots, &request.root_id)?;
-        let relative = relative_path(&request.path)?;
-        check_depth(&relative, self.configuration.limits.context_tree_depth)?;
-        if let Some(message) = reserved_context_path(authorized.root.kind, &relative) {
-            return Err(InspectionError::new("context_reserved_path", message));
-        }
-        let directory = resolve_directory(&authorized.dir, &relative)?;
-        let metadata = directory.dir_metadata().map_err(|error| {
-            InspectionError::new("context_directory_unavailable", error.to_string())
-        })?;
-        if !metadata.is_dir() {
-            return Err(InspectionError::new(
-                "context_not_directory",
-                "requested context path is not a directory",
-            ));
-        }
-        revalidate_root(&authorized.dir, &authorized.root.root_id)?;
-        let limit = self.configuration.limits.context_directory_entries as usize;
-        let offset = request.offset.unwrap_or(0) as usize;
-        if offset > MAX_DIRECTORY_SCAN {
-            return Err(InspectionError::new(
-                "context_directory_bounded",
-                "directory continuation offset exceeds its bounded scan limit",
-            ));
-        }
-        let directory_revision = metadata_revision(&metadata);
-        if let Some(expected) = request.revision.as_deref() {
-            if expected != directory_revision {
-                return Err(InspectionError::new(
-                    "context_stale_revision",
-                    "directory changed since it was listed",
-                ));
-            }
-        }
-        let mut entries = Vec::new();
-        let mut truncated = false;
-        let mut scanned_entries = 0usize;
-        let read_dir = directory.entries().map_err(|error| {
-            InspectionError::new("context_directory_unavailable", error.to_string())
-        })?;
-        for item in read_dir {
-            if scanned_entries >= MAX_DIRECTORY_SCAN {
-                truncated = true;
-                break;
-            }
-            scanned_entries += 1;
-            let item = match item {
-                Ok(item) => item,
-                Err(error) => {
-                    entries.push(ContextEntry {
-                        entry_id: stable_id(&authorized.root.root_id, "<unavailable>"),
-                        name: "<unavailable>".to_owned(),
-                        path: None,
-                        kind: ContextEntryKind::Other,
-                        bytes: None,
-                        revision: String::new(),
-                        refusal: Some(format!("entry became unavailable: {error}")),
-                    });
-                    continue;
-                }
-            };
-            let name = item.file_name().to_string_lossy().into_owned();
-            if name.contains('\0') {
-                continue;
-            }
-            let child_relative = if relative.as_os_str().is_empty() {
-                PathBuf::from(&name)
-            } else {
-                relative.join(&name)
-            };
-            if reserved_context_path(authorized.root.kind, &child_relative).is_some() {
-                continue;
-            }
-            let entry_id = stable_id(&authorized.root.root_id, &child_relative.to_string_lossy());
-            let metadata = match directory.symlink_metadata(Path::new(&name)) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    entries.push(ContextEntry {
-                        entry_id,
-                        name,
-                        path: None,
-                        kind: ContextEntryKind::Other,
-                        bytes: None,
-                        revision: String::new(),
-                        refusal: Some(format!("entry became unavailable: {error}")),
-                    });
-                    continue;
-                }
-            };
-            let (kind, path, bytes, refusal) =
-                match reserved_context_path(authorized.root.kind, &child_relative) {
-                    Some(message) => (
-                        ContextEntryKind::Other,
-                        None,
-                        None,
-                        Some(message.to_owned()),
-                    ),
-                    None => classify_entry(&metadata, &child_relative),
-                };
-            entries.push(ContextEntry {
-                entry_id,
-                name,
-                path,
-                kind,
-                bytes,
-                revision: metadata_revision(&metadata),
-                refusal,
-            });
-        }
-        let after = directory.dir_metadata().map_err(|error| {
-            InspectionError::new("context_directory_unavailable", error.to_string())
-        })?;
-        if metadata_revision(&after) != directory_revision {
-            return Err(InspectionError::new(
-                "context_changed_during_read",
-                "directory changed while it was being listed",
-            ));
-        }
-        entries.sort_by(|left, right| {
-            let left_dir = left.kind == ContextEntryKind::Directory;
-            let right_dir = right.kind == ContextEntryKind::Directory;
-            right_dir.cmp(&left_dir).then(left.name.cmp(&right.name))
-        });
-        let total_entries = if truncated {
-            None
-        } else {
-            Some(u32::try_from(entries.len()).unwrap_or(u32::MAX))
-        };
-        let page_end = offset.saturating_add(limit).min(entries.len());
-        let page = if offset < entries.len() {
-            entries[offset..page_end].to_vec()
-        } else {
-            Vec::new()
-        };
-        let next_offset = if page_end < entries.len() {
-            Some(page_end as u32)
-        } else {
-            None
-        };
-        Ok(ContextDirectory {
-            binding_id: presentation.binding_id,
-            root_id: authorized.root.root_id,
-            path: relative.to_string_lossy().into_owned(),
-            entries: page,
-            truncated,
-            revision: Some(directory_revision),
-            next_offset,
-            total_entries,
-            diagnostics: presentation.diagnostics,
-        })
+        let mut result = read_directory(&authorized, request, &self.configuration.limits)?;
+        result.diagnostics = presentation.diagnostics;
+        Ok(result)
     }
 
     pub async fn document(
@@ -560,178 +414,7 @@ impl ContextService {
         let presentation = self.inspect_pane(session_id, pane_id).await?;
         require_binding(&presentation, &request.binding_id)?;
         let authorized = find_root(&presentation.roots, &request.root_id)?;
-        let relative = relative_path(&request.path)?;
-        if let Some(message) = reserved_context_path(authorized.root.kind, &relative) {
-            return Err(InspectionError::new("context_reserved_path", message));
-        }
-        check_depth(&relative, self.configuration.limits.context_tree_depth)?;
-        let (parent, leaf) = resolve_parent(&authorized.dir, &relative)?;
-        let before = parent.symlink_metadata(&leaf).map_err(|error| {
-            InspectionError::new(
-                if error.kind() == ErrorKind::NotFound {
-                    "context_file_missing"
-                } else {
-                    "context_file_unavailable"
-                },
-                format!("cannot inspect context file: {error}"),
-            )
-        })?;
-        let revision = metadata_revision(&before);
-        if let Some(expected) = request.expected_revision.as_deref() {
-            if expected != revision {
-                return Err(InspectionError::new(
-                    "context_stale_revision",
-                    "context file changed since it was listed",
-                ));
-            }
-        }
-        let mut result = ContextDocument {
-            binding_id: presentation.binding_id,
-            root_id: authorized.root.root_id.clone(),
-            path: relative.to_string_lossy().into_owned(),
-            revision: revision.clone(),
-            content_hash: None,
-            bytes: before.len(),
-            media_type: media_type(&relative),
-            text: None,
-            truncated: false,
-            offset: Some(request.offset.unwrap_or(0)),
-            next_offset: None,
-            total_bytes: Some(before.len()),
-            line_offset: (request.offset.unwrap_or(0) == 0).then_some(0),
-            diagnostics: Vec::new(),
-        };
-        if before.file_type().is_symlink() {
-            refuse_document(
-                &mut result,
-                "context_symlink_refused",
-                "symbolic links are not followed",
-            );
-            return Ok(result);
-        }
-        if !before.is_file() {
-            refuse_document(
-                &mut result,
-                "context_special_file_refused",
-                "special files cannot be opened",
-            );
-            return Ok(result);
-        }
-        let max_bytes = self.configuration.limits.context_preview_bytes as usize;
-        let offset = request.offset.unwrap_or(0) as u64;
-        if offset > before.len() {
-            return Err(InspectionError::new(
-                "context_invalid_request",
-                "document continuation offset exceeds the file",
-            ));
-        }
-        revalidate_root(&authorized.dir, &authorized.root.root_id)?;
-        let mut options = OpenOptions::new();
-        options
-            .read(true)
-            .follow(cap_fs_ext::FollowSymlinks::No)
-            .nonblock(true);
-        let mut file = parent.open_with(&leaf, &options).map_err(|error| {
-            let code = if error.kind() == ErrorKind::WouldBlock || is_symlink_open_error(&error) {
-                "context_special_file_refused"
-            } else if error.kind() == ErrorKind::NotFound {
-                "context_file_missing"
-            } else {
-                "context_file_unavailable"
-            };
-            InspectionError::new(code, format!("cannot open context file: {error}"))
-        })?;
-        let opened = file.metadata().map_err(|error| {
-            InspectionError::new(
-                "context_file_unavailable",
-                format!("cannot stat context file: {error}"),
-            )
-        })?;
-        if !opened.is_file() || opened.file_type().is_symlink() {
-            refuse_document(
-                &mut result,
-                "context_special_file_refused",
-                "file type changed before opening",
-            );
-            return Ok(result);
-        }
-        if metadata_revision(&opened) != revision {
-            return Err(InspectionError::new(
-                "context_changed_during_read",
-                "context file changed while opening",
-            ));
-        }
-        file.seek(SeekFrom::Start(offset)).map_err(|error| {
-            InspectionError::new(
-                "context_file_unavailable",
-                format!("cannot seek context file: {error}"),
-            )
-        })?;
-        let mut content = Vec::with_capacity(max_bytes.min((before.len() - offset) as usize));
-        (&mut file)
-            .take(max_bytes as u64)
-            .read_to_end(&mut content)
-            .map_err(|error| {
-                InspectionError::new(
-                    "context_file_unavailable",
-                    format!("cannot read context file: {error}"),
-                )
-            })?;
-        let after = parent.symlink_metadata(&leaf).map_err(|error| {
-            InspectionError::new(
-                "context_changed_during_read",
-                format!("cannot recheck context file: {error}"),
-            )
-        })?;
-        if metadata_revision(&after) != revision {
-            return Err(InspectionError::new(
-                "context_changed_during_read",
-                "context file changed while reading",
-            ));
-        }
-        let valid_bytes = match std::str::from_utf8(&content) {
-            Ok(_) => content.len(),
-            Err(error) if error.valid_up_to() > 0 && !content.contains(&0) => error.valid_up_to(),
-            Err(_) => 0,
-        };
-        if valid_bytes == 0 && (!content.is_empty() || before.len() > offset) {
-            refuse_document(
-                &mut result,
-                "context_binary",
-                "binary or non-UTF-8 content is not rendered as source",
-            );
-            return Ok(result);
-        }
-        let mut consumed = valid_bytes;
-        let max_lines = self.configuration.limits.context_preview_lines as usize;
-        let (text_bytes, line_truncated) = bounded_lines(&content[..valid_bytes], max_lines);
-        if line_truncated {
-            consumed = text_bytes.len();
-        }
-        let end = offset.saturating_add(consumed as u64);
-        result.truncated = end < before.len();
-        result.next_offset = (end < before.len()).then_some(end as u32);
-        if result.truncated {
-            result.diagnostics.push(diagnostic(
-                if line_truncated {
-                    "context_preview_lines"
-                } else {
-                    "context_preview_bytes"
-                },
-                if line_truncated {
-                    "file exceeds the configured preview line limit; continue reading for more"
-                } else {
-                    "file exceeds the configured preview byte limit; continue reading for more"
-                },
-                Some(&result.path),
-            ));
-        }
-        result.truncated = result.truncated || line_truncated;
-        if offset == 0 && !result.truncated {
-            result.content_hash = Some(hash_bytes(&content));
-        }
-        result.text = Some(String::from_utf8(text_bytes.to_vec()).expect("validated UTF-8"));
-        Ok(result)
+        read_document(&authorized, request, &self.configuration.limits)
     }
     pub async fn open(
         &self,
@@ -1296,6 +979,341 @@ impl ContextService {
     }
 }
 
+pub(crate) fn read_directory(
+    authorized: &AuthorizedRoot,
+    request: &ContextDirectoryRequest,
+    limits: &cockpit_protocol::projects::ProjectLimits,
+) -> Result<ContextDirectory, InspectionError> {
+    let relative = relative_path(&request.path)?;
+    check_depth(&relative, limits.context_tree_depth)?;
+    if let Some(message) = reserved_context_path(authorized.root.kind, &relative) {
+        return Err(InspectionError::new("context_reserved_path", message));
+    }
+    let directory = resolve_directory(&authorized.dir, &relative)?;
+    let metadata = directory.dir_metadata().map_err(|error| {
+        InspectionError::new("context_directory_unavailable", error.to_string())
+    })?;
+    if !metadata.is_dir() {
+        return Err(InspectionError::new(
+            "context_not_directory",
+            "requested context path is not a directory",
+        ));
+    }
+    revalidate_root(&authorized.dir, &authorized.root.root_id)?;
+    let limit = limits.context_directory_entries as usize;
+    let offset = request.offset.unwrap_or(0) as usize;
+    if offset > MAX_DIRECTORY_SCAN {
+        return Err(InspectionError::new(
+            "context_directory_bounded",
+            "directory continuation offset exceeds its bounded scan limit",
+        ));
+    }
+    let directory_revision = metadata_revision(&metadata);
+    if let Some(expected) = request.revision.as_deref() {
+        if expected != directory_revision {
+            return Err(InspectionError::new(
+                "context_stale_revision",
+                "directory changed since it was listed",
+            ));
+        }
+    }
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut scanned_entries = 0usize;
+    let read_dir = directory.entries().map_err(|error| {
+        InspectionError::new("context_directory_unavailable", error.to_string())
+    })?;
+    for item in read_dir {
+        if scanned_entries >= MAX_DIRECTORY_SCAN {
+            truncated = true;
+            break;
+        }
+        scanned_entries += 1;
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                entries.push(ContextEntry {
+                    entry_id: stable_id(&authorized.root.root_id, "<unavailable>"),
+                    name: "<unavailable>".to_owned(),
+                    path: None,
+                    kind: ContextEntryKind::Other,
+                    bytes: None,
+                    revision: String::new(),
+                    refusal: Some(format!("entry became unavailable: {error}")),
+                });
+                continue;
+            }
+        };
+        let name = item.file_name().to_string_lossy().into_owned();
+        if name.contains('\0') {
+            continue;
+        }
+        let child_relative = if relative.as_os_str().is_empty() {
+            PathBuf::from(&name)
+        } else {
+            relative.join(&name)
+        };
+        if reserved_context_path(authorized.root.kind, &child_relative).is_some() {
+            continue;
+        }
+        let entry_id = stable_id(&authorized.root.root_id, &child_relative.to_string_lossy());
+        let metadata = match directory.symlink_metadata(Path::new(&name)) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                entries.push(ContextEntry {
+                    entry_id,
+                    name,
+                    path: None,
+                    kind: ContextEntryKind::Other,
+                    bytes: None,
+                    revision: String::new(),
+                    refusal: Some(format!("entry became unavailable: {error}")),
+                });
+                continue;
+            }
+        };
+        let (kind, path, bytes, refusal) =
+            match reserved_context_path(authorized.root.kind, &child_relative) {
+                Some(message) => (
+                    ContextEntryKind::Other,
+                    None,
+                    None,
+                    Some(message.to_owned()),
+                ),
+                None => classify_entry(&metadata, &child_relative),
+            };
+        entries.push(ContextEntry {
+            entry_id,
+            name,
+            path,
+            kind,
+            bytes,
+            revision: metadata_revision(&metadata),
+            refusal,
+        });
+    }
+    let after = directory.dir_metadata().map_err(|error| {
+        InspectionError::new("context_directory_unavailable", error.to_string())
+    })?;
+    if metadata_revision(&after) != directory_revision {
+        return Err(InspectionError::new(
+            "context_changed_during_read",
+            "directory changed while it was being listed",
+        ));
+    }
+    entries.sort_by(|left, right| {
+        let left_dir = left.kind == ContextEntryKind::Directory;
+        let right_dir = right.kind == ContextEntryKind::Directory;
+        right_dir.cmp(&left_dir).then(left.name.cmp(&right.name))
+    });
+    let total_entries = if truncated {
+        None
+    } else {
+        Some(u32::try_from(entries.len()).unwrap_or(u32::MAX))
+    };
+    let page_end = offset.saturating_add(limit).min(entries.len());
+    let page = if offset < entries.len() {
+        entries[offset..page_end].to_vec()
+    } else {
+        Vec::new()
+    };
+    let next_offset = if page_end < entries.len() {
+        Some(page_end as u32)
+    } else {
+        None
+    };
+    Ok(ContextDirectory {
+        binding_id: request.binding_id.clone(),
+        root_id: authorized.root.root_id.clone(),
+        path: relative.to_string_lossy().into_owned(),
+        entries: page,
+        truncated,
+        revision: Some(directory_revision),
+        next_offset,
+        total_entries,
+        diagnostics: Vec::new(),
+    })
+}
+
+pub(crate) fn read_document(
+    authorized: &AuthorizedRoot,
+    request: &ContextDocumentRequest,
+    limits: &cockpit_protocol::projects::ProjectLimits,
+) -> Result<ContextDocument, InspectionError> {
+    let relative = relative_path(&request.path)?;
+    if let Some(message) = reserved_context_path(authorized.root.kind, &relative) {
+        return Err(InspectionError::new("context_reserved_path", message));
+    }
+    check_depth(&relative, limits.context_tree_depth)?;
+    let (parent, leaf) = resolve_parent(&authorized.dir, &relative)?;
+    let before = parent.symlink_metadata(&leaf).map_err(|error| {
+        InspectionError::new(
+            if error.kind() == ErrorKind::NotFound {
+                "context_file_missing"
+            } else {
+                "context_file_unavailable"
+            },
+            format!("cannot inspect context file: {error}"),
+        )
+    })?;
+    let revision = metadata_revision(&before);
+    if let Some(expected) = request.expected_revision.as_deref() {
+        if expected != revision {
+            return Err(InspectionError::new(
+                "context_stale_revision",
+                "context file changed since it was listed",
+            ));
+        }
+    }
+    let mut result = ContextDocument {
+        binding_id: request.binding_id.clone(),
+        root_id: authorized.root.root_id.clone(),
+        path: relative.to_string_lossy().into_owned(),
+        revision: revision.clone(),
+        content_hash: None,
+        bytes: before.len(),
+        media_type: media_type(&relative),
+        text: None,
+        truncated: false,
+        offset: Some(request.offset.unwrap_or(0)),
+        next_offset: None,
+        total_bytes: Some(before.len()),
+        line_offset: (request.offset.unwrap_or(0) == 0).then_some(0),
+        diagnostics: Vec::new(),
+    };
+    if before.file_type().is_symlink() {
+        refuse_document(
+            &mut result,
+            "context_symlink_refused",
+            "symbolic links are not followed",
+        );
+        return Ok(result);
+    }
+    if !before.is_file() {
+        refuse_document(
+            &mut result,
+            "context_special_file_refused",
+            "special files cannot be opened",
+        );
+        return Ok(result);
+    }
+    let max_bytes = limits.context_preview_bytes as usize;
+    let offset = request.offset.unwrap_or(0) as u64;
+    if offset > before.len() {
+        return Err(InspectionError::new(
+            "context_invalid_request",
+            "document continuation offset exceeds the file",
+        ));
+    }
+    revalidate_root(&authorized.dir, &authorized.root.root_id)?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .follow(cap_fs_ext::FollowSymlinks::No)
+        .nonblock(true);
+    let mut file = parent.open_with(&leaf, &options).map_err(|error| {
+        let code = if error.kind() == ErrorKind::WouldBlock || is_symlink_open_error(&error) {
+            "context_special_file_refused"
+        } else if error.kind() == ErrorKind::NotFound {
+            "context_file_missing"
+        } else {
+            "context_file_unavailable"
+        };
+        InspectionError::new(code, format!("cannot open context file: {error}"))
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        InspectionError::new(
+            "context_file_unavailable",
+            format!("cannot stat context file: {error}"),
+        )
+    })?;
+    if !opened.is_file() || opened.file_type().is_symlink() {
+        refuse_document(
+            &mut result,
+            "context_special_file_refused",
+            "file type changed before opening",
+        );
+        return Ok(result);
+    }
+    if metadata_revision(&opened) != revision {
+        return Err(InspectionError::new(
+            "context_changed_during_read",
+            "context file changed while opening",
+        ));
+    }
+    file.seek(SeekFrom::Start(offset)).map_err(|error| {
+        InspectionError::new(
+            "context_file_unavailable",
+            format!("cannot seek context file: {error}"),
+        )
+    })?;
+    let mut content = Vec::with_capacity(max_bytes.min((before.len() - offset) as usize));
+    (&mut file)
+        .take(max_bytes as u64)
+        .read_to_end(&mut content)
+        .map_err(|error| {
+            InspectionError::new(
+                "context_file_unavailable",
+                format!("cannot read context file: {error}"),
+            )
+        })?;
+    let after = parent.symlink_metadata(&leaf).map_err(|error| {
+        InspectionError::new(
+            "context_changed_during_read",
+            format!("cannot recheck context file: {error}"),
+        )
+    })?;
+    if metadata_revision(&after) != revision {
+        return Err(InspectionError::new(
+            "context_changed_during_read",
+            "context file changed while reading",
+        ));
+    }
+    let valid_bytes = match std::str::from_utf8(&content) {
+        Ok(_) => content.len(),
+        Err(error) if error.valid_up_to() > 0 && !content.contains(&0) => error.valid_up_to(),
+        Err(_) => 0,
+    };
+    if valid_bytes == 0 && (!content.is_empty() || before.len() > offset) {
+        refuse_document(
+            &mut result,
+            "context_binary",
+            "binary or non-UTF-8 content is not rendered as source",
+        );
+        return Ok(result);
+    }
+    let mut consumed = valid_bytes;
+    let max_lines = limits.context_preview_lines as usize;
+    let (text_bytes, line_truncated) = bounded_lines(&content[..valid_bytes], max_lines);
+    if line_truncated {
+        consumed = text_bytes.len();
+    }
+    let end = offset.saturating_add(consumed as u64);
+    result.truncated = end < before.len();
+    result.next_offset = (end < before.len()).then_some(end as u32);
+    if result.truncated {
+        result.diagnostics.push(diagnostic(
+            if line_truncated {
+                "context_preview_lines"
+            } else {
+                "context_preview_bytes"
+            },
+            if line_truncated {
+                "file exceeds the configured preview line limit; continue reading for more"
+            } else {
+                "file exceeds the configured preview byte limit; continue reading for more"
+            },
+            Some(&result.path),
+        ));
+    }
+    result.truncated = result.truncated || line_truncated;
+    if offset == 0 && !result.truncated {
+        result.content_hash = Some(hash_bytes(&content));
+    }
+    result.text = Some(String::from_utf8(text_bytes.to_vec()).expect("validated UTF-8"));
+    Ok(result)
+}
+
 /// Herdr label of the Context viewers Cockpit opens.
 const CONTEXT_PANE_LABEL: &str = "Context";
 
@@ -1349,6 +1367,35 @@ fn find_root(roots: &[ContextRoot], root_id: &str) -> Result<AuthorizedRoot, Ins
     })
 }
 impl AuthorizedRoot {
+    pub(crate) fn library(
+        path: PathBuf,
+        dir: Dir,
+        max_depth: u32,
+    ) -> Result<Self, InspectionError> {
+        let metadata = dir
+            .dir_metadata()
+            .map_err(|error| InspectionError::new("library_unavailable", error.to_string()))?;
+        let identity = format!("library:{}", filesystem_identity(&metadata));
+        Ok(Self {
+            root: ContextRoot {
+                root_id: identity.clone(),
+                kind: ContextRootKind::Library,
+                label: "Library".into(),
+                path: path.to_string_lossy().into_owned(),
+                repository_id: identity,
+                checkout_path: path.to_string_lossy().into_owned(),
+                companion_id: None,
+            },
+            canonical: path,
+            dir,
+            max_depth,
+        })
+    }
+
+    pub(crate) fn summary(&self) -> ContextRoot {
+        self.root.clone()
+    }
+
     pub(crate) fn root_id(&self) -> &str {
         &self.root.root_id
     }
@@ -1396,6 +1443,10 @@ fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'sta
     for name in components {
         if name == ".git" {
             return Some("Git metadata is not exposed");
+        }
+        if kind == ContextRootKind::Library && (name == ".cockpit" || name == ".cockpit-item.json")
+        {
+            return Some("Cockpit Library metadata is not exposed");
         }
         if kind == ContextRootKind::Companion {
             if first
@@ -2143,7 +2194,7 @@ mod review_checkout_tests {
     }
 
     #[tokio::test]
-    async fn opens_files_from_a_fresh_source_folder_root() {
+    async fn opens_files_from_a_fresh_source_folder_root_while_library_unavailable() {
         let workspace =
             std::env::temp_dir().join(format!("cockpit-context-files-{}", Uuid::new_v4()));
         let repository = workspace.join("repository");
@@ -2172,6 +2223,17 @@ mod review_checkout_tests {
             review_launches: Mutex::new(Vec::new()),
         });
         let configuration = configuration(&workspace);
+        std::fs::write(&configuration.library_root, b"not a directory").expect("unusable Library");
+        let sources = Arc::new(SourceService::new(&configuration, vec![]).expect("source service"));
+        let library = crate::library::LibraryService::new(configuration.clone(), sources);
+        assert_eq!(
+            library
+                .listing(None)
+                .await
+                .expect_err("Library unavailable")
+                .code,
+            "library_unavailable"
+        );
         let projects = Arc::new(
             ProjectService::new(configuration.clone(), adapter.clone()).expect("project service"),
         );

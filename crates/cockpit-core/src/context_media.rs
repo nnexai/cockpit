@@ -33,7 +33,7 @@ impl ContextService {
     }
 }
 
-fn read_media(
+pub(crate) fn read_media(
     authorized: AuthorizedRoot,
     request: &ContextMediaRequest,
     max_bytes: usize,

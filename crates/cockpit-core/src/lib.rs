@@ -8,6 +8,7 @@ pub mod context_assets;
 pub mod context_media;
 pub mod context_search;
 pub mod extension_adapter;
+pub mod library;
 pub mod paste_adapter;
 pub mod process;
 pub mod project_adapter;
@@ -129,6 +130,7 @@ pub struct CockpitService {
     contexts: Option<Arc<context::ContextService>>,
     comments: Option<Arc<comments::CommentsService>>,
     reviews: Option<Arc<review::ReviewService>>,
+    library: Option<Arc<library::LibraryService>>,
 }
 
 #[derive(Default)]
@@ -191,6 +193,7 @@ impl CockpitService {
             contexts: None,
             comments: None,
             reviews: None,
+            library: None,
         }
     }
 
@@ -218,6 +221,20 @@ impl CockpitService {
             InspectionError::new(
                 "context_configuration_unavailable",
                 "Context operations are not configured in this host",
+            )
+        })
+    }
+
+    pub fn with_library(mut self, library: library::LibraryService) -> Self {
+        self.library = Some(Arc::new(library));
+        self
+    }
+
+    pub fn library(&self) -> Result<&Arc<library::LibraryService>, InspectionError> {
+        self.library.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "library_unavailable",
+                "Library is not configured in this host",
             )
         })
     }
