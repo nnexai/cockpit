@@ -21,6 +21,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::context::ContextService;
+#[cfg(test)]
 use crate::extension_adapter::ExtensionHerdrAdapter;
 use crate::project_store::{atomic_write_json, read_json_bounded, timestamp, ProjectStore};
 use crate::repositories::RepositoryCatalog;
@@ -39,7 +40,6 @@ const MAX_STORED_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Clone)]
 pub struct ReviewService {
     configuration: ProjectConfiguration,
-    adapter: Arc<dyn ExtensionHerdrAdapter>,
     context: Arc<ContextService>,
     store: ProjectStore,
 }
@@ -121,13 +121,11 @@ struct FrozenSource {
 impl ReviewService {
     pub fn new(
         configuration: ProjectConfiguration,
-        adapter: Arc<dyn ExtensionHerdrAdapter>,
         context: Arc<ContextService>,
     ) -> Result<Self, InspectionError> {
         let store = ProjectStore::new(Path::new(&configuration.state_root).join("review"))?;
         Ok(Self {
             configuration,
-            adapter,
             context,
             store,
         })
@@ -140,15 +138,23 @@ impl ReviewService {
         request: &ReviewSnapshotRequest,
     ) -> Result<ReviewSnapshot, InspectionError> {
         validate_snapshot_request(request)?;
-        let presentation = self
-            .authorize_review_pane(session_id, pane_id, &request.binding_id)
+        // Keep the presentation and its process evidence paired: together they
+        // form one fresh authorization read for this request.
+        let (presentation, evidence) = self
+            .context
+            .inspect_pane_with_evidence(session_id, pane_id)
             .await?;
-        // ContextService owns verified extension classification. The adapter is
-        // used only for the Reviewr cwd needed to select a registered Git worktree.
-        let evidence = self
-            .adapter
-            .inspect_extension_pane(session_id, pane_id)
-            .await?;
+        if presentation.binding_id != request.binding_id
+            || presentation.session_id != session_id
+            || presentation.pane_id != pane_id
+            || presentation.extension != Some(ExtensionKind::Review)
+            || presentation.renderer != Some(ExtensionKind::Review)
+        {
+            return Err(InspectionError::new(
+                "review_snapshot_mismatch",
+                "Reviewr pane identity is no longer current",
+            ));
+        }
         if evidence.pane_id != pane_id
             || evidence.extension != Some(ExtensionKind::Review)
             || !verified(evidence.confidence)
@@ -158,6 +164,8 @@ impl ReviewService {
                 "Reviewr process evidence changed while preparing review",
             ));
         }
+        // The filesystem read below can race with pane changes, so revalidate
+        // the terminal identity immediately before returning the snapshot.
         let confirmed = self
             .authorize_review_pane(session_id, pane_id, &request.binding_id)
             .await?;
@@ -2953,7 +2961,7 @@ mod tests {
             adapter.clone(),
             projects,
         ));
-        ReviewService::new(configuration, adapter, context).expect("review service")
+        ReviewService::new(configuration, context).expect("review service")
     }
 
     fn fixture(label: &str) -> PathBuf {

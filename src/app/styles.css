@@ -1322,6 +1322,17 @@ body.is-resizing-panes * {
   color: var(--working);
   font-size: var(--font-size-xs);
 }
+.pane-focus-overlay {
+  position: absolute;
+  z-index: var(--z-raised);
+  top: 5px;
+  right: 8px;
+  pointer-events: none;
+}
+
+.pane-focus-overlay .pane-focus-retry {
+  pointer-events: auto;
+}
 
 .pane-focus-status-error {
   color: var(--blocked);

@@ -46,7 +46,10 @@ use config::valid_session_name;
 pub use config::{ConfigError, HerdrCliConfig};
 #[cfg(test)]
 use operations::pane_move_destination;
-use operations::{focus_call, mutation_call, request_is_mutating};
+use operations::{
+    focus_call, mutation_call, request_is_mutating,
+    request_is_safe_to_dispatch_before_identity,
+};
 use transport::{
     FINITE_CONNECT_TIMEOUT, FINITE_RESPONSE_TIMEOUT, FINITE_WRITE_TIMEOUT, read_bounded_line,
     read_response, response_deadline, write_with_progress,
@@ -965,6 +968,15 @@ impl HerdrCliAdapter {
         expected_identity: Option<&str>,
     ) -> Result<(Value, String), InspectionError> {
         let path = self.socket_path(session_id)?;
+        let dispatch_read_before_identity = request_is_safe_to_dispatch_before_identity(method);
+        let id = format!(
+            "cockpit-{}",
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let request = json!({"id": id, "method": method, "params": params});
+        let mut line = serde_json::to_vec(&request)
+            .map_err(|error| InspectionError::new("malformed_json", error.to_string()))?;
+        line.push(b'\n');
         let mut stream =
             match tokio::time::timeout(FINITE_CONNECT_TIMEOUT, UnixStream::connect(&path)).await {
                 Ok(Ok(stream)) => stream,
@@ -981,25 +993,26 @@ impl HerdrCliAdapter {
                     ));
                 }
             };
-        let actual_identity = Self::socket_peer_identity(&path, &stream)?;
-        if let Some(expected_identity) = expected_identity
-            && actual_identity != expected_identity
-        {
-            return Err(InspectionError::new(
-                "stale_identity",
-                format!(
-                    "Herdr endpoint identity changed; expected {expected_identity}, connected to {actual_identity}; mutation was not dispatched"
-                ),
-            ));
+
+        // Herdr's socket accept loop reads request bytes during its first pass.
+        // Dispatch known read-only requests immediately so the server does not
+        // wait for its next accept/read tick; their response is not trusted until
+        // the connected peer identity has been checked below.
+        let mut actual_identity = None;
+        if !dispatch_read_before_identity {
+            let identity = Self::socket_peer_identity(&path, &stream)?;
+            if let Some(expected_identity) = expected_identity
+                && identity != expected_identity
+            {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    format!(
+                        "Herdr endpoint identity changed; expected {expected_identity}, connected to {identity}; mutation was not dispatched"
+                    ),
+                ));
+            }
+            actual_identity = Some(identity);
         }
-        let id = format!(
-            "cockpit-{}",
-            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
-        );
-        let request = json!({"id": id, "method": method, "params": params});
-        let mut line = serde_json::to_vec(&request)
-            .map_err(|error| InspectionError::new("malformed_json", error.to_string()))?;
-        line.push(b'\n');
         let progress = AtomicUsize::new(0);
         let write = tokio::time::timeout(
             FINITE_WRITE_TIMEOUT,
@@ -1038,6 +1051,21 @@ impl HerdrCliAdapter {
                     "Herdr request write timed out before dispatch",
                 ));
             }
+        }
+
+        if dispatch_read_before_identity {
+            let identity = Self::socket_peer_identity(&path, &stream)?;
+            if let Some(expected_identity) = expected_identity
+                && identity != expected_identity
+            {
+                return Err(InspectionError::new(
+                    "stale_identity",
+                    format!(
+                        "Herdr endpoint identity changed; expected {expected_identity}, connected to {identity}; read response was discarded"
+                    ),
+                ));
+            }
+            actual_identity = Some(identity);
         }
 
         let response = tokio::time::timeout(response_deadline(method), async {
@@ -1095,6 +1123,12 @@ impl HerdrCliAdapter {
                 "Herdr response deadline expired",
             )),
         }?;
+        let actual_identity = actual_identity.ok_or_else(|| {
+            InspectionError::new(
+                "endpoint_identity_unavailable",
+                "Herdr response peer identity was not checked",
+            )
+        })?;
         Ok((result, actual_identity))
     }
 
@@ -3102,5 +3136,65 @@ mod tests {
             result.expect("slow worktree creation must not be reported unknown")["type"],
             "worktree_created"
         );
+    }
+    #[tokio::test]
+    async fn mutation_identity_mismatch_prevents_request_dispatch() {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-herdr-identity-gate-{}-{}.sock",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            line
+        });
+        let config =
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(path.clone())).unwrap();
+        let error = HerdrCliAdapter::new(config)
+            .socket_request_with_identity(
+                "default",
+                "pane.send_text",
+                json!({"pane_id": "pane-a", "text": "must not be sent"}),
+                Some("not-the-listener-identity"),
+            )
+            .await
+            .expect_err("mutating request must reject a mismatched peer before dispatch");
+        assert_eq!(error.code, "stale_identity");
+        assert!(server.await.unwrap().is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+    #[tokio::test]
+    async fn early_read_identity_mismatch_discards_the_response() {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-herdr-read-identity-{}-{}.sock",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            serde_json::from_str::<Value>(&line).unwrap()
+        });
+        let config =
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(path.clone())).unwrap();
+        let error = HerdrCliAdapter::new(config)
+            .socket_request_with_identity(
+                "default",
+                "pane.get",
+                json!({"pane_id": "pane-a"}),
+                Some("not-the-listener-identity"),
+            )
+            .await
+            .expect_err("read response must be rejected after an identity mismatch");
+        assert_eq!(error.code, "stale_identity");
+        assert_eq!(server.await.unwrap()["method"], "pane.get");
+        std::fs::remove_file(&path).unwrap();
     }
 }

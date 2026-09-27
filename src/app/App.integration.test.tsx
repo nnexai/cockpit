@@ -454,7 +454,8 @@ describe("mounted App mutation and session ordering", () => {
     click(tab);
     await settle();
     expect(selectedTab()).toBe("Tab 2: Second tab");
-    expect(container.querySelector('[aria-label="Waiting for Herdr focus confirmation"]')).not.toBeNull();
+    expect(container.querySelector(".pane-header.is-hidden")).not.toBeNull();
+    expect(container.querySelector('[aria-label="Waiting for Herdr focus confirmation"]')?.closest(".pane-focus-overlay")).not.toBeNull();
 
     fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
     await settle();

@@ -298,6 +298,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   selectedRef.current = selected;
   const focusOnAttachRef = useRef(focusOnAttach);
   focusOnAttachRef.current = focusOnAttach;
+  const wasControlAllowedRef = useRef(controlAllowed);
   const onRequestControlRef = useRef(onRequestControl);
   onRequestControlRef.current = onRequestControl;
   const onSelectRef = useRef(onSelect);
@@ -512,8 +513,12 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
 
   useEffect(() => {
     if (selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
-  }, [deferAttachment, selected, terminalReady]);
-
+  }, [deferAttachment, focusEpoch, selected, terminalReady]);
+  useEffect(() => {
+    const regainedControl = controlAllowed && !wasControlAllowedRef.current;
+    wasControlAllowedRef.current = controlAllowed;
+    if (regainedControl && selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
+  }, [controlAllowed, deferAttachment, selected, terminalReady]);
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;

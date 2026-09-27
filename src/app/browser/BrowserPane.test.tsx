@@ -20,7 +20,7 @@ function descriptor(revision: number, sequence: number, scrollY: number): Browse
 function snapshot(): BrowserViewSnapshot {
   return {
     identity: { association_key: "association", browser_incarnation: "incarnation", view_id: "view", stream_epoch: 1 }, metadata_sequence: 1,
-    targets: [{ target_id: "target", kind: "page", title: "Fixture", url: "https://example.test", order: 0, opener_target_id: null, can_close: false }],
+    targets: [{ target_id: "target", kind: "page", title: "Fixture", url: "https://example.test", order: 0, opener_target_id: null, can_close: true }],
     displayed_target_id: "target", document: { target_id: "target", frame_id: "frame", document_generation: 1, frame_generation: 1 }, viewport: viewport(1, 0),
     navigation: { url: "https://example.test", title: "Fixture", loading: false, can_go_back: false, can_go_forward: false, requested_url: null }, cursor: null,
     focus: { page_focused: true, editable: false, selection_available: false, composition_active: false }, blocker: null,
@@ -50,6 +50,68 @@ describe("BrowserPane wheel recovery", () => {
     originalDpr = undefined;
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("closes the browser pane instead of blocking closure of its final tab", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const observed = snapshot();
+    const commands: BrowserViewCommandRequest[] = [];
+    const closeBrowser = vi.fn();
+    const client = {
+      openBrowserView: vi.fn(async (_request, onEvent) => {
+        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: observed });
+        return {
+          command: async (request: BrowserViewCommandRequest) => { commands.push(request); return accepted(request); },
+          close: vi.fn(),
+        };
+      }),
+    } as unknown as CockpitClient;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn() } as unknown as CanvasRenderingContext2D);
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} onCloseBrowser={closeBrowser} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Close Fixture"]')).not.toBeNull();
+    await act(async () => host!.querySelector<HTMLButtonElement>('[aria-label="Close Fixture"]')!.click());
+    expect(closeBrowser).toHaveBeenCalledOnce();
+    expect(commands.some(({ command }) => command.type === "tab" && command.command.type === "close")).toBe(false);
+  });
+
+  it("closes a non-final browser tab without closing the browser pane", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const observed = snapshot();
+    observed.targets.push({ target_id: "other", kind: "page", title: "Other", url: "https://example.test/other", order: 1, opener_target_id: null, can_close: true });
+    const commands: BrowserViewCommandRequest[] = [];
+    const closeBrowser = vi.fn();
+    const client = {
+      openBrowserView: vi.fn(async (_request, onEvent) => {
+        onEvent({ type: "attached", metadata: { view_id: "view", stream_epoch: 1, metadata_sequence: 1 }, snapshot: observed });
+        return {
+          command: async (request: BrowserViewCommandRequest) => {
+            commands.push(request);
+            if (request.command.type === "tab" && request.command.command.type === "close") {
+              return accepted(request, { type: "snapshot", snapshot: { ...observed, metadata_sequence: 2, targets: [observed.targets[0]!] } });
+            }
+            return accepted(request);
+          },
+          close: vi.fn(),
+        };
+      }),
+    } as unknown as CockpitClient;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ clearRect: vi.fn() } as unknown as CanvasRenderingContext2D);
+    host = document.createElement("div");
+    document.body.append(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<BrowserPane client={client} target={{ session_id: "session", space_id: "space", pane_id: null, endpoint_path: null }} viewport={{ css_width: 800, css_height: 600, device_pixel_ratio: 1 }} onCloseBrowser={closeBrowser} />);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => host!.querySelector<HTMLButtonElement>('[aria-label="Close Other"]')!.click());
+    expect(commands.some(({ command }) => command.type === "tab" && command.command.type === "close" && command.command.target_id === "other")).toBe(true);
+    expect(closeBrowser).not.toHaveBeenCalled();
   });
 
   it("keeps repeated wheel input flowing while scroll frames catch up", async () => {

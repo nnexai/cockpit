@@ -118,6 +118,10 @@ impl LibraryService {
             store: Arc::new(OnceLock::new()),
         }
     }
+    /// Configured global root used by agents to traverse durable Library items.
+    pub fn root_path(&self) -> &str {
+        &self.configuration.library_root
+    }
     pub fn with_projects(
         mut self,
         projects: Arc<crate::projects::ProjectService>,

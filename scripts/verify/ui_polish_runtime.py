@@ -51,12 +51,41 @@ def launch(root, name, argv, env):
     return child.pid
 
 
-def start():
+VIEWER_PLUGINS = ("herdr-file-viewer", "persiyanov.reviewr")
+
+
+def copy_viewer_plugins(root):
+    """Copy the owner's installed Files/Reviewr plugins into the fixture's own registry.
+
+    Writes only under the fixture root and never runs `herdr plugin`, which may reach
+    the owner's registry. The owner's registry is only read.
+    """
+    owner_config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "herdr"
+    registry = json.loads((owner_config / "plugins.json").read_text())
+    copied = []
+    for entry in registry:
+        if entry["plugin_id"] not in VIEWER_PLUGINS:
+            continue
+        source = Path(entry["plugin_root"])
+        target = root / "plugins" / source.name
+        shutil.copytree(source, target, symlinks=True)
+        entry = json.loads(json.dumps(entry).replace(str(source), str(target)))
+        entry["source"] = {"kind": "local"}
+        copied.append(entry)
+    missing = set(VIEWER_PLUGINS) - {entry["plugin_id"] for entry in copied}
+    if missing:
+        raise SystemExit(f"owner registry lacks plugins: {sorted(missing)}")
+    (root / "config/herdr/plugins.json").write_text(json.dumps(copied, indent=2))
+
+
+def start(with_plugins=False):
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
     session = "polish-" + root.name[5:]
     for folder in ["config/herdr", "state", "cache", "data", "repositories/sample", "plain/nested", "evidence", "www"]:
         (root / folder).mkdir(parents=True)
     (root / "config/herdr/config.toml").write_text('')
+    if with_plugins:
+        copy_viewer_plugins(root)
     (root / "cockpit.toml").write_text(
         f'version = 1\nrepository_roots = ["{root}/repositories"]\n'
         f'worktree_root = "{root}/worktrees"\ncompanion_root = "{root}/companions"\n'
@@ -121,9 +150,11 @@ if __name__ == "__main__":
     parser.add_argument("root", nargs="?", type=Path)
     parser.add_argument("method", nargs="?")
     parser.add_argument("params", nargs="?", default="{}")
+    parser.add_argument("--with-plugins", action="store_true",
+                        help="copy the owner's Files and Reviewr plugins into the fixture")
     args = parser.parse_args()
     if args.action == "start":
-        start()
+        start(args.with_plugins)
     elif args.action == "stop":
         stop(args.root)
     else:

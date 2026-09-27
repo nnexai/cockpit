@@ -1986,6 +1986,10 @@ impl ProjectService {
                 companion.to_string_lossy().into_owned(),
             );
             env.insert(
+                "COCKPIT_LIBRARY_ROOT".to_owned(),
+                library.root_path().to_owned(),
+            );
+            env.insert(
                 "COCKPIT_WORKSPACE_ID".to_owned(),
                 result.workspace_id.clone(),
             );
@@ -3042,7 +3046,7 @@ mod tests {
             Ok(ProjectWorktreeResult {
                 workspace_id: "workspace".to_owned(),
                 tab_id: Some("workspace:root".to_owned()),
-                pane_id: Some("workspace:pane".to_owned()),
+                pane_id: None,
                 checkout_path: request.checkout_path.clone(),
                 branch: request.branch.clone(),
                 already_open: false,
@@ -3250,6 +3254,10 @@ mod tests {
                 assert_eq!(calls.load(Ordering::SeqCst), fetched, "copy retry must never ask the provider");
             }
             assert_eq!(operation.state, WorkspaceOperationState::Completed, "{operation:?}");
+            assert_eq!(
+                adapter.terminal_requests.lock().unwrap()[0].env.get("COCKPIT_LIBRARY_ROOT"),
+                Some(&configuration.library_root),
+            );
             let items = library.listing(None).await.unwrap().items;
             let mut identities = items.iter().filter_map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>();
             identities.sort();

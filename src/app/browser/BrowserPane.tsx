@@ -31,11 +31,12 @@ export interface BrowserPaneProps {
   visible?: boolean; presentation?: BrowserViewPresentation; clientId?: string;
   inputActive?: boolean; liveInputEnabled?: boolean; onInteractionFocus?: () => void; onFeedback?: (captureIds: string[], operationId: string, acknowledgeDuplicateRisk: boolean) => Promise<BrowserFeedbackSendResponse>;
   onReconnect?: () => void | Promise<void>; onBackToTerminals?: () => void; onExpand?: () => void;
+  onCloseBrowser?: () => void | Promise<void>;
   registerCloseGuard?: (registration: BrowserPaneRecoveryRegistration | null) => void;
   className?: string;
 }
 
-export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onBackToTerminals, onExpand, registerCloseGuard, className }: BrowserPaneProps) {
+export function BrowserPane({ client, target, viewport, visible = true, presentation = "split", clientId, inputActive = true, liveInputEnabled = true, onInteractionFocus, onFeedback, onReconnect, onBackToTerminals, onExpand, onCloseBrowser, registerCloseGuard, className }: BrowserPaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<BrowserViewStream | null>(null);
@@ -2078,6 +2079,7 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
   const inspectionBounds = inspection?.bounds && descriptor ? { ...inspection.bounds, x: inspection.bounds.x + descriptor.scroll_x, y: inspection.bounds.y + descriptor.scroll_y } : null;
   const blocker = snapshot?.blocker;
   const targetTabs = snapshot?.targets.filter((candidate) => candidate.kind === "page" || candidate.kind === "popup").sort((left, right) => left.order - right.order) ?? [];
+  const closableTabs = targetTabs.filter((candidate) => candidate.can_close);
   const selectedAnnotation = annotations.find((annotation) => annotation.id === selectedId) ?? null;
   const noteEditorStyle = noteEditorPosition ? { left: noteEditorPosition.left, top: noteEditorPosition.top } : undefined;
   useLayoutEffect(() => {
@@ -2154,7 +2156,14 @@ export function BrowserPane({ client, target, viewport, visible = true, presenta
       message={message}
       presentation={presentation}
       onSelect={(targetId) => { onInteractionFocus?.(); tabCommand({ type: "tab", command: { type: "select", target_id: targetId } }); }}
-      onClose={(targetId) => tabCommand({ type: "tab", command: { type: "close", target_id: targetId } })}
+      onClose={(targetId) => {
+        if (closableTabs.length === 1 && onCloseBrowser) {
+          onInteractionFocus?.();
+          void onCloseBrowser();
+          return;
+        }
+        tabCommand({ type: "tab", command: { type: "close", target_id: targetId } });
+      }}
       onCreate={() => tabCommand({ type: "tab", command: { type: "create", url: null } })}
       onRetry={() => void reconnectView()}
       onBackToTerminals={onBackToTerminals}

@@ -45,6 +45,8 @@ import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/l
 import { headerSpaceAction, spaceCopyChip, type SpaceCopyActionKind } from "../library/spaceCopyPresentation";
 import { spaceAddFailure, spaceCopyActions, spaceUpdateOutcome, spaceUpdateUnconfirmed, useSpaceUpdate } from "../library/SpaceContextList";
 import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
+import { resolveContextLink } from "./linkResolver";
+import { copyText } from "../library/clipboard";
 import "./context.css";
 
 export type ContextViewMode = "auto" | "source" | "markdown" | "html";
@@ -318,16 +320,6 @@ function isHtml(document: ContextDocument, path: string): boolean {
   return /(?:^|\.)x?html?$/i.test(path) || document.media_type.toLowerCase().includes("html");
 }
 
-function isSafeHref(href: string | undefined): boolean {
-  if (!href) return false;
-  try {
-    const parsed = new URL(href, "https://context.invalid");
-    if (parsed.origin === "https://context.invalid" && !/^(?:\/|#|\?)/.test(href)) return false;
-    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
-  } catch {
-    return false;
-  }
-}
 
 function nodePosition(node: unknown): { start: number; end: number } | null {
   if (typeof node !== "object" || node === null || !("position" in node)) return null;
@@ -506,6 +498,8 @@ function MarkdownView({
   state,
   onSelect,
   onScroll,
+  onLink,
+  libraryItems,
   media,
 }: {
   media: ContextReader["media"] | null;
@@ -513,6 +507,8 @@ function MarkdownView({
   state: ContextFileViewState;
   onSelect: (start: number, end: number) => void;
   onScroll: (scrollTop: number) => void;
+  onLink: (href: string) => void;
+  libraryItems: readonly LibraryItemSummary[];
 }) {
   const derived = useMemo(() => sourceLinesForMarkdown(text), [text]);
   const externalImages = useMemo(() => countExternalImages(derived.text), [derived.text]);
@@ -553,15 +549,23 @@ function MarkdownView({
       }
       return <pre {...props} {...blockData(node, derived.sourceLines)}>{children}</pre>;
     },
-    a: ({ node, href, children, ...props }) => isSafeHref(href)
-      ? <span {...props} title={href} className="context-link-reference" {...blockData(node, derived.sourceLines)}>{children}</span>
-      : <span {...props} {...blockData(node, derived.sourceLines)}>{children}</span>,
+    a: ({ node, href, children, ...props }) => {
+      const resolution = resolveContextLink(href, state.path, libraryItems);
+      if (resolution.kind === "relative" || resolution.kind === "library") {
+        return <a {...props} href={href} title={resolution.kind === "library" ? `Open in Library: ${resolution.item.title}` : "Navigates within this root; unsafe paths and symlink targets are refused"} className="context-link-reference" {...blockData(node, derived.sourceLines)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (href) onLink(href); }}>{children}</a>;
+      }
+      if (resolution.kind === "refused") {
+        const reason = resolution.reason === "root_escape" ? "target escapes the current root" : resolution.reason === "absolute_path" ? "absolute filesystem paths are not allowed" : resolution.reason === "unsupported_scheme" ? "only relative paths are allowed" : "invalid path";
+        return <span {...props} title={`Link refused: ${reason}`} {...blockData(node, derived.sourceLines)}>{children}</span>;
+      }
+      return <span {...props} title={resolution.kind === "external" ? "External link is not available in this viewer" : undefined} {...blockData(node, derived.sourceLines)}>{children}</span>;
+    },
     img: ({ node, alt, src }) => {
       const path = localImagePath(state.path, src);
       const remote = !path && remoteImageUrl(src);
       return <span {...blockData(node, derived.sourceLines)}>{path && media ? <SafeImage media={media} request={{ root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : remote ? <RemoteImage src={remote} alt={alt ?? ""} allowed={externalAllowed} /> : <span className="context-media-refusal">{alt || "image"}</span>}</span>;
     },
-  }), [derived.sourceLines, derived.text, externalAllowed, media, state.rootId, state.path]);
+  }), [derived.sourceLines, derived.text, externalAllowed, libraryItems, media, onLink, state.rootId, state.path]);
   return (
     <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
       if (event.target instanceof Element && event.target.closest("dialog, button, textarea")) return;
@@ -636,6 +640,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const [invalidationGeneration, setInvalidationGeneration] = useState(0);
   const [rootId, setRootId] = useState<string | null>(value.rootId ?? (presentation ? presentation.default_root_id ?? presentation.roots[0]?.root_id ?? null : LIBRARY_ROOT_ID));
   const [commentStatus, setCommentStatus] = useState({ count: 0, canCreateLines: false, canCreateWholeFile: false });
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [pickerIndex, setPickerIndex] = useState({ loading: false, incomplete: false, entries: new Map<string, ContextEntry>() });
@@ -673,7 +678,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }, []);
   // The Library is a client-side root in every pane and the only root of the Library view.
   const libraryChosen = presentation === null || rootId === LIBRARY_ROOT_ID;
-  const paneLibrary = useLibraryListing(client, viewLibrary === undefined && libraryChosen);
+  const needsLibraryLookup = libraryChosen || Boolean(value.path && presentation?.roots.some((candidate) => candidate.root_id === rootId && candidate.kind === "companion"));
+  const paneLibrary = useLibraryListing(client, viewLibrary === undefined && needsLibraryLookup);
   const library = viewLibrary ?? paneLibrary;
   const serverLibraryRoot = library.listing?.root ?? null;
   const libraryPath = serverLibraryRoot?.path ?? "";
@@ -1275,6 +1281,46 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     setAttachmentNotice(null);
     if (item.document_path) openFile(item.document_path, null);
   };
+  const openMarkdownLink = async (href: string) => {
+    if (!root || !reader || !selectedPath) return;
+    const resolution = resolveContextLink(href, selectedPath, libraryItems ?? []);
+    setLinkNotice(null);
+    if (resolution.kind === "external" || resolution.kind === "inert" || resolution.kind === "refused") return;
+    if (resolution.kind === "library") {
+      const copy = companionRoot && spaceListing.listing?.rows.find((row) => row.item_id === resolution.item.item_id);
+      const copiedPath = copy?.paths.find((path) => path === resolution.item.document_path);
+      if (copiedPath) openFile(copiedPath, null);
+      else if (isLibrary) openLibraryItem(resolution.item);
+      else { setLibraryOpenRequest(resolution.item.item_id); chooseRoot(libraryRoot); }
+      return;
+    }
+    const parts = resolution.path.split("/");
+    const parentPath = parts.slice(0, -1).join("/");
+    try {
+      let offset: number | undefined;
+      let revision: string | undefined;
+      let found: ContextEntry | undefined;
+      do {
+        const page = await reader.directory({ root_id: root.root_id, path: parentPath, offset, revision }, new AbortController().signal);
+        if (page.root_id !== root.root_id) throw new Error("Context root changed");
+        found = page.entries.find((entry) => (entry.path ?? (parentPath ? `${parentPath}/${entry.name}` : entry.name)) === resolution.path);
+        offset = page.next_offset;
+        revision = page.revision;
+      } while (!found && offset !== undefined);
+      if (!found || found.refusal) {
+        setLinkNotice(`Link target not found: ${resolution.path}`);
+        return;
+      }
+      if (found.kind === "directory") {
+        const folders = parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
+        setExpanded((current) => new Set([...current, ...folders, resolution.path]));
+        for (const path of [...folders, resolution.path]) void loadDirectory(root, path);
+      } else if (found.kind === "file") openFile(resolution.path, found.revision);
+      else setLinkNotice(`Link target is unavailable: ${resolution.path}`);
+    } catch {
+      setLinkNotice(`Unable to resolve link target: ${resolution.path}`);
+    }
+  };
   const attachmentActions: LibraryAttachmentActions = {
     busy: libraryBusy,
     active: attachmentBusy ? attachmentRequest : null,
@@ -1298,9 +1344,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     remove: (item) => setLibraryConfirm({ kind: "remove", item }),
     copyLink: (item) => {
       const link = item.source_url ?? item.original_url;
-      if (link) void navigator.clipboard?.writeText(link).catch(() => undefined);
+      if (link) void copyText(link);
     },
     canCopyLink: typeof navigator !== "undefined" && Boolean(navigator.clipboard),
+    copyLibraryPath: (item) => { if (item.document_path) void copyText(item.document_path); },
+    canCopyLibraryPath: typeof navigator !== "undefined" && Boolean(navigator.clipboard),
     refreshBusy: libraryBusy,
     spaceEntries: (item) => {
       const state = itemSpace(item);
@@ -1468,8 +1516,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         <details className="viewer-details">
           <summary aria-label="Document details" title="Document details"><UiIcon name="info" /></summary>
           <dl>
-            <dt>Size</dt><dd>{document.bytes} B</dd><dt>Full path</dt><dd><code>{root.path.replace(/\/$/, "")}/{selectedPath}</code></dd>
-            <dt>Relative path</dt><dd><code>{selectedPath}</code></dd>
+            <dt>Size</dt><dd>{document.bytes} B</dd><dt>Full path</dt><dd><code>{root.path.replace(/\/$/, "")}/{selectedPath}</code><button type="button" onClick={() => void copyText(`${root.path.replace(/\/$/, "")}/${selectedPath}`)}>Copy full path</button></dd>
+            <dt>Relative path</dt><dd><code>{selectedPath}</code>{(root.kind === "library" || root.kind === "companion") ? <button type="button" onClick={() => void copyText(selectedPath)}>Copy Library path</button> : null}</dd>
             <dt>Root identity</dt><dd><code>{root.root_id}</code></dd>
             <dt>Provenance</dt><dd>{root.kind}{root.repository_id ? ` · repository ${root.repository_id}` : ""}{root.companion_id ? ` · companion ${root.companion_id}` : ""}</dd>
             <dt>Revision</dt><dd><code>{document.revision}</code></dd>
@@ -1500,7 +1548,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               return <>
                 {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing the start of a large file.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading === pageRequestKey}>{documentPageLoading === pageRequestKey ? "Loading…" : "Load next source page"}</button></div> : null}
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
-                  {mode === "markdown" ? <MarkdownView media={reader?.media ?? null} text={document.text!} state={{ ...fileState!, mode: "markdown" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
+                  {mode === "markdown" ? <MarkdownView media={reader?.media ?? null} text={document.text!} state={{ ...fileState!, mode: "markdown" }} libraryItems={libraryItems ?? []} onLink={(href) => void openMarkdownLink(href)} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
                 </RenderErrorBoundary>
               </>;
             })()}
@@ -1579,6 +1627,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         onRetryFollow={(followId) => startLibraryRefresh({ scope: "follow", follow_id: followId }, [])} /> : null}
       {isLibrary && !libraryOperation.operation && libraryOperation.error ? <div className="context-notice context-notice-error" role="alert"><strong>Library operation failed:</strong><span>{libraryOperation.error}</span></div> : null}
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
+      {linkNotice ? <div className="context-notice context-notice-warning" role="status">{linkNotice}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
         {overview.narrow && overview.open ? <button type="button" className="viewer-overview-backdrop" aria-label="Close file overview" onClick={overview.close} /> : null}
         <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label={isLibrary ? "Library items" : "Context files"} ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else if (!isLibrary) onTreeKeyDown(event); }}>

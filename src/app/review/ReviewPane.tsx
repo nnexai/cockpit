@@ -12,7 +12,7 @@ import type {
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
 import { retainReviewScrollPosition, type ReviewViewState } from "../context/ContextViewer";
-import { highlightLine } from "../viewer/highlight";
+import { highlightLines } from "../viewer/highlight";
 import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
 import "./review.css";
 
@@ -117,8 +117,7 @@ function ReviewFileTree({ files, selected, onSelect }: { files: ReviewChangedFil
   return <>{renderNode(tree, "", 0)}</>;
 }
 
-function highlightedLine(text: string, path: string | null | undefined): ReactNode {
-  const html = text ? highlightLine(text, path) : null;
+function highlightedLine(text: string, html: string | null): ReactNode {
   return html === null ? text : <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -469,6 +468,10 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
     return Boolean(lineNumber !== null && selection && selection.side === side && lineNumber >= Math.min(selection.start, selection.end) && lineNumber <= Math.max(selection.start, selection.end));
   };
   const lineDigits = useMemo(() => String(diff?.hunks.reduce((largest, hunk) => hunk.lines.reduce((inner, line) => Math.max(inner, line.old_line ?? 0, line.new_line ?? 0), largest), 0) ?? 0).length, [diff]);
+  const highlightedDiffLines = useMemo(
+    () => diff?.hunks.map(hunk => highlightLines(hunk.lines.map(line => line.text).join("\n"), diff.file.new_path ?? diff.file.old_path)) ?? [],
+    [diff],
+  );
   const diffContent = (comments = renderLineComments) => {
     const shownFile = diff?.file ?? selectedFile;
     return <>
@@ -483,7 +486,7 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
             const lineNumber = side === "old" ? line.old_line! : line.new_line!;
             onSelectLines?.(diff.file, side, lineNumber, lineNumber, [line.text], event.shiftKey);
           }}>
-            <span data-side="old">{line.old_line ?? ""}</span><span data-side="new">{line.new_line ?? ""}</span><code><span className="review-diff-marker">{line.kind === "added" ? "+" : line.kind === "deleted" ? "-" : " "}</span>{highlightedLine(line.text, diff.file.new_path ?? diff.file.old_path)}</code>
+            <span data-side="old">{line.old_line ?? ""}</span><span data-side="new">{line.new_line ?? ""}</span><code><span className="review-diff-marker">{line.kind === "added" ? "+" : line.kind === "deleted" ? "-" : " "}</span>{highlightedLine(line.text, highlightedDiffLines[index]?.[lineIndex] ?? null)}</code>
           </button>{comments?.(diff, line.old_line, line.new_line)}</Fragment>)}
         </section>)}
         {diff?.diagnostics.filter(item => !(diff.file.binary && /binary/i.test(item.message))).map((item, index) => <p key={`${item.code}-${index}`} className="review-notice">{item.message}</p>)}

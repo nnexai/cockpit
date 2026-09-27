@@ -592,15 +592,17 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
     const active = document.activeElement;
     if (active instanceof HTMLElement && paneRef.current?.contains(active)) active.blur();
   }, [selected]);
+  const focusStatus = controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null;
   return <section ref={paneRef} className={`pane-view${selected || paintedSelected ? " is-selected" : ""}`} style={style} aria-label={title} inert={retained}
     onContextMenu={(event) => onContext(event, { kind: "pane", id: pane.id })}>
-    <header className={`pane-header${solo && !graphical && !controlPending && !focusError ? " is-hidden" : ""}`}>
+    <header className={`pane-header${solo && !graphical ? " is-hidden" : ""}`}>
       <button type="button" className="pane-header-select" onClick={onSelect} title={title}>
         <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{graphical && renderer ? viewerTitle(renderer).title : title}</span>{graphical && renderer && viewerTitle(renderer).subtitle ? <span className="pane-subtitle" title={viewerTitle(renderer).path}>{viewerTitle(renderer).subtitle}</span> : null}
       </button>
-      {controlPending ? <span className="pane-focus-status" role="status" aria-label="Waiting for Herdr focus confirmation" title="Waiting for Herdr focus confirmation">⟳</span> : focusError ? <span className="pane-focus-status pane-focus-status-error" role="alert" aria-label={focusError.message} title={`${focusError.code}: ${focusError.message}`}><span aria-hidden="true">!</span><button type="button" className="pane-focus-retry" aria-label="Retry focus" onClick={onRetryFocus}>↻</button></span> : null}
+      {!solo || graphical ? focusStatus : null}
       <button type="button" className="pane-header-expand" aria-label="Expand or restore pane" title="Expand / restore pane" onClick={() => mutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" })}><UiIcon name="expand" /></button>
     </header>
+    {solo && !graphical ? <div className="pane-focus-overlay">{focusStatus}</div> : null}
     {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
       onPointerDownCapture={(event) => {
         if (!controlAllowed) {
@@ -1380,6 +1382,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: true, visible: true, presentation: "split" } }));
       } else {
         setBrowserPresentation((currentState) => ({ ...currentState, [key]: { associationOpen: false, visible: false, presentation: "split" } }));
+        const focusedPane = panes.find((pane) => pane.id === selection.paneId && pane.space_id === spaceId)
+          ?? snapshot?.panes.find((pane) => pane.space_id === spaceId && pane.focused);
+        if (focusedPane) focusPane(focusedPane);
       }
       setBrowserError(null);
       setCommandsOpen(false);
@@ -1393,7 +1398,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         setBrowserBusy(false);
       }
     }
-  }, [client, state.sessionId, state.sync]);
+  }, [client, state.sessionId, state.sync, panes, selection.paneId, snapshot, focusPane]);
   useEffect(() => {
     browserRequest.current += 1;
     setBrowserError(null);
@@ -1608,7 +1613,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
         {browserBlockedByOutgoing && browserHandoff.outgoing ? <div className="browser-recovery-strip" role="status"><details><summary>Review retained browser work</summary><p>{browserHandoff.outgoing.recovery.describe()}</p><p>Discard only clears the local retry intent; an in-flight or unknown remote write is not undone.</p></details><button type="button" onClick={retryBrowserHandoff}>Retry retained work</button><button type="button" onClick={discardBrowserHandoff}>Discard retry intent</button></div> : null}
         {browserAssociationOpen && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={!browserPresented ? { display: "none" } : browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
           {browserPresented && browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
-          <BrowserPane key={browserKey ?? "browser-none"} client={client} target={browserTarget} viewport={browserViewport} visible={browserPresented} presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserPresented && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => selection.spaceId ? browserAction(selection.spaceId, "reconnect") : undefined} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} registerCloseGuard={registerBrowserCloseGuard} />
+          <BrowserPane key={browserKey ?? "browser-none"} client={client} target={browserTarget} viewport={browserViewport} visible={browserPresented} presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserPresented && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => selection.spaceId ? browserAction(selection.spaceId, "reconnect") : undefined} onCloseBrowser={() => selection.spaceId ? browserAction(selection.spaceId, "close") : undefined} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} registerCloseGuard={registerBrowserCloseGuard} />
         </div> : null}
       </div>
     </main>

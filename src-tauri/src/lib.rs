@@ -1703,7 +1703,6 @@ pub fn run() {
     let service = service.with_library(library);
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),
-        inspector.extension_adapter(),
         service
             .contexts()
             .expect("context operations configured")

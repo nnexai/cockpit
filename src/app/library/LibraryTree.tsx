@@ -127,6 +127,8 @@ export type LibraryItemActions = {
   remove: (item: LibraryItemSummary) => void;
   copyLink: (item: LibraryItemSummary) => void;
   canCopyLink: boolean;
+  copyLibraryPath?: (item: LibraryItemSummary) => void;
+  canCopyLibraryPath?: boolean;
   refreshBusy: boolean;
   /** The target Space's actions for the item: `Add to <Space>`, or its copy's `Update`, replace, removal and Library version. */
   spaceEntries?: (item: LibraryItemSummary) => LibraryMenuEntry[];
@@ -143,6 +145,7 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
     { label: item.folder ? `Re-copy from ${item.folder.origin_path}` : "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
     ...space,
     ...attachmentMenuEntries(item, actions.attachments),
+    ...(actions.copyLibraryPath ? [{ label: "Copy Library path", onSelect: () => actions.copyLibraryPath?.(item), disabled: !actions.canCopyLibraryPath || !item.document_path }] : []),
     { label: "Copy source link", onSelect: () => actions.copyLink(item), disabled: !actions.canCopyLink || !(item.source_url ?? item.original_url) },
     "separator",
     { label: "Remove from Library…", onSelect: () => actions.remove(item), destructive: true },

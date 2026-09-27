@@ -167,7 +167,6 @@ fn make_service(
             let service = service.with_contexts(contexts);
             let reviews = cockpit_core::review::ReviewService::new(
                 config.clone(),
-                adapter.extension_adapter(),
                 service
                     .contexts()
                     .map_err(|error| error.to_string())?

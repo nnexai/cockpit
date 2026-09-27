@@ -34,6 +34,24 @@ pub(crate) fn request_is_mutating(method: &str) -> bool {
     )
 }
 
+/// Reads may be dispatched before peer-identity validation because they cannot
+/// mutate Herdr state. Unknown methods remain verify-before-dispatch.
+pub(crate) fn request_is_safe_to_dispatch_before_identity(method: &str) -> bool {
+    matches!(
+        method,
+        "ping"
+            | "session.snapshot"
+            | "plugin.list"
+            | "pane.process_info"
+            | "pane.get"
+            | "worktree.list"
+            | "workspace.list"
+            | "workspace.get"
+            | "tab.list"
+            | "tab.get"
+    )
+}
+
 pub(crate) fn focus_call(request: &FocusRequest) -> (&'static str, Value) {
     match request.kind {
         FocusKind::Space => (
@@ -258,5 +276,16 @@ mod tests {
             assert_eq!(method, expected_method);
             assert_eq!(params, expected_params);
         }
+    }
+    #[test]
+    fn only_allowlisted_reads_dispatch_before_peer_identity_check() {
+        use super::request_is_safe_to_dispatch_before_identity;
+
+        assert!(request_is_safe_to_dispatch_before_identity("pane.get"));
+        assert!(request_is_safe_to_dispatch_before_identity("session.snapshot"));
+        assert!(request_is_safe_to_dispatch_before_identity("worktree.list"));
+        assert!(!request_is_safe_to_dispatch_before_identity("pane.send_text"));
+        assert!(!request_is_safe_to_dispatch_before_identity("plugin.pane.open"));
+        assert!(!request_is_safe_to_dispatch_before_identity("unknown.future_method"));
     }
 }
