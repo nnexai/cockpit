@@ -1,0 +1,261 @@
+use axum::{
+    Json, Router,
+    extract::{
+        DefaultBodyLimit, Path, Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
+    middleware,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use cockpit_core::CockpitService;
+use cockpit_protocol::library::{
+    LibraryAddRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryMediaRequest,
+    LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
+    LibraryResolveRequest,
+};
+use serde::Deserialize;
+
+use super::{MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, require_origin};
+
+const MAX_LIBRARY_PAGE_ITEMS: usize = 5_000;
+const MAX_LIBRARY_REPORT_ROWS: usize = 256;
+
+pub(super) fn routes() -> Router<CockpitService> {
+    Router::new()
+        .route("/api/v1/library", get(listing))
+        .route("/api/v1/library/resolve", post(resolve))
+        .route("/api/v1/library/add", post(add))
+        .route("/api/v1/library/refresh", post(refresh))
+        .route("/api/v1/library/operations/{id}", get(operation))
+        .route("/api/v1/library/operations/{id}/cancel", post(cancel))
+        .route("/api/v1/library/replace", post(replace))
+        .route("/api/v1/library/remove", post(remove))
+        .route("/api/v1/library/directory", post(directory))
+        .route("/api/v1/library/document", post(document))
+        .route("/api/v1/library/media", post(media))
+        .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
+        .route_layer(middleware::from_fn(require_origin))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListingQuery {
+    offset: Option<u32>,
+}
+
+fn request<T: serde::de::DeserializeOwned>(
+    body: Result<Json<T>, JsonRejection>,
+) -> Result<T, Response> {
+    body.map(|Json(value)| value).map_err(|_| invalid_request())
+}
+
+fn invalid_request() -> Response {
+    bad_request(
+        "invalid_library_request",
+        "Expected a valid bounded Library request",
+    )
+}
+
+fn invalid_path(path: &str) -> bool {
+    path.starts_with('/') || path.split('/').any(|segment| segment == "..")
+}
+
+fn operation_response(mut operation: LibraryOperation) -> Response {
+    if let Some(report) = &mut operation.report
+        && report.rows.len() > MAX_LIBRARY_REPORT_ROWS
+    {
+        report.rows.truncate(MAX_LIBRARY_REPORT_ROWS);
+        report.truncated_rows = true;
+    }
+    Json(operation).into_response()
+}
+
+async fn listing(
+    State(service): State<CockpitService>,
+    query: Result<Query<ListingQuery>, QueryRejection>,
+) -> Response {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return invalid_request(),
+    };
+    match service.library() {
+        Ok(library) => match library.listing(query.offset).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn resolve(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryResolveRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match service.library() {
+        Ok(library) => match library.resolve(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn add(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryAddRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match service.library() {
+        Ok(library) => match library.start_add(request).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn refresh(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryRefreshRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if matches!(&request, LibraryRefreshRequest::Items { item_ids } if item_ids.len() > MAX_LIBRARY_PAGE_ITEMS)
+    {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.start_refresh(request).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn operation(State(service): State<CockpitService>, Path(id): Path<String>) -> Response {
+    match service.library() {
+        Ok(library) => match library.operation(&id).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn cancel(State(service): State<CockpitService>, Path(id): Path<String>) -> Response {
+    match service.library() {
+        Ok(library) => match library.cancel(&id).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn replace(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryReplaceRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if request.confirmed.len() > MAX_LIBRARY_PAGE_ITEMS {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.start_replace(request).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn remove(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryRemoveRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match service.library() {
+        Ok(library) => match library.remove(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn directory(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryDirectoryRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if invalid_path(&request.path) {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.directory(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn document(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryDocumentRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if invalid_path(&request.path) {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.document(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn media(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryMediaRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if invalid_path(&request.path) {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.media(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}

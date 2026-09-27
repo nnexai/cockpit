@@ -1,5 +1,12 @@
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import { parseSourceScope, parseSourceImport, parseSourceRefresh, parseSourceResponse, matchSourceResponse } from "./sourceProtocol";
+import {
+  matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
+  parseLibraryAddRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
+  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
+  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
+  parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+} from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
@@ -770,6 +777,60 @@ export function createBrowserClient(
       const body = parseContextMediaRequest(value);
       const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/media`, "Context image", parseContextMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       return matchContextMedia(response, body);
+    },
+    async libraryListing(offset) {
+      if (offset !== undefined && offset !== null && (!Number.isInteger(offset) || offset < 0 || offset > 0xffffffff)) throw new CockpitClientError("malformed_response", "Invalid Library listing offset");
+      const query = offset == null ? "" : `?offset=${offset}`;
+      return getJson(request, `/api/v1/library${query}`, "Library listing", parseLibraryListing);
+    },
+    async libraryResolve(value) {
+      const body = parseLibraryResolveRequest(value);
+      return getJson(request, "/api/v1/library/resolve", "Library resolve", parseLibraryResolution, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async libraryAdd(value) {
+      const body = parseLibraryAddRequest(value);
+      return getJson(request, "/api/v1/library/add", "Library add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async libraryRefresh(value) {
+      const body = parseLibraryRefreshRequest(value);
+      return getJson(request, "/api/v1/library/refresh", "Library refresh", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async libraryOperation(operationId) {
+      const id = parseLibraryOperationId(operationId);
+      return matchLibraryOperation(await getJson(request, `/api/v1/library/operations/${encodeURIComponent(id)}`, "Library operation", parseLibraryOperation), id);
+    },
+    async libraryOperationCancel(operationId) {
+      const id = parseLibraryOperationId(operationId);
+      return matchLibraryOperation(await getJson(request, `/api/v1/library/operations/${encodeURIComponent(id)}/cancel`, "Library operation cancellation", parseLibraryOperation, { method: "POST" }), id);
+    },
+    async libraryReplace(value) {
+      const body = parseLibraryReplaceRequest(value);
+      return getJson(request, "/api/v1/library/replace", "Library replace", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async libraryRemove(value) {
+      const body = parseLibraryRemoveRequest(value);
+      return getJson(request, "/api/v1/library/remove", "Library remove", parseLibraryListing, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async libraryDirectory(value, signal) {
+      signal?.throwIfAborted();
+      const body = parseLibraryDirectoryRequest(value);
+      const response = await getJson(request, "/api/v1/library/directory", "Library directory", parseLibraryDirectory, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      signal?.throwIfAborted();
+      return matchLibraryDirectory(response, body);
+    },
+    async libraryDocument(value, signal) {
+      signal?.throwIfAborted();
+      const body = parseLibraryDocumentRequest(value);
+      const response = await getJson(request, "/api/v1/library/document", "Library document", parseLibraryDocument, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      signal?.throwIfAborted();
+      return matchLibraryDocument(response, body);
+    },
+    async libraryMedia(value, signal) {
+      signal?.throwIfAborted();
+      const body = parseLibraryMediaRequest(value);
+      const response = await getJson(request, "/api/v1/library/media", "Library media", parseLibraryMedia, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      signal?.throwIfAborted();
+      return matchLibraryMedia(response, body);
     },
     async sourceImport(sessionId, paneId, value, signal) {
       signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);

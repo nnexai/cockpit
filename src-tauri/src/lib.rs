@@ -6,6 +6,7 @@ mod projects;
 mod requests;
 mod review;
 mod sources;
+mod library;
 
 use std::{
     collections::HashMap,
@@ -1697,8 +1698,10 @@ pub fn run() {
         inspector.extension_adapter(),
         shutdown_projects.clone(),
     );
-    let contexts = contexts.with_sources(sources);
+    let contexts = contexts.with_sources(sources.clone());
     let service = service.with_contexts(contexts);
+    let library = cockpit_core::library::LibraryService::new(project_config.clone(), sources);
+    let service = service.with_library(library);
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),
         inspector.extension_adapter(),
@@ -1771,6 +1774,17 @@ pub fn run() {
             context_search::cockpit_context_snapshot,
             context_search::cockpit_context_invalidate,
             context_media::cockpit_context_media,
+            library::cockpit_library_listing,
+            library::cockpit_library_resolve,
+            library::cockpit_library_add,
+            library::cockpit_library_refresh,
+            library::cockpit_library_operation,
+            library::cockpit_library_operation_cancel,
+            library::cockpit_library_replace,
+            library::cockpit_library_remove,
+            library::cockpit_library_directory,
+            library::cockpit_library_document,
+            library::cockpit_library_media,
             sources::cockpit_source_import,
             sources::cockpit_source_refresh,
             sources::cockpit_source_list,

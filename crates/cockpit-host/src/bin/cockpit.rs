@@ -5,6 +5,7 @@ use cockpit_core::{
     CockpitService,
     browser::BrowserService,
     config::{load_browser_configuration, load_project_configuration},
+    library::LibraryService,
     projects::ProjectService,
 };
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
@@ -149,9 +150,9 @@ fn make_service(
                 )
                 .map_err(|error| error.to_string())?,
             );
+            let library = LibraryService::new(config.clone(), sources.clone());
             let projects = ProjectService::new(config.clone(), adapter.clone())
-                .map_err(|error| error.to_string())?
-                .with_sources(sources.clone());
+                .map_err(|error| error.to_string())?;
             let service = service.with_projects(projects);
             let contexts = cockpit_core::context::ContextService::new(
                 config.clone(),
@@ -189,7 +190,7 @@ fn make_service(
                         .map_err(|error| error.to_string())?
                         .clone(),
                 );
-            Ok(service.with_comments(comments))
+            Ok(service.with_comments(comments).with_library(library))
         }
         None => Ok(service),
     }

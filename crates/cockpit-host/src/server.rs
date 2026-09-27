@@ -52,6 +52,7 @@ mod context_media;
 mod projects;
 mod review;
 mod sources;
+mod library;
 
 // The enclosing guard verifies the exact bound Host and Origin.
 async fn require_origin(request: Request<Body>, next: Next) -> Response {
@@ -215,6 +216,7 @@ fn build_router_with_validated_root(
         .merge(context_media::routes())
         .merge(projects::routes())
         .merge(context::routes())
+        .merge(library::routes())
         .merge(browser_view::routes())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))

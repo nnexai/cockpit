@@ -4,6 +4,11 @@ import type { ReviewLaunchRequest, ReviewSnapshotRequest, ReviewSnapshot, Review
 import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
+  ContextSearchRequest, ContextSearchResponse, ContextInvalidationRequest, ContextInvalidationResponse,
+  ContextLaunchRequest, CommentRequestScope, CommentBatchList, CommentBatchRequest, CommentBatch,
+  CommentBatchMutation, CommentUpsertRequest, CommentRemoveRequest, CommentPreviewRequest, CommentPreview,
+} from "../protocol/generated/v1";
+import type {
   AgentSummary,
   BrowserAction,
   BrowserAssociation,
@@ -131,20 +136,17 @@ import type {
   ContextDirectory,
   ContextDocumentRequest,
   ContextDocument,
-  ContextLaunchRequest,
-  ContextSearchRequest,
-  ContextSearchResponse,
-  ContextInvalidationRequest,
-  ContextInvalidationResponse,
-  CommentBatch,
-  CommentBatchList,
-  CommentBatchMutation,
-  CommentBatchRequest,
-  CommentPreview,
-  CommentPreviewRequest,
-  CommentRemoveRequest,
-  CommentRequestScope,
-  CommentUpsertRequest,
+  LibraryAddRequest,
+  LibraryDirectoryRequest,
+  LibraryDocumentRequest,
+  LibraryListing,
+  LibraryMediaRequest,
+  LibraryOperation,
+  LibraryRefreshRequest,
+  LibraryRemoveRequest,
+  LibraryReplaceRequest,
+  LibraryResolution,
+  LibraryResolveRequest,
 } from "../protocol/generated/v1";
 
 export type {
@@ -231,7 +233,24 @@ export type CockpitHerdrIdentity = Extract<
 export type CockpitSessionSnapshot = SessionSnapshotResponse;
 export type {
   AgentSummary,
+  ContextDirectory,
+  ContextDirectoryRequest,
+  ContextDocument,
+  ContextDocumentRequest,
+  ContextMedia,
+  ContextMediaRequest,
   FocusRequest,
+  LibraryAddRequest,
+  LibraryDirectoryRequest,
+  LibraryDocumentRequest,
+  LibraryListing,
+  LibraryMediaRequest,
+  LibraryOperation,
+  LibraryRefreshRequest,
+  LibraryRemoveRequest,
+  LibraryReplaceRequest,
+  LibraryResolution,
+  LibraryResolveRequest,
   PaneMoveDestination,
   ResourceMutationRequest,
   ResourceMutationResponse,
@@ -298,33 +317,25 @@ export interface CockpitClient {
   commentPasteMarkPasted(sessionId: string, paneId: string, request: CommentPasteMarkPastedRequest): Promise<CommentPasteReceipt>;
   commentPasteSend(sessionId: string, paneId: string, request: CommentPasteSendRequest): Promise<CommentPasteReceipt>;
   commentPreview(sessionId: string, paneId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
+  libraryListing(offset?: number | null): Promise<LibraryListing>;
+  libraryResolve(request: LibraryResolveRequest): Promise<LibraryResolution>;
+  libraryAdd(request: LibraryAddRequest): Promise<LibraryOperation>;
+  libraryRefresh(request: LibraryRefreshRequest): Promise<LibraryOperation>;
+  libraryOperation(operationId: string): Promise<LibraryOperation>;
+  libraryOperationCancel(operationId: string): Promise<LibraryOperation>;
+  libraryReplace(request: LibraryReplaceRequest): Promise<LibraryOperation>;
+  libraryRemove(request: LibraryRemoveRequest): Promise<LibraryListing>;
+  libraryDirectory(request: LibraryDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
+  libraryDocument(request: LibraryDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
+  libraryMedia(request: LibraryMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<CockpitSessionSnapshot>;
   spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;
-  mutate(
-    sessionId: string,
-    request: ResourceMutationRequest,
-  ): Promise<ResourceMutationResponse>;
-  subscribeSession(
-    sessionId: string,
-    onMessage: (message: SessionStreamMessage) => void,
-    onError: (error: CockpitClientError) => void,
-    signal?: AbortSignal,
-  ): Promise<ClosableStream>;
-  openTerminal(
-    request: TerminalOpenRequest,
-    onMessage: (message: TerminalStreamMessage) => void,
-    onError: (error: CockpitClientError) => void,
-    signal?: AbortSignal,
-  ): Promise<TerminalStream>;
-  openBrowserView(
-    request: BrowserViewOpenRequest,
-    onEvent: BrowserViewEventHandler,
-    onFrame: BrowserViewFrameHandler,
-    onError: (error: CockpitClientError) => void,
-    signal?: AbortSignal,
-  ): Promise<BrowserViewStream>;
+  mutate(sessionId: string, request: ResourceMutationRequest): Promise<ResourceMutationResponse>;
+  subscribeSession(sessionId: string, onMessage: (message: SessionStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<ClosableStream>;
+  openTerminal(request: TerminalOpenRequest, onMessage: (message: TerminalStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<TerminalStream>;
+  openBrowserView(request: BrowserViewOpenRequest, onEvent: BrowserViewEventHandler, onFrame: BrowserViewFrameHandler, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<BrowserViewStream>;
 }
 
 export type CockpitClientErrorCode =

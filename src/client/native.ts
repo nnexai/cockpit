@@ -1,5 +1,12 @@
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import { parseSourceScope, parseSourceImport, parseSourceRefresh, parseSourceResponse, matchSourceResponse } from "./sourceProtocol";
+import {
+  matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
+  parseLibraryAddRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
+  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
+  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
+  parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+} from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
@@ -703,6 +710,59 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_context_media", { sessionId, paneId, request: body }, "Context image", parseContextMedia);
       signal?.throwIfAborted();
       return matchContextMedia(response, body);
+    },
+    async libraryListing(offset) {
+      if (offset !== undefined && offset !== null && (!Number.isInteger(offset) || offset < 0 || offset > 0xffffffff)) throw new CockpitClientError("malformed_response", "Invalid Library listing offset");
+      return invokeAndParse(invoke, "cockpit_library_listing", offset == null ? undefined : { offset }, "Library listing", parseLibraryListing);
+    },
+    async libraryResolve(value) {
+      const request = parseLibraryResolveRequest(value);
+      return invokeAndParse(invoke, "cockpit_library_resolve", { request }, "Library resolve", parseLibraryResolution);
+    },
+    async libraryAdd(value) {
+      const request = parseLibraryAddRequest(value);
+      return invokeAndParse(invoke, "cockpit_library_add", { request }, "Library add", parseLibraryOperation);
+    },
+    async libraryRefresh(value) {
+      const request = parseLibraryRefreshRequest(value);
+      return invokeAndParse(invoke, "cockpit_library_refresh", { request }, "Library refresh", parseLibraryOperation);
+    },
+    async libraryOperation(operationId) {
+      const id = parseLibraryOperationId(operationId);
+      return matchLibraryOperation(await invokeAndParse(invoke, "cockpit_library_operation", { operationId: id }, "Library operation", parseLibraryOperation), id);
+    },
+    async libraryOperationCancel(operationId) {
+      const id = parseLibraryOperationId(operationId);
+      return matchLibraryOperation(await invokeAndParse(invoke, "cockpit_library_operation_cancel", { operationId: id }, "Library operation cancellation", parseLibraryOperation), id);
+    },
+    async libraryReplace(value) {
+      const request = parseLibraryReplaceRequest(value);
+      return invokeAndParse(invoke, "cockpit_library_replace", { request }, "Library replace", parseLibraryOperation);
+    },
+    async libraryRemove(value) {
+      const request = parseLibraryRemoveRequest(value);
+      return invokeAndParse(invoke, "cockpit_library_remove", { request }, "Library remove", parseLibraryListing);
+    },
+    async libraryDirectory(value, signal) {
+      signal?.throwIfAborted();
+      const request = parseLibraryDirectoryRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_directory", { request }, "Library directory", parseLibraryDirectory);
+      signal?.throwIfAborted();
+      return matchLibraryDirectory(response, request);
+    },
+    async libraryDocument(value, signal) {
+      signal?.throwIfAborted();
+      const request = parseLibraryDocumentRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_document", { request }, "Library document", parseLibraryDocument);
+      signal?.throwIfAborted();
+      return matchLibraryDocument(response, request);
+    },
+    async libraryMedia(value, signal) {
+      signal?.throwIfAborted();
+      const request = parseLibraryMediaRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_media", { request }, "Library media", parseLibraryMedia);
+      signal?.throwIfAborted();
+      return matchLibraryMedia(response, request);
     },
     async sourceImport(sessionId, paneId, value, signal) {
       signal?.throwIfAborted(); validateSessionId(sessionId); validateResourceId(paneId);

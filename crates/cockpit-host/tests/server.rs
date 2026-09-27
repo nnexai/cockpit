@@ -2,13 +2,18 @@ use async_trait::async_trait;
 use axum::{http::Request, serve};
 use cockpit_core::{
     CockpitService, HerdrAdapter, InspectionError, SessionSubscription, TerminalSession,
+    library::LibraryService,
+    sources::SourceService,
 };
 use cockpit_host::server::{build_router, validate_bind, validate_static_root};
-use cockpit_protocol::v1::{
-    AgentSummary, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
-    LayoutPane, LayoutRect, PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
-    SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceSummary, TabLayout,
-    TabSummary, TerminalOpenRequest,
+use cockpit_protocol::{
+    projects::{ProjectConfiguration, ProjectLimits},
+    v1::{
+        AgentSummary, CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity,
+        LayoutPane, LayoutRect, PaneSummary, ResourceMutationRequest, ResourceMutationResponse,
+        SessionListResponse, SessionSnapshotResponse, SessionSummary, SpaceSummary, TabLayout,
+        TabSummary, TerminalOpenRequest,
+    },
 };
 use std::{
     io::{BufRead, BufReader},
@@ -280,6 +285,88 @@ async fn request(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
     (status, body)
 }
 
+
+fn service_with_library(root: &std::path::Path) -> CockpitService {
+    let config = ProjectConfiguration {
+        version: 1,
+        repository_roots: vec![],
+        worktree_root: root.join("worktrees").display().to_string(),
+        companion_root: root.join("companions").display().to_string(),
+        state_root: root.join("state").display().to_string(),
+        library_root: root.join("library").display().to_string(),
+        branch_template: "{name}".to_owned(),
+        checkout_template: "{name}".to_owned(),
+        providers: vec![],
+        limits: ProjectLimits {
+            catalog_depth: 3,
+            catalog_entries: 100,
+            git_timeout_ms: 1000,
+            git_output_bytes: 1024,
+            operation_timeout_ms: 1000,
+            context_preview_bytes: 1024,
+            context_preview_lines: 100,
+            context_directory_entries: 100,
+            context_tree_depth: 8,
+            library_folder_files: 512,
+            library_folder_bytes: 32 * 1024 * 1024,
+            library_file_bytes: 4 * 1024 * 1024,
+            library_space_pages: 200,
+            library_attachment_bytes: 25 * 1024 * 1024,
+            library_item_attachment_bytes: 100 * 1024 * 1024,
+            library_max_items: 1000,
+        },
+        origins: Default::default(),
+    };
+    let sources = Arc::new(SourceService::new(&config, vec![]).expect("source service"));
+    service().with_library(LibraryService::new(config, sources))
+}
+
+#[tokio::test]
+async fn library_routes_are_session_independent_and_reject_unknown_add_fields() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).expect("router");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/library")
+                .header("host", authority.to_string())
+                .body(axum::body::Body::empty())
+                .expect("listing request"),
+        )
+        .await
+        .expect("listing response");
+    assert_eq!(response.status(), 200);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("listing body");
+    let listing: serde_json::Value = serde_json::from_slice(&body).expect("listing JSON");
+    assert!(listing.get("items").is_some());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/library/add")
+                .header("host", authority.to_string())
+                .header("origin", format!("http://{authority}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(r#"{"input":"https://example.test/item","unexpected":true}"#))
+                .expect("add request"),
+        )
+        .await
+        .expect("add response");
+    assert_eq!(response.status(), 400);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("add body");
+    let error: serde_json::Value = serde_json::from_slice(&body).expect("error JSON");
+    assert_eq!(error["code"], "invalid_library_request");
+
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
 #[tokio::test]
 async fn serves_root_spa_assets_and_precise_fallbacks() {
     let root = fixture_root();

@@ -116,6 +116,17 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     commentPasteSend: async () => { throw new Error("unused"); },
     commentPasteMarkPasted: async () => { throw new Error("unused"); },
     commentPreview: vi.fn(async () => { throw new Error("Unexpected comment preview in terminal fixture"); }),
+    libraryListing: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryResolve: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryAdd: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryRefresh: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryOperation: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryOperationCancel: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryReplace: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryRemove: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryDirectory: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryDocument: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryMedia: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
@@ -212,6 +223,77 @@ describe("session stream transition policy", () => {
     expect(transitionSessionStream("session-1", cursor, streamStale(2))).toMatchObject({ kind: "accept", classification: "same_generation" });
   });
 });
+
+const libraryListing = {
+  root: { root_id: "library:test", kind: "library", label: "Library", path: "/library", repository_id: "library", checkout_path: "/library", companion_id: null },
+  generation: "1", items: [], follows: [], next_offset: null, diagnostics: [],
+};
+const libraryOperation = {
+  operation_id: "op/1", kind: "refresh", phases: [], item_ids: [], report: null, space: null,
+  target: null, cancel_requested: false, finished: true, created_at: "now", updated_at: "now",
+};
+const libraryRequests = {
+  resolve: { input: "https://example.test/item", provider_id: null },
+  add: { input: "https://example.test/item", provider_id: null, hydrate_references: false, follow_space: false, download_attachments: false, refresh_existing: false, label: null, target: null },
+  refresh: { scope: "all" as const },
+  replace: { item_id: "item-1", confirmed: [] },
+  remove: { mode: "follow" as const, follow_id: "follow-1" },
+  directory: { path: "", offset: null, revision: null },
+  document: { path: "item/document.md", expected_revision: "rev-1", offset: 0 },
+  media: { path: "item/image.png", expected_revision: "rev-1" },
+};
+const libraryDirectory = { binding_id: "library", root_id: "library:test", path: "", entries: [], truncated: false, diagnostics: [] };
+const libraryDocument = { binding_id: "library", root_id: "library:test", path: "item/document.md", revision: "rev-1", content_hash: "hash", bytes: 1, media_type: "text/markdown", text: "x", truncated: false, offset: 0, diagnostics: [] };
+const libraryMedia = { binding_id: "library", root_id: "library:test", path: "item/image.png", revision: "rev-1", content_hash: "hash", bytes: 1, mime_type: "image/png", width: 1, height: 1, data_base64: "AA==" };
+const unsafeLibraryItem = {
+  item_id: "item", logical_id: "logical", kind: "provider_snapshot", provider_id: null, provider_instance: null, resource_type: null, canonical_id: null,
+  container: null, parent_item_id: null, ancestors: [], order: null, title: "Item", document_path: "item/document.md", item_path: "../escape",
+  source_url: null, original_url: null, source_revision: null, revision: "rev-1", state: "fresh", partial: null, conflict: [],
+  fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+};
+
+describe("library client validation", () => {
+
+  it("refuses unsafe item paths, malformed DTOs, and unmatched operation or context responses", async () => {
+    const client = createBrowserClient(vi.fn(async () => jsonResponse({ ...libraryOperation, operation_id: "other" })));
+    await expect(client.libraryDirectory({ path: "/absolute", offset: null, revision: null })).rejects.toMatchObject({ code: "malformed_response" });
+    await expect(client.libraryDirectory({ path: "../escape", offset: null, revision: null })).rejects.toMatchObject({ code: "malformed_response" });
+    await expect(client.libraryOperation("op/1")).rejects.toMatchObject({ code: "malformed_response" });
+    const wrongContext = createBrowserClient(vi.fn(async () => jsonResponse({ ...libraryDirectory, path: "elsewhere" })));
+    await expect(wrongContext.libraryDirectory(libraryRequests.directory)).rejects.toMatchObject({ code: "malformed_response" });
+    const malformedItemPath = createBrowserClient(vi.fn(async () => jsonResponse({ ...libraryListing, items: [unsafeLibraryItem] })));
+    await expect(malformedItemPath.libraryListing()).rejects.toMatchObject({ code: "malformed_response" });
+    const native = createNativeClient(vi.fn(async () => ({ ...libraryOperation, operation_id: "other" })));
+    await expect(native.libraryDocument({ ...libraryRequests.document, path: "folder/../escape" })).rejects.toMatchObject({ code: "malformed_response" });
+    await expect(native.libraryOperationCancel("op/1")).rejects.toMatchObject({ code: "malformed_response" });
+  });
+  it("accepts nullable optional strings and configured maximum operation and directory arrays", async () => {
+    const operation = {
+      ...libraryOperation,
+      phases: [{ phase: "library", state: "done", done: 0, total: null, message: null, error: null }],
+      item_ids: Array.from({ length: 5_001 }, (_, index) => `item-${index}`),
+    };
+    const directory = {
+      ...libraryDirectory,
+      entries: Array.from({ length: 10_000 }, (_, index) => ({
+        entry_id: `entry-${index}`, name: "x", path: `item-${index}`, kind: "file", bytes: null, revision: "r", refusal: null,
+      })),
+    };
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/resolve")) return jsonResponse({
+        kind: "artifact", provider_id: null, provider_instance: null, title: "Item", canonical_id: null,
+        container_label: null, existing_item_id: null, existing_follow_id: null, page_count: null,
+        git_working_tree: null, file_count: null, diagnostics: [],
+      });
+      return jsonResponse(path.endsWith("/directory") ? directory : operation);
+    });
+    const client = createBrowserClient(request);
+    await expect(client.libraryResolve(libraryRequests.resolve)).resolves.toMatchObject({ provider_id: null, canonical_id: null });
+    await expect(client.libraryOperation("op/1")).resolves.toMatchObject({ phases: [{ message: null }], item_ids: operation.item_ids });
+    await expect(client.libraryDirectory(libraryRequests.directory)).resolves.toMatchObject({ entries: directory.entries });
+  });
+});
+
 
 describe("browser CockpitClient", () => {
   it("maps named sessions, encoded snapshots, and focus", async () => {
