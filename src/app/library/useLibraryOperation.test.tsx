@@ -51,6 +51,48 @@ it("keeps polling after the initiating view unmounts and exposes pending IDs to 
   }
 });
 
+it("still polls and announces an accepted operation after a newer start takes over the surface", async () => {
+  vi.useFakeTimers();
+  const announced: string[] = [];
+  const changed = (event: Event) => { const detail = (event as CustomEvent<LibraryOperation | null>).detail; if (detail) announced.push(detail.operation_id); };
+  window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
+  const older = (finished: boolean): LibraryOperation => ({ ...operation(finished), operation_id: "older-op", item_ids: ["source:older"] });
+  const newer = (finished: boolean): LibraryOperation => ({ ...operation(finished), operation_id: "newer-op", item_ids: ["source:newer"] });
+  const client = {
+    libraryOperation: vi.fn(async (id: string) => id === "older-op" ? older(true) : newer(true)),
+    libraryOperationCancel: vi.fn(),
+  } as unknown as CockpitClient;
+  let acceptOlder: (value: LibraryOperation) => void = () => undefined;
+  let olderRequest: Promise<LibraryOperation | null> | null = null;
+  let newerRequest: Promise<LibraryOperation | null> | null = null;
+  function View() {
+    const state = useLibraryOperation(client);
+    return <div><span data-shown={state.operation?.operation_id ?? ""} />
+      <button type="button" data-start="older" onClick={() => { olderRequest = state.start(() => new Promise((resolve) => { acceptOlder = resolve; })); }}>Older</button>
+      <button type="button" data-start="newer" onClick={() => { newerRequest = state.start(async () => newer(false)); }}>Newer</button></div>;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<View />));
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-start='older']")!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-start='newer']")!.click(); await newerRequest; });
+    // The older request is accepted only after the newer one started.
+    await act(async () => { acceptOlder(older(false)); await olderRequest; });
+    expect(host.querySelector("span")?.getAttribute("data-shown")).toBe("newer-op");
+    await act(async () => { await vi.advanceTimersByTimeAsync(750); });
+    expect(client.libraryOperation).toHaveBeenCalledWith("older-op");
+    expect(announced).toContain("older-op");
+    expect(announced).toContain("newer-op");
+    expect(host.querySelector("span")?.getAttribute("data-shown")).toBe("newer-op");
+  } finally {
+    window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 it("retains the last good listing when reload fails so the view can show its retry notice", async () => {
   const listing = { items: [{ item_id: "source:item" }], next_offset: null, generation: 1 } as unknown as LibraryListing;
   const client = {

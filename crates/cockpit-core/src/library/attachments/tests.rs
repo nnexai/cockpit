@@ -498,6 +498,38 @@ async fn confirmed_replace_redownloads_locally_edited_attachments() {
 }
 
 #[tokio::test]
+async fn confirmed_replacement_reserves_only_the_new_attachment_bytes() {
+    let (f, _) = fixture(vec![attachment("a", "a.png", b"123456")], 10, 10);
+    let saved = save(&f).await;
+    let downloaded = action(&f.service, &saved, &["a"], LibraryAttachmentAction::Download).await;
+    assert_eq!(downloaded.phases[0].state, LibraryPhaseState::Done, "{downloaded:?}");
+    let current = item(&f.service).await;
+    let path = Path::new(&f.service.configuration.library_root)
+        .join(&current.item_path)
+        .join(current.attachments[0].relative_path.as_deref().unwrap());
+    std::fs::write(&path, b"edited").unwrap();
+
+
+    let conflict = finished(
+        &f.service,
+        f.service.start_refresh(LibraryRefreshRequest::Items { item_ids: vec![current.item_id.clone()] }).await.unwrap(),
+    ).await;
+    assert_eq!(conflict.report.unwrap().conflict, 1);
+    let conflicted = item(&f.service).await;
+    let replaced = finished(
+        &f.service,
+        f.service.start_replace(LibraryReplaceRequest {
+            item_id: current.item_id,
+            confirmed: conflicted.conflict,
+        }).await.unwrap(),
+    ).await;
+    assert_eq!(replaced.phases[0].state, LibraryPhaseState::Done, "{replaced:?}");
+    let repaired = item(&f.service).await;
+    assert_eq!(repaired.attachments[0].state, LibraryAttachmentState::Downloaded);
+    assert_eq!(bytes(&f, &repaired, 0), b"123456");
+}
+
+#[tokio::test]
 async fn unknown_size_reserves_full_file_allowance_from_remaining_page_budget() {
     let mut unknown = attachment("b", "b.png", b"data");
     unknown.0.size = None;

@@ -462,6 +462,51 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
   }
 });
 
+it("opens any file a folder copy captured, not only its first file", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const item: LibraryItemSummary = {
+    item_id: "folder:notes", logical_id: "folder:notes", kind: "folder_copy", provider_id: null, provider_instance: null, resource_type: null,
+    canonical_id: null, container: null, parent_item_id: null, ancestors: [], order: null, title: "Design notes",
+    document_path: "folders/notes-12345678/README.md", item_path: "folders/notes-12345678", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], diagnostics: [],
+    folder: { origin_path: "/home/user/notes", git_working_tree: false, files: 2, bytes: 20, skipped_symlinks: 0, skipped_special: 0, skipped_ignored: 0, skipped_other: 0 },
+  };
+  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const entry = (path: string, kind: "file" | "directory") => ({ entry_id: path, name: path.slice(path.lastIndexOf("/") + 1), path, kind, bytes: kind === "file" ? 10 : null, revision: "r1", refusal: null });
+  const client = {
+    libraryListing: vi.fn(async () => library),
+    projectConfiguration: vi.fn(async () => ({ providers: [] })),
+    libraryDirectory: vi.fn(async (request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "library", root_id: "library:fs", path: request.path, truncated: false, diagnostics: [],
+      entries: request.path === "" ? [entry("folders/notes-12345678", "directory")] : [entry("folders/notes-12345678/README.md", "file"), entry("folders/notes-12345678/docs/guide.md", "file")] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 10, media_type: "text/markdown", text: request.path.endsWith("guide.md") ? "# Guide body" : "# Readme body", truncated: false, diagnostics: [] })),
+  } as unknown as CockpitClient;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn() });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    const row = host.querySelector<HTMLButtonElement>('[data-library-row="folder:notes"]')!;
+    row.focus();
+    await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await flush();
+    const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.textContent?.includes("docs/guide.md"));
+    await act(async () => result!.click());
+    await flush();
+    expect(client.libraryDocument).toHaveBeenCalledWith(expect.objectContaining({ path: "folders/notes-12345678/docs/guide.md" }), expect.any(AbortSignal));
+    // The listing doesn't name this file, but it is part of the folder copy: it stays open.
+    expect(host.textContent).toContain("Guide body");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
 it("lists this Space's Library context in Resources, failed adds first, and retries from the saved item into the companion", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const host = document.createElement("div");
@@ -1119,6 +1164,85 @@ it("clears a header's failed Add to <Space> once another surface copies the item
     expect(header.querySelector("[role='alert']")).toBeNull();
     expect(headerButton("Retry adding to api-review")).toBeUndefined();
     expect(header.textContent).not.toContain("Too many pending Space adds");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("offers the copy's Update, Replace and Remove for the target Space in the Library item header and its menu", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const target = { session_id: "session", space_id: "space-1" };
+  const item: LibraryItemSummary = {
+    item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
+    canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
+    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r2",
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+  };
+  const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const path = "sources/jira/issue/ops-311.md";
+  const copy = (state: SpaceCopyRow["state"], libraryNewer: boolean, edited: SpaceCopyRow["edited"] = []): SpaceCopyRow => ({
+    item_id: "source:ops-311", logical_id: "source:jira:ops-311", title: "Rotate signing keys", provider_id: "jira", resource_type: "issue", kind: "provider_snapshot", state, library_newer: libraryNewer,
+    paths: [path], edited, copy_mode: "copy", library_revision_copied: "sha256:r1", current_library_revision: "sha256:r2", follow: null,
+  });
+  let rows: SpaceCopyRow[] = [copy("library_newer", true)];
+  const client = {
+    libraryListing: vi.fn(async () => library),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test", executable: "jira" }] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "sha256:r2", content_hash: null, bytes: 7, media_type: "text/markdown", text: "# Keys", truncated: false, diagnostics: [] })),
+    librarySpaceList: vi.fn(async (): Promise<SpaceContextListing> => ({ target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows, behind: rows.filter((row) => row.library_newer).length, diagnostics: [] })),
+    librarySpaceUpdate: vi.fn(async () => {
+      rows = [copy("up_to_date", false)];
+      return spaceUpdated("op-header-update", target, ["source:ops-311"], [path]);
+    }),
+    librarySpaceRemove: vi.fn(async () => {
+      rows = [];
+      return { target, companion: { status: "available", companion_root_id: "companion:c1", companion_label: "Context" }, attempts: [], rows, behind: 0, diagnostics: [] };
+    }),
+  } as unknown as CockpitClient;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation: null, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), space: { target, label: "api-review", live: true } });
+  }
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await settle(); };
+  const header = () => host.querySelector<HTMLElement>(".library-item-header")!;
+  const headerButton = (label: string) => [...header().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === label);
+  const dialogButton = (label: string) => [...document.body.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((button) => button.textContent === label);
+  const reread = async () => { await act(async () => window.dispatchEvent(new CustomEvent("cockpit:library-changed", { detail: null }))); await flush(); };
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
+    await flush();
+    expect(header().querySelector(".library-space-state")?.textContent).toBe("In api-review · ↑ Library newer");
+    await act(async () => headerButton("Update in api-review")!.click());
+    await flush();
+    expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: ["source:ops-311"], follow_ids: [] }, replace_edited: [] });
+    expect(header().querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
+    expect(headerButton("Update in api-review")).toBeUndefined();
+
+    // Edited in the Space: the header replaces only after confirmation.
+    rows = [copy("edited_in_space", true, [{ path, current_hash: "sha256:edit" }])];
+    await reread();
+    expect(header().querySelector(".library-space-state")?.textContent).toBe("✎ Edited in Space · Library newer");
+    await act(async () => headerButton("Replace with Library version…")!.click());
+    expect(document.body.querySelector("[role='dialog'] h2")?.textContent).toBe('Replace your edited copy of "Rotate signing keys"?');
+    await act(async () => dialogButton("Keep my copy")!.click());
+    expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
+
+    // Removed at source: the item's `⋯` menu offers removing this Space's copy, confirmed first.
+    rows = [copy("removed_at_source", false)];
+    await reread();
+    await act(async () => header().querySelector<HTMLButtonElement>(".library-more")!.click());
+    const remove = [...document.body.querySelectorAll<HTMLButtonElement>("[role='menu'] button")].find((button) => button.textContent === "Remove from this Space…")!;
+    await act(async () => remove.click());
+    await act(async () => dialogButton("Remove from api-review")!.click());
+    await flush();
+    expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, logical_id: "source:jira:ops-311", confirmed: [] });
+    expect(headerButton("Add to api-review")).toBeDefined();
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

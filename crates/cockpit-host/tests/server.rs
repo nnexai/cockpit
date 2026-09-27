@@ -473,6 +473,38 @@ async fn space_library_routes_fail_closed_and_list_unavailable_companions() {
     assert!(!root.join("state/sources").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn library_space_confirmation_route_accepts_large_valid_confirmation() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).unwrap();
+    let confirmed = (0..512)
+        .map(|index| serde_json::json!({
+            "path": format!("sources/file-{index}-{}", "x".repeat(200)),
+            "current_hash": format!("sha256:{}", "0".repeat(64)),
+        }))
+        .collect::<Vec<_>>();
+    let body = serde_json::json!({
+        "target": {"session_id": "session", "space_id": "space"},
+        "logical_id": "source:one",
+        "confirmed": confirmed,
+    });
+    let encoded = body.to_string();
+    assert!(encoded.len() > 64 * 1024);
+    let response = router.oneshot(Request::builder()
+        .method("POST").uri("/api/v1/library/space/remove")
+        .header("host", authority.to_string())
+        .header("origin", format!("http://{authority}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(encoded)).unwrap())
+        .await.unwrap();
+    assert_eq!(response.status(), 503);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["code"], "source_companion_unavailable");
+    std::fs::remove_dir_all(root).unwrap();
+}
 #[tokio::test]
 async fn space_update_and_remove_validate_scope_confirmation_and_authority() {
     let root = fixture_root();

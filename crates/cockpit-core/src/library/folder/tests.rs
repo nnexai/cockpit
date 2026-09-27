@@ -19,6 +19,26 @@ fn git(path: &Path, args: &[&str]) {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn plain_folder_inventory_does_not_block_the_runtime() {
+    let f = fixture();
+    let source = f.root.join("large-plain");
+    std::fs::create_dir(&source).unwrap();
+    for index in 0..20_000 {
+        std::fs::write(source.join(format!("file-{index}")), []).unwrap();
+    }
+
+    let timer = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    });
+    let result = inventory(&f.service.configuration, &source.to_string_lossy())
+        .await
+        .unwrap();
+
+    assert_eq!(result.paths.len(), 20_000);
+    assert!(timer.is_finished(), "filesystem inventory blocked the Tokio runtime");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn plain_folder_excludes_links_special_files_git_metadata_and_native_binaries() {

@@ -787,7 +787,7 @@ impl LibraryService {
             return match self.save_folder(store, operation, &input, None, Some(entry.clone()),
                 confirmed.as_deref(), None).await {
                 Ok(()) => Ok(()),
-                Err(e) => self.fetch_failed(store, operation, entry, e),
+                Err(e) => self.fetch_failed(store, operation, entry, e, true),
             };
         }
         let result = async {
@@ -843,7 +843,7 @@ impl LibraryService {
                 if let Some(asset) = asset {
                     match self.save_asset(store, operation, asset, Some(entry.clone()), confirmed.as_deref(), None).await {
                         Ok(()) => Ok(()),
-                        Err(e) => self.fetch_failed(store, operation, entry, e),
+                        Err(e) => self.fetch_failed(store, operation, entry, e, true),
                     }
                 } else {
                     self.fetch_failed(
@@ -854,10 +854,11 @@ impl LibraryService {
                             "source_identity_mismatch",
                             "Provider refresh omitted the requested item",
                         ),
+                        true,
                     )
                 }
             }
-            Err(e) => self.fetch_failed(store, operation, entry, e),
+            Err(e) => self.fetch_failed(store, operation, entry, e, true),
         }
     }
     fn fetch_failed(
@@ -866,8 +867,9 @@ impl LibraryService {
         operation: &str,
         mut entry: LibraryIndexEntry,
         e: InspectionError,
+        confirm_not_found: bool,
     ) -> Result<(), InspectionError> {
-        let removed = e.code == "source_not_found";
+        let removed = confirm_not_found && e.code == "source_not_found";
         entry.summary.state = if removed {
             LibraryItemState::RemovedAtSource
         } else {

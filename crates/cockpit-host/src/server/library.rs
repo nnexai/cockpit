@@ -18,10 +18,11 @@ use cockpit_protocol::library::{
 use serde::Deserialize;
 
 use super::{
-    MAX_MUTATION_REQUEST_BYTES, bad_request, inspection_error, require_origin, valid_resource_id,
-    valid_session_id,
+    bad_request, inspection_error, require_origin, valid_resource_id, valid_session_id,
 };
 
+// 512 confirmations with 4 KiB paths, JSON escaping, hashes, and request metadata.
+const MAX_LIBRARY_CONFIRMATION_REQUEST_BYTES: usize = 13 * 1024 * 1024;
 const MAX_LIBRARY_PAGE_ITEMS: usize = 5_000;
 const MAX_LIBRARY_REPORT_ROWS: usize = 256;
 
@@ -48,7 +49,7 @@ pub(super) fn routes() -> Router<CockpitService> {
             "/api/v1/library/space/attempts/dismiss",
             post(space_attempts_dismiss),
         )
-        .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_LIBRARY_CONFIRMATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
 }
 

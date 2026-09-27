@@ -24,6 +24,7 @@ import type {
   LibraryRefreshRequest,
   ReviewComparison,
   SpaceContextListing,
+  SpaceCopyRow,
   SpaceTarget,
 } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "./CommentDrafts";
@@ -41,7 +42,7 @@ import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, type Item
 import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
-import { headerSpaceAction, spaceCopyChip } from "../library/spaceCopyPresentation";
+import { headerSpaceAction, spaceCopyChip, type SpaceCopyActionKind } from "../library/spaceCopyPresentation";
 import { spaceAddFailure, spaceCopyActions, spaceUpdateOutcome, spaceUpdateUnconfirmed, useSpaceUpdate } from "../library/SpaceContextList";
 import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
 import "./context.css";
@@ -226,6 +227,13 @@ type DerivedMarkdown = {
 
 function keyFor(rootId: string, path: string): string {
   return `${rootId}\u0000${path}`;
+}
+
+/** A Library path that belongs to `item`: its document, a downloaded attachment, or any file a folder copy captured (its `document_path` is only the first). */
+function libraryItemHolds(item: LibraryItemSummary, path: string): boolean {
+  return item.document_path === path
+    || (item.folder !== null && path.startsWith(`${item.item_path.replace(/\/+$/, "")}/`))
+    || item.attachments.some((attachment) => attachmentPath(item, attachment) === path);
 }
 
 function readableError(error: unknown): string {
@@ -1164,6 +1172,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const row = listing.rows.find((candidate) => candidate.item_id === item.item_id);
     // A local failure stands only while the Space still lacks the copy; another surface may have added it since.
     const stillMissing = headerSpaceAction(row, spaceLive.label).actions.some((action) => action.kind === "add");
+    // `Update`, a confirmed replace or removal, and the Library version (D23); `Add to Library again` has no flow here.
+    const copyActions = row ? headerSpaceAction(row, spaceLive.label).actions.filter((action) => action.kind === "view_library" || spaceCopyActions(row).some((allowed) => allowed.kind === action.kind)) : [];
+    const copyStatus = row ? spaceCopyStatus(row, spaceLive.label) : null;
     return {
       label: spaceLive.label,
       row,
@@ -1171,6 +1182,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       adding: mine && (spaceAdd.starting || spaceAdd.running || settling),
       error: mine && stillMissing ? spaceAdd.error ?? spaceAddStopped : null,
       onAdd: () => startSpaceAdd(item),
+      actions: copyActions,
+      updating: copyStatus?.working ?? false,
+      busy: copyStatus?.busy ?? false,
+      copyError: copyStatus?.failure ?? null,
+      onAction: (action) => { if (row) startSpaceCopyAction(row, action.kind); },
     };
   };
   // The open companion file's Space copy (design §4.6): its notice offers `Update`, a confirmed replace, and the Library version.
@@ -1180,8 +1196,27 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     : null;
   const spaceCopyUpdate = useSpaceUpdate(client, spaceListing);
   const [spaceCopyConfirm, setSpaceCopyConfirm] = useState<SpaceCopyConfirmation | null>(null);
-  // The copy this notice last acted on, so a result or conflict never shows on another file.
+  // The copy the notice or the Library header last acted on, so a result or conflict never shows on another copy.
   const [spaceCopyAction, setSpaceCopyAction] = useState<{ logicalId: string; conflict: boolean } | null>(null);
+  const spaceCopyStatus = (row: SpaceCopyRow, label: string) => {
+    const mine = spaceCopyAction?.logicalId === row.logical_id;
+    const working = mine && spaceCopyUpdate.working;
+    const unconfirmed = mine && spaceCopyUpdate.unconfirmed;
+    const outcome = mine && spaceCopyUpdate.operation && !spaceCopyUpdate.busy ? spaceUpdateOutcome(spaceCopyUpdate.operation, label, spaceCopyUpdate.itemPaths) : null;
+    const failure = !mine || working ? null : spaceCopyAction?.conflict ? spaceCopyConflict(label) : spaceCopyUpdate.error ?? (unconfirmed ? `${spaceUpdateUnconfirmed(label)} ${spaceListing.error ?? ""}`.trim() : outcome?.failed ? outcome.text : null);
+    return { busy: mine && spaceCopyUpdate.busy, working, unconfirmed, outcome, failure };
+  };
+  const startSpaceCopyAction = (row: SpaceCopyRow, kind: SpaceCopyActionKind) => {
+    if (!spaceLive || spaceCopyStatus(row, spaceLive.label).busy) return;
+    if (kind === "view_library") {
+      if (row.item_id) { setLibraryOpenRequest(row.item_id); if (!isLibrary) chooseRoot(libraryRoot); }
+      return;
+    }
+    setSpaceCopyAction({ logicalId: row.logical_id, conflict: false });
+    if (kind === "replace" || kind === "remove") { setSpaceCopyConfirm({ kind, row }); return; }
+    const itemId = row.item_id;
+    if (kind === "update" && itemId) void spaceCopyUpdate.start(() => client.librarySpaceUpdate({ target: spaceLive.target, scope: { scope: "selection", item_ids: [itemId], follow_ids: [] }, replace_edited: [] }));
+  };
   const spaceCopyNoticeRef = useRef<HTMLDivElement>(null);
   const spaceCopyNoticeFocused = useRef(false);
   // Once the reread copy needs no notice, focus moves to the document rather than the page.
@@ -1198,34 +1233,23 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const actions = spaceCopyActions(openSpaceCopy).filter((action) => action.kind === "update" || action.kind === "replace");
     const itemId = openSpaceCopy.item_id;
     const viewLibrary = itemId && chip.actions.some((action) => action.kind === "view_library") ? itemId : null;
-    const mine = spaceCopyAction?.logicalId === openSpaceCopy.logical_id;
-    const busy = mine && spaceCopyUpdate.busy;
-    const working = mine && spaceCopyUpdate.working;
-    const unconfirmed = mine && spaceCopyUpdate.unconfirmed;
-    const outcome = mine && spaceCopyUpdate.operation && !spaceCopyUpdate.busy ? spaceUpdateOutcome(spaceCopyUpdate.operation, spaceLive.label, spaceCopyUpdate.itemPaths) : null;
-    const failure = !mine || working ? null : spaceCopyAction?.conflict ? spaceCopyConflict(spaceLive.label) : spaceCopyUpdate.error ?? (unconfirmed ? `${spaceUpdateUnconfirmed(spaceLive.label)} ${spaceListing.error ?? ""}`.trim() : outcome?.failed ? outcome.text : null);
+    const { busy, working, unconfirmed, outcome, failure } = spaceCopyStatus(openSpaceCopy, spaceLive.label);
     const skipped = outcome && !outcome.failed && outcome.skipped > 0 ? outcome.text : null;
     const text = working ? `Updating ${spaceLive.label}…` : failure ?? skipped ?? chip.notice;
     if (!text) return null;
-    const act = (kind: "update" | "replace") => {
-      if (busy) return;
-      setSpaceCopyAction({ logicalId: openSpaceCopy.logical_id, conflict: false });
-      if (kind === "replace") { setSpaceCopyConfirm({ kind, row: openSpaceCopy }); return; }
-      if (itemId) void spaceCopyUpdate.start(() => client.librarySpaceUpdate({ target: spaceLive.target, scope: { scope: "selection", item_ids: [itemId], follow_ids: [] }, replace_edited: [] }));
-    };
     return <div ref={spaceCopyNoticeRef} className={`context-notice${failure ? " context-notice-error" : chip.tone === "working" ? " context-notice-warning" : ""}`} role={failure ? "alert" : "status"}
       onFocus={() => { spaceCopyNoticeFocused.current = true; }} onBlur={(event) => { if (event.relatedTarget) spaceCopyNoticeFocused.current = false; }}>
       <strong>{working ? <span className="library-spinner" aria-hidden="true" /> : <span aria-hidden="true">{chip.glyph} </span>}{chip.word}</strong>
       <span>{text}</span>
       {/* aria-disabled keeps focus on the pressed button while the update runs. */}
-      {actions.map((action) => <button key={action.kind} type="button" aria-disabled={busy} onClick={() => act(action.kind === "replace" ? "replace" : "update")}>{action.label}</button>)}
+      {actions.map((action) => <button key={action.kind} type="button" aria-disabled={busy} onClick={() => startSpaceCopyAction(openSpaceCopy, action.kind)}>{action.label}</button>)}
       {unconfirmed ? <button type="button" onClick={spaceListing.reload}>Retry</button> : null}
       {viewLibrary ? <button type="button" onClick={() => { setLibraryOpenRequest(viewLibrary); chooseRoot(libraryRoot); }}>View Library version</button> : null}
     </div>;
   };
   useEffect(() => {
     if (!isLibrary || library.status !== "ready" || !library.listing || !selectedPath) return;
-    if (library.listing.items.some((item) => item.document_path === selectedPath || item.attachments.some((attachment) => attachmentPath(item, attachment) === selectedPath))) return;
+    if (library.listing.items.some((item) => libraryItemHolds(item, selectedPath))) return;
     const key = keyFor(LIBRARY_ROOT_ID, selectedPath);
     setDocuments((current) => {
       const next = { ...current };
@@ -1274,10 +1298,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     },
     canCopyLink: typeof navigator !== "undefined" && Boolean(navigator.clipboard),
     refreshBusy: libraryBusy,
-    spaceEntry: (item) => {
+    spaceEntries: (item) => {
       const state = itemSpace(item);
-      const add = state ? headerSpaceAction(state.row, state.label).actions.find((action) => action.kind === "add") : undefined;
-      return state && add ? { label: add.label, onSelect: state.onAdd, disabled: state.adding || state.attempt?.state === "pending" } : null;
+      if (!state) return [];
+      const add = headerSpaceAction(state.row, state.label).actions.find((action) => action.kind === "add");
+      if (add) return [{ label: add.label, onSelect: state.onAdd, disabled: state.adding || state.attempt?.state === "pending" }];
+      return state.actions.map((action) => ({ label: action.label, onSelect: () => state.onAction(action), disabled: state.busy, destructive: action.kind === "remove" }));
     },
     removeFollow: async (follow, mode) => {
       await client.libraryRemove({ mode, follow_id: follow.follow_id });

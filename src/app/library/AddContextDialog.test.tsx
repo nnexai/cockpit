@@ -339,6 +339,42 @@ it("follows an add closed before it was accepted, and keeps what a cancelled add
   }
 });
 
+it("leaves focus on Cancel while progress polls arrive, and moves it only when the add finishes", async () => {
+  vi.useFakeTimers();
+  const running = (done: number): LibraryOperation => ({
+    operation_id: "op-polled", kind: "add", item_ids: ["source:pr-7"], report: null, space: null, target: null, cancel_requested: false, finished: false, created_at: "", updated_at: "",
+    phases: [{ phase: "library", state: "running", done, total: 3, message: null, error: null }],
+  });
+  const saved: LibraryOperation = { ...running(3), finished: true, phases: [{ phase: "library", state: "done", done: 3, total: 3, message: null, error: null }] };
+  const client = githubClient({
+    libraryAdd: vi.fn(async () => running(0)),
+    libraryOperation: vi.fn().mockResolvedValueOnce(running(1)).mockResolvedValueOnce(running(2)).mockResolvedValueOnce(saved),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} onOpenItem={vi.fn()} />));
+    await advance(0);
+    await typeSource("https://github.com/acme/api/pull/7");
+    await act(async () => dialogButton("Add to Library")!.click());
+    await advance(0);
+    expect(document.activeElement).toBe(dialogButton("Close"));
+    const cancel = dialogButton("Cancel")!;
+    cancel.focus();
+    await advance(750);
+    await advance(750);
+    expect(client.libraryOperation).toHaveBeenCalledTimes(2);
+    expect(document.activeElement).toBe(cancel);
+    await advance(750);
+    expect(document.body.textContent).toContain("✓ Saved to Library");
+    expect(document.activeElement).toBe(dialogButton("Open in Library"));
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 it("keeps a Library failure for retry across reopening, and Add another starts over with a new source", async () => {
   vi.useFakeTimers();
   const failedSave = (id: string): LibraryOperation => ({

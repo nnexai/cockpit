@@ -1,4 +1,4 @@
-use super::{inspection_error_response, requests::decode_request};
+use super::{inspection_error_response, requests::{decode_confirmation_request, decode_request}};
 use cockpit_core::CockpitService;
 use cockpit_protocol::{
     context::{ContextDirectory, ContextDocument},
@@ -184,7 +184,7 @@ pub async fn cockpit_library_replace(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<LibraryOperation, ErrorResponse> {
-    let request: LibraryReplaceRequest = decode_request(request, "library replace")?;
+    let request: LibraryReplaceRequest = decode_confirmation_request(request, "library replace")?;
     let operation = service
         .library()
         .map_err(inspection_error_response)?
@@ -199,7 +199,7 @@ pub async fn cockpit_library_remove(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<LibraryListing, ErrorResponse> {
-    let request: LibraryRemoveRequest = decode_request(request, "library remove")?;
+    let request: LibraryRemoveRequest = decode_confirmation_request(request, "library remove")?;
     service
         .library()
         .map_err(inspection_error_response)?
@@ -308,7 +308,7 @@ pub async fn cockpit_library_space_update(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<LibraryOperation, ErrorResponse> {
-    let request: SpaceUpdateRequest = decode_request(request, "library space update")?;
+    let request: SpaceUpdateRequest = decode_confirmation_request(request, "library space update")?;
     let count = match &request.scope {
         SpaceUpdateScope::Selection { item_ids, follow_ids } => item_ids.len() + follow_ids.len(),
         SpaceUpdateScope::All {} => 0,
@@ -324,7 +324,7 @@ pub async fn cockpit_library_space_remove(
     request: Value,
     service: State<'_, CockpitService>,
 ) -> Result<SpaceContextListing, ErrorResponse> {
-    let request: SpaceRemoveRequest = decode_request(request, "library space remove")?;
+    let request: SpaceRemoveRequest = decode_confirmation_request(request, "library space remove")?;
     validate_space_request(&request.target, 0)?;
     service.library().map_err(inspection_error_response)?
         .space_remove(request).await.map_err(inspection_error_response)

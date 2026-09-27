@@ -454,12 +454,14 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   // A partial copy still opens what it wrote.
   const openablePath = openInSpace && written.length > 0 && operation?.space?.companion_root_id === openInSpace.companionRootId ? written[0] : undefined;
   const libraryIncomplete = finished && progress !== null && !progress.complete && lastBeginRef.current !== null;
-  // After success focus moves to `Open in …`; after a failure, to its retry.
+  // After success focus moves to `Open in …`; after a failure, to its retry. Only a change of phase moves it:
+  // progress polls must not pull focus off `Cancel`.
+  const focusPhase = startError && !operation && !starting ? "error" : finished ? "finished" : starting || operation ? "running" : "idle";
   useEffect(() => {
-    if (startError && !operation && !starting) primaryActionRef.current?.focus();
-    else if (finished) (primaryActionRef.current ?? closeActionRef.current)?.focus();
-    else if (starting || operation) closeActionRef.current?.focus();
-  }, [startError, starting, finished, operation]);
+    if (focusPhase === "error") primaryActionRef.current?.focus();
+    else if (focusPhase === "finished") (primaryActionRef.current ?? closeActionRef.current)?.focus();
+    else if (focusPhase === "running") closeActionRef.current?.focus();
+  }, [focusPhase]);
   const failure = lookup.status === "error" ? lookup.failure : null;
   // On the body: a Context viewer is a size container and would clip a fixed overlay to its pane.
   return createPortal(<div className="setup-overlay library-dialog-overlay" role="presentation">

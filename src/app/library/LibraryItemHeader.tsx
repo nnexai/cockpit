@@ -3,7 +3,7 @@ import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, L
 import { UiIcon } from "../UiIcon";
 import { instanceHost, isConfluencePage, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, relativeTime } from "./libraryState";
 import { ATTACHMENT_STATE, LibraryMenu, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "./LibraryTree";
-import { headerSpaceAction } from "./spaceCopyPresentation";
+import { headerSpaceAction, type SpaceCopyAction } from "./spaceCopyPresentation";
 import { spaceAddFailure } from "./SpaceContextList";
 
 /** The item's standing in the target Space (design §4.4); absent without a live target Space. */
@@ -20,6 +20,15 @@ export type ItemSpaceState = {
    */
   error: string | null;
   onAdd: () => void;
+  /** The existing copy's actions this surface performs: `Update`, a confirmed replace or removal, the Library version. */
+  actions: SpaceCopyAction[];
+  /** This item's copy update or replace is running, or awaits the Space's reread. */
+  updating: boolean;
+  /** Holds the copy actions until the Space confirms the last one, including while its reread failed. */
+  busy: boolean;
+  /** Why this item's last update, replace or removal in the Space changed nothing. */
+  copyError: string | null;
+  onAction: (action: SpaceCopyAction) => void;
 };
 
 /** A Confluence page's last edit, from the page document's frontmatter; `by` is a display name, never an email. */
@@ -27,12 +36,13 @@ export type PageUpdate = { at: string | null; by: string | null };
 
 /**
  * Library item header (design §4.4): kind chip and container path, title,
- * state chip with its freshness phrase and actions, then `Metadata`. The one
- * Space action comes from `headerSpaceAction`; S2 offers only `Add to <Space>`.
+ * state chip with its freshness phrase and actions, then `Metadata`. The Space
+ * actions come from `headerSpaceAction`: `Add to <Space>`, or the copy's
+ * `Update in <Space>`, a confirmed replace or removal, and the Library version.
  * A Confluence page adds its page metadata and an attachments table: metadata
  * only until the user explicitly downloads (`Download all`, `Download selected`
  * or a row's `Download`); `Remove downloaded` drops the bytes and keeps the rows.
- * At pane width ≤ 520 px `Refresh`, the Space action and the attachment bulk actions move into `⋯`.
+ * At pane width ≤ 520 px `Refresh`, the Space actions and the attachment bulk actions move into `⋯`.
  */
 export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null }: {
   item: LibraryItemSummary;
@@ -91,6 +101,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   const spaceAction = space ? headerSpaceAction(space.row, space.label) : null;
   const spaceAdding = Boolean(space && (space.adding || space.attempt?.state === "pending"));
   const addLabel = spaceAction?.actions.find((action) => action.kind === "add")?.label;
+  const spaceUpdating = Boolean(space?.updating);
   const spaceFailure = !space || spaceAdding ? null : space.attempt?.state === "failed" ? spaceAddFailure(space.attempt.error, space.label) : space.error;
   // `Add to <Space>` and its retry give way to progress, then to the result; focus stays in the Space slot.
   const spaceSlotRef = useRef<HTMLSpanElement>(null);
@@ -119,8 +130,11 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
       {narrow ? null : <button type="button" onClick={refresh} disabled={actions.refreshBusy} title={folder ? `Re-copy from ${folder.origin_path}` : undefined}>{folder ? "Re-copy" : "Refresh"}</button>}
       {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
         {spaceAdding ? <span className="context-source-chip library-state is-muted" role="status"><span className="library-spinner" aria-hidden="true" />{`Adding to ${space.label}…`}</span> : null}
-        {!spaceAdding && !narrow && spaceAction?.text ? <span className={`library-state library-space-state is-${spaceAction.tone}`}>{spaceAction.text}</span> : null}
+        {spaceUpdating ? <span className="context-source-chip library-state is-muted" role="status"><span className="library-spinner" aria-hidden="true" />{`Updating ${space.label}…`}</span> : null}
+        {!spaceAdding && !spaceUpdating && !narrow && spaceAction?.text ? <span className={`library-state library-space-state is-${spaceAction.tone}`}>{spaceAction.text}</span> : null}
         {!spaceAdding && !narrow && addLabel && !spaceFailure ? <button type="button" onClick={space.onAdd}>{addLabel}</button> : null}
+        {/* aria-disabled keeps focus on the pressed button, or the confirmation's opener, while the update runs. */}
+        {!spaceAdding && !narrow ? space.actions.map((action) => <button key={action.kind} type="button" aria-disabled={space.busy} onClick={() => space.onAction(action)}>{action.label}</button>) : null}
       </span> : null}
       <button type="button" className="library-more" aria-label={`More actions for ${item.title}`} aria-haspopup="menu" aria-expanded={menu !== null} onClick={(event) => setMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
     </div>
@@ -132,6 +146,9 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
     {space && spaceFailure ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
       <span>{spaceFailure}</span>
       <button type="button" onClick={space.onAdd}>{`Retry adding to ${space.label}`}</button>
+    </div> : null}
+    {space && space.copyError && !spaceUpdating ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
+      <span>{space.copyError}</span>
     </div> : null}
     <details className="library-metadata">
       <summary>Metadata</summary>

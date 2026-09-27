@@ -128,8 +128,8 @@ export type LibraryItemActions = {
   copyLink: (item: LibraryItemSummary) => void;
   canCopyLink: boolean;
   refreshBusy: boolean;
-  /** `Add to <Space>` for the target Space, when that Space can take the item. */
-  spaceEntry?: (item: LibraryItemSummary) => LibraryMenuEntry | null;
+  /** The target Space's actions for the item: `Add to <Space>`, or its copy's `Update`, replace, removal and Library version. */
+  spaceEntries?: (item: LibraryItemSummary) => LibraryMenuEntry[];
   /** Stops following a space or removes it from the Library; resolves once the Library accepted it. */
   removeFollow?: (follow: LibraryFollowSummary, mode: FollowRemoveMode) => Promise<void>;
   attachments?: LibraryAttachmentActions;
@@ -137,11 +137,11 @@ export type LibraryItemActions = {
 
 /** The same entries appear in the row context menu and the item header `⋯` (design §5.3). */
 export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemActions, includeOpen: boolean): LibraryMenuEntry[] {
-  const space = actions.spaceEntry?.(item);
+  const space = actions.spaceEntries?.(item) ?? [];
   return [
     ...(includeOpen ? [{ label: "Open", onSelect: () => actions.open(item), disabled: !item.document_path }] : []),
     { label: item.folder ? `Re-copy from ${item.folder.origin_path}` : "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
-    ...(space ? [space] : []),
+    ...space,
     ...attachmentMenuEntries(item, actions.attachments),
     { label: "Copy source link", onSelect: () => actions.copyLink(item), disabled: !actions.canCopyLink || !(item.source_url ?? item.original_url) },
     "separator",

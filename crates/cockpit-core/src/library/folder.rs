@@ -53,6 +53,13 @@ struct Inventory {
     info: LibraryFolderInfo,
     diagnostics: Vec<ProjectDiagnostic>,
 }
+struct CapturedFolder {
+    inventory: Inventory,
+    stage: store::Stage,
+    files: Vec<MarkerFile>,
+    total: u64,
+    limited: bool,
+}
 fn walk(root: &Dir, prefix: &Path, paths: &mut Vec<PathBuf>, info: &mut LibraryFolderInfo, visited: &mut usize, depth: usize) -> Result<(), InspectionError> {
     if depth > 64 { return Err(unavailable("Folder nesting exceeds the safe inventory depth")); }
     for entry in root.entries().map_err(unavailable)? {
@@ -76,7 +83,11 @@ fn walk(root: &Dir, prefix: &Path, paths: &mut Vec<PathBuf>, info: &mut LibraryF
     Ok(())
 }
 async fn inventory(configuration: &ProjectConfiguration, input: &str) -> Result<Inventory, InspectionError> {
-    let (path, root) = open_source(configuration, input)?;
+    let configuration_for_open = configuration.clone();
+    let input_for_open = input.to_owned();
+    let (path, root) = tokio::task::spawn_blocking(move || {
+        open_source(&configuration_for_open, &input_for_open)
+    }).await.map_err(unavailable)??;
     let git = git_output(configuration, &path, &["rev-parse", "--show-toplevel"]).await?;
     let is_git = git.status.success() &&
         std::str::from_utf8(&git.stdout).is_ok_and(|s| Path::new(s.trim_end()) == path);
@@ -95,14 +106,61 @@ async fn inventory(configuration: &ProjectConfiguration, input: &str) -> Result<
         if !ignored.status.success() { return Err(unavailable("Git could not count ignored files")); }
         info.skipped_ignored += ignored.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()).count() as u32;
         paths
-    } else {
-        let mut paths = vec![];
-        walk(&root, Path::new(""), &mut paths, &mut info, &mut 0, 0)?;
-        paths
-    };
-    paths.sort_by(|a, b| a.as_os_str().as_encoded_bytes().cmp(b.as_os_str().as_encoded_bytes()));
-    source_root_revalidate(&root, &path)?;
+    } else { vec![] };
+    let (path, root, paths, info) = tokio::task::spawn_blocking(move || {
+        if !is_git {
+            walk(&root, Path::new(""), &mut paths, &mut info, &mut 0, 0)?;
+        }
+        paths.sort_by(|a, b| a.as_os_str().as_encoded_bytes().cmp(b.as_os_str().as_encoded_bytes()));
+        source_root_revalidate(&root, &path)?;
+        Ok::<_, InspectionError>((path, root, paths, info))
+    }).await.map_err(unavailable)??;
     Ok(Inventory { path, root, paths, info, diagnostics })
+}
+
+fn capture_folder_files(
+    store: &Arc<Store>,
+    operation: &str,
+    mut captured: Inventory,
+    file_byte_limit: u64,
+    file_count_limit: usize,
+    folder_byte_limit: u64,
+) -> Result<Option<CapturedFolder>, InspectionError> {
+    let stage = store.stage()?;
+    let mut files = vec![];
+    let mut total = 0;
+    let mut limited = false;
+    for relative in &captured.paths {
+        if operations::cancelled(store, operation)? { return Ok(None); }
+        if relative == Path::new(".cockpit-item.json") || relative.as_os_str().as_encoded_bytes().contains(&b'\\') {
+            captured.info.skipped_other += 1;
+            continue;
+        }
+        let source = match read_stable_source_bounded(&captured.root, relative, file_byte_limit) {
+            Ok(source) => source,
+            Err(e) => {
+                match e.code.as_str() {
+                    "context_snapshot_symlink" => captured.info.skipped_symlinks += 1,
+                    "context_snapshot_special_file" => captured.info.skipped_special += 1,
+                    "context_snapshot_hardlink" | "context_snapshot_native_binary" | "context_snapshot_file_missing" => captured.info.skipped_other += 1,
+                    "context_snapshot_file_bytes" => { total += 1; limited = true; },
+                    _ => return Err(e),
+                }
+                continue;
+            }
+        };
+        total += 1;
+        if limited || files.len() >= file_count_limit || captured.info.bytes + source.bytes.len() as u64 > folder_byte_limit {
+            limited = true;
+            continue;
+        }
+        let (parent, leaf) = create_parent(&stage.dir, relative)?;
+        atomic_write_bytes(&parent, &leaf.to_string_lossy(), &source.bytes).map_err(unavailable)?;
+        captured.info.bytes += source.bytes.len() as u64;
+        files.push(MarkerFile { path: relative.to_string_lossy().into_owned(), hash: source.hash, bytes: source.bytes.len() as u64 });
+    }
+    source_root_revalidate(&captured.root, &captured.path)?;
+    Ok(Some(CapturedFolder { inventory: captured, stage, files, total, limited }))
 }
 impl LibraryService {
     pub(super) async fn resolve_folder(&self, input: &str) -> Result<LibraryResolution, InspectionError> {
@@ -117,7 +175,11 @@ impl LibraryService {
     }
     pub(super) async fn start_folder_add(&self, request: LibraryAddRequest) -> Result<LibraryOperation, InspectionError> {
         let handle = operations::runtime()?;
-        let (path, _) = open_source(&self.configuration, &request.input)?;
+        let configuration_for_open = self.configuration.clone();
+        let input_for_open = request.input.clone();
+        let (path, _) = tokio::task::spawn_blocking(move || {
+            open_source(&configuration_for_open, &input_for_open)
+        }).await.map_err(unavailable)??;
         let store = self.open()?;
         let item_id = folder_id(&path);
         let lease = store.lease(&item_id)?;
@@ -156,44 +218,28 @@ impl LibraryService {
                 return Err(e);
             }
         }
-        let mut captured = inventory(&self.configuration, input).await?;
+        let captured = inventory(&self.configuration, input).await?;
         let id = folder_id(&captured.path);
         let title = old.as_ref().map(|e| e.summary.title.clone()).unwrap_or_else(|| label.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| captured.path.file_name().and_then(|s| s.to_str()).unwrap_or("folder")).to_owned());
         let slug: String = title.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).take(60).collect();
         let slug = slug.trim_matches('-');
         let path = old.as_ref().map(|e| e.summary.item_path.clone()).unwrap_or_else(|| format!("folders/{}-{}", if slug.is_empty() { "folder" } else { slug }, &id[7..15]));
-        let stage = store.stage()?;
-        let mut files = vec![];
-        let mut total = 0;
-        let mut limited = false;
-        for relative in &captured.paths {
-            if operations::cancelled(store, operation)? { return Ok(()); }
-            if relative == Path::new(".cockpit-item.json") || relative.as_os_str().as_encoded_bytes().contains(&b'\\') {
-                captured.info.skipped_other += 1; continue;
-            }
-            let source = match read_stable_source_bounded(&captured.root, relative, self.configuration.limits.library_file_bytes) {
-                Ok(source) => source,
-                Err(e) => {
-                    match e.code.as_str() {
-                        "context_snapshot_symlink" => captured.info.skipped_symlinks += 1,
-                        "context_snapshot_special_file" => captured.info.skipped_special += 1,
-                        "context_snapshot_hardlink" | "context_snapshot_native_binary" | "context_snapshot_file_missing" => captured.info.skipped_other += 1,
-                        "context_snapshot_file_bytes" => { total += 1; limited = true; },
-                        _ => return Err(e),
-                    }
-                    continue;
-                }
-            };
-            total += 1;
-            if limited || files.len() >= self.configuration.limits.library_folder_files as usize || captured.info.bytes + source.bytes.len() as u64 > self.configuration.limits.library_folder_bytes {
-                limited = true; continue;
-            }
-            let (parent, leaf) = create_parent(&stage.dir, relative)?;
-            atomic_write_bytes(&parent, &leaf.to_string_lossy(), &source.bytes).map_err(unavailable)?;
-            captured.info.bytes += source.bytes.len() as u64;
-            files.push(MarkerFile { path: relative.to_string_lossy().into_owned(), hash: source.hash, bytes: source.bytes.len() as u64 });
-        }
-        source_root_revalidate(&captured.root, &captured.path)?;
+        let capture_store = store.clone();
+        let capture_operation = operation.to_owned();
+        let file_byte_limit = self.configuration.limits.library_file_bytes;
+        let file_count_limit = self.configuration.limits.library_folder_files as usize;
+        let folder_byte_limit = self.configuration.limits.library_folder_bytes;
+        let Some(capture) = tokio::task::spawn_blocking(move || capture_folder_files(
+            &capture_store, &capture_operation, captured,
+            file_byte_limit, file_count_limit, folder_byte_limit,
+        )).await.map_err(unavailable)?? else {
+            return Ok(());
+        };
+        let mut captured = capture.inventory;
+        let stage = capture.stage;
+        let files = capture.files;
+        let total = capture.total;
+        let limited = capture.limited;
         captured.info.files = files.len() as u64;
         let revision = store::hash(&serde_json::to_vec(&files).map_err(unavailable)?);
         let now = timestamp();

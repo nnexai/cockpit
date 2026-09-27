@@ -131,9 +131,10 @@ export function useLibraryOperation(client: CockpitClient, onFinished?: (operati
     setOperation(null);
     try {
       const next = await begin();
+      // Cockpit accepted it: it is polled and announced even when a newer start now owns this surface.
+      startTracking(client, next);
       if (token !== generation.current) return null;
       setOperation(next);
-      startTracking(client, next);
       return next;
     } catch (cause) {
       if (token === generation.current) setError(errorText(cause, "The Library operation could not start."));

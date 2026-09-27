@@ -353,8 +353,8 @@ pub(crate) fn materialize_library_item(
             entry.content_hash = expected;
         }
         let recheck = if missing {
-            recheck_source_destination(root, &path, &parent, &leaf, &None)
-        } else { recheck_source_destination(root, &path, &parent, &leaf, &expected_entry) };
+            recheck_source_destination(root, &parent, &leaf, &None)
+        } else { recheck_source_destination(root, &parent, &leaf, &expected_entry) };
         if let Err(error) = recheck {
             discard_pending_source_intent(root, &mut manifest, &parent, &temporary)?;
             return Err(if updating && error.code == "source_sync_conflict" { space_copy_conflict() } else { error });
@@ -467,7 +467,7 @@ fn remove_library_entry(
         let (parent, leaf) = resolve_parent(root, &path).map_err(|_| space_copy_conflict())?;
         let mut expected_entry = entry.clone();
         expected_entry.content_hash = expected.into();
-        if recheck_source_destination(root, &path, &parent, &leaf, &Some(expected_entry)).is_err() {
+        if recheck_source_destination(root, &parent, &leaf, &Some(expected_entry)).is_err() {
             manifest.pending_library_remove = None;
             write_manifest_durable(root, manifest)?;
             return Err(space_copy_conflict());
@@ -901,7 +901,7 @@ pub(crate) fn materialize_source_markdown(
     write_manifest_durable(root, &manifest)?;
     // Recheck after the intent is durable and immediately before replacement.
     // A late user edit abandons this publish; it must never be overwritten.
-    if let Err(error) = recheck_source_destination(root, &path, &parent, &leaf, &previous_entry) {
+    if let Err(error) = recheck_source_destination(root, &parent, &leaf, &previous_entry) {
         discard_pending_source_intent(root, &mut manifest, &parent, &temporary)?;
         return Err(error);
     }
@@ -1225,7 +1225,6 @@ fn recover_pending_source_intent(
 
 fn recheck_source_destination(
     root: &Dir,
-    path: &Path,
     parent: &Dir,
     leaf: &Path,
     previous_entry: &Option<ContextManifestEntry>,
@@ -1243,7 +1242,7 @@ fn recheck_source_destination(
             )),
         };
     };
-    let current = read_stable_source_bounded(root, path, previous.bytes.max(MAX_SNAPSHOT_FILE_BYTES as u64)).map_err(|_| {
+    let current = read_space_file(root, previous).map_err(|_| {
         InspectionError::new(
             "source_sync_conflict",
             "a generated source changed while Cockpit was refreshing it",
@@ -1332,6 +1331,12 @@ fn write_manifest_durable(root: &Dir, manifest: &ContextManifest) -> Result<(), 
     let temporary = format!(".context-manifest-{}.tmp", Uuid::new_v4());
     let bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|error| InspectionError::new("source_manifest_failed", error.to_string()))?;
+    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(InspectionError::new(
+            "context_manifest_capacity",
+            "the context manifest exceeds Cockpit's readable manifest size limit",
+        ));
+    }
     let mut options = OpenOptions::new();
     options
         .write(true)
@@ -1392,11 +1397,89 @@ pub(crate) fn read_stable_source_bounded(
 
 fn read_space_file(root: &Dir, entry: &ContextManifestEntry) -> Result<SourceBytes, InspectionError> {
     let path = safe_companion_relative(&entry.relative_path)?;
+    let (parent, leaf) = resolve_parent(root, &path)?;
+    let metadata = parent.symlink_metadata(&leaf).map_err(|error| {
+        InspectionError::new(
+            if error.kind() == ErrorKind::NotFound {
+                "context_snapshot_file_missing"
+            } else {
+                "context_snapshot_file_unavailable"
+            },
+            error.to_string(),
+        )
+    })?;
+    if metadata.len() != entry.bytes {
+        return hash_space_file(&parent, &leaf, &metadata);
+    }
     if entry.bytes <= MAX_SNAPSHOT_FILE_BYTES as u64 {
         read_stable_source(root, &path)
     } else {
         read_stable_source_bounded(root, &path, entry.bytes)
     }
+}
+
+fn hash_space_file(
+    parent: &Dir,
+    leaf: &Path,
+    metadata: &Metadata,
+) -> Result<SourceBytes, InspectionError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(InspectionError::new(
+            "context_snapshot_special_file",
+            "only regular files are eligible for snapshots",
+        ));
+    }
+    if hardlinked(metadata) {
+        return Err(InspectionError::new(
+            "context_snapshot_hardlink",
+            "hardlinked source files are not copied into snapshots",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .follow(cap_fs_ext::FollowSymlinks::No)
+        .nonblock(true);
+    let mut file = parent.open_with(leaf, &options).map_err(|error| {
+        InspectionError::new("context_snapshot_file_unavailable", error.to_string())
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        InspectionError::new("context_snapshot_file_unavailable", error.to_string())
+    })?;
+    if opened.file_type().is_symlink()
+        || !opened.is_file()
+        || identity(&opened) != identity(metadata)
+    {
+        return Err(InspectionError::new(
+            "context_snapshot_source_changed",
+            "a source file changed while opening",
+        ));
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| {
+            InspectionError::new("context_snapshot_file_unavailable", error.to_string())
+        })?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let after = parent.symlink_metadata(leaf).map_err(|error| {
+        InspectionError::new("context_snapshot_file_unavailable", error.to_string())
+    })?;
+    if identity(&after) != identity(&opened) || after.len() != opened.len() {
+        return Err(InspectionError::new(
+            "context_snapshot_source_changed",
+            "a source file changed during snapshot; retry to capture a complete generation",
+        ));
+    }
+    Ok(SourceBytes {
+        bytes: Vec::new(),
+        hash: format!("sha256:{:x}", digest.finalize()),
+        identity: identity(&opened),
+    })
 }
 
 fn read_regular_bounded(parent: &Dir, leaf: &Path, max_bytes: u64) -> Result<SourceBytes, InspectionError> {
@@ -2523,19 +2606,19 @@ mod library_copy_tests {
         materialize_library_item(&f.first, "companion",
             &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let edited = "folders/notes-01234567/edited.txt";
-        f.first.write(edited, b"my notes").unwrap();
+        f.first.write(edited, b"my appended notes").unwrap();
         summary.revision = "revision-two".into();
         let files = [f.file("live.txt", b"new")];
         let copied = materialize_library_item(&f.first, "companion",
             &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update, None).unwrap();
         assert_eq!(copied.skipped_edited, [edited]);
-        assert_eq!(f.first.read(edited).unwrap(), b"my notes");
+        assert_eq!(f.first.read(edited).unwrap(), b"my appended notes");
         assert_eq!(f.first.read("folders/notes-01234567/live.txt").unwrap(), b"new");
         assert!(!f.first.exists("folders/notes-01234567/gone.txt"));
         let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap().remove(0);
         assert_eq!(row.state, SpaceCopyState::EditedInSpace);
         assert_eq!(row.edited.iter().map(|file| (file.path.as_str(), file.current_hash.as_str())).collect::<Vec<_>>(),
-            vec![(edited, hash(b"my notes").as_str())]);
+            vec![(edited, hash(b"my appended notes").as_str())]);
         let before = f.first.read(MANIFEST_NAME).unwrap();
         assert_eq!(remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap_err().code, "space_copy_conflict");
         assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
@@ -2543,6 +2626,27 @@ mod library_copy_tests {
         assert!(!f.first.exists(edited));
         assert!(!f.first.exists("folders/notes-01234567/live.txt"));
         assert!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn oversized_manifest_publication_preserves_readable_space_state() {
+        let f = Fixture::new();
+        let summary = folder_item();
+        let files = [f.file("kept.txt", b"kept")];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
+        let original = f.first.read(MANIFEST_NAME).unwrap();
+        let association = read_companion_association(&f.first).unwrap();
+        let mut manifest = read_manifest(&f.first, "companion", &association).unwrap();
+        manifest.entries[0].source_identity = "x".repeat(MAX_MANIFEST_BYTES as usize);
+        let error = write_manifest_durable(&f.first, &manifest).expect_err("oversized manifest");
+        assert_eq!(error.code, "context_manifest_capacity");
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), original);
+        assert_eq!(
+            library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[])
+                .unwrap()[0].state,
+            SpaceCopyState::UpToDate,
+        );
     }
 
     #[test]

@@ -133,8 +133,16 @@ impl LibraryService {
             .map(str::to_ascii_lowercase).collect::<BTreeSet<_>>();
         let mut total = asset.attachments.iter().filter_map(|a| {
             let removing = request.is_some_and(|r| r.action == LibraryAttachmentAction::RemoveDownloaded && r.attachment_ids.contains(&a.id));
-            old.and_then(|e| e.summary.attachments.iter().find(|p| !removing && p.attachment_id == a.id && p.version == a.source_revision && p.bytes == a.size && p.original_name == a.title)
-                .and_then(|p| p.relative_path.as_ref()).and_then(|path| e.inventory.iter().find(|f| &f.path == path)).map(|f| f.bytes))
+            old.and_then(|e| {
+                e.summary.attachments.iter().find(|p| {
+                    !removing && p.attachment_id == a.id && p.version == a.source_revision && p.bytes == a.size && p.original_name == a.title
+                        && p.relative_path.as_ref().is_some_and(|path| {
+                            !confirmed.is_some_and(|files| files.iter().any(|file| &file.path == path))
+                        })
+                }).and_then(|p| p.relative_path.as_ref())
+                    .and_then(|path| e.inventory.iter().find(|f| &f.path == path))
+                    .map(|f| f.bytes)
+            })
         }).fold(0u64, u64::saturating_add);
         let per_file = self.configuration.limits.library_attachment_bytes;
         let per_page = self.configuration.limits.library_item_attachment_bytes;

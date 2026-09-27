@@ -484,7 +484,7 @@ impl LibraryService {
         };
         match (saved, old) {
             (Ok(()), _) => Ok(()),
-            (Err(failure), Some(old)) => self.fetch_failed(store, operation, old, failure),
+            (Err(failure), Some(old)) => self.fetch_failed(store, operation, old, failure, false),
             (Err(failure), None) => failed(failure.message),
         }
     }
@@ -761,6 +761,7 @@ mod tests {
     struct Site {
         base_url: String,
         pages: BTreeMap<String, Page>,
+        fetch_failures: BTreeSet<String>,
         fetched: Vec<String>,
         confirmed: Vec<String>,
     }
@@ -796,6 +797,7 @@ mod tests {
             Self(Mutex::new(Site {
                 base_url: base_url.into(),
                 pages: pages.into_iter().map(|(id, page)| (id.to_owned(), page)).collect(),
+                fetch_failures: BTreeSet::new(),
                 fetched: vec![],
                 confirmed: vec![],
             }))
@@ -879,6 +881,9 @@ mod tests {
             let id = request.artifact_url.split("pageId=").nth(1).unwrap().to_owned();
             let mut site = self.site();
             site.fetched.push(id.clone());
+            if site.fetch_failures.contains(&id) {
+                return Err(error("source_not_found", "gone during fetch"));
+            }
             let page = site.pages.get(&id).cloned().ok_or_else(|| error("source_not_found", "gone"))?;
             let strings = |key: &str, values: Vec<String>| FrontmatterField {
                 key: key.into(),
@@ -1057,6 +1062,24 @@ mod tests {
             assert_eq!(renamed["200"].item_path, before["200"].item_path);
             assert_eq!(f.provider.take_fetched(), ["200".to_owned()].into());
         }
+    }
+
+    #[tokio::test]
+    async fn listed_page_fetch_not_found_stays_failed_until_absence_is_confirmed() {
+        let f = fixture(DC, false, 200);
+        let service = &f.base.service;
+        let (_, follow_id) = follow(service, "SD").await;
+        let mut site = f.provider.site();
+        site.fetch_failures.insert("111".into());
+        site.pages.get_mut("111").unwrap().version += 1;
+        drop(site);
+
+        let report = refresh(service, LibraryRefreshRequest::Follow { follow_id }).await;
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.removed_at_source, 0);
+        let page = pages(service).await.remove("111").unwrap();
+        assert_eq!(page.state, LibraryItemState::Failed);
+        assert_eq!(page.diagnostics[0].code, "source_not_found");
     }
 
     #[tokio::test]

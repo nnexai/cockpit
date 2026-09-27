@@ -485,14 +485,21 @@ impl Store {
         let old = index
             .items
             .iter()
-            .find(|e| e.summary.item_id == entry.summary.item_id);
-        if old.map(|e| e.summary.revision.as_str()) != previous {
+            .find(|e| e.summary.item_id == entry.summary.item_id)
+            .cloned();
+        if old.is_none() && exists(&target_root, &target_name)? {
+            return Err(error(
+                "library_conflict",
+                "Library destination is already occupied",
+            ));
+        }
+        if old.as_ref().map(|e| e.summary.revision.as_str()) != previous {
             return Err(error(
                 "library_conflict",
                 "Library revision changed before publish",
             ));
         }
-        let predecessor = if let Some(old) = old {
+        let predecessor = if let Some(old) = &old {
             if old.summary.item_path != entry.summary.item_path {
                 return Err(corrupt("item path changed"));
             }
@@ -506,6 +513,15 @@ impl Store {
             return Err(error(
                 "library_full",
                 "Library item limit reached; remove an item before adding another",
+            ));
+        }
+        upsert(&mut index, entry.clone());
+        index.generation = Uuid::new_v4().to_string();
+        let prospective = serde_json::to_vec_pretty(&index).map_err(|e| corrupt(e.to_string()))?;
+        if prospective.len() as u64 > MAX_INDEX {
+            return Err(error(
+                "library_full",
+                "Library index capacity reached; remove an item before adding another",
             ));
         }
         let mut method = if old.is_some() {
@@ -532,7 +548,7 @@ impl Store {
             staging: Some(stage.name.clone()),
             backup: id,
             previous_revision: previous.map(str::to_owned),
-            old_entry: old.cloned(),
+            old_entry: old.clone(),
             predecessor,
             new_entry: Some(entry),
         };
@@ -566,14 +582,27 @@ impl Store {
                 self.fault("old_to_backup")?;
             }
             if matches!(method, Method::TwoRename | Method::NewTarget) {
-                rename_special(
+                match rename_special(
                     &self.staging,
                     &stage.name,
                     &target_root,
                     &target_name,
                     false,
-                )
-                .map_err(io_error)?;
+                ) {
+                    Ok(()) => {}
+                    Err(e)
+                        if method == Method::NewTarget
+                            && (e.kind() == io::ErrorKind::AlreadyExists
+                                || e.raw_os_error() == Some(17)) =>
+                    {
+                        self.finish(&intent)?;
+                        return Err(error(
+                            "library_conflict",
+                            "Library destination is already occupied",
+                        ));
+                    }
+                    Err(e) => return Err(io_error(e)),
+                }
             }
             self.fault("rename_unsynced")?;
             sync(&target_root)?;
@@ -1471,6 +1500,65 @@ mod tests {
             old.summary.revision
         );
     }
+    #[test]
+    fn oversized_publish_leaves_index_openable_and_prior_items_intact() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let origin = f.root.join("origin.txt");
+        let (stage, prior) = folder(&store, &origin, None, b"prior");
+        store.publish(stage, prior.clone(), None, None).unwrap();
+
+        let (stage, mut oversized) = folder(&store, &origin, None, b"oversized");
+        oversized.summary.item_path = "copied-folder-oversized".into();
+        oversized.summary.title = "x".repeat(MAX_INDEX as usize + 1024);
+        let stage_name = stage.name.clone();
+        assert_eq!(
+            store.publish(stage, oversized, None, None).unwrap_err().code,
+            "library_full"
+        );
+        assert!(!exists(&store.staging, &stage_name).unwrap());
+
+        let reopened = reopen(&f).open().unwrap();
+        let index = reopened.index().unwrap();
+        assert_eq!(index.items.len(), 1);
+        assert_eq!(index.items[0].summary.item_id, prior.summary.item_id);
+        assert!(exists(&reopened.root, &prior.summary.item_path).unwrap());
+        assert!(!exists(&reopened.root, "copied-folder-oversized").unwrap());
+        assert_eq!(reopened.journal.entries().unwrap().count(), 0);
+    }
+
+    #[test]
+    fn occupied_new_destination_conflicts_without_journaling_or_removing_target() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let origin = f.root.join("origin.txt");
+        let (stage, entry) = folder(&store, &origin, None, b"new");
+        store.root.create_dir(&entry.summary.item_path).unwrap();
+        let occupied = store
+            .root
+            .open_dir_nofollow(&entry.summary.item_path)
+            .unwrap();
+        atomic_write_bytes(&occupied, "user.txt", b"keep me").unwrap();
+
+        assert_eq!(
+            store.publish(stage, entry.clone(), None, None).unwrap_err().code,
+            "library_conflict"
+        );
+        assert_eq!(occupied.read("user.txt").unwrap(), b"keep me");
+        let reopened = reopen(&f).open().unwrap();
+        assert!(reopened.index().unwrap().items.is_empty());
+        assert_eq!(reopened.journal.entries().unwrap().count(), 0);
+        assert_eq!(
+            reopened
+                .root
+                .open_dir_nofollow(&entry.summary.item_path)
+                .unwrap()
+                .read("user.txt")
+                .unwrap(),
+            b"keep me"
+        );
+    }
+
     #[test]
     fn item_limit_refuses_add_without_eviction_and_remove_crash_finishes() {
         let f = fixture();
