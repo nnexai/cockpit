@@ -1535,6 +1535,7 @@ pub(in crate::library) mod tests {
                 None,
                 Some(&target()),
             )
+            .await
             .unwrap_err();
         assert_eq!(publish_failure.code, "library_test_crash");
         *store.fault.lock().unwrap_or_else(|e| e.into_inner()) = Some("recovery_sync");

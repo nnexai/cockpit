@@ -1,7 +1,7 @@
 import type {
   ContextDirectory, ContextDocument, ContextMedia,
-  LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFollowSummary,
-  LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
+  LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest,
+  LibraryFollowSummary, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
   LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
   SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest,
 } from "../protocol/generated/v1";
@@ -93,6 +93,17 @@ export function parseLibraryRefreshRequest(value: unknown): LibraryRefreshReques
     default: return fail();
   }
 }
+
+export function parseLibraryAttachmentRequest(value: unknown): LibraryAttachmentRequest {
+  const r = record(value);
+  const attachmentIds = array(r.attachment_ids, 256, id);
+  if (attachmentIds.length === 0 || new Set(attachmentIds).size !== attachmentIds.length) return fail();
+  return {
+    item_id: id(r.item_id),
+    attachment_ids: attachmentIds,
+    action: oneOf(r.action, ["download", "remove_downloaded"] as const),
+  };
+}
 export function parseLibraryReplaceRequest(value: unknown): LibraryReplaceRequest { const r = record(value); return { item_id: id(r.item_id), confirmed: array(r.confirmed, 5000, conflict) }; }
 export function parseLibraryRemoveRequest(value: unknown): LibraryRemoveRequest {
   const r = record(value);
@@ -114,6 +125,10 @@ export function parseLibraryOperation(value: unknown): LibraryOperation {
   return { operation_id: id(r.operation_id), kind: oneOf(r.kind, opKinds), phases, item_ids: array(r.item_ids, 1_000_000, id), report, space, target, cancel_requested: bool(r.cancel_requested), finished: bool(r.finished), created_at: text(r.created_at), updated_at: text(r.updated_at) };
 }
 export function matchLibraryOperation(value: LibraryOperation, operationId: string): LibraryOperation { return value.operation_id === operationId ? value : fail(); }
+export function matchLibraryAttachmentsOperation(value: LibraryOperation, request: LibraryAttachmentRequest): LibraryOperation {
+  return value.kind === "attachments" && value.item_ids.length <= 1
+    && (value.item_ids.length === 0 || value.item_ids[0] === request.item_id) ? value : fail();
+}
 export function parseLibraryOperationId(value: unknown): string { return id(value); }
 export function parseLibraryDirectoryRequest(value: unknown): LibraryDirectoryRequest { const r = record(value); return { path: path(r.path, true), offset: nullable(r.offset, v => integer(v, 0xffffffff)), revision: nullable(r.revision, id) }; }
 export function parseLibraryDocumentRequest(value: unknown): LibraryDocumentRequest { const r = record(value); return { path: path(r.path), expected_revision: nullable(r.expected_revision, id), offset: nullable(r.offset, integer) }; }

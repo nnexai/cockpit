@@ -395,8 +395,16 @@ impl Store {
         entry: &mut LibraryIndexEntry,
         asset: &crate::sources::SourceAsset,
     ) -> Result<Stage, InspectionError> {
-        let stage = self.stage()?;
-        let markdown = crate::sources::library_markdown(asset, &entry.summary.revision);
+        self.stage_asset_into(self.stage()?, entry, asset, vec![])
+    }
+    pub fn stage_asset_into(
+        &self,
+        stage: Stage,
+        entry: &mut LibraryIndexEntry,
+        asset: &crate::sources::SourceAsset,
+        mut files: Vec<MarkerFile>,
+    ) -> Result<Stage, InspectionError> {
+        let markdown = crate::sources::library_markdown(asset, &crate::sources::content_revision(asset));
         let keys = format!(
             "---\nlibrary_item_id: {}\nlibrary_revision: {}\n",
             serde_json::to_string(&entry.summary.item_id).unwrap(),
@@ -407,15 +415,12 @@ impl Store {
                 .strip_prefix("---\n")
                 .ok_or_else(|| corrupt("source document has no frontmatter"))?;
         atomic_write_bytes(&stage.dir, "document.md", markdown.as_bytes()).map_err(io_error)?;
-        self.seal(
-            &stage,
-            entry,
-            vec![MarkerFile {
-                path: "document.md".into(),
-                hash: hash(markdown.as_bytes()),
-                bytes: markdown.len() as u64,
-            }],
-        )?;
+        files.push(MarkerFile {
+            path: "document.md".into(),
+            hash: hash(markdown.as_bytes()),
+            bytes: markdown.len() as u64,
+        });
+        self.seal(&stage, entry, files)?;
         Ok(stage)
     }
     pub fn seal(

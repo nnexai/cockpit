@@ -556,8 +556,7 @@ it("recognizes a Cloud page link, asks for the provider only when several config
     expect([...providerSelect()!.options].map((option) => option.value)).toEqual(["cloud", "cloud-reader"]);
     expect(document.body.textContent).toContain("✓ Confluence page · Release checklist · SD");
     expect(document.body.textContent).toContain("SD · Software Development · nnexai.atlassian.net");
-    // Forge-only options never apply to a page.
-    expect(document.body.querySelector("input[type='checkbox']")).toBeNull();
+    expect(document.body.querySelector<HTMLInputElement>("input[type='checkbox']")?.checked).toBe(false);
 
     await act(async () => {
       const select = providerSelect()!;
@@ -733,15 +732,17 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
     const primary = button("Follow and add to api-review")!;
     expect(primary.disabled).toBe(false);
     expect(document.activeElement).toBe(primary);
-    // Following is the only option for a space: no page-or-space choice, and nothing downloads attachments.
+    // Following is the only option for a space; attachment downloads require an explicit opt-in.
     expect([...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => radio.checked)).toEqual([false, true]);
-    expect(document.body.querySelector("input[type='checkbox']")).toBeNull();
+    const downloadAttachments = document.body.querySelector<HTMLInputElement>("input[type='checkbox']")!;
+    expect(downloadAttachments.checked).toBe(false);
+    await act(async () => downloadAttachments.click());
 
     await act(async () => primary.click());
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "SD", provider_id: "cloud", target, label: null,
-      hydrate_references: false, follow_space: true, download_attachments: false, refresh_existing: false,
+      hydrate_references: false, follow_space: true, download_attachments: true, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("✓ Saved to Library · 3 pages");
     expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
@@ -808,4 +809,30 @@ it("offers following a page's whole space, warns when the page limit makes it pa
     await act(async () => root.unmount());
     host.remove();
   }
+});
+
+it("downloads attachments for a page only after its checkbox is checked", async () => {
+  vi.useFakeTimers();
+  const saved: LibraryOperation = {
+    operation_id: "op-page-attachments", kind: "add", item_ids: ["source:page-98765"], report: null, target: null, space: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }],
+  };
+  const client = githubClient({
+    projectConfiguration: vi.fn(async () => ({ providers: confluenceProviders, limits: { library_attachment_bytes: 25 * 1024 * 1024 } })),
+    libraryResolve: vi.fn(async () => pageResolution("cloud")),
+    libraryAdd: vi.fn(async () => saved),
+  });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} />));
+    await advance(0); await typeSource(CLOUD_PAGE);
+    const checkbox = document.body.querySelector<HTMLInputElement>("input[type='checkbox']")!;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.parentElement?.textContent).toContain("Download attachments (up to 25 MB each)");
+    await act(async () => checkbox.click());
+    await act(async () => dialogButton("Add to Library")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ follow_space: false, download_attachments: true }));
+  } finally { await act(async () => root.unmount()); host.remove(); }
 });

@@ -200,6 +200,7 @@ class AppFixture {
     libraryConfluenceSpaces: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryAdd: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryRefresh: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryAttachments: vi.fn(async () => { throw new Error("Unexpected Library attachment operation in terminal fixture"); }),
     libraryOperation: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryOperationCancel: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryReplace: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),

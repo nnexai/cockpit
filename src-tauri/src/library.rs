@@ -4,7 +4,7 @@ use cockpit_protocol::{
     context::{ContextDirectory, ContextDocument},
     context_media::ContextMedia,
     library::{
-        LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing,
+        LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing,
         LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest,
         LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, SpaceAddRequest,
         SpaceAttemptsDismissRequest, SpaceContextListing, SpaceContextRequest,
@@ -116,6 +116,21 @@ pub async fn cockpit_library_add(
         .library()
         .map_err(inspection_error_response)?
         .start_add(request)
+        .await
+        .map_err(inspection_error_response)?;
+    Ok(bounded_operation(operation))
+}
+
+#[tauri::command]
+pub async fn cockpit_library_attachments(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<LibraryOperation, ErrorResponse> {
+    let request: LibraryAttachmentRequest = decode_request(request, "library attachments")?;
+    let operation = service
+        .library()
+        .map_err(inspection_error_response)?
+        .start_attachments(request)
         .await
         .map_err(inspection_error_response)?;
     Ok(bounded_operation(operation))

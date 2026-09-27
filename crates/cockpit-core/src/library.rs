@@ -1,4 +1,5 @@
 //! Durable, session-independent provider snapshots. Legacy source caches are inert.
+mod attachments;
 mod folder;
 mod follow;
 mod operations;
@@ -407,18 +408,18 @@ impl LibraryService {
         if request.follow_space {
             return self.start_follow_add(request).await;
         }
-        if request.download_attachments {
-            return Err(error(
-                "source_capability_unavailable",
-                "This provider snapshot operation does not support downloads",
-            ));
-        }
         if folder::recognizes(&request.input) {
+            if request.download_attachments {
+                return Err(error("source_capability_unavailable", "Only Confluence pages support attachment downloads"));
+            }
             return self.start_folder_add(request).await;
         }
         let page_request = self
             .confluence_request(&request.input, request.provider_id.as_deref())
             .await?;
+        if request.download_attachments && page_request.is_none() {
+            return Err(error("source_capability_unavailable", "Only Confluence pages support attachment downloads"));
+        }
         if page_request.is_some() && request.hydrate_references {
             return Err(error(
                 "source_capability_unavailable",
@@ -518,7 +519,7 @@ impl LibraryService {
                     asset.original_url = Some(request.input.clone());
                 }
                 let old = service.entry(&worker_store, &asset_id)?;
-                if old.is_some() && !request.refresh_existing {
+                if old.is_some() && !request.refresh_existing && !request.download_attachments {
                     if let Some(target) = &request.target {
                         space::prepare_saved_item(&worker_store, &id, target, &old.as_ref().expect("existing item").summary)?;
                     }
@@ -531,7 +532,11 @@ impl LibraryService {
                     )?;
                     continue;
                 }
-                service.save_asset(&worker_store, &id, asset, old, None, request.target.as_ref())?;
+                service.save_asset_with(&worker_store, &id, asset, old, SaveOptions {
+                    target: request.target.as_ref(),
+                    download_all: request.download_attachments,
+                    ..SaveOptions::default()
+                }).await?;
             }
             if let Some(target) = &request.target {
                 let saved = operations::get(&worker_store, &id)?.item_ids;
@@ -591,7 +596,7 @@ impl LibraryService {
                 } else {
                     let asset = assets.remove(id).ok_or_else(||
                         error("library_item_not_found", "Saved setup item no longer exists"))?;
-                    service.save_asset(&worker_store, &worker_id, asset, None, None, Some(&target))?;
+                    service.save_asset(&worker_store, &worker_id, asset, None, None, Some(&target)).await?;
                 }
             }
             // Every item and its pending attempt are now durable. Companion
@@ -836,14 +841,7 @@ impl LibraryService {
                     .into_iter()
                     .find(|a| item_id(&a.source) == entry.summary.item_id);
                 if let Some(asset) = asset {
-                    match self.save_asset(
-                        store,
-                        operation,
-                        asset,
-                        Some(entry.clone()),
-                        confirmed.as_deref(),
-                        None,
-                    ) {
+                    match self.save_asset(store, operation, asset, Some(entry.clone()), confirmed.as_deref(), None).await {
                         Ok(()) => Ok(()),
                         Err(e) => self.fetch_failed(store, operation, entry, e),
                     }
@@ -894,7 +892,7 @@ impl LibraryService {
             Some(e.message),
         )
     }
-    fn save_asset(
+    async fn save_asset(
         &self,
         store: &Arc<Store>,
         operation: &str,
@@ -903,9 +901,9 @@ impl LibraryService {
         confirmed: Option<&[LibraryConflictFile]>,
         target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
-        self.save_asset_with(store, operation, asset, old, SaveOptions { confirmed, target, ..SaveOptions::default() })
+        self.save_asset_with(store, operation, asset, old, SaveOptions { confirmed, target, ..SaveOptions::default() }).await
     }
-    fn save_asset_with(
+    async fn save_asset_with(
         &self,
         store: &Arc<Store>,
         operation: &str,
@@ -913,7 +911,7 @@ impl LibraryService {
         old: Option<LibraryIndexEntry>,
         options: SaveOptions<'_>,
     ) -> Result<(), InspectionError> {
-        let SaveOptions { confirmed, target, follow_id, reason } = options;
+        let SaveOptions { confirmed, target, follow_id, reason, download_all, attachment_request } = options;
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
         }
@@ -1016,6 +1014,18 @@ impl LibraryService {
                 return self.record_conflict(store, operation, old.clone(), e.message);
             }
         }
+        let prepared = if is_confluence {
+            let Some(prepared) = self.prepare_attachments(store, operation, &mut asset, old.as_ref(), download_all, attachment_request, confirmed).await? else {
+                return Ok(());
+            };
+            entry.summary.attachments = attachments::summaries(&asset);
+            entry.summary.revision = prepared.revision(&asset);
+            Some(prepared)
+        } else {
+            None
+        };
+        let attachment_partial = prepared.as_ref().is_some_and(|p| p.partial);
+        let reason = prepared.as_ref().and_then(|p| p.reason.clone()).or(reason);
         let equal = old
             .as_ref()
             .is_some_and(|e| e.summary.revision == entry.summary.revision);
@@ -1032,7 +1042,10 @@ impl LibraryService {
             }
             store.update(entry.clone())?;
         } else {
-            let stage = store.stage_asset(&mut entry, &asset)?;
+            let stage = match prepared {
+                Some(prepared) => store.stage_asset_into(prepared.stage, &mut entry, &asset, prepared.files)?,
+                None => store.stage_asset(&mut entry, &asset)?,
+            };
             if operations::cancelled(store, operation)? {
                 return Ok(());
             }
@@ -1068,7 +1081,9 @@ impl LibraryService {
             store,
             operation,
             Some(&entry.summary),
-            if old.is_none() {
+            if attachment_partial {
+                LibraryReportOutcome::Partial
+            } else if old.is_none() {
                 LibraryReportOutcome::New
             } else if equal {
                 LibraryReportOutcome::Unchanged
@@ -1126,6 +1141,8 @@ struct SaveOptions<'a> {
     follow_id: Option<&'a str>,
     /// Report reason for this item's row, e.g. why a followed page changed.
     reason: Option<String>,
+    download_all: bool,
+    attachment_request: Option<&'a LibraryAttachmentRequest>,
 }
 fn item_id(source: &SourceRef) -> String {
     let mut hash = Sha256::new();
@@ -1711,7 +1728,7 @@ mod tests {
         operations::set_target(&store, &operation.operation_id, target.clone()).unwrap();
         *store.fault.lock().unwrap_or_else(|e| e.into_inner()) = Some("space_after_library_publish");
         let failure = f.service.save_asset(&store, &operation.operation_id, asset(1, "published"),
-            None, None, Some(&target)).unwrap_err();
+            None, None, Some(&target)).await.unwrap_err();
         assert_eq!(failure.code, "library_test_crash");
         assert!(operations::get(&store, &operation.operation_id).unwrap().item_ids.is_empty());
         drop(lease);

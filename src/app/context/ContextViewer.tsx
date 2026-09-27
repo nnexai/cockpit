@@ -18,6 +18,7 @@ import type {
   ContextRoot,
   PanePresentation,
   CommentDraft,
+  LibraryAttachmentRequest,
   LibraryItemSummary,
   LibraryOperation,
   LibraryRefreshRequest,
@@ -36,8 +37,8 @@ import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerL
 import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
 import { AddContextDialog } from "../library/AddContextDialog";
 import { LibraryConfirmDialog, SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "../library/LibraryConfirmDialog";
-import { LibraryItemHeader, type ItemSpaceState } from "../library/LibraryItemHeader";
-import { LibraryMenu, LibraryTree, menuAnchor, type LibraryItemActions } from "../library/LibraryTree";
+import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, type ItemSpaceState } from "../library/LibraryItemHeader";
+import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
 import { headerSpaceAction, spaceCopyChip } from "../library/spaceCopyPresentation";
@@ -1085,10 +1086,21 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     setRefreshGeneration((generation) => generation + 1);
   });
   const startLibraryOperation = libraryOperation.start;
-  const libraryBusy = libraryOperation.running || libraryOperation.starting;
-  const pendingItemIds = useMemo(() => new Set([...libraryOperation.pendingItemIds, ...(libraryBusy ? libraryPendingIds : [])]), [libraryBusy, libraryOperation.pendingItemIds, libraryPendingIds]);
+  const [attachmentRequest, setAttachmentRequest] = useState<LibraryAttachmentRequest | null>(null);
+  const listingRef = useRef(library.listing);
+  listingRef.current = library.listing;
+  const [beforeAttachments, setBeforeAttachments] = useState<LibraryListingState["listing"] | undefined>(undefined);
+  const attachmentOperation = useLibraryOperation(client, () => setBeforeAttachments(listingRef.current));
+  const attachmentBusy = attachmentOperation.running || attachmentOperation.starting;
+  const libraryBusy = libraryOperation.running || libraryOperation.starting || attachmentBusy;
+  const pendingItemIds = useMemo(() => new Set([...libraryOperation.pendingItemIds, ...(libraryOperation.running || libraryOperation.starting ? libraryPendingIds : []), ...(attachmentBusy && attachmentRequest ? [attachmentRequest.item_id] : [])]), [libraryOperation.running, libraryOperation.starting, libraryOperation.pendingItemIds, libraryPendingIds, attachmentBusy, attachmentRequest]);
   const libraryItems = library.listing?.items;
-  const selectedLibraryItem = isLibrary && selectedPath ? libraryItems?.find((item) => item.document_path === selectedPath) ?? null : null;
+  const [attachmentNotice, setAttachmentNotice] = useState<{ itemId: string; attachmentId: string } | null>(null);
+  const noticeItem = isLibrary ? libraryItems?.find((item) => item.item_id === attachmentNotice?.itemId) : null;
+  const noticeAttachment = noticeItem?.attachments.find((attachment) => attachment.attachment_id === attachmentNotice?.attachmentId);
+  const selectedAttachmentId = noticeAttachment?.attachment_id ?? (isLibrary && selectedPath ? libraryItems?.flatMap((item) => item.attachments.filter((attachment) => attachmentPath(item, attachment) === selectedPath)).at(0)?.attachment_id : null);
+  const selectedLibraryItem = isLibrary && selectedPath && !noticeAttachment ? libraryItems?.find((item) => item.document_path === selectedPath) ?? null : null;
+  useEffect(() => { setAttachmentNotice(null); }, [selectedPath, isLibrary]);
   useEffect(() => {
     if (!isLibrary) return;
     // A Space add or update copies saved items out of the Library without changing them; rereading
@@ -1213,7 +1225,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   };
   useEffect(() => {
     if (!isLibrary || library.status !== "ready" || !library.listing || !selectedPath) return;
-    if (library.listing.items.some((item) => item.document_path === selectedPath)) return;
+    if (library.listing.items.some((item) => item.document_path === selectedPath || item.attachments.some((attachment) => attachmentPath(item, attachment) === selectedPath))) return;
     const key = keyFor(LIBRARY_ROOT_ID, selectedPath);
     setDocuments((current) => {
       const next = { ...current };
@@ -1232,9 +1244,27 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     startLibraryRefresh({ scope: "all" }, (libraryItems ?? []).map((item) => item.item_id));
   }, [libraryItems, startLibraryRefresh]);
   const openLibraryItem = (item: LibraryItemSummary) => {
+    setAttachmentNotice(null);
     if (item.document_path) openFile(item.document_path, null);
   };
+  const attachmentActions: LibraryAttachmentActions = {
+    busy: libraryBusy,
+    active: attachmentBusy ? attachmentRequest : null,
+    start: (item, action, attachmentIds) => {
+      if (libraryBusy || attachmentIds.length === 0) return;
+      const request = { item_id: item.item_id, attachment_ids: attachmentIds, action };
+      setBeforeAttachments(undefined);
+      setAttachmentRequest(request);
+      void attachmentOperation.start(() => client.libraryAttachments(request));
+    },
+    open: (item, attachment) => {
+      const path = attachmentPath(item, attachment);
+      if (path) { setAttachmentNotice(null); openFile(path, null); }
+      else setAttachmentNotice({ itemId: item.item_id, attachmentId: attachment.attachment_id });
+    },
+  };
   const libraryActions: LibraryItemActions = {
+    attachments: attachmentActions,
     open: openLibraryItem,
     refresh: startLibraryRefresh,
     remove: (item) => setLibraryConfirm({ kind: "remove", item }),
@@ -1374,6 +1404,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       ? { start: fileState.selectionStart, end: fileState.selectionEnd }
       : null;
     const renderDocumentBody = (drafts: CommentDraft[] = [], actions?: CommentDraftActions, inlineEditor?: (line: number) => ReactNode): ReactNode => {
+      if (noticeItem && noticeAttachment) return attachmentPath(noticeItem, noticeAttachment)
+        ? <div className="context-notice library-attachment-notice"><span>Downloaded.</span><button type="button" onClick={() => attachmentActions.open(noticeItem, noticeAttachment)}>Open attachment</button></div>
+        : <LibraryAttachmentNotice item={noticeItem} attachment={noticeAttachment} attachments={attachmentActions} />;
       if (isLibrary && !selectedPath) {
         if (!library.listing && library.status === "error") {
           return <div className="context-notice context-notice-error" role="alert"><strong>Library unavailable:</strong><span>{library.error}</span><span>Space context is unaffected.</span><button type="button" onClick={library.reload}>Retry</button></div>;
@@ -1504,6 +1537,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         <button type="button" onClick={refresh} aria-label="Refresh Context files" title="Refresh files"><UiIcon name="refresh" /></button>
         {onTerminalView ? <button type="button" onClick={onTerminalView} aria-label="Show terminal" title="Show terminal"><UiIcon name="terminal" /></button> : null}
       </header>
+      {isLibrary && attachmentRequest ? <AttachmentReport request={attachmentRequest} operation={attachmentOperation.operation} starting={attachmentOperation.starting} error={attachmentOperation.error}
+        item={library.status === "error" ? null : libraryItems?.find((item) => item.item_id === attachmentRequest.item_id) ?? null}
+        settled={beforeAttachments !== undefined && (library.status === "error" || (library.status === "ready" && library.listing !== beforeAttachments))}
+        onCancel={attachmentOperation.cancel} onDismiss={() => setAttachmentRequest(null)}
+        onRetry={(ids) => { const item = libraryItems?.find((item) => item.item_id === attachmentRequest.item_id); if (item) attachmentActions.start(item, attachmentRequest.action, ids); }} /> : null}
       {isLibrary && libraryOperation.operation && !libraryReportDismissed ? <RefreshReport operation={libraryOperation.operation} verb={libraryReportVerb} error={libraryOperation.error}
         onCancel={libraryOperation.cancel} onDismiss={() => setLibraryReportDismissed(true)}
         onOpenItem={(itemId) => { const item = libraryItems?.find((candidate) => candidate.item_id === itemId); if (item) openLibraryItem(item); }}
@@ -1532,7 +1570,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               <button type="button" onClick={library.reload}>Retry</button>
             </div> : null}
             {library.listing?.items.length === 0 ? <div className="context-tree-status is-empty">Empty</div> : null}
-            {library.listing ? <LibraryTree items={library.listing.items} follows={library.listing.follows} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
+            {library.listing ? <LibraryTree items={library.listing.items} follows={library.listing.follows} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} selectedAttachmentId={selectedAttachmentId} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
           </> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}

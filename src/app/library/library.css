@@ -134,7 +134,9 @@
 .library-item-phrase { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 .library-item-state button,
 .library-report button,
-.library-report-rows button {
+.library-report-rows button,
+.library-attachments button,
+.library-attachment-notice button {
   min-height: 26px;
   padding: 2px 8px;
   border: 1px solid var(--border);
@@ -146,8 +148,12 @@
 }
 .library-item-state button:hover:not(:disabled),
 .library-report button:hover:not(:disabled),
-.library-report-rows button:hover:not(:disabled) { background: var(--surface-hover); }
-.library-item-state button:disabled { cursor: default; opacity: .6; }
+.library-report-rows button:hover:not(:disabled),
+.library-attachments button:hover:not(:disabled),
+.library-attachment-notice button:hover:not(:disabled) { background: var(--surface-hover); }
+.library-item-state button:disabled,
+.library-attachments button:disabled,
+.library-attachment-notice button:disabled { cursor: default; opacity: .6; }
 .library-more { display: grid; width: 28px; place-items: center; padding: 3px !important; }
 .library-item-notice { margin: 4px -24px 0; padding-inline: 24px; border-top: 1px solid var(--border); }
 .library-metadata > summary { width: fit-content; color: var(--text-muted); cursor: pointer; }
@@ -244,18 +250,22 @@
 .library-progress-files { width: 100%; max-height: 96px; margin: 0; padding: 0 0 0 16px; overflow: auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .library-progress-files code { overflow-wrap: anywhere; user-select: text; }
 
-/* Confluence page attachments (design §4.4): read-only metadata until downloads land. */
+/* Confluence page attachments (design §4.4): metadata until an explicit download. */
 .library-attachments { display: flex; flex-direction: column; gap: 4px; }
-.library-attachments-heading { color: var(--text-muted); }
-.library-attachments-heading span { color: var(--text-secondary); }
+.library-attachments-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); }
+.library-attachments-title span { color: var(--text-secondary); }
 .library-attachments table { width: 100%; border-collapse: collapse; }
 .library-attachments th { padding: 2px 10px 2px 0; color: var(--text-muted); font-weight: 400; text-align: left; }
 .library-attachments td { padding: 2px 10px 2px 0; overflow-wrap: anywhere; }
-.library-attachments td:first-child { color: var(--text-primary); user-select: text; }
+.library-attachments td.library-attachment-name { color: var(--text-primary); user-select: text; }
+.library-attachments td.library-attachment-select { width: 1px; }
+.library-attachments td.library-attachment-action { width: 1px; white-space: nowrap; text-align: right; }
 .library-attachments ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.library-attachments li { display: flex; flex-direction: column; }
+.library-attachments li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .library-attachments li > span:first-child { color: var(--text-primary); overflow-wrap: anywhere; }
 .library-attachment-detail { color: var(--text-muted); }
+.library-attachment-notice { flex-wrap: wrap; }
+.library-attachment-notice > span { overflow-wrap: anywhere; }
 
 /* Followed spaces (design §4.3, §4.5, §4.10, UQ5a). */
 .library-tree-notice { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: var(--font-size-2xs); }

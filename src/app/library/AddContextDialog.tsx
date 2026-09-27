@@ -217,6 +217,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [awaitingStart, setAwaitingStart] = useState(Boolean(restoredRef.current && !restoredRef.current.operation && !restoredRef.current.error));
   const [providers, setProviders] = useState<ProjectProvider[]>([]);
   const [spacePageLimit, setSpacePageLimit] = useState<number | null>(null);
+  const [attachmentLimit, setAttachmentLimit] = useState<number | null>(null);
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [providersError, setProvidersError] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -227,6 +228,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [refreshExisting, setRefreshExisting] = useState(false);
   // A Confluence page: `Only this page` (false, the default) or `Follow the whole space`.
   const [followChoice, setFollowChoice] = useState(false);
+  // A new Confluence page or followed space downloads attachments only when asked (Q6); unchecked by default.
+  const [downloadAttachments, setDownloadAttachments] = useState(false);
   const [browseOpen, setBrowseOpen] = useState(false);
   // A space chosen from the browser is already resolved; the lookup reuses it instead of asking again.
   const [picked, setPicked] = useState<{ input: string; providerId: string; resolution: LibraryResolution } | null>(null);
@@ -259,7 +262,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   useEffect(() => {
     let current = true;
     client.projectConfiguration().then((configuration) => {
-      if (current) { setProviders(configuration.providers); setSpacePageLimit(configuration.limits?.library_space_pages ?? null); setProvidersLoaded(true); }
+      if (current) { setProviders(configuration.providers); setSpacePageLimit(configuration.limits?.library_space_pages ?? null); setAttachmentLimit(configuration.limits?.library_attachment_bytes ?? null); setProvidersLoaded(true); }
     }, (cause: unknown) => {
       if (current) { setProvidersError(errorText(cause, "Provider configuration could not be read.")); setProvidersLoaded(true); }
     });
@@ -314,6 +317,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const existingFollow = follow ? resolution?.existing_follow_id ?? null : null;
   const existingItem = follow ? null : resolution?.existing_item_id ?? null;
   const existing = existingItem ?? existingFollow;
+  // Attachment bytes are fetched only for a new page or followed space, and only when checked; a follow keeps the choice for its refreshes.
+  const attachmentsOffered = (resolution?.kind === "confluence_page" || spaceResolution) && !existing;
   const folder = resolution?.kind === "folder";
   const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
   const forge = resolution?.kind === "artifact" && family !== null && family.key !== "jira" && family.key !== "confluence";
@@ -386,7 +391,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
       provider_id: providerId,
       hydrate_references: forge && linked,
       follow_space: follow,
-      download_attachments: false,
+      download_attachments: attachmentsOffered && downloadAttachments,
       refresh_existing: Boolean(existing) && refreshExisting,
       label: folder ? label?.trim() || resolution.title : null,
       target,
@@ -424,6 +429,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setLabel(null);
     setPicked(null);
     setFollowChoice(false);
+    setDownloadAttachments(false);
     setLookup({ status: "idle" });
     setRefreshExisting(false);
     window.requestAnimationFrame(() => inputRef.current?.focus());
@@ -437,6 +443,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setLookup({ status: "ok", resolution: chosenSpace });
     setLabel(null);
     setRefreshExisting(false);
+    setDownloadAttachments(false);
     setBrowseOpen(false);
     setPickedFocus((value) => value + 1);
   };
@@ -490,7 +497,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           <div className="task-setup-row">
             <label htmlFor={fieldId}>Source</label>
             <div>
-              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setPicked(null); } }}
+              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setDownloadAttachments(false); setPicked(null); } }}
                 placeholder="Issue, MR or PR link, Jira key, Confluence page or space, or folder path" autoComplete="off" spellCheck={false}
                 aria-invalid={failure ? "true" : undefined} aria-describedby={failure ? failureId : undefined} />
               {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed === "~" || trimmed.startsWith("~/") ? "Checking the folder…"
@@ -542,6 +549,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
             </div>
           </div> : null}
           {resolution?.kind === "confluence_page" && resolution.existing_follow_id ? <p className="task-setup-check">{`${resolutionSpaceName(resolution)} is already followed; refreshing it keeps this page current.`}</p> : null}
+          {attachmentsOffered ? <label className="task-setup-check"><input type="checkbox" checked={downloadAttachments} onChange={(event) => setDownloadAttachments(event.target.checked)} /> {`Download attachments${attachmentLimit !== null ? ` (up to ${Math.round(attachmentLimit / (1024 * 1024))} MB each)` : ""}`}</label> : null}
           {resolution && forge && !existing ? <label className="task-setup-check"><input type="checkbox" checked={linked} onChange={(event) => setLinked(event.target.checked)} /> Include linked issues and {family?.review}s within import limits</label> : null}
           {existing ? <label className="task-setup-check"><input type="checkbox" checked={refreshExisting} onChange={(event) => setRefreshExisting(event.target.checked)} /> Refresh from source first</label> : null}
           <div className="task-setup-row">

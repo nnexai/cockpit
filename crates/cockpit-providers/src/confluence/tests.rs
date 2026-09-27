@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cockpit_core::sources::{
     FrontmatterValue, ProviderResolution, SourceAuthority, SourceFetchRequest, SourceProvider,
+    confluence_attachment_pattern, confluence_glob_matches,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
 use serde_json::{Value, json};
@@ -14,7 +15,6 @@ use super::{
     ConfluenceApi, ConfluenceCall, ConfluenceInput, ConfluenceSourceProvider, ContentExpand,
     SearchPage, allowlisted_argv, classify_failure, confluence_args, parse_confluence_input,
 };
-
 const CLOUD: &str = "https://nnexai.atlassian.net/wiki";
 const DC: &str = "https://confluence.example.com/confluence";
 
@@ -285,6 +285,30 @@ fn confluence_args_refuse_malformed_values_before_any_process() {
             "{call:?}"
         );
     }
+}
+
+#[test]
+fn attachment_patterns_keep_hostile_titles_literal_and_predict_cli_overmatches() {
+    let cases = [
+        ("../x", "../x"),
+        ("a/b.png", "a/b.png"),
+        ("con", "con"),
+        ("-rf.png", "-rf.png"),
+        (".hidden", ".hidden"),
+        (" pad.txt ", "?pad.txt?"),
+        ("x*y.png", "x?y.png"),
+        ("x?y.png", "x?y.png"),
+    ];
+    for (title, expected) in cases {
+        assert_eq!(confluence_attachment_pattern(title), expected, "{title:?}");
+    }
+    let star = confluence_attachment_pattern("x*y.png");
+    assert!(confluence_glob_matches(&star, "xzy.png"));
+    assert!(!confluence_glob_matches(&star, "xy.png"));
+    let pdf = confluence_attachment_pattern("Report.PDF");
+    assert!(confluence_glob_matches(&pdf, "report.pdf"));
+    assert!(!confluence_glob_matches(&pdf, "Report.PDFx"));
+    assert_eq!(confluence_attachment_pattern("  "), "??");
 }
 
 #[test]

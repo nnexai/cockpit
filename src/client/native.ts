@@ -1,10 +1,9 @@
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
-  matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
-  parseLibraryAddRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
-  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
-  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
-  parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+  matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
+  parseLibraryAddRequest, parseLibraryAttachmentRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
+  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
+  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
   parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
@@ -722,6 +721,11 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const request = parseLibraryAddRequest(value);
       const response = await invokeAndParse(invoke, "cockpit_library_add", { request }, "Library add", parseLibraryOperation);
       return request.target ? matchSpaceOperation(response, request.target) : response;
+    },
+    async libraryAttachments(value) {
+      const request = parseLibraryAttachmentRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_attachments", { request }, "Library attachments", parseLibraryOperation);
+      return matchLibraryAttachmentsOperation(response, request);
     },
     async libraryRefresh(value) {
       const request = parseLibraryRefreshRequest(value);

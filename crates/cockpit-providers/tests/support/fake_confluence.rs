@@ -278,6 +278,22 @@ fn cql_literal(rest: &str) -> Option<(String, &str)> {
     None
 }
 
+
+/// Deterministic binary body returned for one attachment id.
+pub fn attachment_payload(id: &str, size: usize) -> Vec<u8> {
+    let seed = format!("fixture bytes for attachment {id}\n").into_bytes();
+    seed.iter().copied().cycle().take(size).collect()
+}
+
+fn respond_bytes(stream: &mut TcpStream, body: &[u8]) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
 fn respond(stream: &mut TcpStream, status: u16, body: &Value) {
     let body = serde_json::to_vec(body).unwrap();
     let reason = match status {
@@ -324,6 +340,31 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
             401,
             &json!({"code": 401, "message": "Unauthorized"}),
         );
+        return;
+    }
+    let mut download_path = url.path();
+    if mode == Mode::Cloud {
+        download_path = download_path.strip_prefix("/wiki").unwrap_or(download_path);
+    }
+    let download_segments: Vec<&str> = download_path.trim_start_matches('/').split('/').collect();
+    if method == "GET"
+        && download_segments.len() == 4
+        && download_segments[0] == "download"
+        && download_segments[1] == "attachments"
+    {
+        let page_id = download_segments[2];
+        let requested_title = download_segments[3];
+        let body = state.pages.get(page_id).and_then(|page| {
+            page.attachments.iter().find_map(|(id, title, _, size)| {
+                (web_title(title) == requested_title)
+                    .then(|| attachment_payload(id, *size as usize))
+            })
+        });
+        if let Some(body) = body {
+            respond_bytes(&mut stream, &body);
+        } else {
+            respond(&mut stream, 404, &json!({"message": "attachment not found"}));
+        }
         return;
     }
     let api = match mode {
@@ -462,6 +503,18 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
             }
             None => respond(&mut stream, 404, &not_found(id)),
         },
+        ["content", page_id, "child", "attachment", attachment_id, "download"] => {
+            let body = state.pages.get(*page_id).and_then(|page| {
+                page.attachments.iter().find_map(|(id, _, _, size)| {
+                    (id == attachment_id).then(|| attachment_payload(id, *size as usize))
+                })
+            });
+            if let Some(body) = body {
+                respond_bytes(&mut stream, &body);
+            } else {
+                respond(&mut stream, 404, &json!({"message": "attachment not found"}));
+            }
+        }
         ["content", id, "child", "attachment"] => match state.pages.get(*id) {
             Some(page) => {
                 let results: Vec<_> = page

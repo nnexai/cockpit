@@ -10,14 +10,20 @@
 mod fake_confluence;
 
 use std::ffi::OsString;
+use std::fs;
 use std::path::PathBuf;
 
+use cap_std::ambient_authority;
+use cap_std::fs::Dir;
 use cockpit_core::sources::{
-    FrontmatterValue, ProviderResolution, SourceAuthority, SourceFetchRequest, SourceService,
+    AttachmentRef, FrontmatterValue, ProviderResolution, SourceAuthority, SourceFetchRequest,
+    SourceService,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
 use cockpit_providers::confluence::allowlisted_argv;
-use fake_confluence::{FakeConfluence, Mode, PROFILE, Page};
+use fake_confluence::{
+    FakeConfluence, Mode, PROFILE, Page, attachment_payload,
+};
 
 fn cli() -> Option<PathBuf> {
     match std::env::var_os("COCKPIT_CONFLUENCE_CLI") {
@@ -253,6 +259,99 @@ async fn cloud_and_dc_pages_fetch_and_refresh_through_the_real_cli() {
     }
 }
 
+
+#[tokio::test]
+async fn cloud_and_dc_attachment_downloads_are_id_mapped_and_confined() {
+    let Some(cli) = cli() else { return };
+    let hostile = [
+        ("att201", "../x"),
+        ("att202", "a/b.png"),
+        ("att203", "con"),
+        ("att204", "-rf.png"),
+        ("att205", ".hidden"),
+        ("att206", " pad.txt "),
+        ("att207", "x*y.png"),
+        ("att208", "xzy.png"),
+        ("att209", "Report.PDF"),
+        ("att210", "report.pdf"),
+    ];
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = FakeConfluence::start(mode, &cli);
+        let mut fixture = page("123456789", "Attachment Safety", "SD", 7);
+        fixture.attachments = hostile
+            .iter()
+            .map(|(id, title)| ((*id).into(), (*title).into(), "application/octet-stream".into(), 64))
+            .collect();
+        server.add_page(fixture);
+        let config = configuration(&server, PROFILE);
+        let providers = cockpit_providers::configured_providers(&config).unwrap();
+        let provider = providers.iter().find(|provider| provider.provider_id() == "wiki").unwrap();
+        let download_root = server.root.join("private-staging");
+        fs::create_dir_all(&download_root).unwrap();
+        let siblings: Vec<AttachmentRef> = hostile
+            .iter()
+            .map(|(id, title)| AttachmentRef {
+                id: (*id).into(),
+                title: (*title).into(),
+                bytes: Some(64),
+            })
+            .collect();
+        for (index, (id, title)) in hostile.iter().enumerate() {
+            let dest_path = download_root.join(format!("dl-{index}"));
+            fs::create_dir(&dest_path).unwrap();
+            let dest = Dir::open_ambient_dir(&dest_path, ambient_authority()).unwrap();
+            let attachment = AttachmentRef {
+                id: (*id).into(),
+                title: (*title).into(),
+                bytes: Some(64),
+            };
+            let siblings: Vec<_> = siblings
+                .iter()
+                .filter(|sibling| sibling.id != *id)
+                .cloned()
+                .collect();
+            let pattern = cockpit_core::sources::confluence_attachment_pattern(title);
+            let max_files = 1 + siblings.iter().filter(|sibling| cockpit_core::sources::confluence_glob_matches(&pattern, &sibling.title)).count();
+            let budget = cockpit_core::process::StagingBudget { bytes: 64 * max_files as u64, max_files };
+            assert_eq!(dest.entries().unwrap().count(), 0);
+            let downloaded = provider
+                .download_attachment("123456789", &attachment, &siblings, &dest, &dest_path, budget)
+                .await
+                .unwrap_or_else(|error| panic!("{mode:?} {title:?}: {error:?}; argv={:?}; requests={:?}", calls(&server), server.requests()));
+            assert_eq!(downloaded.attachment_id, *id);
+            assert_eq!(PathBuf::from(&downloaded.file_name).components().count(), 1);
+            assert_eq!(
+                fs::read(dest_path.join(&downloaded.file_name)).unwrap(),
+                attachment_payload(id, 64),
+                "{mode:?} {title:?}"
+            );
+            let files: Vec<_> = fs::read_dir(&dest_path)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(files, [std::ffi::OsString::from(&downloaded.file_name)]);
+        }
+        let download_calls = calls(&server);
+        assert_eq!(
+            download_calls
+                .iter()
+                .filter(|call| call.contains("attachments 123456789 --download"))
+                .count(),
+            hostile.len(),
+            "{mode:?}"
+        );
+        let staging_entries: Vec<_> = fs::read_dir(&download_root)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect();
+        assert_eq!(staging_entries.len(), hostile.len());
+        assert!(staging_entries
+            .iter()
+            .all(|entry| entry.file_type().unwrap().is_dir()));
+        assert_read_only_boundary(&server, PROFILE);
+        assert!(server.requests().iter().all(|request| request.starts_with("GET ")));
+    }
+}
 #[tokio::test]
 async fn real_cli_identity_auth_and_profile_failures_map_to_stable_codes() {
     let Some(cli) = cli() else { return };

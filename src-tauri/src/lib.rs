@@ -1776,6 +1776,7 @@ pub fn run() {
             library::cockpit_library_resolve,
             library::cockpit_library_confluence_spaces,
             library::cockpit_library_add,
+            library::cockpit_library_attachments,
             library::cockpit_library_refresh,
             library::cockpit_library_operation,
             library::cockpit_library_operation_cancel,

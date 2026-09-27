@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import type { LibraryAttachment, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
+import type { LibraryAttachment, LibraryAttachmentAction, LibraryAttachmentRequest, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
 import { errorText, isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, spaceDisplayName, type LibraryContainerNode, type LibraryInstanceNode } from "./libraryState";
@@ -22,6 +22,52 @@ export function byteSize(bytes: number | null): string {
   if (bytes === null) return "—";
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
   return bytes >= 1_000 ? `${Math.round(bytes / 1_000)} KB` : `${bytes} bytes`;
+}
+
+/**
+ * The Library-root path of a downloaded attachment: its item-relative
+ * `attachments/<stored name>` under the item's directory (D22), read through
+ * the Library reader like any other file. Anything else is never opened.
+ */
+export function attachmentPath(item: LibraryItemSummary, attachment: LibraryAttachment): string | null {
+  if (attachment.state !== "downloaded" || !attachment.relative_path) return null;
+  const parts = attachment.relative_path.split("/");
+  const name = parts[1] ?? "";
+  if (parts.length !== 2 || parts[0] !== "attachments" || name === "" || name === "." || name === ".." || name.includes("\\") || name !== attachment.stored_name) return null;
+  return `${item.item_path.replace(/\/+$/, "")}/${attachment.relative_path}`;
+}
+
+/** Attachments a download may ask for: not an over-limit or already downloaded one. */
+export function downloadableAttachments(item: LibraryItemSummary): LibraryAttachment[] {
+  return item.attachments.filter((attachment) => attachment.state === "not_downloaded" || attachment.state === "failed");
+}
+
+/** `Downloading…` / `Removing…` while the attachment request in flight covers this item or attachment. */
+export function attachmentProgress(active: LibraryAttachmentRequest | null | undefined, itemId: string, attachmentId?: string): string | null {
+  if (!active || active.item_id !== itemId || (attachmentId !== undefined && !active.attachment_ids.includes(attachmentId))) return null;
+  return active.action === "download" ? "Downloading…" : "Removing…";
+}
+
+/** Explicit attachment download and removal (S7). Nothing downloads without one of these. */
+export type LibraryAttachmentActions = {
+  start: (item: LibraryItemSummary, action: LibraryAttachmentAction, attachmentIds: string[]) => void;
+  /** Opens a downloaded attachment in the viewer, or the not-downloaded notice for one that isn't. */
+  open: (item: LibraryItemSummary, attachment: LibraryAttachment) => void;
+  /** A Library operation that would conflict is starting or running here. */
+  busy: boolean;
+  /** The attachment request in flight, for per-row progress. */
+  active: LibraryAttachmentRequest | null;
+};
+
+/** `Download attachments` / `Remove downloaded attachments` for a Confluence page's menus (design §4.3). */
+export function attachmentMenuEntries(item: LibraryItemSummary, attachments: LibraryAttachmentActions | undefined): LibraryMenuEntry[] {
+  if (!attachments || !isConfluencePage(item) || item.attachments.length === 0) return [];
+  const downloadable = downloadableAttachments(item);
+  const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded");
+  return [
+    { label: "Download attachments", onSelect: () => attachments.start(item, "download", downloadable.map((attachment) => attachment.attachment_id)), disabled: attachments.busy || downloadable.length === 0 },
+    ...(downloaded.length > 0 ? [{ label: "Remove downloaded attachments", onSelect: () => attachments.start(item, "remove_downloaded", downloaded.map((attachment) => attachment.attachment_id)), disabled: attachments.busy }] : []),
+  ];
 }
 
 /**
@@ -86,6 +132,7 @@ export type LibraryItemActions = {
   spaceEntry?: (item: LibraryItemSummary) => LibraryMenuEntry | null;
   /** Stops following a space or removes it from the Library; resolves once the Library accepted it. */
   removeFollow?: (follow: LibraryFollowSummary, mode: FollowRemoveMode) => Promise<void>;
+  attachments?: LibraryAttachmentActions;
 };
 
 /** The same entries appear in the row context menu and the item header `⋯` (design §5.3). */
@@ -95,6 +142,7 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
     ...(includeOpen ? [{ label: "Open", onSelect: () => actions.open(item), disabled: !item.document_path }] : []),
     { label: item.folder ? `Re-copy from ${item.folder.origin_path}` : "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
     ...(space ? [space] : []),
+    ...attachmentMenuEntries(item, actions.attachments),
     { label: "Copy source link", onSelect: () => actions.copyLink(item), disabled: !actions.canCopyLink || !(item.source_url ?? item.original_url) },
     "separator",
     { label: "Remove from Library…", onSelect: () => actions.remove(item), destructive: true },
@@ -153,12 +201,10 @@ type Row =
   | { kind: "item"; key: string; depth: number; parent: string; item: LibraryItemSummary }
   /** A page's `Attachments (N)` group, after its child pages. */
   | { kind: "attachments"; key: string; depth: number; parent: string; item: LibraryItemSummary; open: boolean }
-  /** Attachment metadata only: read-only until downloads exist (S7). */
-  | { kind: "attachment"; key: string; depth: number; parent: string; attachment: LibraryAttachment };
+  /** One attachment: opens when downloaded, else its not-downloaded notice; read-only metadata where nothing can download it. */
+  | { kind: "attachment"; key: string; depth: number; parent: string; item: LibraryItemSummary; attachment: LibraryAttachment };
 
-/** Attachment rows have no actions yet, so no row menu. */
-type MenuRow = Exclude<Row, { kind: "attachments" | "attachment" }>;
-type Menu = { x: number; y: number; row: MenuRow };
+type Menu = { x: number; y: number; row: Row };
 
 function rowLabel(row: Row): string {
   switch (row.kind) {
@@ -182,18 +228,21 @@ const NO_FOLLOWS: readonly LibraryFollowSummary[] = [];
  * Confluence pages under their ancestors. A followed space is a container
  * reading `◉ Following` (`◐ N of M` while partial) with its own refresh,
  * stop-following and removal actions. Rows are buttons with the Context
- * tree keys; Shift+F10 or the Menu key opens the row menu. Attachment rows are
- * read-only metadata, not buttons: arrow keys reach them, Tab skips them, and
- * they have no click, Enter or menu until downloads exist (S7). Labels are
- * display names, and the full path is the tooltip. A focused row that
+ * tree keys; Shift+F10 or the Menu key opens the row menu. With attachment
+ * actions, an attachment row opens a downloaded file under the safe-media rules,
+ * or the not-downloaded notice with `Download`, and its menu downloads or removes
+ * it; without them attachment rows are read-only metadata that arrow keys reach.
+ * Labels are display names, and the full path is the tooltip. A focused row that
  * disappears (a removed space) hands focus to its parent row.
  */
-export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedItemId, pendingItemIds, actions }: {
+export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedItemId, selectedAttachmentId = null, pendingItemIds, actions }: {
   items: readonly LibraryItemSummary[];
   /** Followed spaces from the Library listing; each is shown as its space's container. */
   follows?: readonly LibraryFollowSummary[];
   providers: readonly ProjectProvider[];
   selectedItemId: string | null;
+  /** The attachment open in the viewer, or whose not-downloaded notice is shown. */
+  selectedAttachmentId?: string | null;
   pendingItemIds: ReadonlySet<string>;
   actions: LibraryItemActions;
 }) {
@@ -219,7 +268,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         const groupKey = `${page.key}\u0000attachments`;
         const groupOpen = !collapsed.has(groupKey);
         visible.push({ kind: "attachments", key: groupKey, depth: depth + 1, parent: page.key, item: page.item, open: groupOpen });
-        if (groupOpen) for (const attachment of attachments) visible.push({ kind: "attachment", key: attachment.attachment_id, depth: depth + 2, parent: groupKey, attachment });
+        if (groupOpen) for (const attachment of attachments) visible.push({ kind: "attachment", key: attachment.attachment_id, depth: depth + 2, parent: groupKey, item: page.item, attachment });
       }
     };
     for (const instance of tree) {
@@ -265,8 +314,20 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
       setFollowNotice({ text: `Still following ${follow.space_key}. ${errorText(cause, "Stopping could not be completed.")}`, failed: true });
     });
   };
-  const menuEntries = (row: MenuRow): LibraryMenuEntry[] => {
+  const attachmentActions = actions.attachments;
+  const menuEntries = (row: Row): LibraryMenuEntry[] => {
     if (row.kind === "item" || row.kind === "page") return itemMenuEntries(row.item, actions, true);
+    if (row.kind === "attachments") return attachmentMenuEntries(row.item, attachmentActions);
+    if (row.kind === "attachment") {
+      if (!attachmentActions) return [];
+      const { item, attachment } = row;
+      const ids = [attachment.attachment_id];
+      if (attachment.state === "downloaded") return [
+        { label: "Open", onSelect: () => attachmentActions.open(item, attachment), disabled: attachmentPath(item, attachment) === null },
+        { label: "Remove download", onSelect: () => attachmentActions.start(item, "remove_downloaded", ids), disabled: attachmentActions.busy },
+      ];
+      return attachment.state === "over_limit" ? [] : [{ label: "Download", onSelect: () => attachmentActions.start(item, "download", ids), disabled: attachmentActions.busy }];
+    }
     const ids = row.kind === "instance" ? row.node.containers.flatMap((container) => container.items.map((item) => item.item_id))
       : row.kind === "container" ? row.node.items.map((item) => item.item_id) : pageItemIds(row.node);
     const follow = row.kind === "container" ? row.node.follow : null;
@@ -287,7 +348,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     return [{ label: `Refresh all in ${rowLabel(row)}`, onSelect: () => actions.refresh(request, ids), disabled: actions.refreshBusy || ids.length === 0 }];
   };
   const openMenu = (row: Row, x: number, y: number) => {
-    if (row.kind !== "attachments" && row.kind !== "attachment") setMenu({ x, y, row });
+    if (menuEntries(row).length > 0) setMenu({ x, y, row });
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-library-row]") : null;
@@ -322,8 +383,10 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      // Only page nodes differ from a directory: Enter opens the page (design §4.3). Attachments stay read-only.
-      if (row.kind === "item" || row.kind === "page") actions.open(row.item); else if ("open" in row) toggle(row.key);
+      // Only page nodes differ from a directory: Enter opens the page (design §4.3), and an attachment its file or notice.
+      if (row.kind === "item" || row.kind === "page") actions.open(row.item);
+      else if (row.kind === "attachment") attachmentActions?.open(row.item, row.attachment);
+      else toggle(row.key);
     }
   };
   const onContextMenu = (row: Row) => (event: MouseEvent<HTMLButtonElement>) => {
@@ -350,6 +413,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         const item = row.item;
         const chip = libraryStateChip(item.state);
         const pending = pendingItemIds.has(item.item_id);
+        const progress = attachmentProgress(attachmentActions?.active, item.item_id);
         const label = itemTreeLabel(item, providers);
         return <div className={`context-tree-node${row.kind === "page" ? " library-page-node" : ""}`} key={`item:${row.key}`}>
           {row.kind === "page" ? <button type="button" tabIndex={-1} className="library-page-disclosure" style={{ left: `${2 + row.depth * 16}px` }}
@@ -366,24 +430,34 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
             <span className="context-tree-disclosure" aria-hidden="true">{row.kind === "page" ? "\u00a0" : null}</span>
             <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
             <span className="context-tree-name" title={item.item_path}>{label}</span>
-            {pending ? <span className="context-tree-meta library-state is-muted"><span className="library-spinner" aria-hidden="true" />Refreshing…</span>
+            {pending ? <span className="context-tree-meta library-state is-muted"><span className="library-spinner" aria-hidden="true" />{progress ?? "Refreshing…"}</span>
               : item.state !== "fresh" ? <span className={`context-tree-meta library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span> : null}
           </button>
         </div>;
       }
       if (row.kind === "attachment") {
-        const attachment = row.attachment;
-        const detail = [attachment.bytes === null ? null : byteSize(attachment.bytes), attachment.media_type, ATTACHMENT_STATE[attachment.state]].filter(Boolean).join(" · ");
-        // Read-only metadata: reachable by arrow keys only, with no click, Enter or menu (downloads arrive in S7).
+        const { item, attachment } = row;
+        const progress = attachmentProgress(attachmentActions?.active, item.item_id, attachment.attachment_id);
+        const detail = [attachment.bytes === null ? null : byteSize(attachment.bytes), attachment.media_type, progress ?? ATTACHMENT_STATE[attachment.state]].filter(Boolean).join(" · ");
+        const content = <>
+          <span className="context-tree-disclosure" aria-hidden="true" />
+          <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
+          {/* The safe stored name is shown; the original name only as a tooltip, never as markup (P11). */}
+          <span className="context-tree-name" title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</span>
+          <span className={`context-tree-meta library-state is-${progress ? "muted" : attachment.state === "downloaded" ? "idle" : attachment.state === "failed" ? "blocked" : "muted"}`}>
+            {progress ? <span className="library-spinner" aria-hidden="true" /> : null}{detail}
+          </span>
+        </>;
+        const selected = attachment.attachment_id === selectedAttachmentId;
         return <div className="context-tree-node" key={`attachment:${row.key}`}>
-          <div role="group" tabIndex={-1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ ...indent, cursor: "default" }}
-            aria-label={`${attachment.stored_name}, attachment, ${detail}`}>
-            <span className="context-tree-disclosure" aria-hidden="true" />
-            <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
-            {/* The safe stored name is shown; the original name only as a tooltip, never as markup (P11). */}
-            <span className="context-tree-name" title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</span>
-            <span className={`context-tree-meta library-state is-${attachment.state === "downloaded" ? "idle" : attachment.state === "failed" ? "blocked" : "muted"}`}>{detail}</span>
-          </div>
+          {attachmentActions
+            ? <button type="button" data-library-row={row.key} data-context-path={attachmentPath(item, attachment) ?? undefined}
+              className={`context-tree-row library-tree-row library-attachment-row${selected ? " is-selected" : ""}`} style={indent}
+              aria-current={selected ? "true" : undefined} aria-label={`${attachment.stored_name}, attachment, ${detail}`}
+              onClick={() => attachmentActions.open(item, attachment)} onContextMenu={onContextMenu(row)}>{content}</button>
+            // Read-only metadata where nothing can download it: arrow keys reach it, with no click, Enter or menu.
+            : <div role="group" tabIndex={-1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ ...indent, cursor: "default" }}
+              aria-label={`${attachment.stored_name}, attachment, ${detail}`}>{content}</div>}
         </div>;
       }
       const label = rowLabel(row);

@@ -369,6 +369,71 @@ async fn library_routes_are_session_independent_and_reject_unknown_add_fields() 
 }
 
 #[tokio::test]
+async fn library_refresh_route_accepts_all_scope() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).expect("router");
+    let response = router.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/library/refresh")
+            .header("host", authority.to_string())
+            .header("origin", format!("http://{authority}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"scope":"all"}"#))
+            .expect("refresh request"),
+    ).await.expect("refresh response");
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await.expect("refresh operation body");
+    let operation: serde_json::Value = serde_json::from_slice(&bytes).expect("refresh operation");
+    assert!(operation["operation_id"].as_str().is_some());
+    assert_eq!(operation["kind"], "refresh");
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn library_attachment_route_requires_origin_and_rejects_invalid_request_identity() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).expect("router");
+    let body = serde_json::json!({
+        "item_id": "item-1",
+        "attachment_ids": [],
+        "action": "download"
+    }).to_string();
+    let response = router.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/library/attachments")
+            .header("host", authority.to_string())
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.clone()))
+            .expect("request"),
+    ).await.expect("response");
+    assert_eq!(response.status(), 400);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("origin error body");
+    let error: serde_json::Value = serde_json::from_slice(&body).expect("origin error JSON");
+    assert_eq!(error["code"], "request_origin_required");
+
+    let response = router.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/library/attachments")
+            .header("host", authority.to_string())
+            .header("origin", format!("http://{authority}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body))
+            .expect("request"),
+    ).await.expect("response");
+    assert_eq!(response.status(), 400);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+    let error: serde_json::Value = serde_json::from_slice(&body).expect("error JSON");
+    assert_eq!(error["code"], "invalid_library_request");
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn space_library_routes_fail_closed_and_list_unavailable_companions() {
     let root = fixture_root();
     let authority = test_authority();

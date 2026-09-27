@@ -164,11 +164,8 @@ impl LibraryService {
         &self,
         request: LibraryAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.download_attachments || request.hydrate_references {
-            return Err(error(
-                "source_capability_unavailable",
-                "Following a space does not download attachments or hydrate linked artifacts",
-            ));
+        if request.hydrate_references {
+            return Err(error("source_capability_unavailable", "Following a space does not hydrate linked artifacts"));
         }
         let (provider_id, resolution) = self
             .confluence_resolution(&request.input, request.provider_id.as_deref())
@@ -198,7 +195,7 @@ impl LibraryService {
             provider_instance: site.provider_instance,
             space_name: space_key.clone(),
             space_key,
-            include_attachments: false,
+            include_attachments: request.download_attachments,
             page_count: 0,
             partial: None,
             excluded_page_ids: vec![],
@@ -285,6 +282,7 @@ impl LibraryService {
                     Some(record) => {
                         record.excluded_page_ids.clear();
                         record.space_name = created.space_name.clone();
+                        record.include_attachments = created.include_attachments;
                     }
                     None => index.follows.push(created),
                 }
@@ -346,6 +344,7 @@ impl LibraryService {
                 }
                 Some(old) => match change_reason(old, page) {
                     Some(reason) => Some(reason),
+                    None if follow.include_attachments && old.summary.attachments.iter().any(|a| matches!(a.state, LibraryAttachmentState::NotDownloaded | LibraryAttachmentState::Failed)) => Some("attachments requested".into()),
                     None => {
                         unchanged += 1;
                         continue;
@@ -471,19 +470,18 @@ impl LibraryService {
         if operations::cancelled(store, operation)? {
             return Ok(());
         }
-        let saved = result.and_then(|asset| {
-            self.save_asset_with(
-                store,
-                operation,
-                asset,
-                old.clone(),
+        let saved = match result {
+            Ok(asset) => self.save_asset_with(
+                store, operation, asset, old.clone(),
                 SaveOptions {
                     follow_id: Some(&follow.follow_id),
                     reason,
+                    download_all: follow.include_attachments,
                     ..SaveOptions::default()
                 },
-            )
-        });
+            ).await,
+            Err(failure) => Err(failure),
+        };
         match (saved, old) {
             (Ok(()), _) => Ok(()),
             (Err(failure), Some(old)) => self.fetch_failed(store, operation, old, failure),

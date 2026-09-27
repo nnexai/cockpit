@@ -1,10 +1,9 @@
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
-  matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
-  parseLibraryAddRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
-  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
-  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
-  parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+  matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
+  parseLibraryAddRequest, parseLibraryAttachmentRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
+  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
+  parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
   parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
@@ -788,6 +787,11 @@ export function createBrowserClient(
       const body = parseLibraryAddRequest(value);
       const response = await getJson(request, "/api/v1/library/add", "Library add", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       return body.target ? matchSpaceOperation(response, body.target) : response;
+    },
+    async libraryAttachments(value) {
+      const body = parseLibraryAttachmentRequest(value);
+      const response = await getJson(request, "/api/v1/library/attachments", "Library attachments", parseLibraryOperation, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return matchLibraryAttachmentsOperation(response, body);
     },
     async libraryRefresh(value) {
       const body = parseLibraryRefreshRequest(value);

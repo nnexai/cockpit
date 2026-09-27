@@ -210,6 +210,65 @@ pub fn confluence_page_url(provider_instance: &str, page_id: &str) -> String {
     )
 }
 
+/// D21 `--pattern`: the attachment title with every `*`, `?` and leading or
+/// trailing whitespace character replaced by `?`, so the CLI glob never widens
+/// beyond single-character wildcards.
+pub fn confluence_attachment_pattern(title: &str) -> String {
+    let whitespace = |c: &char| matches!(*c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}');
+    let leading = title.chars().take_while(whitespace).count();
+    let trailing = title.chars().rev().take_while(whitespace).count();
+    let count = title.chars().count();
+    title
+        .chars()
+        .enumerate()
+        .map(|(index, c)| {
+            if matches!(c, '*' | '?') || index < leading || index >= count.saturating_sub(trailing) {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// The CLI's `globToRegExp` match: anchored, case-insensitive (JavaScript
+/// non-Unicode `i` canonicalization), over UTF-16 code units; `?` is one unit
+/// and `*` any run.
+pub fn confluence_glob_matches(pattern: &str, title: &str) -> bool {
+    fn fold(unit: u16) -> u16 {
+        let Some(c) = char::from_u32(unit as u32) else {
+            return unit;
+        };
+        let mut upper = c.to_uppercase();
+        match (upper.next(), upper.next()) {
+            (Some(u), None) if u.len_utf16() == 1 && !(unit >= 128 && (u as u32) < 128) => u as u16,
+            _ => unit,
+        }
+    }
+    let pattern: Vec<u16> = pattern.encode_utf16().collect();
+    let title: Vec<u16> = title.encode_utf16().map(fold).collect();
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < title.len() {
+        if p < pattern.len() && pattern[p] == u16::from(b'*') {
+            star = Some((p, t));
+            p += 1;
+        } else if p < pattern.len()
+            && (pattern[p] == u16::from(b'?') || fold(pattern[p]) == title[t])
+        {
+            p += 1;
+            t += 1;
+        } else if let Some((star_p, star_t)) = star {
+            p = star_p + 1;
+            t = star_t + 1;
+            star = Some((star_p, star_t + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|unit| *unit == u16::from(b'*'))
+}
+
 fn capability_unavailable<T>() -> Result<T, InspectionError> {
     Err(InspectionError::new(
         "source_capability_unavailable",
@@ -412,6 +471,7 @@ pub trait SourceProvider: Send + Sync {
         _siblings: &[AttachmentRef],
         _dest: &cap_std::fs::Dir,
         _dest_path: &std::path::Path,
+        _budget: crate::process::StagingBudget,
     ) -> Result<DownloadedAttachment, InspectionError> {
         capability_unavailable()
     }
@@ -800,6 +860,53 @@ impl SourceService {
             ));
         }
         Ok(space)
+    }
+
+    /// D21: one attachment through the selected provider into `dest`, a fresh
+    /// private directory at `dest_path`. The result must name the requested
+    /// attachment and one path component; the caller verifies the file.
+    /// `budget` covers all predicted matches, including discarded siblings.
+    pub async fn download_attachment(
+        &self,
+        provider_id: &str,
+        page_id: &str,
+        attachment: &AttachmentRef,
+        siblings: &[AttachmentRef],
+        dest: &cap_std::fs::Dir,
+        dest_path: &std::path::Path,
+        budget: crate::process::StagingBudget,
+    ) -> Result<DownloadedAttachment, InspectionError> {
+        if !confluence_page_id(page_id) {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "attachment download requires a valid page id",
+            ));
+        }
+        let provider = self.selected_provider(provider_id)?;
+        let downloaded = timeout(
+            self.operation_timeout,
+            provider.download_attachment(page_id, attachment, siblings, dest, dest_path, budget),
+        )
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "source_fetch_timeout",
+                "attachment download exceeded the configured operation deadline",
+            )
+        })??;
+        let name = std::path::Path::new(&downloaded.file_name);
+        if downloaded.attachment_id != attachment.id
+            || downloaded.file_name.len() > 255
+            || downloaded.file_name.contains(['/', '\\'])
+            || name.components().count() != 1
+            || !matches!(name.components().next(), Some(std::path::Component::Normal(_)))
+        {
+            return Err(InspectionError::new(
+                "source_capability_unavailable",
+                "this confluence-cli version cannot download attachments safely",
+            ));
+        }
+        Ok(downloaded)
     }
 
     /// Fetch and validate provider assets without accessing persistent state.

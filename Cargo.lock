@@ -670,6 +670,8 @@ name = "cockpit-providers"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "cap-fs-ext",
+ "cap-std",
  "cockpit-core",
  "cockpit-protocol",
  "serde",

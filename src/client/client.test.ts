@@ -119,6 +119,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     libraryResolve: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryConfluenceSpaces: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryAdd: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryAttachments: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryRefresh: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryOperation: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryOperationCancel: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
@@ -241,10 +242,12 @@ const libraryRequests = {
   directory: { path: "", offset: null, revision: null },
   document: { path: "item/document.md", expected_revision: "rev-1", offset: 0 },
   media: { path: "item/image.png", expected_revision: "rev-1" },
+  attachments: { item_id: "item-1", attachment_ids: ["att-1"], action: "download" as const },
 };
 const libraryDirectory = { binding_id: "library", root_id: "library:test", path: "", entries: [], truncated: false, diagnostics: [] };
 const libraryDocument = { binding_id: "library", root_id: "library:test", path: "item/document.md", revision: "rev-1", content_hash: "hash", bytes: 1, media_type: "text/markdown", text: "x", truncated: false, offset: 0, diagnostics: [] };
 const libraryMedia = { binding_id: "library", root_id: "library:test", path: "item/image.png", revision: "rev-1", content_hash: "hash", bytes: 1, mime_type: "image/png", width: 1, height: 1, data_base64: "AA==" };
+const libraryAttachmentsOperation = { ...libraryOperation, kind: "attachments", item_ids: ["item-1"] };
 const unsafeLibraryItem = {
   item_id: "item", logical_id: "logical", kind: "provider_snapshot", provider_id: null, provider_instance: null, resource_type: null, canonical_id: null,
   container: null, parent_item_id: null, ancestors: [], order: null, title: "Item", document_path: "item/document.md", item_path: "../escape",
@@ -253,6 +256,39 @@ const unsafeLibraryItem = {
 };
 
 describe("library client validation", () => {
+  it("posts explicit attachment requests and rejects operations for another item", async () => {
+    const fetch = vi.fn(async () => jsonResponse(libraryAttachmentsOperation));
+    const browser = createBrowserClient(fetch);
+    await expect(browser.libraryAttachments(libraryRequests.attachments)).resolves.toMatchObject({ kind: "attachments", item_ids: ["item-1"] });
+    const started = { ...libraryAttachmentsOperation, item_ids: [], finished: false };
+    await expect(createBrowserClient(vi.fn(async () => jsonResponse(started))).libraryAttachments(libraryRequests.attachments))
+      .resolves.toMatchObject({ kind: "attachments", item_ids: [], finished: false });
+    await expect(createNativeClient(vi.fn(async () => started)).libraryAttachments(libraryRequests.attachments))
+      .resolves.toMatchObject({ kind: "attachments", item_ids: [], finished: false });
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/v1/library/attachments"), expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify(libraryRequests.attachments),
+    }));
+
+    const invoke = vi.fn(async () => libraryAttachmentsOperation);
+    const native = createNativeClient(invoke);
+    await expect(native.libraryAttachments(libraryRequests.attachments)).resolves.toMatchObject({ kind: "attachments", item_ids: ["item-1"] });
+    expect(invoke).toHaveBeenCalledWith("cockpit_library_attachments", { request: libraryRequests.attachments });
+
+    for (const response of [
+      { ...libraryAttachmentsOperation, item_ids: ["another-item"] },
+      { ...libraryAttachmentsOperation, kind: "refresh" },
+      { ...libraryAttachmentsOperation, item_ids: ["item-1", "another-item"] },
+    ]) {
+      const wrongBrowser = createBrowserClient(vi.fn(async () => jsonResponse(response)));
+      const wrongNative = createNativeClient(vi.fn(async () => response));
+      await expect(wrongBrowser.libraryAttachments(libraryRequests.attachments)).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(wrongNative.libraryAttachments(libraryRequests.attachments)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    for (const client of [browser, native]) {
+      await expect(client.libraryAttachments({ ...libraryRequests.attachments, attachment_ids: [] })).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
 
   it("refuses unsafe item paths, malformed DTOs, and unmatched operation or context responses", async () => {
     const client = createBrowserClient(vi.fn(async () => jsonResponse({ ...libraryOperation, operation_id: "other" })));

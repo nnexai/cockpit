@@ -56,6 +56,7 @@
     "allow-cockpit-library-resolve",
     "allow-cockpit-library-confluence-spaces",
     "allow-cockpit-library-add",
+    "allow-cockpit-library-attachments",
     "allow-cockpit-library-refresh",
     "allow-cockpit-library-operation",
     "allow-cockpit-library-operation-cancel",

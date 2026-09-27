@@ -1737,7 +1737,7 @@ pub(crate) fn open_absolute_dir_nofollow(path: &Path) -> std::io::Result<Dir> {
 
 /// A file or directory name a person can read: letters, digits, `.`, `_` and
 /// `-`, with other characters replaced by `-`. Never empty or hidden.
-fn readable_name(value: &str) -> String {
+pub(crate) fn readable_name(value: &str) -> String {
     let mut name = String::new();
     for character in value.chars() {
         let character = if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')

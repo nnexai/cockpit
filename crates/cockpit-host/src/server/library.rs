@@ -31,6 +31,7 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route("/api/v1/library/resolve", post(resolve))
         .route("/api/v1/library/add", post(add))
         .route("/api/v1/library/refresh", post(refresh))
+        .route("/api/v1/library/attachments", post(attachments))
         .route("/api/v1/library/operations/{id}", get(operation))
         .route("/api/v1/library/operations/{id}/cancel", post(cancel))
         .route("/api/v1/library/replace", post(replace))
@@ -49,6 +50,34 @@ pub(super) fn routes() -> Router<CockpitService> {
         )
         .layer(DefaultBodyLimit::max(MAX_MUTATION_REQUEST_BYTES))
         .route_layer(middleware::from_fn(require_origin))
+}
+
+async fn attachments(
+    State(service): State<CockpitService>,
+    body: Result<Json<cockpit_protocol::library::LibraryAttachmentRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if request.item_id.is_empty()
+        || request.item_id.len() > 512
+        || request.item_id.chars().any(char::is_control)
+        || request.attachment_ids.is_empty()
+        || request.attachment_ids.len() > 256
+        || request.attachment_ids.iter().any(|id| {
+            id.is_empty() || id.len() > 512 || id.chars().any(char::is_control)
+        })
+    {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.start_attachments(request).await {
+            Ok(value) => operation_response(value),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
 }
 
 #[derive(Deserialize)]

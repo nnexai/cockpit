@@ -8,6 +8,66 @@ use crate::InspectionError;
 
 const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Aggregate allowance for one CLI download into a fresh private directory.
+#[derive(Debug, Clone, Copy)]
+pub struct StagingBudget {
+    pub bytes: u64,
+    pub max_files: usize,
+}
+
+const STAGING_CHECK_INTERVAL: Duration = Duration::from_millis(10);
+
+fn staging_error() -> InspectionError {
+    InspectionError::new(
+        "source_attachment_size",
+        "Attachment download exceeded its staging budget or created an unsafe entry",
+    )
+}
+
+impl StagingBudget {
+    fn check(self, dir: &cap_std::fs::Dir) -> Result<(), InspectionError> {
+        let mut bytes = 0u64;
+        // Never recurse or follow links. Stop at the first excess entry so the
+        // work of each scan is bounded by the predicted match count.
+        for (index, entry) in dir.entries().map_err(|_| staging_error())?.enumerate() {
+            if index >= self.max_files {
+                return Err(staging_error());
+            }
+            let entry = entry.map_err(|_| staging_error())?;
+            let metadata = dir.symlink_metadata(entry.file_name()).map_err(|_| staging_error())?;
+            if !metadata.is_file() {
+                return Err(staging_error());
+            }
+            #[cfg(unix)]
+            {
+                use cap_std::fs::MetadataExt;
+                if metadata.nlink() != 1 {
+                    return Err(staging_error());
+                }
+            }
+            bytes = bytes.checked_add(metadata.len()).ok_or_else(staging_error)?;
+            if bytes > self.bytes {
+                return Err(staging_error());
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn watch_staging(staging: Option<(&cap_std::fs::Dir, StagingBudget)>) -> InspectionError {
+    let Some((dir, budget)) = staging else {
+        return std::future::pending().await;
+    };
+    let mut interval = tokio::time::interval(STAGING_CHECK_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        if let Err(error) = budget.check(dir) {
+            return error;
+        }
+    }
+}
+
 async fn read_bounded_output<R: AsyncRead + Unpin>(
     reader: R,
     limit: usize,
@@ -134,11 +194,39 @@ fn kill_process_group(pid: u32) {
 /// The command is always owned by this future: timeout or dropped-future paths
 /// terminate its process group and reap it within a bounded cleanup interval.
 pub async fn run_bounded_command(
+    command: Command,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: Duration,
+    label: &str,
+) -> Result<Output, InspectionError> {
+    run_bounded_command_inner(command, stdout_limit, stderr_limit, timeout, label, None).await
+}
+
+/// Monitor a private flat download directory throughout execution, including
+/// after stdout/stderr close. A breach kills/reaps the owned process group.
+/// This is interval enforcement, not a filesystem quota: a write between scans
+/// can overshoot the allowance. The caller owns and removes the staging tree.
+pub async fn run_bounded_staging_command(
+    command: Command,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: Duration,
+    label: &str,
+    dir: &cap_std::fs::Dir,
+    budget: StagingBudget,
+) -> Result<Output, InspectionError> {
+    budget.check(dir)?;
+    run_bounded_command_inner(command, stdout_limit, stderr_limit, timeout, label, Some((dir, budget))).await
+}
+
+async fn run_bounded_command_inner(
     mut command: Command,
     stdout_limit: usize,
     stderr_limit: usize,
     timeout: Duration,
     label: &str,
+    staging: Option<(&cap_std::fs::Dir, StagingBudget)>,
 ) -> Result<Output, InspectionError> {
     command.kill_on_drop(true);
     #[cfg(unix)]
@@ -184,8 +272,15 @@ pub async fn run_bounded_command(
     tokio::pin!(deadline);
     let mut stdout_result = None;
     let mut stderr_result = None;
+    let monitor = watch_staging(staging);
+    tokio::pin!(monitor);
     loop {
         tokio::select! {
+            biased;
+            error = &mut monitor => {
+                let cleanup = child.kill_and_reap().await;
+                return Err(with_cleanup(&error, cleanup));
+            }
             result = &mut stdout_reader, if stdout_result.is_none() => stdout_result = Some(result),
             result = &mut stderr_reader, if stderr_result.is_none() => stderr_result = Some(result),
             _ = &mut deadline => {
@@ -210,12 +305,18 @@ pub async fn run_bounded_command(
         }
     }
 
-    let status = match tokio::time::timeout(
-        deadline_at.saturating_duration_since(tokio::time::Instant::now()),
-        child.child.as_mut().expect("owned child was lost").wait(),
-    )
-    .await
-    {
+    let waited = tokio::select! {
+        biased;
+        error = &mut monitor => {
+            let cleanup = child.kill_and_reap().await;
+            return Err(with_cleanup(&error, cleanup));
+        }
+        result = tokio::time::timeout(
+            deadline_at.saturating_duration_since(tokio::time::Instant::now()),
+            child.child.as_mut().expect("owned child was lost").wait(),
+        ) => result,
+    };
+    let status = match waited {
         Ok(Ok(status)) => status,
         Ok(Err(_)) => {
             let cleanup = child.kill_and_reap().await;
@@ -234,8 +335,18 @@ pub async fn run_bounded_command(
             return Err(InspectionError::new("execution_timeout", message));
         }
     };
+    // A download must not leave a descendant writing after the leader exits.
+    #[cfg(unix)]
+    if staging.is_some() {
+        if let Some(pid) = child.pid {
+            kill_process_group(pid);
+        }
+    }
     child.reaped = true;
     child.child.take();
+    if let Some((dir, budget)) = staging {
+        budget.check(dir)?;
+    }
     Ok(Output {
         status,
         stdout: stdout_result
@@ -253,5 +364,63 @@ fn with_cleanup(error: &InspectionError, cleanup: Option<String>) -> InspectionE
             InspectionError::new(error.code.clone(), format!("{}; {cleanup}", error.message))
         }
         None => error.clone(),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    struct Staging {
+        path: std::path::PathBuf,
+        dir: cap_std::fs::Dir,
+    }
+
+    impl Staging {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("cockpit-staging-budget-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            let dir = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority()).unwrap();
+            Self { path, dir }
+        }
+    }
+
+    impl Drop for Staging {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn staging_budget_accepts_exact_boundary_and_rejects_aggregate_growth() {
+        let staging = Staging::new();
+        let budget = StagingBudget { bytes: 6, max_files: 2 };
+        staging.dir.write("first", b"abc").unwrap();
+        staging.dir.write("second", b"def").unwrap();
+        budget.check(&staging.dir).unwrap();
+        staging.dir.write("second", b"defg").unwrap();
+        assert_eq!(budget.check(&staging.dir).unwrap_err().code, "source_attachment_size");
+        staging.dir.write("second", b"def").unwrap();
+        staging.dir.write("unexpected", b"").unwrap();
+        assert_eq!(budget.check(&staging.dir).unwrap_err().code, "source_attachment_size");
+    }
+
+    #[test]
+    fn staging_budget_rejects_symlinks_nested_directories_special_files_and_hardlinks() {
+        for kind in ["symlink", "directory", "fifo", "hardlink"] {
+            let staging = Staging::new();
+            match kind {
+                "symlink" => std::os::unix::fs::symlink("/does/not/exist", staging.path.join("unsafe")).unwrap(),
+                "directory" => staging.dir.create_dir("unsafe").unwrap(),
+                "fifo" => rustix::fs::mkfifoat(&staging.dir, "unsafe", rustix::fs::Mode::from_raw_mode(0o600)).unwrap(),
+                "hardlink" => {
+                    staging.dir.write("original", b"x").unwrap();
+                    std::fs::hard_link(staging.path.join("original"), staging.path.join("unsafe")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let error = StagingBudget { bytes: 100, max_files: 2 }.check(&staging.dir).unwrap_err();
+            assert_eq!(error.code, "source_attachment_size", "{kind}");
+        }
     }
 }

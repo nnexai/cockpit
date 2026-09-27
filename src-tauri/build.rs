@@ -34,6 +34,7 @@ fn main() {
             "cockpit_library_resolve",
             "cockpit_library_confluence_spaces",
             "cockpit_library_add",
+            "cockpit_library_attachments",
             "cockpit_library_refresh",
             "cockpit_library_operation",
             "cockpit_library_operation_cancel",

@@ -9,13 +9,16 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
+use cap_std::fs::{Dir, OpenOptions};
 use cockpit_core::InspectionError;
-use cockpit_core::process::run_bounded_command;
+use cockpit_core::process::{run_bounded_command, run_bounded_staging_command, StagingBudget};
 use cockpit_core::repositories::is_confluence_executable;
 use cockpit_core::sources::{
-    ConfluencePage, FrontmatterField, FrontmatterValue, ProviderResolution, SourceAsset,
-    SourceAttachment, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider,
-    SourceRef, SpacePage, SpacePageListing, SpaceSummary, confluence_page_url,
+    AttachmentRef, ConfluencePage, DownloadedAttachment, FrontmatterField, FrontmatterValue,
+    ProviderResolution, SourceAsset, SourceAttachment, SourceContainer, SourceFetchRequest,
+    SourceMetadata, SourceProvider, SourceRef, SpacePage, SpacePageListing, SpaceSummary,
+    confluence_attachment_pattern, confluence_page_url,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
 use cockpit_protocol::sources::SourceCapability;
@@ -23,6 +26,8 @@ use serde_json::Value;
 use tokio::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
+
+
 
 /// Library provider bodies are bounded like every other source asset.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -148,10 +153,43 @@ fn cursor_valid(value: &str) -> bool {
         })
 }
 
-/// D21: the attachment title with `*`, `?` and edge whitespace already
-/// replaced by `?`, so the CLI's trimmed glob cannot widen beyond `?`.
 fn pattern_valid(value: &str) -> bool {
     title_valid(value) && !value.contains('*') && value.trim() == value
+}
+fn download_destination_valid(value: &Path) -> bool {
+    value.is_absolute()
+        && value.to_str().is_some_and(|text| text.len() <= 4096 && !text.chars().any(char::is_control))
+        && value
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+        && value.components().count() > 1
+}
+
+fn download_capability_error() -> InspectionError {
+    InspectionError::new(
+        "source_capability_unavailable",
+        "this confluence-cli version cannot download attachments safely",
+    )
+}
+
+fn saved_file_name(saved_to: &str, destination: &Path) -> Result<String, InspectionError> {
+    let path = Path::new(saved_to);
+    let Some(name) = path.file_name().filter(|name| !name.is_empty()) else {
+        return Err(download_capability_error());
+    };
+    if !path.is_absolute()
+        || path.parent() != Some(destination)
+        || path.components().count() != destination.components().count() + 1
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(download_capability_error());
+    }
+    name.to_str()
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .map(str::to_owned)
+        .ok_or_else(download_capability_error)
 }
 
 fn dest_valid(value: &Path) -> bool {
@@ -742,6 +780,15 @@ impl ConfluenceSourceProvider {
         call: &ConfluenceCall,
         stdout_limit: usize,
     ) -> Result<Vec<u8>, InspectionError> {
+        self.run_with_staging(call, stdout_limit, None).await
+    }
+
+    async fn run_with_staging(
+        &self,
+        call: &ConfluenceCall,
+        stdout_limit: usize,
+        staging: Option<(&Dir, StagingBudget)>,
+    ) -> Result<Vec<u8>, InspectionError> {
         let login = self.login.as_deref().ok_or_else(|| {
             InspectionError::new(
                 "source_login_unconfigured",
@@ -756,14 +803,14 @@ impl ConfluenceSourceProvider {
             .args(&argv)
             .env("CONFLUENCE_READ_ONLY", "true")
             .env("CONFLUENCE_CLI_ANALYTICS", "false");
-        let output = run_bounded_command(
-            command,
-            stdout_limit,
-            MAX_STDERR_BYTES,
-            self.timeout,
-            "Confluence CLI",
-        )
-        .await
+        let output = match staging {
+            Some((dir, budget)) => run_bounded_staging_command(
+                command, stdout_limit, MAX_STDERR_BYTES, self.timeout, "Confluence CLI", dir, budget,
+            ).await,
+            None => run_bounded_command(
+                command, stdout_limit, MAX_STDERR_BYTES, self.timeout, "Confluence CLI",
+            ).await,
+        }
         .map_err(|error| match error.code.as_str() {
             "execution_timeout" => InspectionError::new(
                 "source_provider_timeout",
@@ -777,6 +824,10 @@ impl ConfluenceSourceProvider {
                 "source_cli_unavailable",
                 "Confluence CLI (confluence-cli) is not installed or could not be started",
             ),
+            "source_attachment_size" => InspectionError::new(
+                "source_attachment_size",
+                "Attachment download exceeded its staging budget or created an unsafe entry",
+            ),
             _ => InspectionError::new("source_provider_failed", "Confluence CLI request failed"),
         })?;
         if !output.status.success() {
@@ -789,6 +840,147 @@ impl ConfluenceSourceProvider {
         let stdout = self.run(call, MAX_JSON_BYTES).await?;
         serde_json::from_slice(&stdout)
             .map_err(|_| contract("Confluence CLI did not return the documented JSON"))
+    }
+
+    async fn download_attachment_file(
+        &self,
+        page_id: &str,
+        attachment: &AttachmentRef,
+        siblings: &[AttachmentRef],
+        dest: &Dir,
+        dest_path: &Path,
+        budget: StagingBudget,
+    ) -> Result<DownloadedAttachment, InspectionError> {
+        if !page_id_valid(page_id)
+            || attachment.id.is_empty()
+            || attachment.id.len() > MAX_FIELD_CHARS
+            || attachment.id.chars().any(char::is_control)
+            || !title_valid(&attachment.title)
+            || !download_destination_valid(dest_path)
+            || siblings.iter().any(|sibling| sibling.id == attachment.id)
+        {
+            return Err(contract("Confluence attachment request is malformed"));
+        }
+        if dest
+            .entries()
+            .map_err(|_| download_capability_error())?
+            .next()
+            .is_some()
+        {
+            return Err(download_capability_error());
+        }
+        let expected_dir = dest.dir_metadata().map_err(|_| download_capability_error())?;
+        let actual_dir = std::fs::metadata(dest_path).map_err(|_| download_capability_error())?;
+        #[cfg(unix)]
+        if (MetadataExt::dev(&expected_dir), MetadataExt::ino(&expected_dir))
+            != (MetadataExt::dev(&actual_dir), MetadataExt::ino(&actual_dir))
+        {
+            return Err(download_capability_error());
+        }
+        #[cfg(not(unix))]
+        return Err(download_capability_error());
+        let pattern = confluence_attachment_pattern(&attachment.title);
+        let stdout = self
+            .run_with_staging(
+                &ConfluenceCall::DownloadAttachment {
+                    page_id: page_id.to_owned(),
+                    pattern,
+                    dest: dest_path.to_owned(),
+                },
+                MAX_JSON_BYTES,
+                Some((dest, budget)),
+            )
+            .await?;
+        let result: Value =
+            serde_json::from_slice(&stdout).map_err(|_| download_capability_error())?;
+        let destination = result
+            .get("destination")
+            .and_then(Value::as_str)
+            .ok_or_else(download_capability_error)?;
+        if Path::new(destination) != dest_path {
+            return Err(download_capability_error());
+        }
+        let entries = result
+            .get("attachments")
+            .and_then(Value::as_array)
+            .ok_or_else(download_capability_error)?;
+        let mut selected: Option<String> = None;
+        let mut reported_names = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let id = entry
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(download_capability_error)?;
+            let saved_to = entry
+                .get("savedTo")
+                .and_then(Value::as_str)
+                .ok_or_else(download_capability_error)?;
+            let name = saved_file_name(saved_to, dest_path)?;
+            let title = entry
+                .get("title")
+                .and_then(Value::as_str)
+                .ok_or_else(download_capability_error)?;
+            if id == attachment.id {
+                if selected.is_some() || title != attachment.title {
+                    return Err(download_capability_error());
+                }
+                selected = Some(name.clone());
+            }
+            reported_names.push(name);
+        }
+        let file_name = selected.ok_or_else(download_capability_error)?;
+        if reported_names
+            .iter()
+            .enumerate()
+            .any(|(index, name)| reported_names[..index].contains(name))
+        {
+            return Err(download_capability_error());
+        }
+        for name in reported_names.iter().filter(|name| *name != &file_name) {
+            match dest.remove_file(name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(download_capability_error()),
+            }
+        }
+        let metadata = dest
+            .symlink_metadata(&file_name)
+            .map_err(|_| download_capability_error())?;
+        if !metadata.file_type().is_file() {
+            return Err(download_capability_error());
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .follow(FollowSymlinks::No)
+            .nonblock(true);
+        let file = dest
+            .open_with(&file_name, &options)
+            .map_err(|_| download_capability_error())?;
+        let opened = file.metadata().map_err(|_| download_capability_error())?;
+        if !opened.is_file() || opened.len() != metadata.len()
+            || {
+                #[cfg(unix)]
+                {
+                    MetadataExt::nlink(&opened) != 1
+                }
+                #[cfg(windows)]
+                {
+                    opened.number_of_links() != 1
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    false
+                }
+            }
+        {
+            return Err(download_capability_error());
+        }
+        drop(file);
+        Ok(DownloadedAttachment {
+            attachment_id: attachment.id.clone(),
+            file_name,
+        })
     }
 
     fn search_continuation(
@@ -1387,6 +1579,19 @@ impl SourceProvider for ConfluenceSourceProvider {
             fields,
             attachments,
         }])
+    }
+
+    async fn download_attachment(
+        &self,
+        page_id: &str,
+        attachment: &AttachmentRef,
+        siblings: &[AttachmentRef],
+        dest: &Dir,
+        dest_path: &Path,
+        budget: StagingBudget,
+    ) -> Result<DownloadedAttachment, InspectionError> {
+        self.download_attachment_file(page_id, attachment, siblings, dest, dest_path, budget)
+            .await
     }
 }
 

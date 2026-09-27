@@ -135,6 +135,7 @@ import type {
   ContextDirectory,
   ContextDocumentRequest,
   ContextDocument,
+  LibraryAttachmentRequest,
   LibraryAddRequest,
   LibraryDirectoryRequest,
   LibraryDocumentRequest,
@@ -240,6 +241,7 @@ export type {
   ContextMedia,
   ContextMediaRequest,
   FocusRequest,
+  LibraryAttachmentRequest,
   LibraryAddRequest,
   LibraryDirectoryRequest,
   LibraryDocumentRequest,
@@ -325,6 +327,7 @@ export interface CockpitClient {
   /** Spaces readable by one configured Confluence provider, each with its existing follow. */
   libraryConfluenceSpaces(request: LibraryConfluenceSpacesRequest): Promise<LibraryResolution[]>;
   libraryAdd(request: LibraryAddRequest): Promise<LibraryOperation>;
+  libraryAttachments(request: LibraryAttachmentRequest): Promise<LibraryOperation>;
   libraryRefresh(request: LibraryRefreshRequest): Promise<LibraryOperation>;
   libraryOperation(operationId: string): Promise<LibraryOperation>;
   libraryOperationCancel(operationId: string): Promise<LibraryOperation>;
