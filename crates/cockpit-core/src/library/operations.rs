@@ -98,8 +98,10 @@ pub(crate) fn begin_space(store: &Store, id: &str, total: u32) -> Result<(), Ins
             phase.state = if record.cancel_requested { LibraryPhaseState::Cancelled }
                 else if partial { LibraryPhaseState::Partial } else { LibraryPhaseState::Done };
         } else {
+            // Items then follows of one Space add each contribute their count.
+            let previous = if phase.state == LibraryPhaseState::Running { phase.total.unwrap_or(0) } else { 0 };
             phase.state = LibraryPhaseState::Running;
-            phase.total = Some(total);
+            phase.total = Some(previous + total);
         }
     }
     record.updated_at = timestamp();
@@ -217,6 +219,75 @@ pub(crate) fn row(
         } else {
             report.truncated_rows = true;
         }
+    }
+    record.updated_at = timestamp();
+    persist(store, &record)
+}
+/// A report row about a followed space itself (enumeration, limit, failure).
+pub(crate) fn follow_row(
+    store: &Store,
+    id: &str,
+    follow: &LibraryFollowSummary,
+    outcome: LibraryReportOutcome,
+    reason: Option<String>,
+) -> Result<(), InspectionError> {
+    let _lock = store.exclusive()?;
+    let mut record = load(store, id)?;
+    if let Some(report) = &mut record.report {
+        match outcome {
+            LibraryReportOutcome::New => report.new += 1,
+            LibraryReportOutcome::Updated => report.updated += 1,
+            LibraryReportOutcome::Unchanged => report.unchanged += 1,
+            LibraryReportOutcome::RemovedAtSource => report.removed_at_source += 1,
+            LibraryReportOutcome::Partial => report.partial += 1,
+            LibraryReportOutcome::Failed => report.failed += 1,
+            LibraryReportOutcome::Conflict => report.conflict += 1,
+        }
+        if report.rows.len() < MAX_REPORT_ROWS {
+            report.rows.push(LibraryReportRow {
+                item_id: None,
+                follow_id: Some(follow.follow_id.clone()),
+                title: format!("{} · {}", follow.space_key, follow.space_name),
+                outcome,
+                reason,
+            });
+        } else {
+            report.truncated_rows = true;
+        }
+    }
+    record.updated_at = timestamp();
+    persist(store, &record)
+}
+/// Pages skipped because nothing changed are counted without one row each.
+pub(crate) fn unchanged(store: &Store, id: &str, count: u32) -> Result<(), InspectionError> {
+    if count == 0 {
+        return Ok(());
+    }
+    let _lock = store.exclusive()?;
+    let mut record = load(store, id)?;
+    if let Some(phase) = record
+        .phases
+        .iter_mut()
+        .find(|phase| phase.state == LibraryPhaseState::Running)
+    {
+        phase.done += count;
+    }
+    if let Some(report) = &mut record.report {
+        report.unchanged += count;
+    }
+    record.updated_at = timestamp();
+    persist(store, &record)
+}
+/// Enumeration discovers work after the operation started.
+pub(crate) fn add_total(store: &Store, id: &str, count: u32) -> Result<(), InspectionError> {
+    let _lock = store.exclusive()?;
+    let mut record = load(store, id)?;
+    if let Some(phase) = record
+        .phases
+        .iter_mut()
+        .find(|phase| phase.state == LibraryPhaseState::Running)
+    {
+        phase.total = Some(phase.total.unwrap_or(0).saturating_add(count));
     }
     record.updated_at = timestamp();
     persist(store, &record)

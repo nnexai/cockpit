@@ -204,6 +204,12 @@ pub(super) fn recover_attempts(store: &Store) -> Result<(), InspectionError> {
                 continue;
             }
         }
+        if let Some(id) = &attempt.follow_id {
+            if !index.follows.iter().any(|follow| &follow.follow_id == id) {
+                remove_attempt(&dir, &attempt.target, id)?;
+                continue;
+            }
+        }
         attempt.state = SpaceAddAttemptState::Failed;
         attempt.error = Some(ErrorResponse {
             code: "space_add_interrupted".into(),
@@ -215,6 +221,99 @@ pub(super) fn recover_attempts(store: &Store) -> Result<(), InspectionError> {
         persist_attempt(&dir, &attempt)?;
     }
     Ok(())
+}
+
+/// One Space-add retry record to write: a Library item or a follow.
+struct AttemptSubject {
+    id: String,
+    follow: bool,
+    title: String,
+}
+fn attempt_subject(attempt: &SpaceAddAttempt) -> &str {
+    attempt
+        .item_id
+        .as_deref()
+        .or(attempt.follow_id.as_deref())
+        .unwrap_or_default()
+}
+/// Caller holds library.lock exclusively. Makes room by dropping the oldest
+/// failed attempts of other subjects, never pending ones.
+fn persist_pending_attempts(
+    store: &Store,
+    operation: &str,
+    target: &SpaceTarget,
+    subjects: &[AttemptSubject],
+) -> Result<(), InspectionError> {
+    let dir = attempts_dir(store)?;
+    let existing = read_attempts(&dir)?;
+    let current = |attempt: &SpaceAddAttempt, id: &str| {
+        same_target(&attempt.target, target) && attempt_subject(attempt) == id
+    };
+    let added = subjects
+        .iter()
+        .filter(|subject| !existing.iter().any(|a| current(a, &subject.id)))
+        .count();
+    let mut excess = (existing.len() + added).saturating_sub(MAX_ATTEMPTS);
+    for attempt in &existing {
+        if excess == 0 {
+            break;
+        }
+        if attempt.state == SpaceAddAttemptState::Failed
+            && !subjects.iter().any(|subject| current(attempt, &subject.id))
+        {
+            remove_attempt(&dir, &attempt.target, attempt_subject(attempt))?;
+            excess -= 1;
+        }
+    }
+    if excess > 0 {
+        return Err(error("library_item_busy", "Too many pending Space adds"));
+    }
+    for subject in subjects {
+        persist_attempt(
+            &dir,
+            &SpaceAddAttempt {
+                target: target.clone(),
+                space_label: None,
+                item_id: (!subject.follow).then(|| subject.id.clone()),
+                follow_id: subject.follow.then(|| subject.id.clone()),
+                title: subject.title.clone(),
+                state: SpaceAddAttemptState::Pending,
+                error: None,
+                operation_id: operation.into(),
+                updated_at: timestamp(),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// A newly followed space's retry record, durable before phase 2 starts.
+pub(super) fn prepare_saved_follow(
+    store: &Store,
+    operation: &str,
+    target: &SpaceTarget,
+    follow: &LibraryFollowSummary,
+) -> Result<(), InspectionError> {
+    let _lock = store.exclusive()?;
+    persist_pending_attempts(
+        store,
+        operation,
+        target,
+        &[AttemptSubject {
+            id: follow.follow_id.clone(),
+            follow: true,
+            title: format!("{} · {}", follow.space_key, follow.space_name),
+        }],
+    )
+}
+
+fn merge_copy(phase: &mut SpacePhaseResult, copied: context_assets::LibraryCopyResult) {
+    phase.copy_mode = match (phase.copy_mode, copied.copy_mode) {
+        (None, mode) | (mode, None) => mode,
+        (Some(a), Some(b)) => Some(if a == b { a } else { SpaceCopyMode::Mixed }),
+    };
+    phase.written.extend(copied.written);
+    phase.skipped_edited.extend(copied.skipped_edited);
 }
 
 impl LibraryService {
@@ -322,8 +421,8 @@ impl LibraryService {
         let (companion, rows) = match self.authorize_space(&target).await {
             Ok(authorized) => {
                 let _lock = store.shared()?;
-                let items = store
-                    .index()?
+                let index = store.index()?;
+                let items = index
                     .items
                     .into_iter()
                     .map(|entry| entry.summary)
@@ -336,6 +435,7 @@ impl LibraryService {
                         .as_deref()
                         .expect("authorized companion"),
                     &items,
+                    &index.follows,
                 )?;
                 (
                     SpaceCompanionStatus::Available {
@@ -389,24 +489,29 @@ impl LibraryService {
         &self,
         request: SpaceAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        if !request.follow_ids.is_empty() {
-            return Err(error(
-                "source_capability_unavailable",
-                "Follow copying is not available",
-            ));
-        }
         let handle = operations::runtime()?;
         let store = self.open()?;
         let mut ids = request.item_ids;
         ids.sort();
         ids.dedup();
+        let mut follow_ids = request.follow_ids;
+        follow_ids.sort();
+        follow_ids.dedup();
         let leases = ids
             .iter()
+            .chain(&follow_ids)
             .map(|id| store.lease(id))
             .collect::<Result<Vec<_>, _>>()?;
         for id in &ids {
             self.entry(&store, id)?
                 .ok_or_else(|| error("library_item_not_found", "Library item does not exist"))?;
+        }
+        {
+            let _lock = store.shared()?;
+            let follows = store.index()?.follows;
+            if !follow_ids.iter().all(|id| follows.iter().any(|f| &f.follow_id == id)) {
+                return Err(error("library_item_not_found", "Followed space does not exist"));
+            }
         }
         let (record, lease) = operations::create(
             &store,
@@ -419,9 +524,21 @@ impl LibraryService {
         let worker_store = store.clone();
         operations::spawn(handle, store, id.clone(), lease, async move {
             let _leases = leases;
-            service
-                .copy_saved_items(&worker_store, &id, &request.target, &ids)
-                .await
+            let items = if ids.is_empty() && !follow_ids.is_empty() {
+                Ok(())
+            } else {
+                service
+                    .copy_saved_items(&worker_store, &id, &request.target, &ids)
+                    .await
+            };
+            let follows = if follow_ids.is_empty() {
+                Ok(())
+            } else {
+                service
+                    .copy_saved_follows(&worker_store, &id, &request.target, &follow_ids)
+                    .await
+            };
+            items.and(follows)
         });
         Ok(record)
     }
@@ -430,61 +547,84 @@ impl LibraryService {
         &self,
         request: SpaceUpdateRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        let selected = match &request.scope {
+        let (selected, selected_follows) = match &request.scope {
             SpaceUpdateScope::Selection { item_ids, follow_ids } => {
-                if !follow_ids.is_empty() {
-                    return Err(error("source_capability_unavailable", "Follow updates are not available"));
-                }
-                if item_ids.len() > 5_000 {
+                if item_ids.len() > 5_000 || follow_ids.len() > 5_000 {
                     return Err(error("invalid_library_request", "Too many selected items"));
                 }
-                Some(item_ids)
+                (Some(item_ids), Some(follow_ids))
             }
-            SpaceUpdateScope::All {} => None,
+            SpaceUpdateScope::All {} => (None, None),
         };
         validate_confirmed(&request.replace_edited)?;
         let handle = operations::runtime()?;
         let store = self.open()?;
         let authorized = self.authorize_space(&request.target).await?;
-        let rows = {
+        let (rows, follow_rows) = {
             let _lock = store.shared()?;
-            let items = store.index()?.items.into_iter().map(|entry| entry.summary).collect::<Vec<_>>();
-            context_assets::library_space_rows(&authorized.dir,
-                authorized.root.companion_id.as_deref().expect("authorized companion"), &items)?
-                .into_iter().filter(|row| {
+            let index = store.index()?;
+            let items = index.items.into_iter().map(|entry| entry.summary).collect::<Vec<_>>();
+            let (follow_rows, item_rows): (Vec<_>, Vec<_>) = context_assets::library_space_rows(
+                &authorized.dir,
+                authorized.root.companion_id.as_deref().expect("authorized companion"),
+                &items,
+                &index.follows,
+            )?
+            .into_iter()
+            .partition(|row| row.follow.is_some());
+            let rows = item_rows.into_iter().filter(|row| {
                     row.item_id.as_ref().is_some_and(|id| selected.is_none_or(|ids| ids.contains(id)))
                         && row.current_library_revision.is_some()
                         && row.item_id.as_ref().is_some_and(|id| items.iter().any(|item|
                             &item.item_id == id && item.state != LibraryItemState::RemovedAtSource))
                         && matches!(row.state, SpaceCopyState::LibraryNewer | SpaceCopyState::MissingInSpace | SpaceCopyState::EditedInSpace)
-                }).collect::<Vec<_>>()
+                }).collect::<Vec<_>>();
+            // A follow is updated per Space (D8): new pages and changed unedited pages.
+            let follow_rows = follow_rows
+                .into_iter()
+                .filter(|row| {
+                    row.state != SpaceCopyState::NotInLibrary
+                        && selected_follows.is_none_or(|ids| ids.contains(&row.logical_id))
+                })
+                .collect::<Vec<_>>();
+            (rows, follow_rows)
         };
+        if selected_follows.is_some_and(|ids| {
+            ids.iter().any(|id| !follow_rows.iter().any(|row| &row.logical_id == id))
+        }) {
+            return Err(error("library_item_not_found", "Followed space is not in this Space's Library follows"));
+        }
         // Confirmation is bound to this selection, target, and authoritative hash.
         // A stale dialog must fail before any other selected row can be written.
         for confirmed in &request.replace_edited {
-            if !rows.iter().any(|row| row.edited.iter().any(|file|
+            if !rows.iter().chain(&follow_rows).any(|row| row.edited.iter().any(|file|
                 file.path == confirmed.path && file.current_hash == confirmed.current_hash))
             {
                 return Err(error("space_copy_conflict", "The Space copy changed; reload before confirming"));
             }
         }
+        let follow_ids = follow_rows.iter().map(|row| row.logical_id.clone()).collect::<Vec<_>>();
         let leases = rows.iter().filter_map(|row| row.item_id.as_deref())
+            .chain(follow_ids.iter().map(String::as_str))
             .map(|id| store.lease(id)).collect::<Result<Vec<_>, _>>()?;
-        let (record, lease) = operations::create(&store, LibraryOperationKind::SpaceUpdate, Some(rows.len() as u32))?;
+        let total = rows.len() as u32 + follow_rows.iter().filter_map(|row| row.follow.as_ref())
+            .map(|follow| follow.page_count + follow.new_pages).sum::<u32>();
+        let (record, lease) = operations::create(&store, LibraryOperationKind::SpaceUpdate, Some(total))?;
         let record = operations::set_target(&store, &record.operation_id, request.target.clone())?;
         let service = self.clone();
         let id = record.operation_id.clone();
         let worker_store = store.clone();
         operations::spawn(handle, store, id.clone(), lease, async move {
             let _leases = leases;
-            operations::begin_space(&worker_store, &id, rows.len() as u32)?;
+            operations::begin_space(&worker_store, &id, total)?;
             let mut phase = SpacePhaseResult {
                 space_id: request.target.space_id.clone(), copy_mode: None,
                 written: vec![], skipped_edited: vec![], companion_root_id: None,
             };
             operations::space_result(&worker_store, &id, phase.clone(), 0)?;
             let mut first_error = None;
-            for (position, row) in rows.iter().enumerate() {
+            let mut done = 0;
+            for row in &rows {
                 if operations::cancelled(&worker_store, &id)? { break; }
                 let item_id = row.item_id.as_deref().expect("selected linked row");
                 let confirmed = request.replace_edited.iter()
@@ -495,15 +635,10 @@ impl LibraryService {
                 let (outcome, reason) = match result {
                     Ok((authorized, copied)) => {
                         phase.companion_root_id = Some(authorized.root.root_id);
-                        phase.copy_mode = match (phase.copy_mode, copied.copy_mode) {
-                            (None, mode) | (mode, None) => mode,
-                            (Some(a), Some(b)) => Some(if a == b { a } else { SpaceCopyMode::Mixed }),
-                        };
                         let outcome = if !copied.skipped_edited.is_empty() { LibraryReportOutcome::Partial }
                             else if copied.written.is_empty() { LibraryReportOutcome::Unchanged }
                             else { LibraryReportOutcome::Updated };
-                        phase.written.extend(copied.written);
-                        phase.skipped_edited.extend(copied.skipped_edited);
+                        merge_copy(&mut phase, copied);
                         (outcome, None)
                     }
                     Err(failure) => {
@@ -517,7 +652,18 @@ impl LibraryService {
                 };
                 let entry = service.entry(&worker_store, item_id)?;
                 operations::row(&worker_store, &id, entry.as_ref().map(|entry| &entry.summary), outcome, reason)?;
-                operations::space_result(&worker_store, &id, phase.clone(), (position + 1) as u32)?;
+                done += 1;
+                operations::space_result(&worker_store, &id, phase.clone(), done)?;
+            }
+            for follow_id in &follow_ids {
+                if operations::cancelled(&worker_store, &id)? { break; }
+                let mut progress = FollowProgress { phase: &mut phase, done: &mut done, first_error: &mut first_error };
+                let result = service.update_follow_pages(
+                    &worker_store, &id, &request.target, follow_id, &request.replace_edited, &mut progress,
+                ).await;
+                if let Err(failure) = result {
+                    first_error.get_or_insert(failure);
+                }
             }
             match first_error { Some(failure) => Err(failure), None => Ok(()) }
         });
@@ -529,16 +675,20 @@ impl LibraryService {
         request: SpaceRemoveRequest,
     ) -> Result<SpaceContextListing, InspectionError> {
         validate_confirmed(&request.confirmed)?;
-        if request.logical_id.starts_with("follow:") {
-            return Err(error("source_capability_unavailable", "Follow removal is not available"));
-        }
         if request.logical_id.is_empty() || request.logical_id.len() > 4096 {
             return Err(error("invalid_library_request", "Invalid Space copy identity"));
         }
         let authorized = self.authorize_space(&request.target).await?;
-        context_assets::remove_library_copy(&authorized.dir,
-            authorized.root.companion_id.as_deref().expect("authorized companion"),
-            &request.logical_id, &request.confirmed)?;
+        let companion = authorized.root.companion_id.as_deref().expect("authorized companion");
+        // A follow aggregate removes its page copies and the Space's follow
+        // record; one page keeps its known id so Update does not re-add it.
+        if request.logical_id.starts_with("follow:") {
+            context_assets::remove_follow_copy(&authorized.dir, companion,
+                &request.logical_id, &request.confirmed)?;
+        } else {
+            context_assets::remove_library_copy(&authorized.dir, companion,
+                &request.logical_id, &request.confirmed)?;
+        }
         self.space_listing(request.target).await
     }
 
@@ -577,64 +727,25 @@ impl LibraryService {
         // All retry records are durable before any companion lookup or write.
         {
             let _lock = store.exclusive()?;
-            let dir = attempts_dir(store)?;
             let index = store.index()?;
-            let existing = read_attempts(&dir)?;
-            let added = ids
+            let subjects = ids
                 .iter()
-                .filter(|id| {
-                    !existing
+                .map(|id| {
+                    let entry = index
+                        .items
                         .iter()
-                        .any(|a| same_target(&a.target, target) && a.item_id.as_ref() == Some(*id))
-                })
-                .count();
-            let mut excess = (existing.len() + added).saturating_sub(MAX_ATTEMPTS);
-            for attempt in &existing {
-                if excess == 0 {
-                    break;
-                }
-                if attempt.state == SpaceAddAttemptState::Failed
-                    && !(same_target(&attempt.target, target)
-                        && attempt.item_id.as_ref().is_some_and(|id| ids.contains(id)))
-                {
-                    remove_attempt(
-                        &dir,
-                        &attempt.target,
-                        attempt
-                            .item_id
-                            .as_ref()
-                            .or(attempt.follow_id.as_ref())
-                            .unwrap(),
-                    )?;
-                    excess -= 1;
-                }
-            }
-            if excess > 0 {
-                return Err(error("library_item_busy", "Too many pending Space adds"));
-            }
-            for id in ids {
-                let entry = index
-                    .items
-                    .iter()
-                    .find(|entry| &entry.summary.item_id == id)
-                    .ok_or_else(|| {
-                        error("library_item_not_found", "Library item no longer exists")
-                    })?;
-                persist_attempt(
-                    &dir,
-                    &SpaceAddAttempt {
-                        target: target.clone(),
-                        space_label: None,
-                        item_id: Some(id.clone()),
-                        follow_id: None,
+                        .find(|entry| &entry.summary.item_id == id)
+                        .ok_or_else(|| {
+                            error("library_item_not_found", "Library item no longer exists")
+                        })?;
+                    Ok(AttemptSubject {
+                        id: id.clone(),
+                        follow: false,
                         title: entry.summary.title.clone(),
-                        state: SpaceAddAttemptState::Pending,
-                        error: None,
-                        operation_id: operation.into(),
-                        updated_at: timestamp(),
-                    },
-                )?;
-            }
+                    })
+                })
+                .collect::<Result<Vec<_>, InspectionError>>()?;
+            persist_pending_attempts(store, operation, target, &subjects)?;
         }
         #[cfg(test)]
         {
@@ -724,34 +835,258 @@ impl LibraryService {
         mode: LibraryCopyMode<'_>,
     ) -> Result<(AuthorizedSpace, context_assets::LibraryCopyResult), InspectionError> {
         let authorized = self.authorize_space(target).await?;
-        let _lock = store.shared()?;
-        let index = store.index()?;
-        let entry = index
-            .items
-            .iter()
-            .find(|entry| entry.summary.item_id == id)
-            .ok_or_else(|| error("library_item_not_found", "Library item no longer exists"))?;
-        if !store.conflicts(entry)?.is_empty() {
-            return Err(error("library_conflict", "Library item was edited"));
-        }
-        let root = store.item_dir(&entry.summary.item_path)?;
-        let view = LibraryItemView {
-            root: &root,
-            summary: &entry.summary,
-            files: &entry.inventory,
-        };
-        let copied = context_assets::materialize_library_item(
-            &authorized.dir,
-            authorized
-                .root
-                .companion_id
-                .as_deref()
-                .expect("authorized companion"),
-            &view,
-            mode,
-        )?;
+        let copied = copy_into(store, &authorized, id, mode, None)?;
         Ok((authorized, copied))
     }
+
+    /// Phase 2 of adding follows: each follow's current pages not yet offered
+    /// to this Space are copied with its follow id and recorded as known.
+    pub(super) async fn copy_saved_follows(
+        &self,
+        store: &Arc<Store>,
+        operation: &str,
+        target: &SpaceTarget,
+        follow_ids: &[String],
+    ) -> Result<(), InspectionError> {
+        let _attempt_leases = follow_ids
+            .iter()
+            .map(|id| store.lease(&format!("space-add:{}", attempt_name(target, id))))
+            .collect::<Result<Vec<_>, _>>()?;
+        let space_only = operations::get(store, operation)?.kind == LibraryOperationKind::SpaceAdd;
+        let total = {
+            let _lock = store.exclusive()?;
+            let index = store.index()?;
+            let subjects = follow_ids
+                .iter()
+                .map(|id| {
+                    let follow = index.follows.iter().find(|f| &f.follow_id == id).ok_or_else(|| {
+                        error("library_item_not_found", "Followed space no longer exists")
+                    })?;
+                    Ok(AttemptSubject {
+                        id: id.clone(),
+                        follow: true,
+                        title: format!("{} · {}", follow.space_key, follow.space_name),
+                    })
+                })
+                .collect::<Result<Vec<_>, InspectionError>>()?;
+            persist_pending_attempts(store, operation, target, &subjects)?;
+            index
+                .items
+                .iter()
+                .filter(|e| e.summary.follow_id.as_ref().is_some_and(|id| follow_ids.contains(id)))
+                .count() as u32
+        };
+        operations::begin_space(store, operation, total)?;
+        let record = operations::get(store, operation)?;
+        let mut phase = record.space.unwrap_or(SpacePhaseResult {
+            space_id: target.space_id.clone(),
+            copy_mode: None,
+            written: vec![],
+            skipped_edited: vec![],
+            companion_root_id: None,
+        });
+        let mut done = record
+            .phases
+            .iter()
+            .find(|phase| phase.phase == LibraryPhaseName::Space)
+            .map_or(0, |phase| phase.done);
+        let mut first_error = None;
+        for follow_id in follow_ids {
+            let mut page_error = None;
+            let result = async {
+                let authorized = self.authorize_space(target).await?;
+                let companion = authorized.root.companion_id.clone().expect("authorized companion");
+                context_assets::record_follow_pages(&authorized.dir, &companion, follow_id, &[])?;
+                let copies = context_assets::library_follow_copies(&authorized.dir, &companion, follow_id)?;
+                phase.companion_root_id = Some(authorized.root.root_id.clone());
+                let mut progress = FollowProgress { phase: &mut phase, done: &mut done, first_error: &mut page_error };
+                offer_follow_pages(store, operation, &authorized, follow_id, &copies, space_only, &mut progress)
+            }
+            .await;
+            let result = result.and_then(|()| page_error.map_or(Ok(()), Err));
+            let _lock = store.exclusive()?;
+            let dir = attempts_dir(store)?;
+            match result {
+                Ok(()) => remove_attempt(&dir, target, follow_id)?,
+                Err(failure) => {
+                    let mut attempt: SpaceAddAttempt =
+                        read_json_bounded(&dir, &attempt_name(target, follow_id), MAX_ATTEMPT_BYTES)?;
+                    attempt.state = SpaceAddAttemptState::Failed;
+                    attempt.error = Some(response(&failure));
+                    attempt.updated_at = timestamp();
+                    persist_attempt(&dir, &attempt)?;
+                    first_error.get_or_insert(failure);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// S6 per-follow `Update` in one Space: refresh this follow's unedited
+    /// changed or missing pages, list edited ones, then offer new pages.
+    /// Other follows, items and Spaces are not read for writing.
+    async fn update_follow_pages(
+        &self,
+        store: &Arc<Store>,
+        operation: &str,
+        target: &SpaceTarget,
+        follow_id: &str,
+        replace_edited: &[LibraryConflictFile],
+        progress: &mut FollowProgress<'_>,
+    ) -> Result<(), InspectionError> {
+        let authorized = self.authorize_space(target).await?;
+        let companion = authorized.root.companion_id.clone().expect("authorized companion");
+        progress.phase.companion_root_id = Some(authorized.root.root_id.clone());
+        let copies = context_assets::library_follow_copies(&authorized.dir, &companion, follow_id)?;
+        let items = {
+            let _lock = store.shared()?;
+            store.index()?.items.into_iter().map(|entry| entry.summary).collect::<Vec<_>>()
+        };
+        for (item_id, paths) in &copies.pages {
+            if operations::cancelled(store, operation)? {
+                return Ok(());
+            }
+            let Some(item) = items.iter().find(|item| &item.item_id == item_id) else { continue };
+            if item.state == LibraryItemState::RemovedAtSource {
+                continue;
+            }
+            let confirmed = replace_edited.iter()
+                .filter(|file| paths.contains(&file.path)).cloned().collect::<Vec<_>>();
+            let mode = if confirmed.is_empty() { LibraryCopyMode::Update }
+                else { LibraryCopyMode::Replace { confirmed: &confirmed } };
+            match copy_into(store, &authorized, item_id, mode, Some(follow_id)) {
+                Ok(copied) => {
+                    context_assets::record_follow_pages(&authorized.dir, &companion, follow_id,
+                        std::slice::from_ref(item_id))?;
+                    // Up-to-date pages are not report rows; only work done or skipped is.
+                    let outcome = if !copied.skipped_edited.is_empty() { Some(LibraryReportOutcome::Partial) }
+                        else if copied.written.is_empty() { None }
+                        else { Some(LibraryReportOutcome::Updated) };
+                    merge_copy(progress.phase, copied);
+                    if let Some(outcome) = outcome {
+                        operations::row(store, operation, Some(item), outcome, None)?;
+                    }
+                }
+                Err(failure) => {
+                    let outcome = if failure.code == "space_copy_conflict" { LibraryReportOutcome::Conflict }
+                        else { LibraryReportOutcome::Failed };
+                    operations::row(store, operation, Some(item), outcome, Some(failure.message.clone()))?;
+                    progress.first_error.get_or_insert(failure);
+                }
+            }
+            *progress.done += 1;
+            operations::space_result(store, operation, progress.phase.clone(), *progress.done)?;
+        }
+        if operations::cancelled(store, operation)? {
+            return Ok(());
+        }
+        offer_follow_pages(store, operation, &authorized, follow_id, &copies, true, progress)
+    }
+}
+
+/// Mutable phase-2 progress shared across one operation's follows.
+struct FollowProgress<'a> {
+    phase: &'a mut SpacePhaseResult,
+    done: &'a mut u32,
+    first_error: &'a mut Option<InspectionError>,
+}
+
+/// Copy one Library item into an authorized Space under the shared Library lock.
+fn copy_into(
+    store: &Store,
+    authorized: &AuthorizedSpace,
+    id: &str,
+    mode: LibraryCopyMode<'_>,
+    follow_id: Option<&str>,
+) -> Result<context_assets::LibraryCopyResult, InspectionError> {
+    let _lock = store.shared()?;
+    let index = store.index()?;
+    let entry = index
+        .items
+        .iter()
+        .find(|entry| entry.summary.item_id == id)
+        .ok_or_else(|| error("library_item_not_found", "Library item no longer exists"))?;
+    if !store.conflicts(entry)?.is_empty() {
+        return Err(error("library_conflict", "Library item was edited"));
+    }
+    let root = store.item_dir(&entry.summary.item_path)?;
+    let view = LibraryItemView {
+        root: &root,
+        summary: &entry.summary,
+        files: &entry.inventory,
+    };
+    context_assets::materialize_library_item(
+        &authorized.dir,
+        authorized
+            .root
+            .companion_id
+            .as_deref()
+            .expect("authorized companion"),
+        &view,
+        mode,
+        follow_id,
+    )
+}
+
+/// D8: offer the follow's current Library pages this Space was never offered.
+/// A page already copied here (for example added on its own) is recognized,
+/// not rewritten. Known ids grow only for pages written or recognized.
+fn offer_follow_pages(
+    store: &Store,
+    operation: &str,
+    authorized: &AuthorizedSpace,
+    follow_id: &str,
+    copies: &context_assets::SpaceFollowCopies,
+    report: bool,
+    progress: &mut FollowProgress<'_>,
+) -> Result<(), InspectionError> {
+    let companion = authorized.root.companion_id.as_deref().expect("authorized companion");
+    let mut pages = {
+        let _lock = store.shared()?;
+        store
+            .index()?
+            .items
+            .into_iter()
+            .map(|entry| entry.summary)
+            .filter(|item| {
+                item.follow_id.as_deref() == Some(follow_id)
+                    && item.state != LibraryItemState::RemovedAtSource
+                    && !copies.known.contains(&item.item_id)
+                    && !copies.pages.iter().any(|(id, _)| id == &item.item_id)
+            })
+            .collect::<Vec<_>>()
+    };
+    pages.sort_by(|a, b| (a.order, &a.title).cmp(&(b.order, &b.title)));
+    for page in &pages {
+        if copies.linked.contains(&page.item_id) {
+            context_assets::record_follow_pages(&authorized.dir, companion, follow_id,
+                std::slice::from_ref(&page.item_id))?;
+            continue;
+        }
+        match copy_into(store, authorized, &page.item_id, LibraryCopyMode::NewOnly, Some(follow_id)) {
+            Ok(copied) => {
+                context_assets::record_follow_pages(&authorized.dir, companion, follow_id,
+                    std::slice::from_ref(&page.item_id))?;
+                let outcome = if copied.written.is_empty() { LibraryReportOutcome::Unchanged }
+                    else { LibraryReportOutcome::New };
+                merge_copy(progress.phase, copied);
+                if report {
+                    operations::row(store, operation, Some(page), outcome, None)?;
+                }
+            }
+            Err(failure) => {
+                if report {
+                    let outcome = if failure.code == "source_sync_conflict" { LibraryReportOutcome::Conflict }
+                        else { LibraryReportOutcome::Failed };
+                    operations::row(store, operation, Some(page), outcome, Some(failure.message.clone()))?;
+                }
+                progress.first_error.get_or_insert(failure);
+            }
+        }
+        *progress.done += 1;
+        operations::space_result(store, operation, progress.phase.clone(), *progress.done)?;
+    }
+    Ok(())
 }
 
 fn validate_confirmed(files: &[LibraryConflictFile]) -> Result<(), InspectionError> {
@@ -769,7 +1104,7 @@ fn validate_confirmed(files: &[LibraryConflictFile]) -> Result<(), InspectionErr
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::library) mod tests {
     use super::super::tests::{Fixture, add, asset, finished, fixture, linked_add, reopen, saved};
     use super::*;
     use crate::{
@@ -786,8 +1121,8 @@ mod tests {
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    struct Adapter {
-        reachable: AtomicBool,
+    pub(in crate::library) struct Adapter {
+        pub(in crate::library) reachable: AtomicBool,
         space_present: AtomicBool,
         endpoint_changed: AtomicBool,
         space_id: String,
@@ -931,7 +1266,7 @@ mod tests {
         }
     }
 
-    fn target() -> SpaceTarget {
+    pub(in crate::library) fn target() -> SpaceTarget {
         SpaceTarget {
             session_id: "session".into(),
             space_id: "space".into(),
@@ -940,7 +1275,7 @@ mod tests {
     async fn companion(f: &Fixture) -> (Arc<ProjectService>, Arc<Adapter>, std::path::PathBuf) {
         companion_named(f, "space").await
     }
-    async fn companion_named(f: &Fixture, space: &str) -> (Arc<ProjectService>, Arc<Adapter>, std::path::PathBuf) {
+    pub(in crate::library) async fn companion_named(f: &Fixture, space: &str) -> (Arc<ProjectService>, Arc<Adapter>, std::path::PathBuf) {
         let adapter = Arc::new(Adapter {
             reachable: AtomicBool::new(true),
             space_present: AtomicBool::new(true),
@@ -1531,11 +1866,11 @@ mod tests {
         assert!(listing.rows.is_empty());
         assert!(!path.exists());
         assert_eq!(service.start_space_update(SpaceUpdateRequest {
-            target: target(), scope: SpaceUpdateScope::Selection { item_ids: vec![], follow_ids: vec!["follow".into()] },
+            target: target(), scope: SpaceUpdateScope::Selection { item_ids: vec![], follow_ids: vec!["follow:one".into()] },
             replace_edited: vec![],
-        }).await.unwrap_err().code, "source_capability_unavailable");
+        }).await.unwrap_err().code, "library_item_not_found");
         assert_eq!(service.space_remove(SpaceRemoveRequest {
             target: target(), logical_id: "follow:one".into(), confirmed: vec![],
-        }).await.unwrap_err().code, "source_capability_unavailable");
+        }).await.unwrap_err().code, "library_item_not_found");
     }
 }

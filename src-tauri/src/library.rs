@@ -4,7 +4,7 @@ use cockpit_protocol::{
     context::{ContextDirectory, ContextDocument},
     context_media::ContextMedia,
     library::{
-        LibraryAddRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing,
+        LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing,
         LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest,
         LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, SpaceAddRequest,
         SpaceAttemptsDismissRequest, SpaceContextListing, SpaceContextRequest,
@@ -61,6 +61,30 @@ pub async fn cockpit_library_listing(
         .library()
         .map_err(inspection_error_response)?
         .listing(offset)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_library_confluence_spaces(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<Vec<LibraryResolution>, ErrorResponse> {
+    let request: LibraryConfluenceSpacesRequest =
+        decode_request(request, "library Confluence spaces")?;
+    if request.provider_id.is_empty()
+        || request.provider_id.len() > 128
+        || request.provider_id.chars().any(char::is_control)
+    {
+        return Err(super::stream_error(
+            "invalid_library_request",
+            "Expected a valid bounded Library request",
+        ));
+    }
+    service
+        .library()
+        .map_err(inspection_error_response)?
+        .confluence_spaces(&request.provider_id)
         .await
         .map_err(inspection_error_response)
 }

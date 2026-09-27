@@ -415,8 +415,8 @@ async fn space_update_and_remove_validate_scope_confirmation_and_authority() {
     let router = build_router(service_with_library(&root), &root, authority).unwrap();
     let target = serde_json::json!({"session_id": "session", "space_id": "space"});
     for (route, body, status, code) in [
-        ("update", serde_json::json!({"target": target, "scope": {"scope": "selection", "item_ids": [], "follow_ids": ["follow:one"]}, "replace_edited": []}), 503, "source_capability_unavailable"),
-        ("remove", serde_json::json!({"target": target, "logical_id": "follow:one", "confirmed": []}), 503, "source_capability_unavailable"),
+        ("update", serde_json::json!({"target": target, "scope": {"scope": "selection", "item_ids": [], "follow_ids": ["follow:one"]}, "replace_edited": []}), 503, "source_companion_unavailable"),
+        ("remove", serde_json::json!({"target": target, "logical_id": "follow:one", "confirmed": []}), 503, "source_companion_unavailable"),
         ("update", serde_json::json!({"target": target, "scope": {"scope": "all"}, "replace_edited": []}), 503, "source_companion_unavailable"),
         ("remove", serde_json::json!({"target": target, "logical_id": "source:one", "confirmed": []}), 503, "source_companion_unavailable"),
         ("update", serde_json::json!({"target": target, "scope": {"scope": "all", "unexpected": true}, "replace_edited": []}), 400, "invalid_library_request"),
@@ -438,6 +438,43 @@ async fn space_update_and_remove_validate_scope_confirmation_and_authority() {
         assert_eq!(error["code"], code);
     }
     assert!(!root.join("companions").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn confluence_space_browse_route_requires_origin_bounded_request_and_configured_provider() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service_with_library(&root), &root, authority).unwrap();
+    let post = |origin: String, body: serde_json::Value| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/library/confluence/spaces")
+            .header("host", authority.to_string())
+            .header("origin", origin)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    };
+    let trusted = format!("http://{authority}");
+    let response = router
+        .clone()
+        .oneshot(post("http://untrusted.test".into(), serde_json::json!({"provider_id": "confluence"})))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    for (body, status, code) in [
+        (serde_json::json!({"provider_id": "confluence", "unexpected": true}), 400, "invalid_library_request"),
+        (serde_json::json!({"provider_id": ""}), 400, "invalid_library_request"),
+        (serde_json::json!({"provider_id": "x".repeat(129)}), 400, "invalid_library_request"),
+        (serde_json::json!({"provider_id": "confluence"}), 503, "source_provider_unsupported"),
+    ] {
+        let response = router.clone().oneshot(post(trusted.clone(), body.clone())).await.unwrap();
+        assert_eq!(response.status(), status, "{body}");
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], code, "{body}");
+    }
     std::fs::remove_dir_all(root).unwrap();
 }
 

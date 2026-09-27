@@ -1,5 +1,5 @@
-import type { SpaceCopyRow, SpaceCopyState } from "../../protocol/generated/v1";
-import type { StateTone } from "./libraryState";
+import type { SpaceCopyRow, SpaceCopyState, SpaceFollowSummary } from "../../protocol/generated/v1";
+import { pageCount, type StateChip, type StateTone } from "./libraryState";
 
 /**
  * The only mapping from `SpaceCopyState` to words (D23, design §4.4, §4.6,
@@ -89,4 +89,28 @@ export function headerSpaceAction(row: StateInput | undefined, space: string): H
       return unreachable;
     }
   }
+}
+
+export type SpaceFollowPresentation = { chips: StateChip[]; notice: string | null; actions: SpaceCopyAction[] };
+
+/**
+ * A followed space's one aggregate row in a Space (design §4.6): `↑ Library
+ * newer: 1 new, 2 changed pages`, plus `✎ 1 page edited in Space` and
+ * removed-at-source counts when they apply. `Update` is offered only while the
+ * Library has new or changed pages; it writes this follow alone.
+ */
+export function spaceFollowPresentation(row: StateInput, follow: SpaceFollowSummary): SpaceFollowPresentation {
+  if (row.state === "not_in_library") return { chips: [spaceCopyChip(row)], notice: "This followed space was removed from the Library. Its pages here are kept and won't receive updates.", actions: [] };
+  const behind = follow.new_pages + follow.changed_pages;
+  const chips: StateChip[] = [];
+  if (behind > 0) {
+    const counts = [follow.new_pages > 0 ? `${follow.new_pages} new` : null, follow.changed_pages > 0 ? `${follow.changed_pages} changed` : null].filter(Boolean).join(", ");
+    chips.push({ glyph: "↑", word: `Library newer: ${counts} ${behind === 1 ? "page" : "pages"}`, tone: "working" });
+  }
+  if (follow.edited_pages > 0) chips.push({ glyph: "✎", word: `${pageCount(follow.edited_pages)} edited in Space`, tone: "working" });
+  if (follow.removed_at_source_pages > 0) chips.push({ glyph: "⊘", word: `${pageCount(follow.removed_at_source_pages)} removed at source`, tone: "muted" });
+  if (chips.length === 0) chips.push({ glyph: "✓", word: "Up to date", tone: "idle" });
+  const notice = behind > 0 ? "The Library has new or changed pages. Update copies them here; pages you edited or removed in this Space are skipped."
+    : follow.edited_pages > 0 ? "Updates skip pages you edited in this Space." : null;
+  return { chips, notice, actions: behind > 0 ? [{ kind: "update", label: "Update" }] : [] };
 }

@@ -250,6 +250,7 @@ fn page_json(page: &Page, mode: Mode, base: &str) -> Value {
             "lastUpdated": { "by": by, "when": "2026-09-25T14:03:11.000Z", "number": page.version },
         },
         "version": { "by": by, "when": "2026-09-25T14:03:11.000Z", "number": page.version, "minorEdit": false },
+        "position": page.ancestors.len() as i64,
         "ancestors": page.ancestors.iter().map(|(id, kind, title)| json!({
             "id": id, "type": kind, "status": "current", "title": title,
         })).collect::<Vec<_>>(),
@@ -357,6 +358,63 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
     }
     let segments: Vec<&str> = path.split('/').collect();
     match segments.as_slice() {
+        ["space"] => {
+            let mut spaces = BTreeMap::new();
+            for page in state.pages.values() {
+                spaces.entry(page.space_key.clone()).or_insert_with(|| page.space_name.clone());
+            }
+            let results: Vec<_> = spaces.iter().map(|(key, name)| json!({
+                "key": key, "name": name, "type": "global"
+            })).collect();
+            respond(&mut stream, 200, &json!({
+                "results": results, "start": 0, "limit": 100, "size": results.len(),
+                "_links": {"base": base, "context": if mode == Mode::Cloud { "/wiki" } else { "" }},
+            }));
+        }
+        ["space", key] => {
+            let page = state.pages.values().find(|page| page.space_key == *key);
+            match page {
+                Some(page) => {
+                    let homepage = state.pages.values()
+                        .find(|candidate| candidate.space_key == *key && candidate.ancestors.is_empty())
+                        .unwrap_or(page);
+                    respond(&mut stream, 200, &json!({
+                        "key": key,
+                        "name": page.space_name,
+                        "homepage": {"id": homepage.id, "type": "page", "title": homepage.title},
+                        "_links": {"base": base, "context": if mode == Mode::Cloud { "/wiki" } else { "" }},
+                    }));
+                }
+                None => respond(&mut stream, 404, &not_found(key)),
+            }
+        }
+        ["content", "search"] if query.get("cql").is_some_and(|cql| cql.contains("type=page")) => {
+            let cql = query.get("cql").cloned().unwrap_or_default();
+            let key = cql.strip_prefix("space=\"").and_then(|rest| rest.strip_suffix("\" and type=page"));
+            let Some(key) = key else {
+                respond(&mut stream, 400, &json!({"message":"invalid cql"}));
+                return;
+            };
+            let all: Vec<_> = state.pages.values().filter(|page| page.space_key == key).collect();
+            let start = query.get("start").or_else(|| query.get("cursor"))
+                .and_then(|value| value.parse::<usize>().ok()).unwrap_or(0);
+            let request_limit = query.get("limit").and_then(|value| value.parse::<usize>().ok()).unwrap_or(2);
+            let limit = request_limit.min(2);
+            let results: Vec<_> = all.iter().skip(start).take(limit)
+                .map(|page| page_json(page, mode, &base)).collect();
+            let next_start = start + results.len();
+            let next = if next_start < all.len() {
+                let param = if mode == Mode::Cloud { "cursor" } else { "start" };
+                Some(format!("{}?cql={}&limit={request_limit}&expand=version%2Cancestors%2Cspace&{param}={next_start}",
+                    if mode == Mode::Cloud { "/wiki/rest/api/content/search" } else { "/rest/api/content/search" },
+                    url::form_urlencoded::byte_serialize(cql.as_bytes()).collect::<String>()))
+            } else { None };
+            respond(&mut stream, 200, &json!({
+                "results": results, "start": start, "limit": request_limit, "size": results.len(),
+                "totalSize": all.len(), "cqlQuery": cql,
+                "_links": {"base": base, "context": if mode == Mode::Cloud { "/wiki" } else { "" }, "next": next},
+            }));
+        }
         ["search"] => {
             let cql = query.get("cql").cloned().unwrap_or_default();
             let found = cql

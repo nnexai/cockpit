@@ -573,8 +573,9 @@ it("recognizes a Cloud page link, asks for the provider only when several config
     expect([...providerSelect()!.options].map((option) => option.value)).toEqual(["cloud", "cloud-reader", "dc"]);
     expect(providerSelect()!.value).toBe("cloud-reader");
     expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: "98765", provider_id: "cloud-reader" });
+    // `Only this page` stays the default for a page; the destination keeps the Space.
     const radios = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
-    expect(radios[1]?.checked).toBe(true);
+    expect(radios.map((radio) => radio.checked)).toEqual([true, false, false, true]);
 
     await act(async () => dialogButton("Add to Library and api-review")!.click());
     await advance(0);
@@ -664,6 +665,145 @@ it("explains a Confluence sign-in failure and a missing confluence CLI without c
     expect(alert().textContent).toContain("Install it with brew install pchuri/tap/confluence-cli, configure a read-only profile, then retry.");
     expect(dialogButton("Add to Library")!.disabled).toBe(true);
     expect(client.libraryAdd).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+function spaceResolution(overrides: Record<string, unknown>) {
+  return {
+    kind: "confluence_space", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", title: "Software Development", canonical_id: "SD",
+    container_label: "SD · Software Development", existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [],
+    ...overrides,
+  };
+}
+
+it("browses each Confluence provider's spaces, keeps a provider's sign-in failure to itself, and follows a chosen space into the Library and the Space", async () => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space-1" };
+  const followed: LibraryOperation = {
+    operation_id: "op-follow", kind: "add", item_ids: ["source:h", "source:a", "source:t"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "library", state: "done", done: 3, total: 3, message: null, error: null }, { phase: "space", state: "done", done: 3, total: 3, message: null, error: null }],
+    space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/confluence/page/SD/1-home/document.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+  };
+  const client = githubClient({
+    projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0], confluenceProviders[2]], limits: { library_space_pages: 200 } })),
+    libraryConfluenceSpaces: vi.fn(async (request: { provider_id: string }) => {
+      if (request.provider_id === "dc") throw Object.assign(new Error("Confluence rejected the profile"), { code: "source_auth_failed" });
+      return [spaceResolution({}), spaceResolution({ title: "Operations", canonical_id: "OPS", container_label: "OPS · Operations", existing_follow_id: "follow:ops" })];
+    }),
+    libraryAdd: vi.fn(async () => followed),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const button = (label: string) => [...document.body.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((candidate) => candidate.textContent?.trim() === label || candidate.getAttribute("aria-label") === label);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} onOpenItem={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
+    await advance(0);
+    // Collapsed until asked: nothing is listed before the disclosure opens.
+    const disclosure = button("Browse Confluence spaces")!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(client.libraryConfluenceSpaces).not.toHaveBeenCalled();
+    await act(async () => disclosure.click());
+    await advance(0);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(client.libraryConfluenceSpaces).toHaveBeenCalledWith({ provider_id: "cloud" });
+    expect(client.libraryConfluenceSpaces).toHaveBeenCalledWith({ provider_id: "dc" });
+    const cloud = document.body.querySelector("[aria-label='Confluence · nnexai.atlassian.net']")!;
+    expect([...cloud.querySelectorAll("li")].map((row) => row.textContent)).toEqual(["SD · Software DevelopmentFollow", "OPS · Operations◉ FollowingSelect"]);
+    const dc = document.body.querySelector("[aria-label='Confluence · confluence.example.com/confluence']")!;
+    expect(dc.querySelector("[role='alert'] strong")?.textContent).toBe("✕ Confluence sign-in failed");
+    expect(dc.querySelector("li")).toBeNull();
+    await act(async () => [...dc.querySelectorAll("button")].find((candidate) => candidate.textContent === "Retry")!.click());
+    await advance(0);
+    expect(client.libraryConfluenceSpaces).toHaveBeenCalledTimes(3);
+    expect(client.libraryConfluenceSpaces).toHaveBeenLastCalledWith({ provider_id: "dc" });
+
+    // Choosing a space fills Add with it without another lookup, and focus moves to the action it enables.
+    await act(async () => button("Follow SD · Software Development")!.click());
+    await advance(450);
+    expect(client.libraryResolve).not.toHaveBeenCalled();
+    expect(document.body.querySelector<HTMLInputElement>("input[type='text']")!.value).toBe("SD");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(document.body.textContent).toContain("✓ Confluence space · SD · Software Development");
+    expect(document.body.textContent).toContain("Follow the whole space (SD · Software Development)");
+    expect(document.body.textContent).toContain("including every top-level page tree");
+    const primary = button("Follow and add to api-review")!;
+    expect(primary.disabled).toBe(false);
+    expect(document.activeElement).toBe(primary);
+    // Following is the only option for a space: no page-or-space choice, and nothing downloads attachments.
+    expect([...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => radio.checked)).toEqual([false, true]);
+    expect(document.body.querySelector("input[type='checkbox']")).toBeNull();
+
+    await act(async () => primary.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith({
+      input: "SD", provider_id: "cloud", target, label: null,
+      hydrate_references: false, follow_space: true, download_attachments: false, refresh_existing: false,
+    });
+    expect(document.body.textContent).toContain("✓ Saved to Library · 3 pages");
+    expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("offers following a page's whole space, warns when the page limit makes it partial, and adds an already followed space to the Space without refetching", async () => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space-1" };
+  const saved: LibraryOperation = {
+    operation_id: "op-follow-page", kind: "add", item_ids: ["source:page-98765"], report: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "library", state: "partial", done: 200, total: 312, message: null, error: null }], space: null,
+  };
+  const copied: LibraryOperation = {
+    operation_id: "op-follow-space", kind: "space_add", item_ids: [], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
+    space: { space_id: "space-1", copy_mode: "copy", written: ["sources/confluence/page/SD/1-home/document.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+  };
+  const client = githubClient({
+    projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0]], limits: { library_space_pages: 200 } })),
+    libraryResolve: vi.fn(async (request: { input: string }) => request.input === CLOUD_PAGE
+      ? { ...pageResolution("cloud"), page_count: 312 }
+      : spaceResolution({ existing_follow_id: "follow:sd", page_count: 38 })),
+    libraryAdd: vi.fn(async () => saved),
+    librarySpaceAdd: vi.fn(async () => copied),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  let root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} onOpenItem={vi.fn()} />));
+    await advance(0);
+    await typeSource(CLOUD_PAGE);
+    const choice = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
+    expect(choice.map((radio) => radio.parentElement?.textContent?.trim())).toEqual(["Only this page", "Follow the whole space (SD · Software Development · 312 pages)"]);
+    expect(choice[0]!.checked).toBe(true);
+    expect(dialogButton("Add to Library")!.disabled).toBe(false);
+    expect(document.body.textContent).not.toContain("page limit");
+    await act(async () => choice[1]!.click());
+    expect(document.body.querySelector("[role='status'].library-note-partial")?.textContent).toContain("The page limit is 200, so this saves 200 of 312 pages. Refresh won't mark pages removed at source until the whole space fits.");
+    await act(async () => dialogButton("Follow space")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: CLOUD_PAGE, provider_id: "cloud", target: null, follow_space: true, download_attachments: false }));
+    expect(document.body.textContent).toContain("◐ Saved to Library, partial");
+    await act(async () => root.unmount());
+
+    // A space that is already followed is copied into the Space as a follow, with no Library step.
+    root = createRoot(host);
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
+    await advance(0);
+    await typeSource("https://nnexai.atlassian.net/wiki/spaces/SD");
+    expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: "https://nnexai.atlassian.net/wiki/spaces/SD", provider_id: "cloud" });
+    expect(document.body.textContent).toContain("✓ Already following · SD · Software Development");
+    expect(document.body.textContent).not.toContain("including every top-level page tree");
+    await act(async () => dialogButton("Add to api-review")!.click());
+    await advance(0);
+    expect(client.librarySpaceAdd).toHaveBeenCalledWith({ target, item_ids: [], follow_ids: ["follow:sd"] });
+    expect(client.libraryAdd).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("✓ Added to api-review · copied (reflink not supported here)");
   } finally {
     await act(async () => root.unmount());
     host.remove();

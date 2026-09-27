@@ -151,6 +151,12 @@ pub struct LibraryResolveRequest {
     pub input: String,
     pub provider_id: Option<String>,
 }
+/// Browse the spaces of one configured Confluence provider (UQ5a).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryConfluenceSpacesRequest {
+    pub provider_id: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LibraryResolution {
     pub kind: LibraryInputKind,

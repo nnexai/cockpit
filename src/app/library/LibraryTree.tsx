@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import type { LibraryAttachment, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
+import type { LibraryAttachment, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, type LibraryContainerNode, type LibraryInstanceNode } from "./libraryState";
+import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
+import { errorText, isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, spaceDisplayName, type LibraryContainerNode, type LibraryInstanceNode } from "./libraryState";
 import "./library.css";
 
 export type LibraryMenuEntry = { label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean } | "separator";
@@ -83,6 +84,8 @@ export type LibraryItemActions = {
   refreshBusy: boolean;
   /** `Add to <Space>` for the target Space, when that Space can take the item. */
   spaceEntry?: (item: LibraryItemSummary) => LibraryMenuEntry | null;
+  /** Stops following a space or removes it from the Library; resolves once the Library accepted it. */
+  removeFollow?: (follow: LibraryFollowSummary, mode: FollowRemoveMode) => Promise<void>;
 };
 
 /** The same entries appear in the row context menu and the item header `⋯` (design §5.3). */
@@ -98,8 +101,13 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
   ];
 }
 
-/** A Confluence page's place under its space: a Library page, or an ancestor known only by its title. */
-type PageNode = { key: string; title: string; item: LibraryItemSummary | null; children: PageNode[] };
+/**
+ * A Confluence page's place under its space: a Library page, or an ancestor
+ * known only by its title. In a completely enumerated followed space every
+ * page is in the Library, so an ancestor that isn't, and wasn't removed from
+ * it, is a non-document node such as a Cloud folder.
+ */
+type PageNode = { key: string; title: string; item: LibraryItemSummary | null; folder: boolean; children: PageNode[] };
 
 /**
  * Pages beneath their space (design §4.3). Each page's ancestor chain, root
@@ -115,13 +123,18 @@ function pageForest(container: LibraryContainerNode): PageNode[] {
     for (const [index, page] of chain.entries()) {
       let node = nodes.get(page.id);
       if (!node) {
-        node = { key: `${container.key}\u0000page:${page.id}`, title: page.title, item: null, children: [] };
+        node = { key: `${container.key}\u0000page:${page.id}`, title: page.title, item: null, folder: false, children: [] };
         nodes.set(page.id, node);
         (parent?.children ?? roots).push(node);
       }
       if (index === chain.length - 1) Object.assign(node, { key: item.item_id, title: item.title, item });
       parent = node;
     }
+  }
+  const follow = container.follow;
+  if (follow && !follow.partial) {
+    const excluded = new Set(follow.excluded_page_ids);
+    for (const [id, node] of nodes) node.folder = !node.item && !excluded.has(id);
   }
   return roots;
 }
@@ -133,7 +146,7 @@ function pageItemIds(page: PageNode): string[] {
 type Row =
   | { kind: "instance"; key: string; depth: 0; parent: null; node: LibraryInstanceNode; open: boolean }
   | { kind: "container"; key: string; depth: 1; parent: string; node: LibraryContainerNode; open: boolean }
-  /** An ancestor page that isn't in the Library itself: a plain group. */
+  /** An ancestor page that isn't in the Library itself, or a followed space's folder: a plain group. */
   | { kind: "ancestor"; key: string; depth: number; parent: string; node: PageNode; open: boolean }
   /** A Library page with child pages or attachments: the chevron expands, the label opens (design §4.3). */
   | { kind: "page"; key: string; depth: number; parent: string; node: PageNode; item: LibraryItemSummary; open: boolean }
@@ -157,16 +170,28 @@ function rowLabel(row: Row): string {
   }
 }
 
+/** Design §4.10: stopping keeps every page and ends new-page refreshes. */
+function stoppedFollowing(follow: LibraryFollowSummary): string {
+  return `Stopped following ${follow.space_key}. Its ${pageCount(follow.page_count)} stay in the Library; refresh no longer adds new pages.`;
+}
+
+const NO_FOLLOWS: readonly LibraryFollowSummary[] = [];
+
 /**
  * Library tree (design §4.3): provider instance → container → item, with
- * Confluence pages under their ancestors. Rows are buttons with the Context
+ * Confluence pages under their ancestors. A followed space is a container
+ * reading `◉ Following` (`◐ N of M` while partial) with its own refresh,
+ * stop-following and removal actions. Rows are buttons with the Context
  * tree keys; Shift+F10 or the Menu key opens the row menu. Attachment rows are
  * read-only metadata, not buttons: arrow keys reach them, Tab skips them, and
  * they have no click, Enter or menu until downloads exist (S7). Labels are
- * display names, and the full path is the tooltip.
+ * display names, and the full path is the tooltip. A focused row that
+ * disappears (a removed space) hands focus to its parent row.
  */
-export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, actions }: {
+export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedItemId, pendingItemIds, actions }: {
   items: readonly LibraryItemSummary[];
+  /** Followed spaces from the Library listing; each is shown as its space's container. */
+  follows?: readonly LibraryFollowSummary[];
   providers: readonly ProjectProvider[];
   selectedItemId: string | null;
   pendingItemIds: ReadonlySet<string>;
@@ -174,8 +199,11 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [removing, setRemoving] = useState<LibraryFollowSummary | null>(null);
+  const [followNotice, setFollowNotice] = useState<{ text: string; failed: boolean } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const tree = useMemo(() => libraryTree(items, providers), [items, providers]);
+  const focusedRow = useRef<{ key: string; parent: string | null; index: number } | null>(null);
+  const tree = useMemo(() => libraryTree(items, providers, follows), [follows, items, providers]);
   const rows = useMemo(() => {
     const visible: Row[] = [];
     const pushPages = (pages: readonly PageNode[], depth: number, parent: string) => {
@@ -216,15 +244,43 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
   const focusRow = (key: string) => window.requestAnimationFrame(() => {
     [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === key)?.focus();
   });
+  // A focused row removed by a reread (a removed space or item) leaves focus on the body: hand it to the parent row.
+  useLayoutEffect(() => {
+    const last = focusedRow.current;
+    if (!last || (document.activeElement !== null && document.activeElement !== document.body) || rows.some((row) => row.key === last.key)) return;
+    const next = rows.find((row) => row.key === last.parent) ?? rows[Math.min(last.index, rows.length - 1)];
+    if (!next) return;
+    [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === next.key)?.focus({ preventScroll: true });
+  }, [rows]);
   const toggle = (key: string) => setCollapsed((current) => {
     const next = new Set(current);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
+  const removeFollow = actions.removeFollow;
+  const stopFollowing = (follow: LibraryFollowSummary) => {
+    if (!removeFollow) return;
+    setFollowNotice(null);
+    removeFollow(follow, "stop_following").then(() => setFollowNotice({ text: stoppedFollowing(follow), failed: false }), (cause: unknown) => {
+      setFollowNotice({ text: `Still following ${follow.space_key}. ${errorText(cause, "Stopping could not be completed.")}`, failed: true });
+    });
+  };
   const menuEntries = (row: MenuRow): LibraryMenuEntry[] => {
     if (row.kind === "item" || row.kind === "page") return itemMenuEntries(row.item, actions, true);
     const ids = row.kind === "instance" ? row.node.containers.flatMap((container) => container.items.map((item) => item.item_id))
       : row.kind === "container" ? row.node.items.map((item) => item.item_id) : pageItemIds(row.node);
+    const follow = row.kind === "container" ? row.node.follow : null;
+    if (follow) {
+      // Design §5.3: `Refresh space` · `Stop following` · separator · `Remove space from Library…`.
+      return [
+        { label: "Refresh space", onSelect: () => actions.refresh({ scope: "follow", follow_id: follow.follow_id }, ids), disabled: actions.refreshBusy },
+        ...(removeFollow ? [
+          { label: "Stop following", onSelect: () => stopFollowing(follow) },
+          "separator" as const,
+          { label: "Remove space from Library…", onSelect: () => { setFollowNotice(null); setRemoving(follow); }, destructive: true },
+        ] : []),
+      ];
+    }
     const request: LibraryRefreshRequest = row.kind === "container" && row.node.instance && row.node.containerId
       ? { scope: "container", provider_instance: row.node.instance, container_id: row.node.containerId }
       : { scope: "items", item_ids: ids };
@@ -276,7 +332,18 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
     event.currentTarget.focus();
     openMenu(row, event.clientX, event.clientY);
   };
-  return <div className="library-tree" ref={listRef} onKeyDown={onKeyDown}>
+  const onFocus = (event: FocusEvent<HTMLDivElement>) => {
+    const key = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-library-row]")?.dataset.libraryRow : undefined;
+    const index = key === undefined ? -1 : rows.findIndex((row) => row.key === key);
+    focusedRow.current = index < 0 ? null : { key: key!, parent: rows[index]!.parent, index };
+  };
+  // Focus moving elsewhere (a menu, a dialog, another pane) is no longer the tree's to restore.
+  const onBlur = (event: FocusEvent<HTMLDivElement>) => { if (event.relatedTarget) focusedRow.current = null; };
+  return <div className="library-tree" ref={listRef} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
+    {followNotice ? <div className={`library-tree-notice${followNotice.failed ? " is-error" : ""}`} role={followNotice.failed ? "alert" : "status"}>
+      <span>{followNotice.text}</span>
+      <button type="button" onClick={() => setFollowNotice(null)}>Dismiss</button>
+    </div> : null}
     {rows.map((row) => {
       const indent = { paddingLeft: `${8 + row.depth * 16}px` };
       if (row.kind === "item" || row.kind === "page") {
@@ -320,19 +387,32 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
         </div>;
       }
       const label = rowLabel(row);
-      // Pages added one by one; a followed space reads `◉ Following` (S6).
+      const follow = row.kind === "container" ? row.node.follow : null;
+      const folder = row.kind === "ancestor" && row.node.folder;
+      // Pages added one by one read `Pages`; a followed space `◉ Following`, `◐ N of M` while partial.
       const meta = row.kind === "instance" && row.node.unavailable ? "Unavailable"
-        : row.kind === "container" && row.node.items.every((item) => isConfluencePage(item) && !item.follow_id) ? "Pages"
-        : row.kind === "attachments" ? `${row.item.attachments.filter((attachment) => attachment.state === "downloaded").length} downloaded` : null;
+        : row.kind === "container" && !follow && row.node.items.every((item) => isConfluencePage(item) && !item.follow_id) ? "Pages"
+        : row.kind === "attachments" ? `${row.item.attachments.filter((attachment) => attachment.state === "downloaded").length} downloaded`
+        : folder ? "Folder" : null;
+      const partial = follow?.partial ? partialText(follow) : null;
       return <div className="context-tree-node" key={`${row.kind}:${row.key}`}>
         <button type="button" data-library-row={row.key} className={`context-tree-row library-tree-group is-${row.kind}`} style={indent} aria-expanded={row.open}
+          aria-label={follow ? `${label}, following${partial ? `, partial: ${partial}` : ""}` : folder ? `${label}, folder` : undefined}
           onClick={() => toggle(row.key)} onContextMenu={onContextMenu(row)}>
           <span className="context-tree-disclosure"><UiIcon name={row.open ? "down" : "right"} /></span>
           <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? label : label}>{label}</span>
+          {follow ? <span className={`context-tree-meta library-state is-${follow.partial ? "working" : "idle"}`} title={partial ?? undefined}>
+            <span aria-hidden="true">◉</span> Following{follow.partial ? <> · <span aria-hidden="true">◐</span> {follow.partial.have} of {follow.partial.total ?? "?"}</> : null}
+          </span> : null}
           {meta ? <span className={`context-tree-meta library-state ${meta === "Unavailable" ? "is-blocked" : "is-muted"}`}>{meta}</span> : null}
         </button>
       </div>;
     })}
     {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${rowLabel(menu.row)} actions`} entries={menuEntries(menu.row)} onDismiss={() => setMenu(null)} /> : null}
+    {removing && removeFollow ? <FollowRemoveDialog follow={removing} onClose={() => setRemoving(null)} remove={async (mode) => {
+      await removeFollow(removing, mode);
+      setRemoving(null);
+      setFollowNotice({ text: mode === "stop_following" ? stoppedFollowing(removing) : `Removed ${spaceDisplayName(removing)} from the Library.`, failed: false });
+    }} /> : null}
   </div>;
 }

@@ -1,4 +1,5 @@
 import type {
+  LibraryFollowSummary,
   LibraryItemState,
   LibraryItemSummary,
   LibraryRefreshReport,
@@ -135,6 +136,52 @@ export function confluencePageInput(input: string, providers: readonly ProjectPr
   return { ...page, host: url.host, providers: matching };
 }
 
+/** A Confluence space reference typed into Add (design §4.5): the space to follow. */
+export type ConfluenceSpaceInput = {
+  spaceKey: string;
+  /** The link's host; null for a bare key. */
+  host: string | null;
+  /** Configured Confluence providers that can read it: all of them for a bare key, else those whose base URL contains the link. */
+  providers: ProjectProvider[];
+};
+
+/** Confluence space keys (`SD`, `~jdoe`); a bare `~` is the home folder, and a bare key needs a configured Confluence provider. */
+const CONFLUENCE_SPACE_KEY = /^(?!~$)(?=.*[A-Za-z~_-])[A-Za-z0-9~_-]{1,255}$/;
+
+/**
+ * A space link (`…/spaces/<KEY>[/overview]`, Data Center `…/display/<KEY>`) or
+ * a bare space key while a Confluence provider is configured.
+ */
+export function confluenceSpaceInput(input: string, providers: readonly ProjectProvider[]): ConfluenceSpaceInput | null {
+  const trimmed = input.trim();
+  const confluence = confluenceProviders(providers);
+  if (CONFLUENCE_SPACE_KEY.test(trimmed)) return confluence.length > 0 ? { spaceKey: trimmed, host: null, providers: confluence } : null;
+  let url: URL;
+  try { url = new URL(trimmed); } catch { return null; }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const match = /\/(?:spaces\/([^/]+)(?:\/overview)?|display\/([^/]+))\/?$/.exec(url.pathname);
+  const key = match ? pathSegment(match[1] ?? match[2]!) : null;
+  if (!key || !CONFLUENCE_SPACE_KEY.test(key)) return null;
+  const matching = confluence.filter((provider) => urlWithin(provider.base_url, url));
+  if (matching.length === 0 && providers.some((provider) => !confluence.includes(provider) && urlWithin(provider.base_url, url))) return null;
+  return { spaceKey: key, host: url.host, providers: matching };
+}
+
+/** `SD · Software Development`: how a followed or resolved space is named everywhere. */
+export function spaceDisplayName(space: { space_key: string; space_name: string }): string {
+  return space.space_name && space.space_name !== space.space_key ? `${space.space_key} · ${space.space_name}` : space.space_key;
+}
+
+/** The space a `confluence_space` resolution names, from its container label or its key and title. */
+export function resolutionSpaceName(resolution: Pick<LibraryResolution, "container_label" | "canonical_id" | "title">): string {
+  return resolution.container_label ?? spaceDisplayName({ space_key: resolution.canonical_id ?? resolution.title, space_name: resolution.title });
+}
+
+/** `1 page`, `38 pages`. */
+export function pageCount(count: number): string {
+  return `${count} ${count === 1 ? "page" : "pages"}`;
+}
+
 function trailingNumber(value: string | null): number | null {
   const match = value ? /(\d+)$/.exec(value) : null;
   return match ? Number(match[1]) : null;
@@ -248,6 +295,8 @@ export type LibraryContainerNode = {
   instance: string | null;
   containerId: string | null;
   items: LibraryItemSummary[];
+  /** The followed space this container shows (`◉ Following`), or null for pages added one by one. */
+  follow: LibraryFollowSummary | null;
 };
 
 export type LibraryInstanceNode = {
@@ -262,7 +311,7 @@ export type LibraryInstanceNode = {
 const UNAVAILABLE_CODES: Record<string, true> = { source_cli_unavailable: true, source_auth_failed: true };
 const FOLDERS_KEY = "folders";
 
-function containerFor(item: LibraryItemSummary): { id: string | null; label: string } {
+function itemContainer(item: LibraryItemSummary): { id: string | null; label: string } {
   if (item.container) return { id: item.container.container_id, label: item.container.label };
   const id = item.canonical_id;
   if (id && /[#!]\d+$/.test(id)) return { id: null, label: id.replace(/[#!]\d+$/, "") };
@@ -282,34 +331,45 @@ function compareItems(left: LibraryItemSummary, right: LibraryItemSummary): numb
 /**
  * Library tree ordering (design §4.3): provider instances alphabetically, then
  * `Folders`; containers alphabetically; forge and Jira items by id, newest
- * first; Confluence pages in page-tree order.
+ * first; Confluence pages in page-tree order. A followed space is its space's
+ * container, and it is listed even while it holds no pages.
  */
-export function libraryTree(items: readonly LibraryItemSummary[], providers: readonly ProjectProvider[]): LibraryInstanceNode[] {
+export function libraryTree(items: readonly LibraryItemSummary[], providers: readonly ProjectProvider[], follows: readonly LibraryFollowSummary[] = []): LibraryInstanceNode[] {
   const instances = new Map<string, LibraryInstanceNode>();
-  for (const item of items) {
-    const folder = item.kind === "folder_copy";
-    const instanceKey = folder ? FOLDERS_KEY : `instance:${item.provider_id ?? ""}\u0000${item.provider_instance ?? ""}`;
+  const instanceFor = (providerId: string | null, providerInstance: string | null, folder: boolean): LibraryInstanceNode => {
+    const instanceKey = folder ? FOLDERS_KEY : `instance:${providerId ?? ""}\u0000${providerInstance ?? ""}`;
     let instance = instances.get(instanceKey);
     if (!instance) {
-      const family = providerFamily(providers, item.provider_id);
+      const family = providerFamily(providers, providerId);
       instance = {
         kind: "instance",
         key: instanceKey,
-        label: folder ? "Folders" : `${family.name} · ${family.key === "confluence" ? confluenceSite(item.provider_instance) : instanceHost(item.provider_instance)}`,
-        instance: folder ? null : item.provider_instance,
+        label: folder ? "Folders" : `${family.name} · ${family.key === "confluence" ? confluenceSite(providerInstance) : instanceHost(providerInstance)}`,
+        instance: folder ? null : providerInstance,
         unavailable: false,
         containers: [],
       };
       instances.set(instanceKey, instance);
     }
-    const container = folder ? { id: null, label: "" } : containerFor(item);
-    const containerKey = `${instanceKey}\u0000${container.id ?? container.label}`;
+    return instance;
+  };
+  const containerFor = (instance: LibraryInstanceNode, container: { id: string | null; label: string }): LibraryContainerNode => {
+    const containerKey = `${instance.key}\u0000${container.id ?? container.label}`;
     let node = instance.containers.find((candidate) => candidate.key === containerKey);
     if (!node) {
-      node = { kind: "container", key: containerKey, label: container.label, instance: instance.instance, containerId: container.id, items: [] };
+      node = { kind: "container", key: containerKey, label: container.label, instance: instance.instance, containerId: container.id, items: [], follow: null };
       instance.containers.push(node);
     }
-    node.items.push(item);
+    return node;
+  };
+  for (const item of items) {
+    const folder = item.kind === "folder_copy";
+    const instance = instanceFor(item.provider_id, item.provider_instance, folder);
+    containerFor(instance, folder ? { id: null, label: "" } : itemContainer(item)).items.push(item);
+  }
+  for (const follow of follows) {
+    const instance = instanceFor(follow.provider_id, follow.provider_instance, false);
+    containerFor(instance, { id: follow.space_key, label: spaceDisplayName(follow) }).follow = follow;
   }
   for (const instance of instances.values()) {
     const all = instance.containers.flatMap((container) => container.items);
@@ -354,6 +414,7 @@ export function resolutionNote(resolution: LibraryResolution, providers: readonl
   if (resolution.kind === "folder") return `Folder${resolution.git_working_tree ? " · Git working tree" : ""}${resolution.file_count !== null ? ` · ${resolution.file_count} files` : ""} · ${resolution.title}`;
   // `KEY · Space name`: the note names the space by its key.
   if (resolution.kind === "confluence_page") return `Confluence page · ${resolution.title}${resolution.container_label ? ` · ${resolution.container_label.split(" · ")[0]}` : ""}`;
+  if (resolution.kind === "confluence_space") return `Confluence space · ${resolutionSpaceName(resolution)}${resolution.page_count !== null ? ` · ${pageCount(resolution.page_count)}` : ""}`;
   const family = providerFamily(providers, resolution.provider_id);
   const host = instanceHost(resolution.provider_instance);
   if (family.key === "jira") return `Jira issue ${resolution.canonical_id ?? ""} · ${resolution.title} · ${host}`;
@@ -400,7 +461,7 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
         : { title: `✕ No provider configured for ${host}`, detail: "Add this instance to the Cockpit configuration file, then retry.", retry: true };
     case "invalid_artifact_url":
     case "library_input_unrecognized":
-      return { title: "✕ Not recognized", detail: "Enter an issue, merge request or pull request link, a Jira key, a Confluence page link or id, or an absolute or ~ folder path.", retry: false };
+      return { title: "✕ Not recognized", detail: "Enter an issue, merge request or pull request link, a Jira key, a Confluence page or space link, page id or space key, or an absolute or ~ folder path.", retry: false };
     case "library_folder_refused":
       return { title: "Can't copy this folder", detail: message, retry: false };
     case "library_folder_unavailable":

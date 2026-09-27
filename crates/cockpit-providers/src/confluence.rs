@@ -15,12 +15,13 @@ use cockpit_core::repositories::is_confluence_executable;
 use cockpit_core::sources::{
     ConfluencePage, FrontmatterField, FrontmatterValue, ProviderResolution, SourceAsset,
     SourceAttachment, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider,
-    SourceRef, confluence_page_url,
+    SourceRef, SpacePage, SpacePageListing, SpaceSummary, confluence_page_url,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
 use cockpit_protocol::sources::SourceCapability;
 use serde_json::Value;
 use tokio::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
 
 /// Library provider bodies are bounded like every other source asset.
@@ -731,6 +732,10 @@ impl ConfluenceSourceProvider {
         })
     }
 
+    fn url_in_instance(&self, input: &str) -> bool {
+        Url::parse(input).is_ok_and(|url| within_instance(&self.base_url, &url))
+    }
+
     /// Run one allowlisted call; returns stdout.
     async fn run(
         &self,
@@ -786,10 +791,101 @@ impl ConfluenceSourceProvider {
             .map_err(|_| contract("Confluence CLI did not return the documented JSON"))
     }
 
-    fn url_in_instance(&self, value: &str) -> Option<Url> {
-        Url::parse(value)
-            .ok()
-            .filter(|url| value.len() <= 8192 && within_instance(&self.base_url, url))
+    fn search_continuation(
+        &self,
+        value: &Value,
+        space_key: &str,
+        limit: u8,
+        expand: &str,
+    ) -> Result<Option<SearchPage>, InspectionError> {
+        let Some(next) = value.pointer("/_links/next").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        if next.is_empty() || next.len() > 8192 {
+            return Err(contract("Confluence search continuation is malformed"));
+        }
+        let base = value
+            .pointer("/_links/base")
+            .and_then(Value::as_str)
+            .and_then(|base| Url::parse(base).ok())
+            .filter(|base| within_instance(&self.base_url, base))
+            .ok_or_else(|| contract("Confluence search continuation has an invalid base"))?;
+        let url = base
+            .join(next)
+            .map_err(|_| contract("Confluence search continuation is malformed"))?;
+        let expected_path = format!("{}/rest/api/content/search", self.base_path);
+        if url.scheme() != self.base_url.scheme()
+            || !url.host_str().is_some_and(|host| host.eq_ignore_ascii_case(&self.host))
+            || url.port() != self.port
+            || !(url.path() == expected_path || url.path() == "/rest/api/content/search")
+            || url.fragment().is_some()
+            || url.username() != ""
+            || url.password().is_some()
+        {
+            return Err(contract("Confluence search continuation leaves the configured search endpoint"));
+        }
+        let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+        let expected_cql = search_cql(space_key);
+        let mut cql = None;
+        let mut found_limit = None;
+        let mut found_expand = None;
+        let mut continuation = None;
+        for (name, value) in pairs {
+            match name.as_str() {
+                "cql" if cql.is_none() => cql = Some(value),
+                "limit" if found_limit.is_none() => found_limit = Some(value),
+                "expand" if found_expand.is_none() => found_expand = Some(value),
+                "cursor" if continuation.is_none() => continuation = Some(SearchPage::Cursor(value)),
+                "start" if continuation.is_none() => {
+                    let start = value.parse::<u64>().ok()
+                        .filter(|start| start.to_string() == value)
+                        .ok_or_else(|| contract("Confluence search offset is malformed"))?;
+                    continuation = Some(SearchPage::Start(start));
+                }
+                _ => return Err(contract("Confluence search continuation has altered query parameters")),
+            }
+        }
+        if cql.as_deref() != Some(expected_cql.as_str())
+            || found_limit.as_deref() != Some(limit.to_string().as_str())
+            || found_expand.as_deref() != Some(expand)
+        {
+            return Err(contract("Confluence search continuation has altered query parameters"));
+        }
+        let continuation = continuation
+            .ok_or_else(|| contract("Confluence search continuation has no cursor or offset"))?;
+        if let SearchPage::Cursor(cursor) = &continuation
+            && !cursor_valid(cursor)
+        {
+            return Err(contract("Confluence search cursor is malformed"));
+        }
+        Ok(Some(continuation))
+    }
+
+    fn listing_page(item: &Value, space_key: &str) -> Result<SpacePage, InspectionError> {
+        let page_id = id_text(item.get("id"))
+            .filter(|id| page_id_valid(id))
+            .ok_or_else(|| contract("Confluence search result has an invalid page id"))?;
+        if item.get("type").and_then(Value::as_str).is_some_and(|kind| kind != "page")
+            || item.pointer("/space/key").and_then(Value::as_str).is_some_and(|key| key != space_key)
+        {
+            return Err(contract("Confluence search returned a page outside the requested space"));
+        }
+        let title = item.get("title").and_then(Value::as_str)
+            .filter(|title| title_valid(title))
+            .ok_or_else(|| contract("Confluence search result has an invalid title"))?
+            .to_owned();
+        let version = item.pointer("/version/number").and_then(Value::as_u64)
+            .or_else(|| item.get("version").and_then(Value::as_u64))
+            .ok_or_else(|| contract("Confluence search result has an invalid version"))?;
+        let ancestors = item.get("ancestors").and_then(Value::as_array)
+            .ok_or_else(|| contract("Confluence search result has invalid ancestors"))?
+            .iter().map(|ancestor| {
+                id_text(ancestor.get("id")).filter(|id| page_id_valid(id))
+                    .ok_or_else(|| contract("Confluence search result has an invalid ancestor id"))
+            }).collect::<Result<Vec<_>, _>>()?;
+        let position = item.get("position").and_then(Value::as_i64)
+            .or_else(|| item.pointer("/extensions/position").and_then(Value::as_i64));
+        Ok(SpacePage { page_id, title, version, ancestors, position })
     }
 
     fn check_authority(&self, request: &SourceFetchRequest) -> Result<(), InspectionError> {
@@ -827,7 +923,7 @@ impl ConfluenceSourceProvider {
         let url = value
             .get("url")
             .and_then(Value::as_str)
-            .filter(|url| self.url_in_instance(url).is_some())
+            .filter(|url| self.url_in_instance(url))
             .ok_or_else(|| {
                 InspectionError::new(
                     "source_identity_mismatch",
@@ -1033,7 +1129,7 @@ impl ConfluenceSourceProvider {
                 source_url: item
                     .get("downloadLink")
                     .and_then(Value::as_str)
-                    .filter(|url| self.url_in_instance(url).is_some())
+                    .filter(|url| self.url_in_instance(url))
                     .map(str::to_owned),
                 source_revision: item
                     .get("version")
@@ -1087,6 +1183,99 @@ impl SourceProvider for ConfluenceSourceProvider {
 
     fn capabilities(&self) -> Vec<SourceCapability> {
         vec![SourceCapability::Wiki]
+    }
+    async fn list_spaces(&self) -> Result<Vec<SpaceSummary>, InspectionError> {
+        let value = self.json(&ConfluenceCall::Spaces).await?;
+        let spaces = value.get("spaces").and_then(Value::as_array)
+            .or_else(|| value.as_array())
+            .ok_or_else(|| contract("Confluence spaces output lacks a space list"))?;
+        spaces.iter().map(|space| {
+            let key = space.get("key").and_then(Value::as_str)
+                .filter(|key| space_key_valid(key))
+                .ok_or_else(|| contract("Confluence space key is missing or malformed"))?;
+            let name = space.get("name").and_then(Value::as_str)
+                .filter(|name| bounded_field(Some(name)).as_deref() == Some(*name))
+                .ok_or_else(|| contract("Confluence space name is missing or malformed"))?;
+            Ok(SpaceSummary { key: key.to_owned(), name: name.to_owned() })
+        }).collect()
+    }
+
+    async fn list_space_pages(
+        &self,
+        space_key: &str,
+        max_pages: u32,
+        cancel: &AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        if !space_key_valid(space_key) {
+            return Err(contract("Confluence space key is malformed"));
+        }
+        let space = self.json(&ConfluenceCall::Api(ConfluenceApi::Space {
+            space_key: space_key.to_owned(),
+        })).await?;
+        if space.get("key").and_then(Value::as_str) != Some(space_key) {
+            return Err(InspectionError::new(
+                "source_identity_mismatch",
+                "Confluence returned a different space",
+            ));
+        }
+        let space_name = space.get("name").and_then(Value::as_str)
+            .filter(|name| bounded_field(Some(name)).as_deref() == Some(*name))
+            .ok_or_else(|| contract("Confluence space name is missing or malformed"))?
+            .to_owned();
+        let homepage_id = id_text(space.pointer("/homepage/id"))
+            .filter(|id| page_id_valid(id));
+        let expand = vec![ContentExpand::Version, ContentExpand::Ancestors, ContentExpand::Space];
+        let expand_text = expand_value(&expand)?;
+        let mut pages = Vec::new();
+        let mut total = None;
+        let mut continuation = None;
+        let mut complete = false;
+        while (pages.len() as u64) < u64::from(max_pages) {
+            if cancel.load(Ordering::Relaxed) { break; }
+            let remaining = (u64::from(max_pages) - pages.len() as u64).min(100) as u8;
+            let result = self.json(&ConfluenceCall::Api(ConfluenceApi::Search {
+                space_key: space_key.to_owned(),
+                limit: remaining,
+                expand: expand.clone(),
+                page: continuation.take(),
+            })).await?;
+            let results = result.get("results").and_then(Value::as_array)
+                .ok_or_else(|| contract("Confluence page search output lacks results"))?;
+            if total.is_none() {
+                total = result.get("totalSize").or_else(|| result.get("total"))
+                    .and_then(Value::as_u64);
+            }
+            for result_page in results {
+                if pages.len() as u64 >= u64::from(max_pages) { break; }
+                pages.push(Self::listing_page(result_page, space_key)?);
+            }
+            let next = self.search_continuation(&result, space_key, remaining, &expand_text)?;
+            match next {
+                Some(next) if !results.is_empty() => continuation = Some(next),
+                Some(_) => return Err(contract("Confluence search continuation has an empty page")),
+                None => {
+                    complete = total.is_none_or(|total| pages.len() as u64 >= total);
+                    break;
+                }
+            }
+        }
+        if cancel.load(Ordering::Relaxed)
+            || (pages.len() as u64) >= u64::from(max_pages) && !complete
+        {
+            complete = false;
+        }
+        Ok(SpacePageListing { space_name, homepage_id, pages, total, complete })
+    }
+
+    async fn page_space(&self, page_id: &str) -> Result<Option<String>, InspectionError> {
+        if !page_id_valid(page_id) {
+            return Err(contract("Confluence page id must be 1–20 digits"));
+        }
+        match self.info(page_id).await {
+            Ok(info) => Ok(Some(info.space_key)),
+            Err(error) if error.code == "source_not_found" => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     async fn metadata(

@@ -7,8 +7,8 @@ use cap_fs_ext::{DirExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, Metadata, OpenOptions};
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::library::{
-    LibraryConflictFile, LibraryItemKind, LibraryItemState, LibraryItemSummary,
-    SpaceCopyMode, SpaceCopyRow, SpaceCopyState,
+    LibraryConflictFile, LibraryFollowSummary, LibraryItemKind, LibraryItemState,
+    LibraryItemSummary, SpaceCopyMode, SpaceCopyRow, SpaceCopyState, SpaceFollowSummary,
 };
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -168,8 +168,11 @@ fn library_destination(item: &LibraryItemView<'_>, file: &str, file_count: usize
 
 /// NewOnly never updates an existing linked revision. Explicit re-add can link
 /// a legacy source or restore a missing file. Copies use the durable intent path.
+/// `follow_id` names the Space follow a new copy belongs to; an existing linked
+/// entry keeps its own follow membership, so item and follow updates never move it.
 pub(crate) fn materialize_library_item(
     root: &Dir, companion_id: &str, item: &LibraryItemView<'_>, mode: LibraryCopyMode<'_>,
+    follow_id: Option<&str>,
 ) -> Result<LibraryCopyResult, InspectionError> {
     let _lock = acquire_companion_lock(root)?;
     let association = read_companion_association(root)?;
@@ -182,9 +185,6 @@ pub(crate) fn materialize_library_item(
     if updating && (item.summary.state == LibraryItemState::RemovedAtSource
         || (linked.is_empty() && !manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id))) {
         return Ok(LibraryCopyResult { written: vec![], skipped_edited: vec![], copy_mode: None });
-    }
-    if updating && linked.iter().any(|entry| entry.library_follow_id.is_some()) {
-        return Err(InspectionError::new("source_capability_unavailable", "Followed Space updates are not available"));
     }
     let confirmed = match &mode {
         LibraryCopyMode::Replace { confirmed } => *confirmed,
@@ -336,7 +336,9 @@ pub(crate) fn materialize_library_item(
             source_hash_before: file.hash.clone(), source_hash_after: file.hash.clone(),
             library_item_id: Some(item.summary.item_id.clone()),
             library_revision: Some(item.summary.revision.clone()),
-            library_file: Some(file.path.clone()), library_follow_id: item.summary.follow_id.clone(),
+            library_file: Some(file.path.clone()),
+            library_follow_id: previous.as_ref().filter(|entry| entry.library_item_id.is_some())
+                .map_or_else(|| follow_id.map(str::to_owned), |entry| entry.library_follow_id.clone()),
         };
         manifest.pending_source_intent = Some(PendingSourceIntent {
             schema_version: PENDING_SOURCE_INTENT_SCHEMA_VERSION, relative_path: relative.clone(),
@@ -422,9 +424,6 @@ pub(crate) fn remove_library_copy(
     let entries = manifest.entries.iter().filter(|candidate|
         if let Some(id) = &entry.library_item_id { candidate.library_item_id.as_ref() == Some(id) }
         else { candidate.logical_id == entry.logical_id }).cloned().collect::<Vec<_>>();
-    if entries.iter().any(|entry| entry.library_follow_id.is_some()) {
-        return Err(InspectionError::new("source_capability_unavailable", "Followed Space removal is not available"));
-    }
     if confirmed.iter().any(|file| !entries.iter().any(|entry| entry.relative_path == file.path)) {
         return Err(space_copy_conflict());
     }
@@ -513,8 +512,10 @@ fn space_copy_state(
     else { SpaceCopyState::UpToDate }
 }
 
+/// One row per unfollowed item, plus one aggregate row per Space follow whose
+/// pages are counted per D8 (`known_page_item_ids`) rather than listed.
 pub(crate) fn library_space_rows(
-    root: &Dir, companion_id: &str, library: &[LibraryItemSummary],
+    root: &Dir, companion_id: &str, library: &[LibraryItemSummary], follows: &[LibraryFollowSummary],
 ) -> Result<Vec<SpaceCopyRow>, InspectionError> {
     let association = read_companion_association(root)?;
     // Listing never writes, including v1 manifests and interrupted intents.
@@ -526,6 +527,7 @@ pub(crate) fn library_space_rows(
         groups.entry(key).or_default().push(entry);
     }
     let mut rows = Vec::new();
+    let mut follow_pages = std::collections::BTreeMap::<String, Vec<SpaceCopyRow>>::new();
     for entries in groups.values() {
         let first = entries.iter().copied().find(|entry| entry.library_file.as_deref() == Some("document.md"))
             .unwrap_or(entries[0]);
@@ -548,7 +550,7 @@ pub(crate) fn library_space_rows(
                 Err(error) => return Err(error),
             }
         }
-        rows.push(SpaceCopyRow {
+        let row = SpaceCopyRow {
             item_id: first.library_item_id.clone(),
             logical_id: current.map(|item| item.logical_id.clone()).unwrap_or_else(|| {
                 first.library_file.as_ref()
@@ -566,14 +568,18 @@ pub(crate) fn library_space_rows(
             })),
             library_revision_copied: first.library_revision.clone(),
             current_library_revision: current.map(|item| item.revision.clone()), follow: None,
-        });
+        };
+        match &first.library_follow_id {
+            Some(follow_id) => follow_pages.entry(follow_id.clone()).or_default().push(row),
+            None => rows.push(row),
+        }
     }
     // Empty folders and an interrupted first-file publication still have a
     // durable item inventory, even though no per-file row exists yet.
     for copy in manifest.library_copies.iter().filter(|copy| !groups.contains_key(&copy.item_id)) {
         let current = library.iter().find(|item| item.item_id == copy.item_id);
         let newer = current.is_some_and(|item| copy.revision.as_deref() != Some(item.revision.as_str()));
-        rows.push(SpaceCopyRow {
+        let row = SpaceCopyRow {
             item_id: Some(copy.item_id.clone()),
             logical_id: current.map(|item| &item.logical_id).or(copy.logical_id.as_ref()).unwrap_or(&copy.item_id).clone(),
             title: current.map(|item| &item.title).unwrap_or(&copy.item_id).clone(),
@@ -584,13 +590,186 @@ pub(crate) fn library_space_rows(
             library_newer: newer, paths: vec![], edited: vec![], copy_mode: None,
             library_revision_copied: copy.revision.clone(),
             current_library_revision: current.map(|item| item.revision.clone()), follow: None,
-        });
+        };
+        let follow = manifest.library_follows.iter()
+            .find(|record| record.known_page_item_ids.contains(&copy.item_id));
+        match follow {
+            Some(record) => follow_pages.entry(record.follow_id.clone()).or_default().push(row),
+            None => rows.push(row),
+        }
+    }
+    let mut follow_ids = manifest.library_follows.iter().map(|record| record.follow_id.clone())
+        .collect::<BTreeSet<_>>();
+    follow_ids.extend(follow_pages.keys().cloned());
+    for follow_id in follow_ids {
+        let pages = follow_pages.remove(&follow_id).unwrap_or_default();
+        let known = manifest.library_follows.iter().find(|record| record.follow_id == follow_id)
+            .map(|record| record.known_page_item_ids.as_slice()).unwrap_or_default();
+        rows.push(follow_space_row(&follow_id, pages, known, library,
+            follows.iter().find(|follow| follow.follow_id == follow_id)));
     }
     rows.sort_by(|a, b| {
         let rank = |state| match state { SpaceCopyState::UpToDate => 1, SpaceCopyState::NotLinked => 2, _ => 0 };
         (rank(a.state), &a.title, &a.logical_id).cmp(&(rank(b.state), &b.title, &b.logical_id))
     });
     Ok(rows)
+}
+
+/// D8 aggregate: `new` pages are the follow's current Library pages this Space
+/// was never offered; `changed` pages are unedited copies behind or missing.
+fn follow_space_row(
+    follow_id: &str, pages: Vec<SpaceCopyRow>, known: &[String], library: &[LibraryItemSummary],
+    follow: Option<&LibraryFollowSummary>,
+) -> SpaceCopyRow {
+    let new_pages = library.iter().filter(|item| item.follow_id.as_deref() == Some(follow_id)
+        && item.state != LibraryItemState::RemovedAtSource
+        && !known.contains(&item.item_id)
+        && !pages.iter().any(|page| page.item_id.as_ref() == Some(&item.item_id))).count() as u32;
+    let count = |state| pages.iter().filter(|page| page.state == state).count() as u32;
+    let changed_pages = count(SpaceCopyState::LibraryNewer) + count(SpaceCopyState::MissingInSpace);
+    let edited_pages = count(SpaceCopyState::EditedInSpace);
+    let library_newer = new_pages + changed_pages > 0;
+    let state = if follow.is_none() { SpaceCopyState::NotInLibrary }
+        else if edited_pages > 0 { SpaceCopyState::EditedInSpace }
+        else if library_newer { SpaceCopyState::LibraryNewer }
+        else { SpaceCopyState::UpToDate };
+    SpaceCopyRow {
+        item_id: None,
+        logical_id: follow_id.to_owned(),
+        title: follow.map(|follow| format!("{} · {}", follow.space_key, follow.space_name))
+            .unwrap_or_else(|| follow_id.to_owned()),
+        provider_id: follow.map(|follow| follow.provider_id.clone())
+            .or_else(|| pages.iter().find_map(|page| page.provider_id.clone())),
+        resource_type: Some("space".into()),
+        kind: LibraryItemKind::ProviderSnapshot,
+        state,
+        library_newer,
+        paths: pages.iter().flat_map(|page| page.paths.iter().cloned()).collect(),
+        edited: pages.iter().flat_map(|page| page.edited.iter().cloned()).collect(),
+        copy_mode: aggregate_copy_mode(pages.iter().filter_map(|page| page.copy_mode)),
+        library_revision_copied: None,
+        current_library_revision: None,
+        follow: Some(SpaceFollowSummary {
+            follow_id: follow_id.to_owned(),
+            space_key: follow.map(|follow| follow.space_key.clone()).unwrap_or_default(),
+            page_count: pages.len() as u32,
+            new_pages,
+            changed_pages,
+            edited_pages,
+            removed_at_source_pages: count(SpaceCopyState::RemovedAtSource),
+        }),
+    }
+}
+
+/// One follow's copies in a Space, read without writing.
+pub(crate) struct SpaceFollowCopies {
+    pub known: Vec<String>,
+    /// Library item ids copied as this follow's pages, with their Space paths.
+    pub pages: Vec<(String, Vec<String>)>,
+    /// Every Library item id with a copy in this Space, followed or not.
+    pub linked: BTreeSet<String>,
+}
+
+pub(crate) fn library_follow_copies(
+    root: &Dir, companion_id: &str, follow_id: &str,
+) -> Result<SpaceFollowCopies, InspectionError> {
+    let association = read_companion_association(root)?;
+    let manifest = read_manifest(root, companion_id, &association)?;
+    let known = manifest.library_follows.iter().find(|record| record.follow_id == follow_id)
+        .map(|record| record.known_page_item_ids.clone());
+    let mut pages = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for entry in &manifest.entries {
+        if let (Some(id), Some(follow)) = (&entry.library_item_id, &entry.library_follow_id) {
+            if follow == follow_id {
+                pages.entry(id.clone()).or_default().push(entry.relative_path.clone());
+            }
+        }
+    }
+    let mut linked = manifest.entries.iter().filter_map(|entry| entry.library_item_id.clone())
+        .collect::<BTreeSet<_>>();
+    for copy in &manifest.library_copies {
+        linked.insert(copy.item_id.clone());
+        // An interrupted first write of a known page is still this follow's page.
+        if known.as_ref().is_some_and(|known| known.contains(&copy.item_id)) {
+            pages.entry(copy.item_id.clone()).or_default();
+        }
+    }
+    Ok(SpaceFollowCopies {
+        known: known.unwrap_or_default(),
+        pages: pages.into_iter().collect(),
+        linked,
+    })
+}
+
+/// Record that the Space was offered these follow pages (written or already
+/// present). Creates the follow record; never removes known ids.
+pub(crate) fn record_follow_pages(
+    root: &Dir, companion_id: &str, follow_id: &str, item_ids: &[String],
+) -> Result<(), InspectionError> {
+    let _lock = acquire_companion_lock(root)?;
+    let association = read_companion_association(root)?;
+    let mut manifest = read_manifest(root, companion_id, &association)?;
+    recover_pending_source_intent(root, &mut manifest)?;
+    let now = timestamp();
+    let mut created = false;
+    let position = match manifest.library_follows.iter().position(|record| record.follow_id == follow_id) {
+        Some(position) => position,
+        None => {
+            created = true;
+            manifest.library_follows.push(SpaceFollowRecord {
+                follow_id: follow_id.to_owned(), known_page_item_ids: vec![],
+                added_at: now.clone(), updated_at: now.clone(),
+            });
+            manifest.library_follows.len() - 1
+        }
+    };
+    let record = &mut manifest.library_follows[position];
+    let before = record.known_page_item_ids.len();
+    for id in item_ids {
+        if !record.known_page_item_ids.contains(id) {
+            record.known_page_item_ids.push(id.clone());
+        }
+    }
+    if record.known_page_item_ids.len() == before && !created {
+        return Ok(());
+    }
+    record.updated_at = now.clone();
+    manifest.updated_at = now;
+    write_manifest_durable(root, &manifest)
+}
+
+/// Remove every copy of a follow's pages (edited files only with an exact
+/// confirmation) and the Space's follow record. Other entries are untouched.
+pub(crate) fn remove_follow_copy(
+    root: &Dir, companion_id: &str, follow_id: &str, confirmed: &[LibraryConflictFile],
+) -> Result<(), InspectionError> {
+    let _lock = acquire_companion_lock(root)?;
+    let association = read_companion_association(root)?;
+    let mut manifest = read_manifest(root, companion_id, &association)?;
+    recover_pending_source_intent(root, &mut manifest)?;
+    let entries = manifest.entries.iter()
+        .filter(|entry| entry.library_follow_id.as_deref() == Some(follow_id)).cloned().collect::<Vec<_>>();
+    let record = manifest.library_follows.iter().position(|record| record.follow_id == follow_id);
+    if entries.is_empty() && record.is_none() {
+        return Err(InspectionError::new("library_item_not_found", "Space copy does not exist"));
+    }
+    if confirmed.iter().any(|file| !entries.iter().any(|entry| entry.relative_path == file.path)) {
+        return Err(space_copy_conflict());
+    }
+    let expected = entries.iter().map(|entry| library_remove_expected(root, entry, confirmed))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (entry, expected) in entries.iter().zip(expected) {
+        remove_library_entry(root, &mut manifest, entry, expected.as_deref())?;
+    }
+    let known = record.map(|position| manifest.library_follows.remove(position).known_page_item_ids)
+        .unwrap_or_default();
+    manifest.library_copies.retain(|copy| {
+        let page = known.contains(&copy.item_id)
+            || entries.iter().any(|entry| entry.library_item_id.as_ref() == Some(&copy.item_id));
+        !page || manifest.entries.iter().any(|entry| entry.library_item_id.as_ref() == Some(&copy.item_id))
+    });
+    manifest.updated_at = timestamp();
+    write_manifest_durable(root, &manifest)
 }
 
 /// Materialize one immutable provider payload through the companion lock,
@@ -2085,9 +2264,9 @@ mod library_copy_tests {
         let summary = item();
         let files = [f.file("document.md", b"saved bytes")];
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-        let copy = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let copy = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         let path = &copy.written[0];
-        materialize_library_item(&f.second, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        materialize_library_item(&f.second, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         #[cfg(unix)] {
             use cap_std::fs::MetadataExt;
             let original = f.library.metadata("document.md").unwrap().ino();
@@ -2097,12 +2276,12 @@ mod library_copy_tests {
         }
         let before = f.first.read(MANIFEST_NAME).unwrap();
         let metadata = f.first.metadata(path).unwrap();
-        let current = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let current = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         assert!(current.written.is_empty());
         assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
         assert_eq!(identity(&f.first.metadata(path).unwrap()), identity(&metadata));
         f.first.write(path, b"user edit").unwrap();
-        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "source_sync_conflict");
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).err().unwrap().code, "source_sync_conflict");
         assert_eq!(f.second.read(path).unwrap(), b"saved bytes");
         assert_eq!(f.library.read("document.md").unwrap(), b"saved bytes");
     }
@@ -2113,10 +2292,10 @@ mod library_copy_tests {
         let mut summary = item();
         let files = [f.file("document.md", b"body"), f.file("attachments/image.png", b"image bytes")];
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         assert!(copied.written[0].ends_with("/document.md"));
         assert!(copied.written[1].ends_with("/attachments/image.png"));
-        let rows = |item: &LibraryItemSummary| library_space_rows(&f.first, "companion", std::slice::from_ref(item)).unwrap();
+        let rows = |item: &LibraryItemSummary| library_space_rows(&f.first, "companion", std::slice::from_ref(item), &[]).unwrap();
         assert_eq!(rows(&summary)[0].state, SpaceCopyState::UpToDate);
         summary.revision = "revision-two".into();
         assert_eq!(rows(&summary)[0].state, SpaceCopyState::LibraryNewer);
@@ -2125,7 +2304,7 @@ mod library_copy_tests {
         f.first.write(&copied.written[0], b"edited").unwrap();
         assert_eq!(rows(&summary)[0].state, SpaceCopyState::EditedInSpace);
         assert!(rows(&summary)[0].library_newer);
-        assert_eq!(library_space_rows(&f.first, "companion", &[]).unwrap()[0].state, SpaceCopyState::EditedInSpace);
+        assert_eq!(library_space_rows(&f.first, "companion", &[], &[]).unwrap()[0].state, SpaceCopyState::EditedInSpace);
         let parent = Path::new(&copied.written[1]).parent().unwrap();
         f.first.remove_dir_all(parent).unwrap();
         assert_eq!(rows(&summary)[0].state, SpaceCopyState::MissingInSpace);
@@ -2133,10 +2312,10 @@ mod library_copy_tests {
         summary.revision = "revision-one".into();
         summary.state = LibraryItemState::Fresh;
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-        let restored = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let restored = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         assert_eq!(restored.written, vec![copied.written[1].clone()]);
         assert_eq!(rows(&summary)[0].state, SpaceCopyState::UpToDate);
-        assert_eq!(library_space_rows(&f.first, "companion", &[]).unwrap()[0].state, SpaceCopyState::NotInLibrary);
+        assert_eq!(library_space_rows(&f.first, "companion", &[], &[]).unwrap()[0].state, SpaceCopyState::NotInLibrary);
     }
 
     #[test]
@@ -2150,7 +2329,7 @@ mod library_copy_tests {
         let bytes = serde_json::to_vec_pretty(&legacy).unwrap();
         f.first.write(MANIFEST_NAME, &bytes).unwrap();
         let old_entry = legacy["entries"][0].clone();
-        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::NotLinked);
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap()[0].state, SpaceCopyState::NotLinked);
         assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), bytes);
         assert_eq!(f.first.read(&legacy_path).unwrap(), b"legacy bytes");
         // Another item's v2 write preserves every field of the unlinked entry.
@@ -2161,9 +2340,9 @@ mod library_copy_tests {
         assert_eq!(upgraded["entries"][0], old_entry);
         let files = [f.file("document.md", b"Library bytes")];
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-        let linked = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let linked = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         assert_eq!(linked.written, vec![legacy_path.clone()]);
-        let rows = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap();
+        let rows = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap();
         assert_eq!(rows.iter().find(|row| row.item_id.is_some()).unwrap().state, SpaceCopyState::UpToDate);
         let untouched = rows.iter().find(|row| row.item_id.is_none()).unwrap();
         assert_eq!(untouched.state, SpaceCopyState::NotLinked);
@@ -2178,21 +2357,21 @@ mod library_copy_tests {
         let files = [f.file("document.md", b"body"), f.file("attachments/image.png", b"image")];
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
         LIBRARY_COPY_FAIL_AFTER_FILES.with(|fault| fault.set(Some(1)));
-        let failure = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap();
+        let failure = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).err().unwrap();
         assert_eq!(failure.code, "library_test_crash");
         // This listing uses a reopened companion and no Library-side attempt
         // storage at all: dismissing an attempt cannot turn the partial copy green.
         let reopened = Dir::open_ambient_dir(f.path.join("first"), cap_std::ambient_authority()).unwrap();
         let before = reopened.read(MANIFEST_NAME).unwrap();
-        let rows = library_space_rows(&reopened, "companion", std::slice::from_ref(&summary)).unwrap();
+        let rows = library_space_rows(&reopened, "companion", std::slice::from_ref(&summary), &[]).unwrap();
         assert_eq!(rows[0].paths.len(), 1);
         assert_eq!(rows[0].state, SpaceCopyState::MissingInSpace);
-        assert_eq!(library_space_rows(&reopened, "companion", &[]).unwrap()[0].state, SpaceCopyState::MissingInSpace);
+        assert_eq!(library_space_rows(&reopened, "companion", &[], &[]).unwrap()[0].state, SpaceCopyState::MissingInSpace);
         assert_eq!(reopened.read(MANIFEST_NAME).unwrap(), before);
-        let completed = materialize_library_item(&reopened, "companion", &view, LibraryCopyMode::NewOnly).unwrap();
+        let completed = materialize_library_item(&reopened, "companion", &view, LibraryCopyMode::NewOnly, None).unwrap();
         assert_eq!(completed.written.len(), 1);
         assert!(completed.written[0].ends_with("/attachments/image.png"));
-        let rows = library_space_rows(&reopened, "companion", std::slice::from_ref(&summary)).unwrap();
+        let rows = library_space_rows(&reopened, "companion", std::slice::from_ref(&summary), &[]).unwrap();
         assert_eq!(rows[0].state, SpaceCopyState::UpToDate);
         assert_eq!(rows[0].paths.len(), 2);
     }
@@ -2204,12 +2383,12 @@ mod library_copy_tests {
         let mut files = [f.file("document.md", b"bytes")];
         files[0].path = "../outside".into();
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "context_snapshot_path");
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).err().unwrap().code, "context_snapshot_path");
         #[cfg(unix)] {
             files[0].path = "document.md".into();
             std::fs::hard_link(f.path.join("library/document.md"), f.path.join("alias")).unwrap();
             let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-            assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly).err().unwrap().code, "context_snapshot_hardlink");
+            assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::NewOnly, None).err().unwrap().code, "context_snapshot_hardlink");
         }
         assert!(!f.first.exists(MANIFEST_NAME));
     }
@@ -2229,23 +2408,23 @@ mod library_copy_tests {
         let f = Fixture::new();
         let mut summary = folder_item();
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &[] }, LibraryCopyMode::NewOnly).unwrap();
-        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+            &LibraryItemView { root: &f.library, summary: &summary, files: &[] }, LibraryCopyMode::NewOnly, None).unwrap();
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap()[0].state, SpaceCopyState::UpToDate);
         summary.revision = "revision-two".into();
         let files = [f.file("only.txt", b"only")];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update, None).unwrap();
         assert_eq!(f.first.read("folders/notes-01234567/only.txt").unwrap(), b"only");
         summary.revision = "revision-three".into();
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &[] }, LibraryCopyMode::Update).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &[] }, LibraryCopyMode::Update, None).unwrap();
         assert!(!f.first.exists("folders/notes-01234567/only.txt"));
-        let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap().remove(0);
+        let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap().remove(0);
         assert_eq!(row.state, SpaceCopyState::UpToDate);
         assert!(row.paths.is_empty());
-        assert_eq!(library_space_rows(&f.first, "companion", &[]).unwrap()[0].state, SpaceCopyState::NotInLibrary);
+        assert_eq!(library_space_rows(&f.first, "companion", &[], &[]).unwrap()[0].state, SpaceCopyState::NotInLibrary);
         remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
-        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
+        assert!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -2255,15 +2434,15 @@ mod library_copy_tests {
         let mut bytes = vec![b'a'; MAX_SNAPSHOT_FILE_BYTES + 1];
         let files = [f.file("large.txt", &bytes)];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let path = "folders/notes-01234567/large.txt";
         assert_eq!(f.first.read(path).unwrap(), bytes);
-        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap()[0].state, SpaceCopyState::UpToDate);
         bytes[0] = b'b';
         summary.revision = "revision-two".into();
         let files = [f.file("large.txt", &bytes)];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update, None).unwrap();
         assert_eq!(f.first.read(path).unwrap(), bytes);
         remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
         assert!(!f.first.exists(path));
@@ -2275,7 +2454,7 @@ mod library_copy_tests {
         let summary = folder_item();
         let files = [f.file("a.txt", b"a"), f.file("nested/b.txt", b"b")];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let association = read_companion_association(&f.first).unwrap();
         let mut manifest = read_manifest(&f.first, "companion", &association).unwrap();
         let entry = manifest.entries[0].clone();
@@ -2297,7 +2476,7 @@ mod library_copy_tests {
         let summary = folder_item();
         let files = [f.file("README.md", b"readme"), f.file("src/nested/code.rs", b"code")];
         let copied = materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         assert_eq!(copied.written, ["folders/notes-01234567/README.md", "folders/notes-01234567/src/nested/code.rs"]);
         let manifest = read_manifest(&f.first, "companion", &read_companion_association(&f.first).unwrap()).unwrap();
         for file in &files {
@@ -2306,7 +2485,7 @@ mod library_copy_tests {
             assert_eq!(entry.library_revision.as_ref(), Some(&summary.revision));
             assert_eq!(f.first.read(&entry.relative_path).unwrap(), f.library.read(&file.path).unwrap());
         }
-        assert_eq!(library_space_rows(&f.first, "companion", &[summary]).unwrap()[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap()[0].state, SpaceCopyState::UpToDate);
     }
 
     #[test]
@@ -2316,23 +2495,23 @@ mod library_copy_tests {
         let files = [f.file("keep.txt", b"keep"), f.file("changed.txt", b"old"),
             f.file("nested/missing.txt", b"restore"), f.file("gone.txt", b"gone")];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let unchanged = identity(&f.first.metadata("folders/notes-01234567/keep.txt").unwrap());
         f.first.remove_dir_all("folders/notes-01234567/nested").unwrap();
         summary.revision = "revision-two".into();
         let files = [f.file("keep.txt", b"keep"), f.file("changed.txt", b"new"),
             f.file("nested/missing.txt", b"restore"), f.file("added/deep.txt", b"added")];
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
-        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update).unwrap();
+        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update, None).unwrap();
         assert!(copied.skipped_edited.is_empty());
         assert_eq!(f.first.read("folders/notes-01234567/changed.txt").unwrap(), b"new");
         assert_eq!(f.first.read("folders/notes-01234567/nested/missing.txt").unwrap(), b"restore");
         assert_eq!(f.first.read("folders/notes-01234567/added/deep.txt").unwrap(), b"added");
         assert!(!f.first.exists("folders/notes-01234567/gone.txt"));
         assert_eq!(identity(&f.first.metadata("folders/notes-01234567/keep.txt").unwrap()), unchanged);
-        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap()[0].state, SpaceCopyState::UpToDate);
         let before = f.first.read(MANIFEST_NAME).unwrap();
-        assert!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update).unwrap().written.is_empty());
+        assert!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update, None).unwrap().written.is_empty());
         assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
     }
 
@@ -2342,18 +2521,18 @@ mod library_copy_tests {
         let mut summary = folder_item();
         let files = [f.file("edited.txt", b"baseline"), f.file("gone.txt", b"gone"), f.file("live.txt", b"old")];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let edited = "folders/notes-01234567/edited.txt";
         f.first.write(edited, b"my notes").unwrap();
         summary.revision = "revision-two".into();
         let files = [f.file("live.txt", b"new")];
         let copied = materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update, None).unwrap();
         assert_eq!(copied.skipped_edited, [edited]);
         assert_eq!(f.first.read(edited).unwrap(), b"my notes");
         assert_eq!(f.first.read("folders/notes-01234567/live.txt").unwrap(), b"new");
         assert!(!f.first.exists("folders/notes-01234567/gone.txt"));
-        let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap().remove(0);
+        let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap().remove(0);
         assert_eq!(row.state, SpaceCopyState::EditedInSpace);
         assert_eq!(row.edited.iter().map(|file| (file.path.as_str(), file.current_hash.as_str())).collect::<Vec<_>>(),
             vec![(edited, hash(b"my notes").as_str())]);
@@ -2363,7 +2542,7 @@ mod library_copy_tests {
         remove_library_copy(&f.first, "companion", &summary.logical_id, &row.edited).unwrap();
         assert!(!f.first.exists(edited));
         assert!(!f.first.exists("folders/notes-01234567/live.txt"));
-        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
+        assert!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -2372,7 +2551,7 @@ mod library_copy_tests {
         let mut summary = folder_item();
         let files = [f.file("a.txt", b"a"), f.file("b.txt", b"b"), f.file("c.txt", b"c")];
         materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let a = "folders/notes-01234567/a.txt";
         let b = "folders/notes-01234567/b.txt";
         let c = "folders/notes-01234567/c.txt";
@@ -2384,11 +2563,11 @@ mod library_copy_tests {
         let stale = [LibraryConflictFile { path: a.into(), current_hash: hash(b"edit a") },
             LibraryConflictFile { path: b.into(), current_hash: hash(b"stale") }];
         let before = f.first.read(MANIFEST_NAME).unwrap();
-        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &stale }).err().unwrap().code, "space_copy_conflict");
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &stale }, None).err().unwrap().code, "space_copy_conflict");
         assert_eq!(f.first.read(a).unwrap(), b"edit a");
         assert_eq!(f.first.read(c).unwrap(), b"c");
         assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
-        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &stale[..1] }).unwrap();
+        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &stale[..1] }, None).unwrap();
         assert_eq!(copied.skipped_edited, [b]);
         assert_eq!(f.first.read(a).unwrap(), b"new a");
         assert_eq!(f.first.read(b).unwrap(), b"edit b");
@@ -2398,12 +2577,12 @@ mod library_copy_tests {
         assert_eq!(f.first.read(a).unwrap(), b"new a");
         assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
         let confirmed = [LibraryConflictFile { path: b.into(), current_hash: hash(b"edit b") }];
-        materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &confirmed }).unwrap();
+        materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &confirmed }, None).unwrap();
         assert_eq!(f.first.read(b).unwrap(), b"new b");
-        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary), &[]).unwrap()[0].state, SpaceCopyState::UpToDate);
         f.first.remove_file(c).unwrap();
         remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
-        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
+        assert!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -2412,7 +2591,7 @@ mod library_copy_tests {
         let mut summary = item();
         let files = [f.file("document.md", b"body")];
         let copied = materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let path = &copied.written[0];
         f.first.write(path, b"my edit").unwrap();
         summary.revision = "revision-two".into();
@@ -2420,7 +2599,7 @@ mod library_copy_tests {
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
         let wrong = LibraryConflictFile { path: path.clone(), current_hash: hash(b"stale edit") };
         assert_eq!(materialize_library_item(&f.first, "companion", &view,
-            LibraryCopyMode::Replace { confirmed: std::slice::from_ref(&wrong) }).err().unwrap().code, "space_copy_conflict");
+            LibraryCopyMode::Replace { confirmed: std::slice::from_ref(&wrong) }, None).err().unwrap().code, "space_copy_conflict");
         assert_eq!(f.first.read(path).unwrap(), b"my edit");
 
         let association = read_companion_association(&f.first).unwrap();
@@ -2441,9 +2620,9 @@ mod library_copy_tests {
         assert_eq!(f.first.read(path).unwrap(), b"my edit");
         let confirmed = LibraryConflictFile { path: path.clone(), current_hash: hash(b"my edit") };
         materialize_library_item(&f.first, "companion", &view,
-            LibraryCopyMode::Replace { confirmed: std::slice::from_ref(&confirmed) }).unwrap();
+            LibraryCopyMode::Replace { confirmed: std::slice::from_ref(&confirmed) }, None).unwrap();
         assert_eq!(f.first.read(path).unwrap(), b"new body");
-        assert_eq!(library_space_rows(&f.first, "companion", &[summary]).unwrap()[0].state, SpaceCopyState::UpToDate);
+        assert_eq!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap()[0].state, SpaceCopyState::UpToDate);
     }
 
     #[test]
@@ -2452,7 +2631,7 @@ mod library_copy_tests {
         let summary = item();
         let files = [f.file("document.md", b"body")];
         let copied = materialize_library_item(&f.first, "companion",
-            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly, None).unwrap();
         let path = &copied.written[0];
         let association = read_companion_association(&f.first).unwrap();
         let mut manifest = read_manifest(&f.first, "companion", &association).unwrap();
@@ -2469,6 +2648,6 @@ mod library_copy_tests {
         recover_pending_source_intent(&f.first, &mut manifest).unwrap();
         assert!(manifest.entries.is_empty());
         assert!(manifest.library_copies.is_empty());
-        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
+        assert!(library_space_rows(&f.first, "companion", &[summary], &[]).unwrap().is_empty());
     }
 }

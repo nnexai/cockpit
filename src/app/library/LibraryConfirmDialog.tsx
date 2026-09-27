@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { LibraryOperation, SpaceCopyRow } from "../../protocol/generated/v1";
+import type { LibraryFollowSummary, LibraryOperation, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { errorCode, errorText, type LibrarySpace } from "./libraryState";
+import { errorCode, errorText, pageCount, spaceDisplayName, type LibrarySpace } from "./libraryState";
 import { announceLibraryChanged } from "./useLibraryOperation";
 import "../projects/setup.css";
 import "../projects/taskSetup.css";
@@ -43,14 +43,16 @@ export function useRestoreFocus(): void {
 
 /**
  * Compact confirmation (design §4.10): focus starts on the safe button, the
- * destructive button names its effect, and a failure stays inline.
+ * destructive button names its effect, and a failure stays inline. An
+ * `alternative` is a lesser action between them (`Stop following only`).
  */
-export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, destructive = false, onConfirm, onClose }: {
+export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, destructive = false, alternative, onConfirm, onClose }: {
   title: string;
   body: ReactNode;
   safeLabel: string;
   confirmLabel: string;
   destructive?: boolean;
+  alternative?: { label: string; onConfirm: () => Promise<void> };
   /** Resolves when the action was accepted; a rejection keeps the dialog open with the reason. */
   onConfirm: () => Promise<void>;
   onClose: () => void;
@@ -62,11 +64,11 @@ export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, des
   const [error, setError] = useState<string | null>(null);
   useRestoreFocus();
   useEffect(() => { safeRef.current?.focus(); }, []);
-  const confirm = async () => {
+  const confirm = async (action: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     try {
-      await onConfirm();
+      await action();
     } catch (cause) {
       setError(errorText(cause, "The action could not be completed."));
       setBusy(false);
@@ -82,10 +84,31 @@ export function LibraryConfirmDialog({ title, body, safeLabel, confirmLabel, des
       </div>
       <footer className="task-setup-footer">
         <button ref={safeRef} type="button" onClick={onClose} disabled={busy}>{safeLabel}</button>
-        <button type="button" className={destructive ? "library-destructive" : "setup-primary"} onClick={() => void confirm()} disabled={busy}>{busy ? "Working…" : confirmLabel}</button>
+        {alternative ? <button type="button" onClick={() => void confirm(alternative.onConfirm)} disabled={busy}>{alternative.label}</button> : null}
+        <button type="button" className={destructive ? "library-destructive" : "setup-primary"} onClick={() => void confirm(onConfirm)} disabled={busy}>{busy ? "Working…" : confirmLabel}</button>
       </footer>
     </section>
   </div>, document.body);
+}
+
+/** `stop_following` keeps the pages; `follow` removes them with the follow (design §4.10). */
+export type FollowRemoveMode = "stop_following" | "follow";
+
+/**
+ * Remove a followed space (design §4.10): `Cancel` is focused, `Stop following
+ * only` keeps every page, and `Remove space` deletes its pages from the Library.
+ * Space copies are never touched.
+ */
+export function FollowRemoveDialog({ follow, remove, onClose }: {
+  follow: LibraryFollowSummary;
+  /** Resolves once the Library accepted the removal; a rejection stays inline. */
+  remove: (mode: FollowRemoveMode) => Promise<void>;
+  onClose: () => void;
+}) {
+  return <LibraryConfirmDialog title={`Remove ${spaceDisplayName(follow)} from the Library?`} safeLabel="Cancel" confirmLabel="Remove space" destructive
+    body={<p>{`Deletes ${pageCount(follow.page_count)} from the Library and stops following the space. Copies already in Spaces stay as they are and stop receiving updates. Confluence isn't changed.`}</p>}
+    alternative={{ label: "Stop following only", onConfirm: () => remove("stop_following") }}
+    onConfirm={() => remove("follow")} onClose={onClose} />;
 }
 
 export type SpaceCopyConfirmation = { kind: "replace" | "remove"; row: SpaceCopyRow };

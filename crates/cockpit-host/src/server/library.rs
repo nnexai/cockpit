@@ -10,7 +10,7 @@ use axum::{
 };
 use cockpit_core::CockpitService;
 use cockpit_protocol::library::{
-    LibraryAddRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryMediaRequest,
+    LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryMediaRequest,
     LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
     LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceContextRequest,
     SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
@@ -38,6 +38,7 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route("/api/v1/library/directory", post(directory))
         .route("/api/v1/library/document", post(document))
         .route("/api/v1/library/media", post(media))
+        .route("/api/v1/library/confluence/spaces", post(confluence_spaces))
         .route("/api/v1/library/space/list", post(space_list))
         .route("/api/v1/library/space/add", post(space_add))
         .route("/api/v1/library/space/update", post(space_update))
@@ -114,6 +115,29 @@ async fn resolve(
     };
     match service.library() {
         Ok(library) => match library.resolve(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn confluence_spaces(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryConfluenceSpacesRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if request.provider_id.is_empty()
+        || request.provider_id.len() > 128
+        || request.provider_id.chars().any(char::is_control)
+    {
+        return invalid_request();
+    }
+    match service.library() {
+        Ok(library) => match library.confluence_spaces(&request.provider_id).await {
             Ok(value) => Json(value).into_response(),
             Err(error) => inspection_error(error),
         },

@@ -32,6 +32,7 @@ fn main() {
             "cockpit_context_media",
             "cockpit_library_listing",
             "cockpit_library_resolve",
+            "cockpit_library_confluence_spaces",
             "cockpit_library_add",
             "cockpit_library_refresh",
             "cockpit_library_operation",

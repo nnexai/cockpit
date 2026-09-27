@@ -339,6 +339,31 @@ impl Store {
         *old = entry;
         self.commit(&mut index)
     }
+    /// Commit presentation and follow-record changes that never touch item files.
+    /// The closure must preserve every item's revision, path and inventory.
+    pub fn mutate_index<R>(
+        &self,
+        change: impl FnOnce(&mut Index) -> Result<R, InspectionError>,
+    ) -> Result<R, InspectionError> {
+        let _lock = self.exclusive()?;
+        let mut index = self.index()?;
+        let before = index
+            .items
+            .iter()
+            .map(|e| (e.summary.item_id.clone(), e.summary.revision.clone(), e.summary.item_path.clone()))
+            .collect::<Vec<_>>();
+        let result = change(&mut index)?;
+        let after = index
+            .items
+            .iter()
+            .map(|e| (e.summary.item_id.clone(), e.summary.revision.clone(), e.summary.item_path.clone()))
+            .collect::<Vec<_>>();
+        if before != after {
+            return Err(error("library_conflict", "Index mutation changed item identity"));
+        }
+        self.commit(&mut index)?;
+        Ok(result)
+    }
     fn item_parent<'a>(&self, path: &'a str) -> Result<(Dir, &'a str), InspectionError> {
         if !item_path(path) {
             return Err(corrupt("invalid Library item path"));

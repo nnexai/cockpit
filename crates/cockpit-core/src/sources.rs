@@ -18,6 +18,7 @@ const MAX_ASSETS_PER_FETCH: usize = 64;
 const MAX_ASSET_BYTES: usize = 1024 * 1024;
 const MAX_METADATA_BYTES: usize = 16 * 1024;
 const MAX_URL_BYTES: usize = 8 * 1024;
+const MAX_LISTED_SPACES: usize = 10_000;
 const MAX_METADATA_DESCRIPTION_BYTES: usize = 256 * 1024;
 /// Setup reads one artifact while planning, checking before start and
 /// importing, usually within seconds. It may reuse a provider result this
@@ -669,6 +670,136 @@ impl SourceService {
             ));
         }
         Ok(resolution)
+    }
+
+    fn selected_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<&Arc<dyn SourceProvider>, InspectionError> {
+        self.providers
+            .iter()
+            .find(|provider| provider.provider_id() == provider_id)
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_unsupported",
+                    "selected source provider is unavailable",
+                )
+            })
+    }
+
+    /// Spaces readable by the selected provider's profile, structurally checked.
+    pub async fn list_spaces(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<SpaceSummary>, InspectionError> {
+        let provider = self.selected_provider(provider_id)?;
+        let spaces = timeout(self.operation_timeout, provider.list_spaces())
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "source_fetch_timeout",
+                    "space listing exceeded the configured operation deadline",
+                )
+            })??;
+        let mut keys = std::collections::BTreeSet::new();
+        if spaces.len() > MAX_LISTED_SPACES
+            || spaces.iter().any(|space| {
+                !confluence_space_key(&space.key)
+                    || !bounded_text(&space.name, MAX_METADATA_BYTES)
+                    || !keys.insert(space.key.as_str())
+            })
+        {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "source provider returned an invalid space listing",
+            ));
+        }
+        Ok(spaces)
+    }
+
+    /// D20 enumeration of one space. Each page of up to 100 results gets the
+    /// operation deadline; the provider stops early when `cancel` is set.
+    pub async fn list_space_pages(
+        &self,
+        provider_id: &str,
+        space_key: &str,
+        max_pages: u32,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        if !confluence_space_key(space_key) || max_pages == 0 {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "space enumeration requires a valid space key and page limit",
+            ));
+        }
+        let provider = self.selected_provider(provider_id)?;
+        let calls = max_pages.div_ceil(100).saturating_add(2);
+        let listing = timeout(
+            self.operation_timeout.saturating_mul(calls),
+            provider.list_space_pages(space_key, max_pages, cancel),
+        )
+        .await
+        .map_err(|_| {
+            InspectionError::new(
+                "source_fetch_timeout",
+                "space enumeration exceeded the configured operation deadline",
+            )
+        })??;
+        let mut ids = std::collections::BTreeSet::new();
+        // The homepage may be appended beyond the limit when the search omitted it.
+        let valid = listing.pages.len() <= max_pages as usize + 1
+            && bounded_text(&listing.space_name, MAX_METADATA_BYTES)
+            && listing
+                .homepage_id
+                .as_deref()
+                .is_none_or(confluence_page_id)
+            && listing.pages.iter().all(|page| {
+                confluence_page_id(&page.page_id)
+                    && ids.insert(page.page_id.as_str())
+                    && bounded_text(&page.title, MAX_METADATA_BYTES)
+                    && page.ancestors.len() <= 256
+                    && page
+                        .ancestors
+                        .iter()
+                        .all(|ancestor| confluence_page_id(ancestor) && *ancestor != page.page_id)
+            });
+        if !valid {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "source provider returned an invalid space enumeration",
+            ));
+        }
+        Ok(listing)
+    }
+
+    /// The page's current space, or `None` when the provider reports it missing.
+    pub async fn page_space(
+        &self,
+        provider_id: &str,
+        page_id: &str,
+    ) -> Result<Option<String>, InspectionError> {
+        if !confluence_page_id(page_id) {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "page confirmation requires a valid page id",
+            ));
+        }
+        let provider = self.selected_provider(provider_id)?;
+        let space = timeout(self.operation_timeout, provider.page_space(page_id))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "source_fetch_timeout",
+                    "page confirmation exceeded the configured operation deadline",
+                )
+            })??;
+        if space.as_deref().is_some_and(|key| !confluence_space_key(key)) {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "source provider returned an invalid space key",
+            ));
+        }
+        Ok(space)
     }
 
     /// Fetch and validate provider assets without accessing persistent state.

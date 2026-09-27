@@ -197,6 +197,7 @@ class AppFixture {
     commentPasteMarkPasted: async () => { throw new Error("unused"); },
     libraryListing: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryResolve: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryConfluenceSpaces: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryAdd: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryRefresh: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryOperation: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),

@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import type { LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
+import type { LibraryFollowSummary, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
 import { LibraryTree } from "./LibraryTree";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -214,6 +214,89 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
     await key(named("Architecture overview"), "F10", { shiftKey: true });
     expect([...document.body.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["Open", "Refresh from source", "Copy source link", "Remove from Library…"]);
     expect(actions.refresh).not.toHaveBeenCalled();
+    expect(actions.remove).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("shows followed spaces with their partial count and folder ancestors, and refreshes, stops following and removes a space from its menu", async () => {
+  const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
+    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", space_key: "SD", space_name: "Software Development",
+    include_attachments: false, page_count: 4, partial: null, excluded_page_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
+  });
+  const sd = follow({});
+  // Partial: the page limit stopped enumeration at 3 of 5, so nothing is shown for this space yet.
+  const ops = follow({ follow_id: "follow:ops", space_key: "OPS", space_name: "Operations", page_count: 3, partial: { unit: "pages", have: 3, total: 5, reason: "page limit" } });
+  const homePage = { id: "1", title: "Home" };
+  const folder = { id: "900", title: "Release folder" };
+  const team = { id: "30", title: "Team" };
+  const followed = (overrides: Partial<LibraryItemSummary>) => page({ follow_id: "follow:sd", ...overrides });
+  const pages = [
+    followed({ item_id: "source:home", canonical_id: "1", title: "Home", order: 1 }),
+    followed({ item_id: "source:architecture", canonical_id: "20", title: "Architecture", ancestors: [homePage], order: 2 }),
+    // A second top-level tree under a Cloud folder, which is not a page.
+    followed({ item_id: "source:team", canonical_id: "30", title: "Team", ancestors: [folder], order: 3 }),
+    followed({ item_id: "source:team-notes", canonical_id: "31", title: "Team notes", ancestors: [folder, team], order: 4 }),
+  ];
+  let stop!: () => void;
+  const removeFollow = vi.fn((_follow: LibraryFollowSummary, mode: "stop_following" | "follow") => mode === "stop_following" ? new Promise<void>((resolve) => { stop = resolve; }) : Promise.resolve());
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, removeFollow };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const treeRows = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")];
+  const named = (label: string) => treeRows().find((row) => row.querySelector(".context-tree-name")?.textContent === label)!;
+  const menuItems = () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  const openMenu = (row: HTMLElement) => act(async () => { row.focus(); row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })); });
+  const choose = (label: string) => act(async () => menuItems().find((item) => item.textContent === label)!.click());
+  try {
+    await act(async () => root.render(<LibraryTree items={pages} follows={[sd, ops]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    expect(treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent))
+      .toEqual(["Confluence · nnexai.atlassian.net", "OPS · Operations", "SD · Software Development", "Home", "Architecture", "Release folder", "Team", "Team notes"]);
+    const opsRow = named("OPS · Operations");
+    expect(opsRow.querySelector(".context-tree-meta")?.textContent).toBe("◉ Following · ◐ 3 of 5");
+    expect(opsRow.getAttribute("aria-label")).toBe("OPS · Operations, following, partial: 3 of 5 pages (page limit)");
+    expect(named("SD · Software Development").querySelector(".context-tree-meta")?.textContent).toBe("◉ Following");
+    // The folder is a non-document group: it expands but never opens.
+    const folderRow = named("Release folder");
+    expect(folderRow.getAttribute("aria-label")).toBe("Release folder, folder");
+    expect(folderRow.querySelector(".context-tree-meta")?.textContent).toBe("Folder");
+    await act(async () => folderRow.click());
+    expect(actions.open).not.toHaveBeenCalled();
+    expect(treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent)).not.toContain("Team");
+    await act(async () => folderRow.click());
+
+    await openMenu(named("SD · Software Development"));
+    expect(menuItems().map((item) => item.textContent)).toEqual(["Refresh space", "Stop following", "Remove space from Library…"]);
+    await choose("Refresh space");
+    expect(actions.refresh).toHaveBeenCalledWith({ scope: "follow", follow_id: "follow:sd" }, ["source:home", "source:architecture", "source:team", "source:team-notes"]);
+
+    // Stopping keeps the pages and says so once the Library accepted it.
+    await openMenu(named("SD · Software Development"));
+    await choose("Stop following");
+    expect(removeFollow).toHaveBeenLastCalledWith(sd, "stop_following");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await act(async () => stop());
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Stopped following SD. Its 4 pages stay in the Library; refresh no longer adds new pages.");
+
+    // Removal asks first, with Cancel focused and `Stop following only` as the lesser choice.
+    await openMenu(named("SD · Software Development"));
+    await choose("Remove space from Library…");
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.querySelector("h2")?.textContent).toBe("Remove SD · Software Development from the Library?");
+    expect(dialog.textContent).toContain("Deletes 4 pages from the Library and stops following the space. Copies already in Spaces stay as they are");
+    expect([...dialog.querySelectorAll("footer button")].map((button) => button.textContent)).toEqual(["Cancel", "Stop following only", "Remove space"]);
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    await act(async () => [...dialog.querySelectorAll<HTMLButtonElement>("footer button")].find((button) => button.textContent === "Remove space")!.click());
+    expect(removeFollow).toHaveBeenLastCalledWith(sd, "follow");
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(named("SD · Software Development"));
+    // The reread drops the space; focus moves to its provider row instead of the page body.
+    await act(async () => root.render(<LibraryTree items={[]} follows={[ops]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
+    expect(named("SD · Software Development")).toBeUndefined();
+    expect(document.activeElement).toBe(named("Confluence · nnexai.atlassian.net"));
     expect(actions.remove).not.toHaveBeenCalled();
   } finally {
     await act(async () => root.unmount());

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { LibraryItemState, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
-import { confluencePageInput, itemKindLabel, itemTreeLabel, libraryInputUrl, libraryStateChip, libraryTree } from "./libraryState";
+import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
+import { confluencePageInput, confluenceSpaceInput, itemKindLabel, itemTreeLabel, libraryInputUrl, libraryStateChip, libraryTree } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -85,5 +85,45 @@ describe("Confluence page recognition", () => {
     expect(recognized("OPS-311")).toBeNull();
     expect(recognized("~/notes")).toBeNull();
     expect(recognized("https://nnexai.atlassian.net/wiki/spaces/SD/overview")).toBeNull();
+  });
+});
+
+describe("Confluence space recognition", () => {
+  const withConfluence: ProjectProvider[] = [
+    ...providers,
+    { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence", login: "default" },
+    { id: "dc", base_url: "https://confluence.example.com/confluence/", executable: "confluence", login: "dc" },
+  ];
+  const recognized = (input: string, configured = withConfluence) => {
+    const space = confluenceSpaceInput(input, configured);
+    return space && { ...space, providers: space.providers.map((provider) => provider.id) };
+  };
+
+  it("reads space links and keys against the configured instance, leaving folders, pages and unconfigured keys alone", () => {
+    expect(recognized("https://nnexai.atlassian.net/wiki/spaces/SD/overview")).toEqual({ spaceKey: "SD", host: "nnexai.atlassian.net", providers: ["cloud"] });
+    expect(recognized("https://confluence.example.com/confluence/display/ENG/")).toEqual({ spaceKey: "ENG", host: "confluence.example.com", providers: ["dc"] });
+    expect(recognized(" ~jdoe ")).toEqual({ spaceKey: "~jdoe", host: null, providers: ["cloud", "dc"] });
+    // A bare key needs a configured Confluence provider; the home folder and a page link are not spaces.
+    expect(recognized("SD", providers)).toBeNull();
+    expect(recognized("~")).toBeNull();
+    expect(recognized("~/notes")).toBeNull();
+    expect(recognized("https://nnexai.atlassian.net/wiki/spaces/SD/pages/98765/Release")).toBeNull();
+    expect(recognized("https://gitlab.test/display/group")).toBeNull();
+  });
+});
+
+describe("Followed spaces in the tree", () => {
+  const confluence: ProjectProvider[] = [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence" }];
+  const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
+    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", space_key: "SD", space_name: "Software Development",
+    include_attachments: false, page_count: 0, partial: null, excluded_page_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
+  });
+
+  it("puts a follow's pages under its space container and lists a follow that holds no pages yet", () => {
+    const page = item({ item_id: "source:h", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", resource_type: "page", canonical_id: "1", title: "Home", container: { container_id: "SD", label: "SD · Software Development" }, follow_id: "follow:sd" });
+    const [instance] = libraryTree([page], confluence, [follow({ page_count: 1 }), follow({ follow_id: "follow:ops", space_key: "OPS", space_name: "Operations" })]);
+    expect(instance!.label).toBe("Confluence · nnexai.atlassian.net");
+    expect(instance!.containers.map((container) => [container.label, container.follow?.follow_id, container.items.map((entry) => entry.item_id)]))
+      .toEqual([["OPS · Operations", "follow:ops", []], ["SD · Software Development", "follow:sd", ["source:h"]]]);
   });
 });

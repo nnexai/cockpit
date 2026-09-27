@@ -4,9 +4,11 @@ import { REPORT_OUTCOMES, reportOutcomeLabel, reportSummary } from "./librarySta
 
 /**
  * Provider refresh report (design §4.9). It stays until dismissed or the next
- * refresh; a Library refresh never writes to a Space.
+ * refresh; a Library refresh never writes to a Space. A followed space that hit
+ * the page limit explains it: pages past the limit aren't added, and no page is
+ * marked removed at source until a refresh reads the whole space.
  */
-export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onOpenItem, onRetry }: {
+export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onOpenItem, onRetry, onRetryFollow }: {
   operation: LibraryOperation;
   /** `Refresh` for provider refreshes, `Replace` for a confirmed edited-file replace. */
   verb: "Refresh" | "Replace";
@@ -15,6 +17,8 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
   onDismiss: () => void;
   onOpenItem: (itemId: string) => void;
   onRetry: (itemIds: string[]) => void;
+  /** Refreshes one followed space again; failed follow rows offer it when set. */
+  onRetryFollow?: (followId: string) => void;
 }) {
   const [shown, setShown] = useState(false);
   const phase = operation.phases.find((candidate) => candidate.phase === "library");
@@ -31,6 +35,9 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
   const failed = phase?.state === "failed" ? phase.error : null;
   const rows = report?.rows ?? [];
   const retryIds = rows.filter((row) => row.outcome === "failed" && row.item_id).map((row) => row.item_id!);
+  // One retry starts one operation: failed items, else the one followed space that failed; several failed spaces retry per row.
+  const failedFollowIds = onRetryFollow && retryIds.length === 0 ? [...new Set(rows.filter((row) => row.outcome === "failed" && !row.item_id && row.follow_id).map((row) => row.follow_id!))] : [];
+  const limitedFollows = rows.filter((row) => row.outcome === "partial" && !row.item_id && row.follow_id);
   const rowLabel = (row: LibraryReportRow) => row.item_id
     ? <button type="button" className="library-report-link" onClick={() => onOpenItem(row.item_id!)}>{row.title}</button>
     : <span>{row.title}</span>;
@@ -41,9 +48,15 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
       <span className="library-report-note">Spaces aren't changed.</span>
       <span className="context-toolbar-spacer" />
       {rows.length > 0 ? <button type="button" aria-expanded={shown} onClick={() => setShown((value) => !value)}>{shown ? "Hide" : "Show"}</button> : null}
-      {retryIds.length > 0 ? <button type="button" onClick={() => onRetry(retryIds)}>Retry failed</button> : null}
+      {retryIds.length > 0 || failedFollowIds.length === 1 ? <button type="button" onClick={() => {
+        if (retryIds.length > 0) onRetry(retryIds); else onRetryFollow?.(failedFollowIds[0]!);
+      }}>Retry failed</button> : null}
       <button type="button" onClick={onDismiss}>Dismiss</button>
     </div>
+    {limitedFollows.map((row, index) => <p key={`${row.follow_id}:${index}`} className="context-notice context-notice-warning library-report-limit" role="status">
+      <span aria-hidden="true">◐</span>
+      <span>{`${row.title}: ${row.reason ?? "partial"}. Pages past the limit aren't added, and no page is marked removed at source until a refresh reads the whole space.`}</span>
+    </p>)}
     {shown && rows.length > 0 ? <div className="library-report-rows">
       {REPORT_OUTCOMES.map((outcome) => {
         const group = rows.filter((row) => row.outcome === outcome);
@@ -54,6 +67,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
             {rowLabel(row)}
             {row.reason ? <span className="library-report-reason">{row.outcome === "failed" ? `${row.reason}. Previous content kept.` : row.reason}</span> : null}
             {row.outcome === "failed" && row.item_id ? <button type="button" onClick={() => onRetry([row.item_id!])}>Retry</button> : null}
+            {row.outcome === "failed" && !row.item_id && row.follow_id && onRetryFollow ? <button type="button" onClick={() => onRetryFollow(row.follow_id!)}>Retry</button> : null}
           </li>)}</ul>
         </section>;
       })}

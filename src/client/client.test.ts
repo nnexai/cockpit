@@ -117,6 +117,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     commentPreview: vi.fn(async () => { throw new Error("Unexpected comment preview in terminal fixture"); }),
     libraryListing: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryResolve: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryConfluenceSpaces: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryAdd: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryRefresh: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryOperation: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
@@ -346,6 +347,26 @@ describe("library client validation", () => {
     for (const client of [browser, native]) {
       await expect(client.librarySpaceUpdate(update)).rejects.toMatchObject({ code: "malformed_response" });
       await expect(client.librarySpaceRemove(remove)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+  it("browses one Confluence provider's spaces and refuses spaces of another provider in both transports", async () => {
+    const space = { kind: "confluence_space", provider_id: "confluence", provider_instance: "https://acme.atlassian.net/wiki", title: "Software Development", canonical_id: "SD", container_label: "SD · Software Development", existing_item_id: null, existing_follow_id: "follow:1", page_count: 38, git_working_tree: null, file_count: null, diagnostics: [] };
+    let payload: unknown = [space];
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => jsonResponse(payload));
+    const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => payload);
+    const browser = createBrowserClient(request);
+    const native = createNativeClient(invoke);
+    await expect(browser.libraryConfluenceSpaces({ provider_id: "confluence" })).resolves.toEqual([space]);
+    await expect(native.libraryConfluenceSpaces({ provider_id: "confluence" })).resolves.toEqual([space]);
+    expect(request.mock.calls.map(([path, init]) => [path, init?.method, JSON.parse(String(init?.body))])).toEqual([["/api/v1/library/confluence/spaces", "POST", { provider_id: "confluence" }]]);
+    expect(invoke.mock.calls).toEqual([["cockpit_library_confluence_spaces", { request: { provider_id: "confluence" } }]]);
+    for (const client of [browser, native]) {
+      await expect(client.libraryConfluenceSpaces({ provider_id: "" })).rejects.toMatchObject({ code: "malformed_response" });
+      payload = [{ ...space, provider_id: "other" }];
+      await expect(client.libraryConfluenceSpaces({ provider_id: "confluence" })).rejects.toMatchObject({ code: "malformed_response" });
+      payload = [{ ...space, kind: "confluence_page" }];
+      await expect(client.libraryConfluenceSpaces({ provider_id: "confluence" })).rejects.toMatchObject({ code: "malformed_response" });
+      payload = [space];
     }
   });
 });

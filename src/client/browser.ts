@@ -5,6 +5,7 @@ import {
   parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
   parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+  parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
   parseSpaceUpdateRequest, parseSpaceRemoveRequest,
@@ -778,6 +779,10 @@ export function createBrowserClient(
     async libraryResolve(value) {
       const body = parseLibraryResolveRequest(value);
       return getJson(request, "/api/v1/library/resolve", "Library resolve", parseLibraryResolution, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    },
+    async libraryConfluenceSpaces(value) {
+      const body = parseLibraryConfluenceSpacesRequest(value);
+      return getJson(request, "/api/v1/library/confluence/spaces", "Confluence spaces", (response) => parseLibraryConfluenceSpaces(response, body), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     },
     async libraryAdd(value) {
       const body = parseLibraryAddRequest(value);

@@ -5,6 +5,7 @@ import {
   parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest,
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest,
   parseLibraryReplaceRequest, parseLibraryResolution, parseLibraryResolveRequest,
+  parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
   parseSpaceAddRequest, matchSpaceOperation, parseSpaceAttemptsDismissRequest, parseSpaceAttemptsDismissed,
   parseSpaceUpdateRequest, parseSpaceRemoveRequest,
@@ -712,6 +713,10 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     async libraryResolve(value) {
       const request = parseLibraryResolveRequest(value);
       return invokeAndParse(invoke, "cockpit_library_resolve", { request }, "Library resolve", parseLibraryResolution);
+    },
+    async libraryConfluenceSpaces(value) {
+      const request = parseLibraryConfluenceSpacesRequest(value);
+      return invokeAndParse(invoke, "cockpit_library_confluence_spaces", { request }, "Confluence spaces", (response) => parseLibraryConfluenceSpaces(response, request));
     },
     async libraryAdd(value) {
       const request = parseLibraryAddRequest(value);

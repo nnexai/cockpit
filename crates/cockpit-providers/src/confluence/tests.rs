@@ -1526,3 +1526,37 @@ async fn selected_provider_resolution_and_fetch_pass_the_source_service_page_pro
     let fetched = service.fetch_assets(request, false).await.unwrap();
     assert_eq!(fetched.assets[0].source.canonical_id, "524301");
 }
+#[test]
+fn search_continuations_validate_endpoint_and_preserve_only_typed_cursors() {
+    let cloud = Shim::new(CLOUD);
+    let provider = cloud.provider();
+    let base = json!({"_links":{"base":CLOUD}});
+    let cloud_next = format!(
+        "{CLOUD}/rest/api/content/search?cql=space%3D%22SD%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&cursor=opaque"
+    );
+    let next = json!({"_links":{"base":CLOUD,"next":cloud_next}});
+    assert_eq!(
+        provider.search_continuation(&next, "SD", 100, "version,ancestors,space").unwrap(),
+        Some(SearchPage::Cursor("opaque".into()))
+    );
+    for bad in [
+        "https://evil.test/wiki/rest/api/content/search?cql=space%3D%22SD%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&cursor=opaque",
+        "https://nnexai.atlassian.net/wiki/rest/api/other?cql=space%3D%22SD%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&cursor=opaque",
+        "https://nnexai.atlassian.net/wiki/rest/api/content/search?cql=space%3D%22EVIL%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&cursor=opaque",
+    ] {
+        let value = json!({"_links":{"base":CLOUD,"next":bad}});
+        assert!(provider.search_continuation(&value, "SD", 100, "version,ancestors,space").is_err());
+    }
+    assert!(provider.search_continuation(&base, "SD", 100, "version,ancestors,space").unwrap().is_none());
+
+    let dc = Shim::new(DC);
+    let provider = dc.provider();
+    let next = json!({"_links":{
+        "base":DC,
+        "next":"/rest/api/content/search?cql=space%3D%22SD%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&start=2"
+    }});
+    assert_eq!(
+        provider.search_continuation(&next, "SD", 100, "version,ancestors,space").unwrap(),
+        Some(SearchPage::Start(2))
+    );
+}

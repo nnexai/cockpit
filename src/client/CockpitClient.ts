@@ -144,6 +144,7 @@ import type {
   LibraryRefreshRequest,
   LibraryRemoveRequest,
   LibraryReplaceRequest,
+  LibraryConfluenceSpacesRequest,
   LibraryResolution,
   LibraryResolveRequest,
 } from "../protocol/generated/v1";
@@ -321,6 +322,8 @@ export interface CockpitClient {
   commentPreview(sessionId: string, paneId: string, request: CommentPreviewRequest, signal?: AbortSignal): Promise<CommentPreview>;
   libraryListing(offset?: number | null): Promise<LibraryListing>;
   libraryResolve(request: LibraryResolveRequest): Promise<LibraryResolution>;
+  /** Spaces readable by one configured Confluence provider, each with its existing follow. */
+  libraryConfluenceSpaces(request: LibraryConfluenceSpacesRequest): Promise<LibraryResolution[]>;
   libraryAdd(request: LibraryAddRequest): Promise<LibraryOperation>;
   libraryRefresh(request: LibraryRefreshRequest): Promise<LibraryOperation>;
   libraryOperation(operationId: string): Promise<LibraryOperation>;

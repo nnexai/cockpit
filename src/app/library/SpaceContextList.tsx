@@ -1,9 +1,9 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ErrorResponse, LibraryOperation, ProjectProvider, SpaceAddAttempt, SpaceCopyRow, SpaceCopyState } from "../../protocol/generated/v1";
+import type { ErrorResponse, LibraryOperation, ProjectProvider, SpaceAddAttempt, SpaceCopyRow, SpaceCopyState, SpaceFollowSummary } from "../../protocol/generated/v1";
 import { SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "./LibraryConfirmDialog";
-import { errorText, providerFamily, type LibrarySpace } from "./libraryState";
-import { spaceCopyChip, type SpaceCopyAction } from "./spaceCopyPresentation";
+import { errorText, pageCount, providerFamily, type LibrarySpace } from "./libraryState";
+import { spaceCopyChip, spaceFollowPresentation, type SpaceCopyAction } from "./spaceCopyPresentation";
 import { useLibraryOperation, type SpaceListingState } from "./useLibraryOperation";
 import "./library.css";
 
@@ -33,9 +33,14 @@ const UPDATABLE: Record<SpaceCopyState, boolean> = {
   not_linked: false,
 };
 
-// Followed spaces get their Space actions with S6; until then a follow row offers none.
+// A followed space is one aggregate row: its own `Update` writes that follow alone, and item actions never apply to it.
 function followRow(row: SpaceCopyRow): boolean {
   return row.follow !== null || row.logical_id.startsWith("follow:");
+}
+
+/** A follow row `Update` may write, and that `Update all (N)` counts: the Library has new or changed pages for it. */
+function spaceFollowUpdatable(row: SpaceCopyRow): boolean {
+  return row.follow !== null && row.state !== "not_in_library" && row.follow.new_pages + row.follow.changed_pages > 0;
 }
 
 /** A row `Update`/`Restore from Library` may write, and that `Update all (N)` counts. */
@@ -92,6 +97,20 @@ export function spaceUpdateOutcome(operation: LibraryOperation, space: string, i
   return { failed: false, skipped: skipped.length, text };
 }
 
+/**
+ * What a finished per-follow update did (design §4.8): pages it wrote come from
+ * the operation's own items, else its written files; edited pages it skipped
+ * are listed. A stopped update reads like any other Space update.
+ */
+function followUpdateOutcome(operation: LibraryOperation, space: string, follow: SpaceFollowSummary): SpaceUpdateOutcome | null {
+  const outcome = spaceUpdateOutcome(operation, space, new Map());
+  if (!outcome || outcome.failed) return outcome;
+  const written = operation.item_ids.length || (operation.space?.written.length ?? 0);
+  const skippedText = outcome.skipped > 0 ? ` Skipped ${pageCount(outcome.skipped)} edited in ${space}.` : "";
+  const text = written > 0 ? `Updated ${pageCount(written)} of ${follow.space_key} in ${space}.${skippedText}` : outcome.skipped > 0 ? `Nothing updated in ${space}.${skippedText}` : `Nothing from ${follow.space_key} in ${space} needed updating.`;
+  return { ...outcome, text };
+}
+
 /** A finished update whose Space listing couldn't be reread: its result stays unshown until a reread succeeds. */
 export function spaceUpdateUnconfirmed(space: string): string {
   return `The update finished, but ${space}'s copies couldn't be reread, so its result isn't shown yet.`;
@@ -132,10 +151,11 @@ function listEntries(attempts: readonly SpaceAddAttempt[], rows: readonly SpaceC
   ];
 }
 
-/** `GitLab` `MR`, `Jira` `issue`, `Confluence` `page`, `Folder`: the provider and kind chips of a Space row. */
+/** `GitLab` `MR`, `Jira` `issue`, `Confluence` `page`, `Folder`, `Confluence` `followed space`: the provider and kind chips of a Space row. */
 function kindChips(row: SpaceCopyRow, providers: readonly ProjectProvider[]): string[] {
   if (row.kind === "folder_copy") return ["Folder"];
   const family = providerFamily(providers, row.provider_id);
+  if (row.follow) return [family.name, "followed space"];
   if (row.resource_type === "page") return [family.name, "page"];
   return [family.name, family.key !== "jira" && row.resource_type === "review" ? family.review : "issue"];
 }
@@ -229,22 +249,30 @@ function CopyEntry({ client, space, row, providers, listing, updatingAll, onFocu
     const next = slotRef.current?.querySelector("button");
     if (next) next.focus({ preventScroll: true }); else onFocusLeavingRef.current();
   });
-  const chip = spaceCopyChip(row);
-  const actions = spaceCopyActions(row);
-  const updatable = spaceCopyUpdatable(row);
+  const follow = row.follow;
+  const followPresentation = follow ? spaceFollowPresentation(row, follow) : null;
+  const chips = followPresentation?.chips ?? [spaceCopyChip(row)];
+  const notice = followPresentation ? followPresentation.notice : spaceCopyChip(row).notice;
+  const actions = followPresentation?.actions ?? spaceCopyActions(row);
+  const updatable = follow ? spaceFollowUpdatable(row) : spaceCopyUpdatable(row);
   const busy = update.busy || (updatingAll.busy && updatable);
   const working = update.working || (updatingAll.working && updatable);
-  const outcome = update.operation && !update.busy ? spaceUpdateOutcome(update.operation, space.label, update.itemPaths) : null;
+  const outcome = update.operation && !update.busy
+    ? follow ? followUpdateOutcome(update.operation, space.label, follow) : spaceUpdateOutcome(update.operation, space.label, update.itemPaths)
+    : null;
   const note = conflict ? spaceCopyConflict(space.label) : update.error ?? (update.unconfirmed ? spaceUpdateUnconfirmed(space.label) : outcome && (outcome.failed || outcome.skipped > 0) ? outcome.text : null);
   const act = (action: SpaceCopyAction) => {
     if (busy) return;
     setConflict(false);
     if (action.kind === "replace" || action.kind === "remove") { setConfirmation({ kind: action.kind, row }); return; }
-    const itemId = row.item_id;
-    if (itemId) void update.start(() => client.librarySpaceUpdate({ target: space.target, scope: { scope: "selection", item_ids: [itemId], follow_ids: [] }, replace_edited: [] }));
+    // A follow's `Update` writes that follow's pages only; other follows and items in this Space stay as they are.
+    const scope = follow ? { scope: "selection" as const, item_ids: [], follow_ids: [follow.follow_id] }
+      : row.item_id ? { scope: "selection" as const, item_ids: [row.item_id], follow_ids: [] } : null;
+    if (scope) void update.start(() => client.librarySpaceUpdate({ target: space.target, scope, replace_edited: [] }));
   };
+  const title = follow ? `${row.title} · ${pageCount(follow.page_count)}` : row.title;
   return <article ref={ref} role="listitem" className="context-source-entry">
-    <strong id={titleId} className="context-source-title" title={row.title}>{row.title}</strong>
+    <strong id={titleId} className="context-source-title" title={title}>{title}</strong>
     <div ref={slotRef} className="space-context-actions" onFocus={() => { slotFocused.current = true; }} onBlur={(event: FocusEvent) => { if (event.relatedTarget) slotFocused.current = false; }}>
       {/* aria-disabled keeps focus on the pressed button while the update runs. */}
       {actions.map((action) => <button key={action.kind} type="button" aria-disabled={busy} aria-describedby={titleId} onClick={() => act(action)}>{action.label}</button>)}
@@ -253,14 +281,22 @@ function CopyEntry({ client, space, row, providers, listing, updatingAll, onFocu
       {kindChips(row, providers).map((label) => <span key={label} className="context-source-chip">{label}</span>)}
       {working
         ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />Updating…</span>
-        : <span className={`context-source-chip library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span>}
+        : chips.map((chip) => <span key={chip.word} className={`context-source-chip library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span>)}
     </div>
-    {chip.notice ? <p className="context-source-diagnostic">{chip.notice}</p> : null}
+    {notice ? <p className="context-source-diagnostic">{notice}</p> : null}
     {note && !working ? <p className="context-source-diagnostic" role={conflict || update.error || update.unconfirmed || outcome?.failed ? "alert" : "status"}>{note}</p> : null}
     <details className="context-source-details">
       <summary>Details</summary>
       <dl>
         {row.item_id ? <><dt>Library item</dt><dd><code>{row.item_id}</code></dd></> : null}
+        {follow ? <>
+          <dt>Followed space</dt><dd><code>{follow.space_key}</code></dd>
+          <dt>Pages in {space.label}</dt><dd>{follow.page_count}</dd>
+          <dt>New in Library</dt><dd>{follow.new_pages}</dd>
+          <dt>Changed in Library</dt><dd>{follow.changed_pages}</dd>
+          <dt>Edited in {space.label}</dt><dd>{follow.edited_pages}</dd>
+          <dt>Removed at source</dt><dd>{follow.removed_at_source_pages}</dd>
+        </> : null}
         {row.paths.map((path) => <Fragment key={path}><dt>Space copy path</dt><dd><code>{path}</code></dd></Fragment>)}
         {row.copy_mode ? <><dt>Copied as</dt><dd>{row.copy_mode === "mixed" ? "reflink and copy" : row.copy_mode}</dd></> : null}
         {row.library_revision_copied ? <><dt>Library version copied</dt><dd><code>{row.library_revision_copied}</code></dd></> : null}
@@ -283,7 +319,8 @@ function CopyEntry({ client, space, row, providers, listing, updatingAll, onFocu
  * Retrying copies the saved Library item again; it never fetches from the
  * provider. `Update`, `Update all (N)`, a confirmed replace and a confirmed
  * removal write only this Space; each shows its result once the Space's
- * listing has been reread.
+ * listing has been reread. A followed space is one aggregate row whose own
+ * `Update` writes that follow alone (review R4).
  */
 export function SpaceContextList({ client, space, state, onAdd }: {
   client: CockpitClient;
@@ -316,10 +353,10 @@ export function SpaceContextList({ client, space, state, onAdd }: {
   entries.sort((left, right) => (order.current?.get(left.key) ?? 0) - (order.current?.get(right.key) ?? 0));
   const companion = listing?.companion;
   const itemCount = listing?.rows.length ?? 0;
-  // `Update all (N)` counts `Library newer` and `Missing in Space` copies. It stays available while edited
-  // copies exist, so an update can report them as skipped (design scenario 7); it never writes them.
-  const eligible = listing?.rows.filter(spaceCopyUpdatable).length ?? 0;
-  const updateAllAvailable = eligible > 0 || (listing?.rows.some((row) => row.state === "edited_in_space" && row.item_id !== null && !followRow(row)) ?? false);
+  // `Update all (N)` counts `Library newer` and `Missing in Space` copies and follows with new or changed pages. It stays
+  // available while edited copies exist, so an update can report them as skipped (design scenario 7); it never writes them.
+  const eligible = listing?.rows.filter((row) => spaceCopyUpdatable(row) || spaceFollowUpdatable(row)).length ?? 0;
+  const updateAllAvailable = eligible > 0 || (listing?.rows.some((row) => (row.state === "edited_in_space" && row.item_id !== null && !followRow(row)) || (row.follow?.edited_pages ?? 0) > 0) ?? false);
   const updateAllOutcome = updateAll.operation && !updateAll.busy ? spaceUpdateOutcome(updateAll.operation, space.label, updateAll.itemPaths) : null;
   const updateAllFailure = updateAll.error ?? (updateAllOutcome?.failed ? updateAllOutcome.text : null);
   return <div className="space-context">

@@ -319,6 +319,8 @@ export type LibraryInputKind = "artifact" | "confluence_page" | "confluence_spac
 
 export type LibraryResolveRequest = { input: string, provider_id: string | null, };
 
+export type LibraryConfluenceSpacesRequest = { provider_id: string, };
+
 export type LibraryResolution = { kind: LibraryInputKind, provider_id: string | null, provider_instance: string | null, title: string, canonical_id: string | null, container_label: string | null, existing_item_id: string | null, existing_follow_id: string | null, page_count: number | null, git_working_tree: boolean | null, file_count: number | null, diagnostics: Array<ProjectDiagnostic>, };
 
 export type LibraryAddRequest = { input: string, provider_id: string | null, hydrate_references: boolean, follow_space: boolean, download_attachments: boolean, refresh_existing: boolean, label: string | null, target: SpaceTarget | null, };

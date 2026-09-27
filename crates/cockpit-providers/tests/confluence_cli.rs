@@ -293,3 +293,61 @@ async fn real_cli_identity_auth_and_profile_failures_map_to_stable_codes() {
         allowlisted_argv(&argv).unwrap();
     }
 }
+
+#[tokio::test]
+async fn cloud_and_dc_space_enumeration_and_paged_listing_use_only_gets() {
+    let Some(cli) = cli() else { return };
+    for mode in [Mode::Cloud, Mode::DataCenter] {
+        let server = FakeConfluence::start(mode, &cli);
+        let mut home = page("100", "Home", "SD", 4);
+        home.ancestors.clear();
+        server.add_page(home);
+        let mut top = page("101", "Top level", "SD", 2);
+        top.ancestors.clear();
+        server.add_page(top);
+        let mut child = page("102", "Nested child", "SD", 7);
+        child.ancestors = vec![
+            ("100".into(), "page".into(), "Home".into()),
+            ("150".into(), "folder".into(), "Runbooks".into()),
+        ];
+        server.add_page(child);
+        let other = page("201", "Other space", "ENG", 1);
+        server.add_page(other);
+
+        let configuration = configuration(&server, PROFILE);
+        let providers = cockpit_providers::configured_providers(&configuration).unwrap();
+        let provider = providers.iter().find(|provider| provider.provider_id() == "wiki").unwrap();
+        let spaces = provider.list_spaces().await.unwrap();
+        assert!(spaces.iter().any(|space| space.key == "SD" && space.name == "SD Space"), "{spaces:?}");
+        let listing = provider.list_space_pages("SD", 100, &std::sync::atomic::AtomicBool::new(false))
+            .await.unwrap();
+        assert!(listing.complete, "{mode:?}: {listing:?}");
+        assert_eq!(listing.total, Some(3), "{mode:?}");
+        assert_eq!(listing.homepage_id.as_deref(), Some("100"));
+        let by_id: std::collections::BTreeMap<_, _> = listing.pages.iter()
+            .map(|page| (page.page_id.as_str(), page)).collect();
+        assert_eq!(by_id.len(), 3);
+        assert_eq!(by_id["102"].ancestors, vec!["100".to_owned(), "150".to_owned()]);
+        assert_eq!(by_id["102"].version, 7);
+        assert_eq!(by_id["102"].position, Some(2));
+        assert_eq!(provider.page_space("102").await.unwrap().as_deref(), Some("SD"));
+        assert_eq!(provider.page_space("999").await.unwrap(), None);
+        let partial = provider.list_space_pages(
+            "SD", 2, &std::sync::atomic::AtomicBool::new(false),
+        ).await.unwrap();
+        assert!(!partial.complete, "{mode:?}: {partial:?}");
+        assert_eq!(partial.pages.len(), 2);
+        assert_eq!(partial.total, Some(3));
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let cancelled_listing = provider.list_space_pages("SD", 100, &cancelled).await.unwrap();
+        assert!(!cancelled_listing.complete);
+        assert!(cancelled_listing.pages.is_empty());
+        assert_read_only_boundary(&server, PROFILE);
+        let requests = server.requests();
+        assert!(requests.iter().any(|request| request.contains("/space?")), "{requests:?}");
+        assert!(requests.iter().any(|request| request.contains("/content/search?") && request.contains("cql=")), "{requests:?}");
+        assert!(requests.iter().all(|request| !request.contains("/download/")), "{requests:?}");
+        let calls = calls(&server);
+        assert!(calls.iter().all(|call| !call.contains("--download")), "{calls:?}");
+    }
+}

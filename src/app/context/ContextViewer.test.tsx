@@ -456,7 +456,6 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     await act(async () => window.dispatchEvent(new Event("cockpit:library-changed")));
     await flush();
     expect(host.querySelector(".library-kind-chip")).toBeNull();
-    expect(host.textContent).toContain("Jira issue, or a folder.");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

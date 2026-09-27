@@ -1,6 +1,6 @@
 import type {
   ContextDirectory, ContextDocument, ContextMedia,
-  LibraryAddRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFollowSummary,
+  LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFollowSummary,
   LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
   LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
   SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest,
@@ -70,6 +70,14 @@ export function parseLibraryListing(value: unknown): LibraryListing {
 export function parseLibraryResolveRequest(value: unknown): LibraryResolveRequest { const r = record(value); return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id) }; }
 export function parseLibraryResolution(value: unknown): LibraryResolution {
   const r = record(value); return { kind: oneOf(r.kind, ["artifact", "confluence_page", "confluence_space", "folder"] as const), provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), title: text(r.title), canonical_id: optionalText(r.canonical_id), container_label: optionalText(r.container_label), existing_item_id: optionalText(r.existing_item_id), existing_follow_id: optionalText(r.existing_follow_id), page_count: nullable(r.page_count, v => integer(v, 0xffffffff)), git_working_tree: nullable(r.git_working_tree, bool), file_count: nullable(r.file_count, integer), diagnostics: diagnostics(r.diagnostics) };
+}
+export function parseLibraryConfluenceSpacesRequest(value: unknown): LibraryConfluenceSpacesRequest {
+  const r = record(value); const provider_id = id(r.provider_id);
+  return provider_id.length <= 128 ? { provider_id } : fail();
+}
+/** Every browsed space belongs to the requested provider and is a Confluence space. */
+export function parseLibraryConfluenceSpaces(value: unknown, request: LibraryConfluenceSpacesRequest): LibraryResolution[] {
+  return array(value, 10_000, parseLibraryResolution).map(space => space.kind === "confluence_space" && space.provider_id === request.provider_id && space.canonical_id !== null ? space : fail());
 }
 export function parseLibraryAddRequest(value: unknown): LibraryAddRequest {
   const r = record(value); const target = nullable(r.target, parseSpaceTarget);

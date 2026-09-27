@@ -1249,6 +1249,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       const add = state ? headerSpaceAction(state.row, state.label).actions.find((action) => action.kind === "add") : undefined;
       return state && add ? { label: add.label, onSelect: state.onAdd, disabled: state.adding || state.attempt?.state === "pending" } : null;
     },
+    removeFollow: async (follow, mode) => {
+      await client.libraryRemove({ mode, follow_id: follow.follow_id });
+      if (mode === "follow" && selectedLibraryItem?.follow_id === follow.follow_id) onChange({ ...value, path: null });
+      announceLibraryChanged();
+    },
   };
   // Palette commands and `Open in Library` wait until the listing can serve them.
   useEffect(() => {
@@ -1502,7 +1507,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       {isLibrary && libraryOperation.operation && !libraryReportDismissed ? <RefreshReport operation={libraryOperation.operation} verb={libraryReportVerb} error={libraryOperation.error}
         onCancel={libraryOperation.cancel} onDismiss={() => setLibraryReportDismissed(true)}
         onOpenItem={(itemId) => { const item = libraryItems?.find((candidate) => candidate.item_id === itemId); if (item) openLibraryItem(item); }}
-        onRetry={(itemIds) => startLibraryRefresh({ scope: "items", item_ids: itemIds }, itemIds)} /> : null}
+        onRetry={(itemIds) => startLibraryRefresh({ scope: "items", item_ids: itemIds }, itemIds)}
+        onRetryFollow={(followId) => startLibraryRefresh({ scope: "follow", follow_id: followId }, [])} /> : null}
       {isLibrary && !libraryOperation.operation && libraryOperation.error ? <div className="context-notice context-notice-error" role="alert"><strong>Library operation failed:</strong><span>{libraryOperation.error}</span></div> : null}
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
@@ -1526,7 +1532,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               <button type="button" onClick={library.reload}>Retry</button>
             </div> : null}
             {library.listing?.items.length === 0 ? <div className="context-tree-status is-empty">Empty</div> : null}
-            {library.listing ? <LibraryTree items={library.listing.items} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
+            {library.listing ? <LibraryTree items={library.listing.items} follows={library.listing.follows} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
           </> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}

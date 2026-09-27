@@ -1,5 +1,6 @@
 //! Durable, session-independent provider snapshots. Legacy source caches are inert.
 mod folder;
+mod follow;
 mod operations;
 mod reader;
 pub(crate) mod store;
@@ -184,11 +185,13 @@ impl LibraryService {
             authority,
         })
     }
-    async fn confluence_request(
+    /// The selected Confluence provider's recognition of `input`, or `None`
+    /// when the input belongs to forge/Jira resolution.
+    async fn confluence_resolution(
         &self,
         input: &str,
         selected: Option<&str>,
-    ) -> Result<Option<(ConfluencePage, SourceFetchRequest)>, InspectionError> {
+    ) -> Result<Option<(String, ProviderResolution)>, InspectionError> {
         let Some(provider_id) =
             confluence_provider_for_input(&self.configuration, input, selected)
         else {
@@ -222,29 +225,48 @@ impl LibraryService {
             }
             return Ok(None);
         };
-        let page = match self.sources.resolve_input(&provider_id, input).await? {
+        let resolution = self.sources.resolve_input(&provider_id, input).await?;
+        Ok(Some((provider_id, resolution)))
+    }
+    async fn confluence_request(
+        &self,
+        input: &str,
+        selected: Option<&str>,
+    ) -> Result<Option<(ConfluencePage, SourceFetchRequest)>, InspectionError> {
+        let Some((provider_id, resolution)) = self.confluence_resolution(input, selected).await?
+        else {
+            return Ok(None);
+        };
+        let page = match resolution {
             ProviderResolution::ConfluencePage(page) => page,
             ProviderResolution::ConfluenceSpace { .. } => {
                 return Err(error(
                     "source_capability_unavailable",
-                    "Confluence spaces are not available in this Library operation",
+                    "A Confluence space is added by following it",
                 ));
             }
         };
+        self.confluence_page_request(provider_id, page).map(Some)
+    }
+    fn confluence_page_request(
+        &self,
+        provider_id: String,
+        page: ConfluencePage,
+    ) -> Result<(ConfluencePage, SourceFetchRequest), InspectionError> {
         let authority = confluence_instance_authority(
             &self.configuration,
             &provider_id,
             &page,
             &page.canonical_url,
         )?;
-        Ok(Some((
+        Ok((
             page.clone(),
             SourceFetchRequest {
                 provider_id,
                 artifact_url: confluence_page_url(&authority.provider_instance, &page.page_id),
                 authority,
             },
-        )))
+        ))
     }
     pub async fn resolve(
         &self,
@@ -253,10 +275,19 @@ impl LibraryService {
         if folder::recognizes(&request.input) {
             return self.resolve_folder(&request.input).await;
         }
-        if let Some((page, fetch)) = self
-            .confluence_request(&request.input, request.provider_id.as_deref())
+        let page_request = match self
+            .confluence_resolution(&request.input, request.provider_id.as_deref())
             .await?
         {
+            Some((provider_id, ProviderResolution::ConfluenceSpace { space_key })) => {
+                return self.resolve_space(&provider_id, &space_key).await;
+            }
+            Some((provider_id, ProviderResolution::ConfluencePage(page))) => {
+                Some(self.confluence_page_request(provider_id, page)?)
+            }
+            None => None,
+        };
+        if let Some((page, fetch)) = page_request {
             let fetched = self.sources.fetch_assets(fetch.clone(), false).await?;
             let asset = fetched
                 .assets
@@ -301,11 +332,20 @@ impl LibraryService {
             let source = asset.source;
             let store = self.open()?;
             let _lock = store.shared()?;
-            let existing = store
-                .index()?
+            let index = store.index()?;
+            let existing = index
                 .items
-                .into_iter()
+                .iter()
                 .find(|entry| entry.summary.item_id == item_id(&source));
+            let existing_follow_id = index
+                .follows
+                .iter()
+                .find(|follow| {
+                    follow.provider_id == source.provider_id
+                        && follow.provider_instance == source.provider_instance
+                        && follow.space_key == page.space_key
+                })
+                .map(|follow| follow.follow_id.clone());
             return Ok(LibraryResolution {
                 kind: LibraryInputKind::ConfluencePage,
                 provider_id: Some(source.provider_id),
@@ -313,8 +353,8 @@ impl LibraryService {
                 title: asset.title,
                 canonical_id: Some(page.page_id),
                 container_label: asset.container.map(|container| container.label),
-                existing_item_id: existing.map(|entry| entry.summary.item_id),
-                existing_follow_id: None,
+                existing_item_id: existing.map(|entry| entry.summary.item_id.clone()),
+                existing_follow_id,
                 page_count: None,
                 git_working_tree: None,
                 file_count: None,
@@ -364,10 +404,13 @@ impl LibraryService {
         &self,
         request: LibraryAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.follow_space || request.download_attachments {
+        if request.follow_space {
+            return self.start_follow_add(request).await;
+        }
+        if request.download_attachments {
             return Err(error(
                 "source_capability_unavailable",
-                "This provider snapshot operation does not support follows or downloads",
+                "This provider snapshot operation does not support downloads",
             ));
         }
         if folder::recognizes(&request.input) {
@@ -569,15 +612,25 @@ impl LibraryService {
             .into_iter()
             .find(|e| e.summary.item_id == id))
     }
+    /// Items refreshed one by one, and follows refreshed by D20 enumeration.
+    /// `All` refreshes each follow once and every item outside a follow.
     fn select(
         &self,
         store: &Store,
         request: LibraryRefreshRequest,
-    ) -> Result<Vec<LibraryIndexEntry>, InspectionError> {
+    ) -> Result<(Vec<LibraryIndexEntry>, Vec<LibraryFollowSummary>), InspectionError> {
         let _lock = store.shared()?;
         let index = store.index()?;
-        Ok(match request {
-            LibraryRefreshRequest::All => index.items,
+        Ok((match request {
+            LibraryRefreshRequest::All => {
+                let followed = |entry: &LibraryIndexEntry| {
+                    entry.summary.follow_id.as_ref().is_some_and(|id| {
+                        index.follows.iter().any(|follow| &follow.follow_id == id)
+                    })
+                };
+                let items = index.items.iter().filter(|e| !followed(e)).cloned().collect();
+                return Ok((items, index.follows));
+            }
             LibraryRefreshRequest::Items { item_ids } => {
                 let mut selected = vec![];
                 for id in item_ids {
@@ -617,13 +670,17 @@ impl LibraryService {
                             .is_some_and(|c| c.container_id == container_id)
                 })
                 .collect(),
-            LibraryRefreshRequest::Follow { .. } => {
-                return Err(error(
-                    "source_capability_unavailable",
-                    "Follow refresh is not available for this provider",
-                ));
+            LibraryRefreshRequest::Follow { follow_id } => {
+                let follow = index
+                    .follows
+                    .into_iter()
+                    .find(|follow| follow.follow_id == follow_id)
+                    .ok_or_else(|| {
+                        error("library_item_not_found", "Followed space does not exist")
+                    })?;
+                return Ok((vec![], vec![follow]));
             }
-        })
+        }, vec![]))
     }
     pub async fn start_refresh(
         &self,
@@ -631,10 +688,12 @@ impl LibraryService {
     ) -> Result<LibraryOperation, InspectionError> {
         let handle = operations::runtime()?;
         let store = self.open()?;
-        let entries = self.select(&store, request)?;
+        let (entries, follows) = self.select(&store, request)?;
         let leases: Vec<Lease> = entries
             .iter()
-            .map(|e| store.lease(&e.summary.item_id))
+            .map(|e| e.summary.item_id.as_str())
+            .chain(follows.iter().map(|f| f.follow_id.as_str()))
+            .map(|id| store.lease(id))
             .collect::<Result<_, _>>()?;
         let (record, operation_lease) = operations::create(
             &store,
@@ -651,6 +710,12 @@ impl LibraryService {
                     break;
                 }
                 service.refresh_one(&worker_store, &id, entry, None).await?;
+            }
+            for follow in follows {
+                if operations::cancelled(&worker_store, &id)? {
+                    break;
+                }
+                service.refresh_follow(&worker_store, &id, follow, false, None).await?;
             }
             Ok(())
         });
@@ -833,11 +898,22 @@ impl LibraryService {
         &self,
         store: &Arc<Store>,
         operation: &str,
-        mut asset: SourceAsset,
+        asset: SourceAsset,
         old: Option<LibraryIndexEntry>,
         confirmed: Option<&[LibraryConflictFile]>,
         target: Option<&SpaceTarget>,
     ) -> Result<(), InspectionError> {
+        self.save_asset_with(store, operation, asset, old, SaveOptions { confirmed, target, ..SaveOptions::default() })
+    }
+    fn save_asset_with(
+        &self,
+        store: &Arc<Store>,
+        operation: &str,
+        mut asset: SourceAsset,
+        old: Option<LibraryIndexEntry>,
+        options: SaveOptions<'_>,
+    ) -> Result<(), InspectionError> {
+        let SaveOptions { confirmed, target, follow_id, reason } = options;
         if let Some(old) = &old {
             asset.original_url = old.summary.original_url.clone();
         }
@@ -907,6 +983,9 @@ impl LibraryService {
         };
         let mut entry = asset_entry(&asset, old.as_ref());
         entry.canonical_url = Some(canonical_url);
+        if let Some(follow_id) = follow_id {
+            entry.summary.follow_id = Some(follow_id.to_owned());
+        }
         if is_confluence {
             if let Some(parent_id) = field_string(&asset, "parent_id") {
                 let _lock = store.shared()?;
@@ -996,7 +1075,7 @@ impl LibraryService {
             } else {
                 LibraryReportOutcome::Updated
             },
-            None,
+            reason,
         )
     }
     fn record_conflict(
@@ -1029,16 +1108,24 @@ impl LibraryService {
             LibraryRemoveRequest::Item {
                 item_id,
                 expected_revision,
-            } => self.open()?.remove(&item_id, &expected_revision)?,
-            _ => {
-                return Err(error(
-                    "source_capability_unavailable",
-                    "Follow removal is not available for this provider",
-                ));
+            } => self.remove_item(&item_id, &expected_revision)?,
+            LibraryRemoveRequest::StopFollowing { follow_id } => {
+                self.remove_follow(&follow_id, false)?
             }
+            LibraryRemoveRequest::Follow { follow_id } => self.remove_follow(&follow_id, true)?,
         }
         self.listing(None).await
     }
+}
+/// Save-path choices beyond the asset itself.
+#[derive(Default)]
+struct SaveOptions<'a> {
+    confirmed: Option<&'a [LibraryConflictFile]>,
+    target: Option<&'a SpaceTarget>,
+    /// The follow a page is saved for; items otherwise keep their own.
+    follow_id: Option<&'a str>,
+    /// Report reason for this item's row, e.g. why a followed page changed.
+    reason: Option<String>,
 }
 fn item_id(source: &SourceRef) -> String {
     let mut hash = Sha256::new();

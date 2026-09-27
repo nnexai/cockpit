@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: architecture reference. The Herdr client, workspace setup, Context browsing and media, comments/paste, Library provider imports and copied folders, graphical Review snapshots, and inline browser are implemented. Verified delivery boundaries are recorded in `DECISIONS.md`.
+Status: architecture reference. The Herdr client, workspace setup, Context browsing and media, comments/paste, Library provider imports, copied folders, and followed Confluence spaces, graphical Review snapshots, and inline browser are implemented. Verified delivery boundaries are recorded in `DECISIONS.md`.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 
@@ -292,6 +292,10 @@ Local folders are copied into the Library from a typed absolute or `~` path; the
 
 Folder items live under `folders/<label-slug>-<8 hex>` and retain each file at its relative path. Adding a multi-file item to a Space mirrors that relative layout under the companion's `sources/` tree, with one manifest entry and content hash per file. Explicit Space update copies new or changed Library files, restores missing files, and removes unedited files no longer in the Library. Edited files are skipped until their listed path hashes are explicitly confirmed; edited Space-only files are preserved and reported. Removal applies the same per-file compare-and-swap protection. Single-file provider paths remain unchanged.
 
+A followed Confluence space includes every page the profile can read across its top-level trees, not only the homepage tree; Cloud folders appear as ancestor-only nodes in the hierarchy. Its durable follow record, page count, partial state, and excluded page ids live in the Library index. `Refresh space` pages the space once and fetches a page only when new or when its version, title, or ancestor chain changed. Ancestor metadata drives hierarchy and parent links; a moved page keeps its stable Library directory path. Pages absent from a complete enumeration are individually confirmed before being marked `removed at source` (including `moved to <KEY>`); page-limit partial results, enumeration failures, and cancellation never mark removals. Removing one followed page excludes it from later refreshes; following the whole space again clears exclusions. `Stop following` keeps existing pages as ordinary Library items, while `Remove space` removes the follow and its pages.
+
+A Space holding follows shows one aggregate row per follow, with new, changed, edited, and removed-at-source page counts rather than one row per page. Its explicit `Update` can select follows and copies only the selected follow's new or changed pages for that Space; other follows, standalone items, and other Spaces are untouched. Edited Space copies are reported and skipped unless replacement is explicitly confirmed against their current hashes. The Space manifest tracks known pages so removing a page copy does not cause it to be re-added by a later update.
+
 The former companion repository-snapshot action and its HTTP/Tauri/client transports are removed. Existing `repos/` companion entries remain readable as `Not linked`; Cockpit does not migrate them or inspect the legacy `<state_root>/sources` cache.
 
 ### 7.4 Library Markdown format
@@ -302,7 +306,7 @@ Provider snapshots in the Library are Markdown with a versioned frontmatter enve
 
 ### 7.5 Available provider adapters
 
-The Library currently supports GitHub issues and pull requests, GitLab, Gitea through Tea, Jira issues, and Confluence pages. Confluence accepts Cloud page IDs/links and Data Center display links from a configured `confluence` CLI profile. A page snapshot includes page body and bounded metadata (space, ancestors, version, editor display name, labels, and attachment metadata); attachment bytes are not downloaded. Confluence URL authority and canonical page identity are checked against the configured instance; a checkout's Git origin does not select or constrain it. Provider credentials remain with the provider CLI or external credential setup; Cockpit does not store tokens or secrets.
+The Library currently supports GitHub issues and pull requests, GitLab, Gitea through Tea, Jira issues, and Confluence pages and followed spaces. Confluence accepts Cloud page IDs/links and Data Center display links from a configured `confluence` CLI profile. A page snapshot includes page body and bounded metadata (space, ancestors, version, editor display name, labels, and attachment metadata); attachment bytes are not downloaded. Confluence URL authority and canonical page identity are checked against the configured instance; a checkout's Git origin does not select or constrain it. Provider credentials remain with the provider CLI or external credential setup; Cockpit does not store tokens or secrets.
 
 Self-hosted provider behavior is fixture/contract verified, not live validated. `glab`'s host selector cannot express a port, and Jira wiki-markup descriptions/comments are shown unconverted. Confluence Cloud and Data Center protocol paths are covered by synthetic CLI fixtures. The existing read-only Confluence profile exposed no page or attachment in the inspected SD space, so there is no live page/attachment validation. Provider executables, logins, and supported operations vary; unsupported capabilities are reported rather than silently substituted.
 

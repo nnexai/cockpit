@@ -4,7 +4,7 @@ import type { LibraryOperation, LibraryResolution, ProjectProvider } from "../..
 import { createPortal } from "react-dom";
 import { UiIcon } from "../UiIcon";
 import { trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
-import { JIRA_KEY, confluencePageInput, confluenceSite, errorText, jiraProviders, libraryInputUrl, lookupFailure, providerFamily, resolutionNote, type LibrarySpace, type LookupFailure } from "./libraryState";
+import { JIRA_KEY, confluencePageInput, confluenceProviders, confluenceSite, confluenceSpaceInput, errorText, jiraProviders, libraryInputUrl, lookupFailure, pageCount, providerFamily, resolutionNote, resolutionSpaceName, type LibrarySpace, type LookupFailure } from "./libraryState";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { useLibraryOperation, useSpaceContextListing } from "./useLibraryOperation";
 import "../projects/setup.css";
@@ -27,13 +27,14 @@ type Tone = "running" | "done" | "failed";
  * still offers them; `complete` is false when part of the source wasn't added.
  * A Space-only retry starts from saved items.
  */
-function libraryPhase(operation: LibraryOperation): { text: string; tone: Tone; saved: boolean; complete: boolean } {
+function libraryPhase(operation: LibraryOperation, unit: "items" | "pages"): { text: string; tone: Tone; saved: boolean; complete: boolean } {
   if (operation.kind === "space_add") return { text: "✓ Saved to Library", tone: "done", saved: true, complete: true };
   const phase = operation.phases.find((candidate) => candidate.phase === "library");
   const partialReason = operation.report?.rows.find((row) => row.outcome === "partial")?.reason;
   const unchanged = operation.report?.rows.find((row) => row.outcome === "unchanged");
   const count = operation.item_ids.length;
-  const summary = count > 1 ? ` · ${count} items` : "";
+  // A followed space counts its pages (`✓ Saved to Library · 38 pages`).
+  const summary = unit === "pages" ? ` · ${pageCount(count)}` : count > 1 ? ` · ${count} items` : "";
   switch (phase?.state ?? "pending") {
     case "pending":
     case "running":
@@ -91,6 +92,12 @@ function spacePhase(operation: LibraryOperation, space: string): { text: string;
   }
 }
 
+/** What a Space-only copy asked for: saved items, followed spaces, or both. */
+type SpaceSelection = { item_ids: string[]; follow_ids: string[] };
+
+/** A followed space's source, so a Space retry can look up the follow the add created. */
+type FollowSource = { input: string; provider_id: string | null };
+
 /**
  * The dialog's accepted request outlives the dialog (design §4.7: closing does
  * not cancel). Reopening shows a request still starting, a running add, an
@@ -100,10 +107,12 @@ function spacePhase(operation: LibraryOperation, space: string): { text: string;
 type AcceptedAdd = {
   begin: () => Promise<LibraryOperation>;
   /**
-   * The saved items a Space-only copy asked for (no Library step), or null for
-   * an add. A retry resends these: an interrupted operation may record fewer.
+   * What a Space-only copy asked for (no Library step), or null for an add. A
+   * retry resends these: an interrupted operation may record fewer.
    */
-  spaceItemIds: string[] | null;
+  spaceSelection: SpaceSelection | null;
+  /** Set when the request follows a space; its operation lists the space's pages, not the follow. */
+  followSource: FollowSource | null;
   space: LibrarySpace | null;
   /** Settles after `operation` or `error` is recorded. */
   pending: Promise<LibraryOperation>;
@@ -113,11 +122,69 @@ type AcceptedAdd = {
 };
 let accepted: AcceptedAdd | null = null;
 
+type SpaceList =
+  | { status: "loading" }
+  | { status: "ready"; spaces: LibraryResolution[] }
+  | { status: "error"; failure: LookupFailure };
+
+/**
+ * One configured Confluence provider's spaces in `Browse Confluence spaces`
+ * (design UQ5a): a read-only list of what its profile can read. Choosing a
+ * space fills Add with it; nothing is saved until the dialog's primary action.
+ * A sign-in or install failure stays with its provider and retries on its own.
+ */
+function ConfluenceSpaceList({ client, provider, providers, onPick }: {
+  client: CockpitClient;
+  provider: ProjectProvider;
+  providers: readonly ProjectProvider[];
+  onPick: (provider: ProjectProvider, space: LibraryResolution) => void;
+}) {
+  const [list, setList] = useState<SpaceList>({ status: "loading" });
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let current = true;
+    setList({ status: "loading" });
+    client.libraryConfluenceSpaces({ provider_id: provider.id }).then((spaces) => {
+      if (current) setList({ status: "ready", spaces });
+    }, (cause: unknown) => {
+      if (current) setList({ status: "error", failure: lookupFailure(cause, provider.base_url, providers, provider) });
+    });
+    return () => { current = false; };
+    // `providers` only improves failure wording.
+  }, [client, provider, retry]);
+  const site = `Confluence · ${confluenceSite(provider.base_url)}`;
+  return <section className="library-browse-provider" aria-label={site}>
+    <h3>{site}</h3>
+    {list.status === "loading" ? <p className="task-setup-note" role="status">Loading spaces…</p> : null}
+    {list.status === "error" ? <div className="library-refusal" role="alert">
+      <strong>{list.failure.title}</strong>
+      <span>{list.failure.detail}</span>
+      {list.failure.retry ? <button type="button" className="task-setup-link" onClick={() => setRetry((value) => value + 1)}>Retry</button> : null}
+    </div> : null}
+    {list.status === "ready" && list.spaces.length === 0 ? <p className="task-setup-note">No spaces this profile can read.</p> : null}
+    {list.status === "ready" && list.spaces.length > 0 ? <ul className="library-browse-list">
+      {list.spaces.map((space) => {
+        const name = resolutionSpaceName(space);
+        // An already followed space can still be chosen, to add it to the target Space.
+        const verb = space.existing_follow_id ? "Select" : "Follow";
+        return <li key={space.canonical_id ?? name}>
+          <span className="library-browse-name" title={name}>{name}</span>
+          {space.page_count !== null ? <span className="library-browse-detail">{pageCount(space.page_count)}</span> : null}
+          {space.existing_follow_id ? <span className="library-state is-idle"><span aria-hidden="true">◉</span> Following</span> : null}
+          <button type="button" aria-label={`${verb} ${name}`} onClick={() => onPick(provider, space)}>{verb}</button>
+        </li>;
+      })}
+    </ul> : null}
+  </section>;
+}
+
 /**
  * Add context (design §4.5): one field for a forge issue, MR or PR link, a
- * Jira key, a Confluence page link or id, or a local folder path. It always
- * saves to the Library first; with a live target Space the destination can
- * also copy the saved item there.
+ * Jira key, a Confluence page link or id, a Confluence space link or key, or a
+ * local folder path, plus `Browse Confluence spaces`. A page can be added alone
+ * or its whole space followed. It always saves to the Library first; with a
+ * live target Space the destination can also copy the saved item or followed
+ * space there.
  */
 export function AddContextDialog({ client, onClose, onOpenItem, space = null, defaultDestination = "library", openInSpace = null }: {
   client: CockpitClient;
@@ -134,17 +201,22 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const fieldId = useId();
   const failureId = useId();
   const destinationId = useId();
+  const followChoiceId = useId();
+  const browseId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const closeActionRef = useRef<HTMLButtonElement>(null);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
+  const submitRef = useRef<HTMLButtonElement>(null);
   const restoredRef = useRef(accepted);
   const lastBeginRef = useRef<(() => Promise<LibraryOperation>) | null>(restoredRef.current?.begin ?? null);
   const [operationSpace, setOperationSpace] = useState<LibrarySpace | null>(restoredRef.current?.space ?? null);
-  const [spaceItemIds, setSpaceItemIds] = useState<string[] | null>(restoredRef.current?.spaceItemIds ?? null);
+  const [spaceSelection, setSpaceSelection] = useState<SpaceSelection | null>(restoredRef.current?.spaceSelection ?? null);
+  const [followSource, setFollowSource] = useState<FollowSource | null>(restoredRef.current?.followSource ?? null);
   const [restoredError, setRestoredError] = useState<string | null>(restoredRef.current && !restoredRef.current.operation ? restoredRef.current.error : null);
   // Closed before the request was accepted: follow it until it settles.
   const [awaitingStart, setAwaitingStart] = useState(Boolean(restoredRef.current && !restoredRef.current.operation && !restoredRef.current.error));
   const [providers, setProviders] = useState<ProjectProvider[]>([]);
+  const [spacePageLimit, setSpacePageLimit] = useState<number | null>(null);
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [providersError, setProvidersError] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -153,6 +225,12 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [chosenProviderId, setChosenProviderId] = useState<string | null>(null);
   const [linked, setLinked] = useState(false);
   const [refreshExisting, setRefreshExisting] = useState(false);
+  // A Confluence page: `Only this page` (false, the default) or `Follow the whole space`.
+  const [followChoice, setFollowChoice] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  // A space chosen from the browser is already resolved; the lookup reuses it instead of asking again.
+  const [picked, setPicked] = useState<{ input: string; providerId: string; resolution: LibraryResolution } | null>(null);
+  const [pickedFocus, setPickedFocus] = useState(0);
   const [lookup, setLookup] = useState<Lookup>({ status: "idle" });
   const [lookupRetry, setLookupRetry] = useState(0);
   const spaceChoice = space?.live ? space : null;
@@ -181,7 +259,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   useEffect(() => {
     let current = true;
     client.projectConfiguration().then((configuration) => {
-      if (current) { setProviders(configuration.providers); setProvidersLoaded(true); }
+      if (current) { setProviders(configuration.providers); setSpacePageLimit(configuration.limits?.library_space_pages ?? null); setProvidersLoaded(true); }
     }, (cause: unknown) => {
       if (current) { setProvidersError(errorText(cause, "Provider configuration could not be read.")); setProvidersLoaded(true); }
     });
@@ -189,25 +267,29 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   }, [client]);
   const trimmed = input.trim();
   const jira = jiraProviders(providers);
+  const confluence = confluenceProviders(providers);
   const jiraKey = JIRA_KEY.test(trimmed);
   const confluencePage = jiraKey ? null : confluencePageInput(trimmed, providers);
-  // A Jira key or Confluence page names its provider here; every other input by its own link.
-  const choices = jiraKey ? jira : confluencePage?.providers ?? [];
+  const confluenceSpace = jiraKey || confluencePage ? null : confluenceSpaceInput(trimmed, providers);
+  // A Jira key or Confluence page or space names its provider here; every other input by its own link.
+  const choices = jiraKey ? jira : confluencePage?.providers ?? confluenceSpace?.providers ?? [];
   const chosen = choices.find((provider) => provider.id === chosenProviderId) ?? choices[0];
-  const needsProvider = jiraKey || confluencePage !== null;
+  const needsProvider = jiraKey || confluencePage !== null || confluenceSpace !== null;
   const requestUrl = libraryInputUrl(trimmed, jiraKey ? chosen : undefined);
   const requestProviderId = chosen?.id ?? null;
   const lookupKey = `${requestUrl}\u0000${requestProviderId ?? ""}\u0000${lookupRetry}\u0000${needsProvider && !providersLoaded}`;
   useEffect(() => {
     if (!trimmed) { setLookup({ status: "idle" }); return; }
     if (needsProvider && !providersLoaded) { setLookup({ status: "pending" }); return; }
+    if (picked && picked.input === requestUrl && picked.providerId === requestProviderId && lookupRetry === 0) { setLookup({ status: "ok", resolution: picked.resolution }); return; }
     if (jiraKey && jira.length === 0) {
       setLookup({ status: "error", failure: { title: "✕ No Jira provider configured", detail: "Add a Jira instance to the Cockpit configuration file, or paste the issue's link.", retry: false } });
       return;
     }
-    if (confluencePage && confluencePage.providers.length === 0) {
-      setLookup({ status: "error", failure: confluencePage.host
-        ? { title: `✕ No provider configured for ${confluencePage.host}`, detail: "Add this Confluence instance to the Cockpit configuration file, then retry.", retry: false }
+    const unconfigured = confluencePage ?? confluenceSpace;
+    if (unconfigured && unconfigured.providers.length === 0) {
+      setLookup({ status: "error", failure: unconfigured.host
+        ? { title: `✕ No provider configured for ${unconfigured.host}`, detail: "Add this Confluence instance to the Cockpit configuration file, then retry.", retry: false }
         : { title: "✕ No Confluence provider configured", detail: "Add a Confluence instance to the Cockpit configuration file, or paste the page's link.", retry: false } });
       return;
     }
@@ -224,24 +306,37 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     // `providers` only improves failure wording and is loaded before a provider-named lookup starts.
   }, [client, lookupKey]);
   const resolution = lookup.status === "ok" ? lookup.resolution : null;
-  const existing = resolution?.existing_item_id ?? null;
+  const spaceResolution = resolution?.kind === "confluence_space";
+  // A page can follow its whole space unless that space is already followed.
+  const followOffered = resolution?.kind === "confluence_page" && !resolution.existing_follow_id;
+  const follow = spaceResolution || (followOffered && followChoice);
+  const spaceName = resolution && (spaceResolution || followOffered) ? resolutionSpaceName(resolution) : null;
+  const existingFollow = follow ? resolution?.existing_follow_id ?? null : null;
+  const existingItem = follow ? null : resolution?.existing_item_id ?? null;
+  const existing = existingItem ?? existingFollow;
   const folder = resolution?.kind === "folder";
   const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
   const forge = resolution?.kind === "artifact" && family !== null && family.key !== "jira" && family.key !== "confluence";
   const destinationSpace = destination === "space" ? spaceChoice : null;
   const companion = spaceListing.listing?.companion ?? null;
-  // An item already in the target Space: the header's Space state decides whether adding applies.
-  const existingInSpace = existing && destinationSpace && spaceListing.listing ? headerSpaceAction(spaceListing.listing.rows.find((row) => row.item_id === existing), destinationSpace.label) : null;
+  // An item or followed space already in the target Space: the header's Space state decides whether adding applies.
+  const existingRow = spaceListing.listing?.rows.find((row) => existingFollow ? row.follow?.follow_id === existingFollow : row.item_id === existingItem);
+  const existingInSpace = existing && destinationSpace && spaceListing.listing ? headerSpaceAction(existingRow, destinationSpace.label) : null;
   const spaceAddable = !existingInSpace || existingInSpace.actions.some((action) => action.kind === "add");
+  // A follow over the page limit saves only part of the space (design §4.6 `◐ Partial`).
+  const pageTotal = resolution?.page_count ?? null;
+  const overLimit = follow && !existingFollow && spacePageLimit !== null && pageTotal !== null && pageTotal > spacePageLimit;
   const operation = add.operation;
   const shownSpace = operationSpace?.label ?? "the Space";
-  const progress = operation ? libraryPhase(operation) : null;
+  const unit = followSource ? "pages" : "items";
+  const progress = operation ? libraryPhase(operation, unit) : null;
   const spaceStep = operation && progress?.saved ? spacePhase(operation, shownSpace) : null;
   const finished = operation?.finished ?? false;
   const startError = add.error ?? restoredError;
   const canAdd = resolution !== null && !add.starting && (!existing || refreshExisting || (destinationSpace !== null && spaceAddable));
   const primaryLabel = existing
-    ? refreshExisting ? (destinationSpace ? `Refresh and add to ${destinationSpace.label}` : "Refresh from source") : destinationSpace ? `Add to ${destinationSpace.label}` : "Already in Library"
+    ? refreshExisting ? (destinationSpace ? `Refresh and add to ${destinationSpace.label}` : "Refresh from source") : destinationSpace ? `Add to ${destinationSpace.label}` : existingFollow ? "Already following" : "Already in Library"
+    : follow ? (destinationSpace ? `Follow and add to ${destinationSpace.label}` : "Follow space")
     : destinationSpace ? `Add to Library and ${destinationSpace.label}` : "Add to Library";
   const operationRef = useRef(operation);
   operationRef.current = operation;
@@ -249,15 +344,19 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   useEffect(() => () => {
     const latest = operationRef.current;
     if (!accepted?.seen || !latest?.finished || accepted.operation?.operation_id !== latest.operation_id) return;
-    const phase = libraryPhase(latest);
+    const phase = libraryPhase(latest, accepted.followSource ? "pages" : "items");
     if (phase.saved && phase.complete && spacePhase(latest, "")?.tone !== "failed") accepted = null;
   }, []);
   useEffect(() => {
     if (finished && operation && accepted?.operation?.operation_id === operation.operation_id) accepted.seen = true;
   }, [finished, operation]);
-  const begin = (request: () => Promise<LibraryOperation>, requestSpace: LibrarySpace | null, requestItemIds: string[] | null) => {
+  // A space chosen in the browser moves focus to the action it enables, or back to the field.
+  useEffect(() => {
+    if (pickedFocus > 0) (submitRef.current && !submitRef.current.disabled ? submitRef.current : inputRef.current)?.focus();
+  }, [pickedFocus]);
+  const begin = (request: () => Promise<LibraryOperation>, requestSpace: LibrarySpace | null, requestSelection: SpaceSelection | null, requestFollow: FollowSource | null) => {
     const pending = request();
-    const entry: AcceptedAdd = { begin: request, spaceItemIds: requestItemIds, space: requestSpace, operation: null, error: null, seen: false, pending };
+    const entry: AcceptedAdd = { begin: request, spaceSelection: requestSelection, followSource: requestFollow, space: requestSpace, operation: null, error: null, seen: false, pending };
     // Record the result on this request only; a newer request owns `accepted`.
     entry.pending = pending.then((next) => { entry.operation = next; return next; }, (cause: unknown) => {
       entry.error = errorText(cause, "The Library operation could not start.");
@@ -266,7 +365,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     accepted = entry;
     lastBeginRef.current = request;
     setOperationSpace(requestSpace);
-    setSpaceItemIds(requestItemIds);
+    setSpaceSelection(requestSelection);
+    setFollowSource(requestFollow);
     setRestoredError(null);
     setAwaitingStart(false);
     void add.start(() => entry.pending);
@@ -275,32 +375,45 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     if (!canAdd || !resolution) return;
     const target = destinationSpace?.target ?? null;
     if (existing && target && !refreshExisting) {
-      // Already saved: copy the Library item without asking the provider again.
-      const itemIds = [existing];
-      begin(() => client.librarySpaceAdd({ target, item_ids: itemIds, follow_ids: [] }), destinationSpace, itemIds);
+      // Already saved: copy the Library item or followed space without asking the provider again.
+      const selection: SpaceSelection = { item_ids: existingItem ? [existingItem] : [], follow_ids: existingFollow ? [existingFollow] : [] };
+      begin(() => client.librarySpaceAdd({ target, ...selection }), destinationSpace, selection, null);
       return;
     }
+    const providerId = requestProviderId ?? resolution.provider_id;
     begin(() => client.libraryAdd({
       input: requestUrl,
-      provider_id: requestProviderId ?? resolution.provider_id,
+      provider_id: providerId,
       hydrate_references: forge && linked,
-      follow_space: false,
+      follow_space: follow,
       download_attachments: false,
       refresh_existing: Boolean(existing) && refreshExisting,
       label: folder ? label?.trim() || resolution.title : null,
       target,
-    }), destinationSpace, null);
+    }), destinationSpace, null, follow ? { input: requestUrl, provider_id: providerId } : null);
   };
   // The same source again, whether the request never started or stopped part way.
-  const retryAll = () => { if (lastBeginRef.current) begin(lastBeginRef.current, operationSpace, spaceItemIds); };
+  const retryAll = () => { if (lastBeginRef.current) begin(lastBeginRef.current, operationSpace, spaceSelection, followSource); };
   // Copies the saved items again; items already in the Space are left unchanged. A
   // Space-only request resends what it asked for, since an interrupted operation
   // may have recorded only some of them; an add knows its items only from the operation.
+  // A follow's operation lists its pages, so a follow is copied again by its follow id.
   const retrySpace = () => {
     const target = operation?.target ?? operationSpace?.target;
     if (!target || !operation) return;
-    const itemIds = [...new Set([...(spaceItemIds ?? []), ...operation.item_ids])];
-    begin(() => client.librarySpaceAdd({ target, item_ids: itemIds, follow_ids: [] }), operationSpace, itemIds);
+    if (followSource) {
+      const source = followSource;
+      begin(async () => {
+        const followed = await client.libraryResolve(source);
+        if (!followed.existing_follow_id) throw new Error("The followed space isn't in the Library, so it can't be added to the Space.");
+        return client.librarySpaceAdd({ target, item_ids: [], follow_ids: [followed.existing_follow_id] });
+      }, operationSpace, { item_ids: [], follow_ids: [] }, source);
+      return;
+    }
+    const followIds = spaceSelection?.follow_ids ?? [];
+    const itemIds = followIds.length > 0 ? spaceSelection?.item_ids ?? [] : [...new Set([...(spaceSelection?.item_ids ?? []), ...operation.item_ids])];
+    const selection: SpaceSelection = { item_ids: itemIds, follow_ids: followIds };
+    begin(() => client.librarySpaceAdd({ target, ...selection }), operationSpace, selection, null);
   };
   const addAnother = () => {
     accepted = null;
@@ -309,12 +422,26 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setAwaitingStart(false);
     setInput("");
     setLabel(null);
+    setPicked(null);
+    setFollowChoice(false);
     setLookup({ status: "idle" });
     setRefreshExisting(false);
     window.requestAnimationFrame(() => inputRef.current?.focus());
   };
+  const pickSpace = (provider: ProjectProvider, chosenSpace: LibraryResolution) => {
+    const key = chosenSpace.canonical_id ?? resolutionSpaceName(chosenSpace).split(" · ")[0]!;
+    setInput(key);
+    setChosenProviderId(provider.id);
+    setPicked({ input: key, providerId: provider.id, resolution: chosenSpace });
+    setLookupRetry(0);
+    setLookup({ status: "ok", resolution: chosenSpace });
+    setLabel(null);
+    setRefreshExisting(false);
+    setBrowseOpen(false);
+    setPickedFocus((value) => value + 1);
+  };
   const starting = add.starting || awaitingStart;
-  const openedItemId = operation?.item_ids[0] ?? spaceItemIds?.[0] ?? existing;
+  const openedItemId = operation?.item_ids[0] ?? spaceSelection?.item_ids[0] ?? existingItem;
   const spaceFailed = spaceStep?.tone === "failed";
   const written = operation?.space?.written ?? [];
   // A partial copy still opens what it wrote.
@@ -342,7 +469,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
         {operation || starting ? <div className="library-progress" aria-live="polite">
           <ol className="library-progress-steps">
             <li className={`library-progress-step is-${progress?.tone ?? "running"}`}>
-              <span>{progress?.text ?? (spaceItemIds ? `Adding to ${shownSpace}…` : "Saving to Library…")}</span>
+              <span>{progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? "Following the space…" : "Saving to Library…")}</span>
               {operation && !finished && !operation.cancel_requested && operation.kind !== "space_add" && !progress?.saved ? <button type="button" onClick={add.cancel}>Cancel</button> : null}
             </li>
             {spaceStep ? <li className={`library-progress-step is-${spaceStep.tone}`}>
@@ -363,14 +490,15 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           <div className="task-setup-row">
             <label htmlFor={fieldId}>Source</label>
             <div>
-              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); } }}
-                placeholder="Issue, MR or PR link, Jira key, Confluence page, or folder path" autoComplete="off" spellCheck={false}
+              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setPicked(null); } }}
+                placeholder="Issue, MR or PR link, Jira key, Confluence page or space, or folder path" autoComplete="off" spellCheck={false}
                 aria-invalid={failure ? "true" : undefined} aria-describedby={failure ? failureId : undefined} />
-              {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed.startsWith("~") ? "Checking the folder…"
+              {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed === "~" || trimmed.startsWith("~/") ? "Checking the folder…"
                 : confluencePage ? `Looking up Confluence page ${confluencePage.pageId ?? `“${confluencePage.title}”`}${confluencePage.spaceKey ? ` in ${confluencePage.spaceKey}` : ""}${chosen ? ` on ${confluenceSite(chosen.base_url)}` : ""}…`
+                : confluenceSpace ? `Looking up Confluence space ${confluenceSpace.spaceKey}${chosen ? ` on ${confluenceSite(chosen.base_url)}` : ""}…`
                 : "Looking up the link…"}</p> : null}
-              {resolution ? <p className="task-setup-note is-valid">✓ {existing ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
-              {resolution?.kind === "confluence_page" ? <p className="task-setup-note">{[resolution.container_label, confluenceSite(resolution.provider_instance)].filter(Boolean).join(" · ")}</p> : null}
+              {resolution ? <p className="task-setup-note is-valid">✓ {existingFollow ? `Already following · ${spaceName}` : existingItem ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
+              {resolution && (resolution.kind === "confluence_page" || resolution.kind === "confluence_space") ? <p className="task-setup-note">{[resolution.kind === "confluence_page" ? resolution.container_label : null, confluenceSite(resolution.provider_instance)].filter(Boolean).join(" · ")}</p> : null}
               {resolution?.diagnostics.map((diagnostic, index) => <p className="task-setup-note" key={`${diagnostic.code}:${index}`}>{diagnostic.message}</p>)}
               {existingInSpace?.text ? <p className="task-setup-note">{existingInSpace.text}</p> : null}
               {failure ? <div id={failureId} className="library-refusal" role="alert">
@@ -379,6 +507,14 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
                 {failure.retry ? <button type="button" className="task-setup-link" onClick={() => setLookupRetry((value) => value + 1)}>Retry lookup</button> : null}
               </div> : null}
               {providersError ? <p className="task-setup-note">{providersError}</p> : null}
+              {providersLoaded && confluence.length > 0 ? <>
+                <button type="button" className="task-setup-link library-browse-toggle" aria-expanded={browseOpen} aria-controls={browseOpen ? browseId : undefined} onClick={() => setBrowseOpen((open) => !open)}>
+                  <UiIcon name={browseOpen ? "down" : "right"} /> Browse Confluence spaces
+                </button>
+                {browseOpen ? <div id={browseId} className="library-browse">
+                  {confluence.map((provider) => <ConfluenceSpaceList key={provider.id} client={client} provider={provider} providers={providers} onPick={pickSpace} />)}
+                </div> : null}
+              </> : null}
             </div>
           </div>
           {folder ? <div className="task-setup-row">
@@ -394,6 +530,18 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               {choices.map((provider) => <option key={provider.id} value={provider.id}>{provider.id} · {provider.base_url}</option>)}
             </select></div>
           </div> : null}
+          {followOffered || spaceResolution ? <div className="task-setup-row">
+            <span id={followChoiceId} className="library-row-label">Add</span>
+            <div>
+              {followOffered ? <div role="radiogroup" aria-labelledby={followChoiceId} className="library-destination-choices">
+                <label className="task-setup-check"><input type="radio" name={followChoiceId} checked={!followChoice} onChange={() => setFollowChoice(false)} /> Only this page</label>
+                <label className="task-setup-check"><input type="radio" name={followChoiceId} checked={followChoice} onChange={() => setFollowChoice(true)} /> {`Follow the whole space (${spaceName}${pageTotal !== null ? ` · ${pageCount(pageTotal)}` : ""})`}</label>
+              </div> : <p className="library-destination">{`Follow the whole space (${spaceName}${pageTotal !== null ? ` · ${pageCount(pageTotal)}` : ""})`}</p>}
+              {follow && !existingFollow ? <p className="task-setup-note">Saves every page this profile can read in {spaceName}, including every top-level page tree. Refresh adds new pages and updates changed ones; Spaces change only when you update them.</p> : null}
+              {overLimit ? <p className="task-setup-note library-note-partial" role="status"><span aria-hidden="true">◐</span> {`The page limit is ${spacePageLimit}, so this saves ${spacePageLimit} of ${pageTotal} pages. Refresh won't mark pages removed at source until the whole space fits.`}</p> : null}
+            </div>
+          </div> : null}
+          {resolution?.kind === "confluence_page" && resolution.existing_follow_id ? <p className="task-setup-check">{`${resolutionSpaceName(resolution)} is already followed; refreshing it keeps this page current.`}</p> : null}
           {resolution && forge && !existing ? <label className="task-setup-check"><input type="checkbox" checked={linked} onChange={(event) => setLinked(event.target.checked)} /> Include linked issues and {family?.review}s within import limits</label> : null}
           {existing ? <label className="task-setup-check"><input type="checkbox" checked={refreshExisting} onChange={(event) => setRefreshExisting(event.target.checked)} /> Refresh from source first</label> : null}
           <div className="task-setup-row">
@@ -416,9 +564,9 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
             <button type="button" onClick={addAnother}>Add another</button>
             <button ref={primaryActionRef} type="button" className="setup-primary" onClick={retryAll}>Retry</button>
           </> : null}
-          {existing && onOpenItem ? <button type="button" onClick={() => { onOpenItem(existing); onClose(); }}>Open in Library</button> : null}
+          {existingItem && onOpenItem ? <button type="button" onClick={() => { onOpenItem(existingItem); onClose(); }}>Open in Library</button> : null}
           <button type="button" onClick={onClose}>Cancel</button>
-          {!startError ? <button type="button" className="setup-primary" onClick={submit} disabled={!canAdd}>{primaryLabel}</button> : null}
+          {!startError ? <button ref={submitRef} type="button" className="setup-primary" onClick={submit} disabled={!canAdd}>{primaryLabel}</button> : null}
         </> : !finished || !progress ? <button ref={closeActionRef} type="button" onClick={onClose}>Close</button> : <>
           <button type="button" onClick={addAnother}>Add another</button>
           <button ref={closeActionRef} type="button" onClick={onClose}>Close</button>

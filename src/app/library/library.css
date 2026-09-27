@@ -256,3 +256,24 @@
 .library-attachments li { display: flex; flex-direction: column; }
 .library-attachments li > span:first-child { color: var(--text-primary); overflow-wrap: anywhere; }
 .library-attachment-detail { color: var(--text-muted); }
+
+/* Followed spaces (design §4.3, §4.5, §4.10, UQ5a). */
+.library-tree-notice { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.library-tree-notice span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.library-tree-notice.is-error { color: var(--blocked); }
+.library-tree-notice button { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 1px 8px; background: var(--surface); color: var(--text-secondary); font-size: inherit; cursor: pointer; }
+.library-tree-notice button:hover { background: var(--surface-hover); }
+.library-report-limit { margin: 0; }
+.library-report-limit span:last-child { white-space: normal; overflow-wrap: anywhere; }
+.library-note-partial { color: var(--working); }
+.task-setup-row .library-browse-toggle { display: inline-flex; align-items: center; gap: 4px; margin: 6px 0 0; font-size: var(--font-size-2xs); }
+.library-browse-toggle .ui-icon { width: 12px; height: 12px; }
+.library-browse { display: flex; flex-direction: column; gap: 8px; max-height: 260px; margin-top: 6px; overflow: auto; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.library-browse-provider h3 { margin: 0 0 4px; color: var(--text-secondary); font-size: var(--font-size-2xs); font-weight: 600; }
+.library-browse-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.library-browse-list li { display: flex; min-width: 0; align-items: center; gap: 8px; min-height: 28px; font-size: var(--font-size-control); }
+.library-browse-name { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
+.library-browse-detail { flex: 0 0 auto; color: var(--text-muted); font-size: var(--font-size-2xs); }
+.library-browse-list button { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 2px 10px; background: var(--surface-raised); color: var(--text-primary); font-size: var(--font-size-2xs); cursor: pointer; }
+.library-browse-list button:hover { background: var(--surface-hover); }
+.library-browse .library-refusal .task-setup-link { margin-left: 0; }
