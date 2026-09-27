@@ -73,7 +73,7 @@ impl Prepared {
 pub(super) fn summaries(asset: &SourceAsset) -> Vec<LibraryAttachment> {
     asset.attachments.iter().map(|a| LibraryAttachment {
         attachment_id: a.id.clone(), original_name: a.title.clone(),
-        stored_name: a.path.as_deref().and_then(|p| p.strip_prefix("attachments/")).unwrap_or(&a.title).into(),
+        stored_name: a.path.as_deref().and_then(|p| p.strip_prefix("_files/")).unwrap_or(&a.title).into(),
         media_type: a.media_type.clone(), bytes: a.size, version: a.source_revision.clone(),
         state: if a.path.is_some() { LibraryAttachmentState::Downloaded } else { match a.not_downloaded.as_deref() {
             Some("over_limit") => LibraryAttachmentState::OverLimit,
@@ -129,7 +129,7 @@ impl LibraryService {
         }
         let refs: Vec<_> = asset.attachments.iter().map(|a| AttachmentRef { id: a.id.clone(), title: a.title.clone(), bytes: a.size }).collect();
         let mut used = old.into_iter().flat_map(|e| &e.summary.attachments)
-            .filter_map(|a| a.relative_path.as_deref().and_then(|p| p.strip_prefix("attachments/")))
+            .filter_map(|a| a.relative_path.as_deref().and_then(|p| p.strip_prefix("_files/")))
             .map(str::to_ascii_lowercase).collect::<BTreeSet<_>>();
         let mut total = asset.attachments.iter().filter_map(|a| {
             let removing = request.is_some_and(|r| r.action == LibraryAttachmentAction::RemoveDownloaded && r.attachment_ids.contains(&a.id));
@@ -166,10 +166,10 @@ impl LibraryService {
             let previous_file = previous.filter(|_| unchanged && !replacing_confirmed_file).and_then(|p| p.relative_path.as_deref());
             if let (Some(old), Some(path)) = (old, previous_file) {
                 let expected = old.inventory.iter().find(|f| f.path == path).ok_or_else(|| error("library_corrupt", "Attachment is absent from the item inventory"))?;
-                let name = path.strip_prefix("attachments/").filter(|name| single(name)).ok_or_else(unsafe_download)?;
+                let name = path.strip_prefix("_files/").filter(|name| single(name)).ok_or_else(unsafe_download)?;
                 let _lock = store.shared()?;
                 let root = store.item_dir(&old.summary.item_path)?;
-                let parent = root.open_dir_nofollow("attachments").map_err(io)?;
+                let parent = root.open_dir_nofollow("_files").map_err(io)?;
                 let file = open_regular(&parent, name)?;
                 let copied = copy_file(file, &prepared.stage.dir, name, expected.bytes, Some(expected.bytes))?;
                 if copied.hash != expected.hash { return Err(error("library_conflict", "Library attachment changed while copying")); }
@@ -242,7 +242,7 @@ impl LibraryService {
             let copied = match result {
                 Ok(result) => {
                     let file = open_regular(&dest, &result.file_name)?;
-                    if let Some(name) = previous.and_then(|p| p.relative_path.as_deref()).and_then(|p| p.strip_prefix("attachments/")) {
+                    if let Some(name) = previous.and_then(|p| p.relative_path.as_deref()).and_then(|p| p.strip_prefix("_files/")) {
                         used.remove(&name.to_ascii_lowercase());
                     }
                     let name = stored_name(&a.title, &a.id, &mut used);
@@ -290,8 +290,8 @@ fn copy_file(mut file: cap_std::fs::File, root: &Dir, name: &str, limit: u64, si
     if before.len() > limit || size.is_some_and(|n| before.len() != n) {
         return Err(error("source_attachment_size", "Attachment size differs from metadata or exceeds the limit"));
     }
-    match root.create_dir("attachments") { Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(io(e)) }
-    let parent = root.open_dir_nofollow("attachments").map_err(io)?;
+    match root.create_dir("_files") { Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(io(e)) }
+    let parent = root.open_dir_nofollow("_files").map_err(io)?;
     let mut opts = OpenOptions::new(); opts.write(true).create_new(true).follow(cap_fs_ext::FollowSymlinks::No);
     let mut out = parent.open_with(name, &opts).map_err(io)?;
     let result = (|| {
@@ -307,7 +307,7 @@ fn copy_file(mut file: cap_std::fs::File, root: &Dir, name: &str, limit: u64, si
             return Err(error("source_attachment_size", "Attachment changed while reading"));
         }
         out.sync_all().map_err(io)?;
-        Ok(MarkerFile { path: format!("attachments/{name}"), hash: format!("sha256:{:x}", hash.finalize()), bytes })
+        Ok(MarkerFile { path: format!("_files/{name}"), hash: format!("sha256:{:x}", hash.finalize()), bytes })
     })();
     drop(out);
     if result.is_err() { let _ = parent.remove_file(name); }
@@ -319,8 +319,11 @@ fn copy_file(mut file: cap_std::fs::File, root: &Dir, name: &str, limit: u64, si
 fn read_asset(store: &Store, entry: &LibraryIndexEntry) -> Result<SourceAsset, InspectionError> {
     let bad = || error("library_corrupt", "Library document has invalid generated metadata");
     let root = store.item_dir(&entry.summary.item_path)?;
-    let expected = entry.inventory.iter().find(|f| f.path == "document.md").ok_or_else(bad)?;
-    let mut file = open_regular(&root, "document.md")?;
+    let document_path = entry.summary.document_path.as_deref().ok_or_else(bad)?;
+    let prefix = format!("{}/", entry.summary.item_path);
+    let name = document_path.strip_prefix(&prefix).filter(|name| single(name)).ok_or_else(bad)?;
+    let expected = entry.inventory.iter().find(|f| f.path == name).ok_or_else(bad)?;
+    let mut file = open_regular(&root, name)?;
     if file.metadata().map_err(io)?.len() != expected.bytes { return Err(bad()); }
     let mut bytes = Vec::new(); Read::by_ref(&mut file).take(expected.bytes + 1).read_to_end(&mut bytes).map_err(io)?;
     if store::hash(&bytes) != expected.hash { return Err(error("library_conflict", "Library document changed")); }

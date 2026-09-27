@@ -221,9 +221,21 @@ impl LibraryService {
         let captured = inventory(&self.configuration, input).await?;
         let id = folder_id(&captured.path);
         let title = old.as_ref().map(|e| e.summary.title.clone()).unwrap_or_else(|| label.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| captured.path.file_name().and_then(|s| s.to_str()).unwrap_or("folder")).to_owned());
-        let slug: String = title.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).take(60).collect();
-        let slug = slug.trim_matches('-');
-        let path = old.as_ref().map(|e| e.summary.item_path.clone()).unwrap_or_else(|| format!("folders/{}-{}", if slug.is_empty() { "folder" } else { slug }, &id[7..15]));
+        let leaf = super::layout::folder_leaf(&title);
+        let base_path = format!("folders/{leaf}");
+        let index_items = {
+            let _lock = store.shared()?;
+            store.index()?.items
+        };
+        let path = if super::layout::is_reserved(&leaf, false)
+            || index_items.iter().any(|item| {
+                item.summary.item_id != id && item.summary.item_path == base_path
+            })
+        {
+            format!("folders/{}", super::layout::tagged(&leaf, id.strip_prefix("folder:").unwrap_or(&id)))
+        } else {
+            base_path
+        };
         let capture_store = store.clone();
         let capture_operation = operation.to_owned();
         let file_byte_limit = self.configuration.limits.library_file_bytes;
@@ -245,7 +257,7 @@ impl LibraryService {
         let now = timestamp();
         let equal = old.as_ref().is_some_and(|e| e.summary.revision == revision);
         let partial = limited.then(|| LibraryPartial { unit: "files".into(), have: files.len() as u64, total: Some(total), reason: "Folder capture limits reached".into() });
-        let mut entry = LibraryIndexEntry { canonical_url: None, marker_hash: None, inventory: vec![], summary: LibraryItemSummary {
+        let mut entry = LibraryIndexEntry { canonical_url: None, inventory: vec![], summary: LibraryItemSummary {
             item_id: id.clone(), logical_id: id, kind: LibraryItemKind::FolderCopy, provider_id: None, provider_instance: None,
             resource_type: None, canonical_id: None, container: None, parent_item_id: None, ancestors: vec![], order: None,
             title, document_path: files.first().map(|file| format!("{path}/{}", file.path)), item_path: path, source_url: None, original_url: None, source_revision: None, revision,
@@ -255,7 +267,6 @@ impl LibraryService {
         }};
         if equal && confirmed.is_none() {
             let old = old.as_ref().unwrap();
-            entry.marker_hash = old.marker_hash.clone();
             entry.inventory = old.inventory.clone();
             entry.summary.fetched_at = old.summary.fetched_at.clone();
             if let Some(target) = target { space::prepare_saved_item(store, operation, target, &entry.summary)?; }

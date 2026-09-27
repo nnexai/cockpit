@@ -15,7 +15,7 @@ function page(overrides: Partial<LibraryItemSummary>): LibraryItemSummary {
   return {
     item_id: "source:page", logical_id: "source:page", kind: "provider_snapshot", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", resource_type: "page",
     canonical_id: "0", container: { container_id: "SD", label: "SD · Software Development" }, parent_item_id: null, ancestors: [], order: null, title: "Page",
-    document_path: "pages/page/document.md", item_path: "pages/page", source_url: null, original_url: null, source_revision: "1", revision: "r1",
+    document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Page/Page.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Page", source_url: null, original_url: null, source_revision: "1", revision: "r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
     ...overrides,
   };
@@ -26,10 +26,10 @@ async function nextFrame(): Promise<void> {
 }
 
 it("places pages under provider, space and ancestors, and gives a page with children separate expand and open targets", async () => {
-  const parent = page({ item_id: "source:process", canonical_id: "10", title: "Release process", ancestors: [home], order: 2, document_path: "pages/process/document.md" });
-  const child = page({ item_id: "source:checklist", canonical_id: "11", title: "Release checklist", ancestors: [home, processPage], order: 1, state: "changed", document_path: "pages/checklist/document.md" });
+  const parent = page({ item_id: "source:process", canonical_id: "10", title: "Release process", ancestors: [home], order: 2, document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Release process/Release process.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Release process" });
+  const child = page({ item_id: "source:checklist", canonical_id: "11", title: "Release checklist", ancestors: [home, processPage], order: 1, state: "changed", document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Release process/Release checklist/Release checklist.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Release process/Release checklist" });
   // Page-tree order, not id order: a higher id sorts after its earlier sibling.
-  const sibling = page({ item_id: "source:architecture", canonical_id: "50", title: "Architecture overview", ancestors: [home], order: 3, document_path: "pages/architecture/document.md" });
+  const sibling = page({ item_id: "source:architecture", canonical_id: "50", title: "Architecture overview", ancestors: [home], order: 3, document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Architecture overview/Architecture overview.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Architecture overview" });
   const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false };
   const host = document.createElement("div");
   document.body.append(host);
@@ -107,7 +107,7 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
   const mixed = page({ item_id: "source:process", canonical_id: "10", title: "Release process", ancestors: [home], order: 2,
     attachments: [attachment("source:process#attachment:r1", { original_name: "runbook.pdf", stored_name: "runbook.pdf" })] });
   const child = page({ item_id: "source:checklist", canonical_id: "11", title: "Release checklist", ancestors: [home, processPage], order: 1 });
-  const solo = page({ item_id: "source:architecture", canonical_id: "50", title: "Architecture overview", ancestors: [home], order: 3, document_path: "pages/architecture/document.md",
+  const solo = page({ item_id: "source:architecture", canonical_id: "50", title: "Architecture overview", ancestors: [home], order: 3, document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Architecture overview/Architecture overview.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Architecture overview",
     attachments: [
       attachment("source:architecture#attachment:a1", { original_name: "release-flow.png", stored_name: "release-flow.png", media_type: "image/png", bytes: 84_000 }),
       attachment("source:architecture#attachment:a2", { original_name: "Q3/plan?.pdf", stored_name: "Q3_plan_.pdf", media_type: "application/pdf", bytes: 1_200_000, version: "3" }),

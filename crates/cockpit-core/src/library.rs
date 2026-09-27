@@ -3,6 +3,7 @@ mod attachments;
 mod folder;
 mod follow;
 mod operations;
+mod layout;
 mod reader;
 pub(crate) mod store;
 pub mod space;
@@ -986,12 +987,13 @@ impl LibraryService {
         if let Some(follow_id) = follow_id {
             entry.summary.follow_id = Some(follow_id.to_owned());
         }
+        let index_items = {
+            let _lock = store.shared()?;
+            store.index()?.items
+        };
         if is_confluence {
             if let Some(parent_id) = field_string(&asset, "parent_id") {
-                let _lock = store.shared()?;
-                entry.summary.parent_item_id = store
-                    .index()?
-                    .items
+                entry.summary.parent_item_id = index_items
                     .iter()
                     .find(|candidate| {
                         candidate.summary.provider_id.as_deref()
@@ -1004,6 +1006,7 @@ impl LibraryService {
                     .map(|candidate| candidate.summary.item_id.clone());
             }
         }
+        resolve_asset_path(&mut entry, &asset, old.as_ref(), &index_items);
         if let Some(old) = &old {
             let check = {
                 let _lock = store.shared()?;
@@ -1184,21 +1187,12 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
     let id = item_id(&asset.source);
     let revision = content_revision(asset);
     let now = timestamp();
-    let slug: String = asset
-        .title
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .take(60)
-        .collect();
-    let path = old
-        .map(|e| e.summary.item_path.clone())
-        .unwrap_or_else(|| format!("{}-{}", slug.trim_matches('-'), &id[7..]));
+    let placement = layout::source_placement(asset);
+    let mut path = placement.container.join("/");
+    if !path.is_empty() {
+        path.push('/');
+    }
+    path.push_str(&placement.leaf);
     let ancestor_titles = field_strings(asset, "ancestors");
     let ancestor_ids = field_strings(asset, "ancestor_ids");
     let ancestors = if asset.source.resource_type == "page" {
@@ -1212,7 +1206,6 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
     };
     LibraryIndexEntry {
         inventory: old.map(|e| e.inventory.clone()).unwrap_or_default(),
-        marker_hash: old.and_then(|e| e.marker_hash.clone()),
         canonical_url: asset.source_url.clone(),
         summary: LibraryItemSummary {
             item_id: id,
@@ -1236,7 +1229,7 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
             ancestors,
             order: old.and_then(|e| e.summary.order),
             title: asset.title.clone(),
-            document_path: Some(format!("{path}/document.md")),
+            document_path: Some(format!("{path}/{}", placement.document)),
             item_path: path,
             source_url: asset.source_url.clone(),
             original_url: asset.original_url.clone(),
@@ -1266,6 +1259,51 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
             diagnostics: asset.diagnostics.clone(),
         },
     }
+}
+fn resolve_asset_path(
+    entry: &mut LibraryIndexEntry,
+    asset: &SourceAsset,
+    old: Option<&LibraryIndexEntry>,
+    items: &[LibraryIndexEntry],
+) {
+    let placement = layout::source_placement(asset);
+    let parent = entry
+        .summary
+        .parent_item_id
+        .as_ref()
+        .and_then(|parent_id| items.iter().find(|item| &item.summary.item_id == parent_id));
+    let mut base = parent
+        .map(|item| item.summary.item_path.clone())
+        .unwrap_or_else(|| placement.container.join("/"));
+    if !base.is_empty() {
+        base.push('/');
+    }
+    let candidate = format!("{base}{}", placement.leaf);
+    let stable_old = old
+        .map(|old| old.summary.item_path.as_str())
+        .filter(|path| {
+            path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("")
+                == candidate.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("")
+                && path.rsplit_once('/').map(|(_, leaf)| leaf).unwrap_or(path)
+                    .starts_with(&placement.leaf)
+        });
+    let mut path = stable_old.unwrap_or(&candidate).to_owned();
+    let occupied = |path: &str| {
+        items.iter().any(|item| {
+            item.summary.item_id != entry.summary.item_id && item.summary.item_path == path
+        })
+    };
+    let leaf = path.rsplit_once('/').map(|(_, leaf)| leaf).unwrap_or(&path);
+    if layout::is_reserved(leaf, !path.contains('/')) || occupied(&path) {
+        let tag = if asset.source.canonical_id.is_empty() {
+            entry.summary.item_id.rsplit(':').next().unwrap_or(&entry.summary.item_id)
+        } else {
+            &asset.source.canonical_id
+        };
+        path = format!("{base}{}", layout::tagged(&placement.leaf, tag));
+    }
+    entry.summary.item_path = path.clone();
+    entry.summary.document_path = Some(format!("{path}/{}", placement.document));
 }
 
 #[cfg(test)]
@@ -1532,7 +1570,7 @@ mod tests {
     pub(super) fn assert_store_valid(store: &Store) {
         let _lock = store.shared().unwrap();
         for entry in store.index().unwrap().items {
-            assert!(store.root.open_dir(&entry.summary.item_path).is_ok());
+            assert!(store.item_dir(&entry.summary.item_path).is_ok());
             assert!(
                 store.conflicts(&entry).unwrap().is_empty(),
                 "{}",
@@ -1615,11 +1653,10 @@ mod tests {
     async fn provenance_only_refresh_is_fresh_and_does_not_publish() {
         let f = fixture();
         let item = saved(&f, 1).await;
-        let marker = Path::new(&f.service.configuration.library_root)
-            .join(&item.item_path)
-            .join(".cockpit-item.json");
-        let before = std::fs::read(&marker).unwrap();
-        let modified = std::fs::metadata(&marker).unwrap().modified().unwrap();
+        let document = Path::new(&f.service.configuration.library_root)
+            .join(item.document_path.as_deref().unwrap());
+        let before = std::fs::read(&document).unwrap();
+        let modified = std::fs::metadata(&document).unwrap().modified().unwrap();
         {
             let mut state = f.provider.state.lock().unwrap_or_else(|e| e.into_inner());
             state.container = "renamed/repo".into();
@@ -1634,11 +1671,8 @@ mod tests {
         assert_eq!(updated.diagnostics[0].code, "source_markup_unconverted");
         assert!(updated.source_url.unwrap().ends_with("?verified=1"));
         assert_eq!(updated.original_url, item.original_url);
-        assert_eq!(std::fs::read(&marker).unwrap(), before);
-        assert_eq!(
-            std::fs::metadata(&marker).unwrap().modified().unwrap(),
-            modified
-        );
+        assert_eq!(std::fs::read(&document).unwrap(), before);
+        assert_eq!(std::fs::metadata(&document).unwrap().modified().unwrap(), modified);
         // The next refresh uses the stored API-validated canonical URL.
         assert_eq!(
             refresh(&f, &item).await.phases[0].state,
@@ -1946,12 +1980,12 @@ mod tests {
                 .iter()
                 .map(|e| e.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["document.md"]
+            vec!["Issue 1.md"]
         );
         let e = f
             .service
             .document(LibraryDocumentRequest {
-                path: format!("{}/.cockpit-item.json", item.item_path),
+                path: ".cockpit/index.json".into(),
                 expected_revision: None,
                 offset: None,
             })

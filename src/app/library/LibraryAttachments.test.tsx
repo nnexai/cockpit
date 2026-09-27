@@ -11,7 +11,7 @@ import { LibraryItemHeader } from "./LibraryItemHeader";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const page: LibraryItemSummary = {
   item_id: "page:s7", logical_id: "page:s7", kind: "provider_snapshot", provider_id: "confluence", provider_instance: "https://wiki.test", resource_type: "page", canonical_id: "7",
-  container: { container_id: "SD", label: "SD" }, parent_item_id: null, ancestors: [], order: null, title: "Release", document_path: "pages/7/document.md", item_path: "pages/7", source_url: null, original_url: null, source_revision: "1", revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, folder: null, diagnostics: [],
+  container: { container_id: "SD", label: "SD" }, parent_item_id: null, ancestors: [], order: null, title: "Release", document_path: "confluence/wiki.test/SD - Software Development/Release/Release.md", item_path: "confluence/wiki.test/SD - Software Development/Release", source_url: null, original_url: null, source_revision: "1", revision: "r1", state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, folder: null, diagnostics: [],
   attachments: [
     { attachment_id: "png", original_name: "../flow.png", stored_name: "flow.png", media_type: "image/png", bytes: 68, version: "1", state: "not_downloaded", relative_path: null },
     { attachment_id: "pdf", original_name: "report.pdf", stored_name: "report.pdf", media_type: "application/pdf", bytes: 100, version: "1", state: "failed", relative_path: null },
@@ -38,7 +38,7 @@ it("downloads only chosen rows, keeps over-limit rows inert, and removes only do
     expect(attachments.start).toHaveBeenLastCalledWith(page, "download", ["png"]);
     await act(async () => button("Download all").click());
     expect(attachments.start).toHaveBeenLastCalledWith(page, "download", ["png", "pdf"]);
-    const downloaded = { ...page, attachments: page.attachments.map((attachment) => attachment.attachment_id === "png" ? { ...attachment, state: "downloaded" as const, relative_path: "attachments/flow.png" } : attachment) };
+    const downloaded = { ...page, attachments: page.attachments.map((attachment) => attachment.attachment_id === "png" ? { ...attachment, state: "downloaded" as const, relative_path: "_files/flow.png" } : attachment) };
     await act(async () => render(downloaded));
     await act(async () => button("Remove downloaded").click());
     expect(attachments.start).toHaveBeenLastCalledWith(downloaded, "remove_downloaded", ["png"]);
@@ -58,7 +58,7 @@ it("keeps metadata-only selection local, polls an explicit download, then opens 
     libraryMedia: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r2", content_hash: null, bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" })),
     libraryAttachments: vi.fn(async () => operation),
     libraryOperation: vi.fn(async () => {
-      item = { ...page, revision: "r2", attachments: page.attachments.map((attachment) => attachment.attachment_id === "png" ? { ...attachment, state: "downloaded", relative_path: "attachments/flow.png" } : attachment) };
+      item = { ...page, revision: "r2", attachments: page.attachments.map((attachment) => attachment.attachment_id === "png" ? { ...attachment, state: "downloaded", relative_path: "_files/flow.png" } : attachment) };
       return { ...operation, finished: true, phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }] };
     }),
   } as unknown as CockpitClient;
@@ -76,7 +76,7 @@ it("keeps metadata-only selection local, polls an explicit download, then opens 
     await act(async () => { await vi.advanceTimersByTimeAsync(750); }); await flush();
     expect(host.textContent).toContain("Downloaded 1 of 1 attachment.");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="png"]')!.click()); await flush();
-    expect(client.libraryMedia).toHaveBeenCalledWith({ path: "pages/7/attachments/flow.png", expected_revision: "r2" }, expect.any(AbortSignal));
+    expect(client.libraryMedia).toHaveBeenCalledWith({ path: "confluence/wiki.test/SD - Software Development/Release/_files/flow.png", expected_revision: "r2" }, expect.any(AbortSignal));
     expect(host.querySelector<HTMLImageElement>(".context-raster-preview img")?.src).toBe("blob:s7-png");
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); }
 });
@@ -86,11 +86,11 @@ it.each(["library", "companion"] as const)("resolves a page-relative image throu
   const mounted = createRoot(host);
   const rootId = kind === "library" ? "library" : "companion";
   const serverRootId = kind === "library" ? "library:fs" : rootId;
-  const prefix = kind === "library" ? page.item_path : "sources/confluence/page/SD/7-release";
-  const path = `${prefix}/document.md`;
+  const prefix = kind === "library" ? page.item_path : "confluence/wiki.test/SD - Software Development/Release";
+  const path = `${prefix}/Release.md`;
   const root = { root_id: serverRootId, kind, label: kind, path: `/${kind}`, repository_id: "", checkout_path: "", companion_id: kind === "companion" ? "c1" : null };
-  const documentRead = async () => ({ binding_id: "binding", root_id: serverRootId, path, revision: "r1", content_hash: null, bytes: 100, media_type: "text/markdown", text: "# Release\n\n![Flow](attachments/flow.png)", truncated: false, diagnostics: [] });
-  const media = { binding_id: "binding", root_id: serverRootId, path: `${prefix}/attachments/flow.png`, revision: "r1", content_hash: null, bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" };
+  const documentRead = async () => ({ binding_id: "binding", root_id: serverRootId, path, revision: "r1", content_hash: null, bytes: 100, media_type: "text/markdown", text: "# Release\n\n![Flow](_files/flow.png)", truncated: false, diagnostics: [] });
+  const media = { binding_id: "binding", root_id: serverRootId, path: `${prefix}/_files/flow.png`, revision: "r1", content_hash: null, bytes: 68, mime_type: "image/png", width: 1, height: 1, data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLq9wAAAABJRU5ErkJggg==" };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers })),
     libraryListing: vi.fn(async () => ({ root, generation: "1", items: [page], follows: [], next_offset: null, diagnostics: [] })),
@@ -105,7 +105,7 @@ it.each(["library", "companion"] as const)("resolves a page-relative image throu
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:shared-layout"), revokeObjectURL: vi.fn() });
   try {
     await act(async () => mounted.render(<Harness />)); await flush();
-    const request = { path: `${prefix}/attachments/flow.png`, expected_revision: null };
+    const request = { path: `${prefix}/_files/flow.png`, expected_revision: null };
     if (kind === "library") expect(client.libraryMedia).toHaveBeenCalledWith(request, expect.any(AbortSignal));
     else expect(client.contextMedia).toHaveBeenCalledWith("session", "pane", { ...request, binding_id: "binding", root_id: rootId }, expect.any(AbortSignal));
     expect(host.querySelector<HTMLImageElement>('img[alt="Flow"]')?.src).toBe("blob:shared-layout");
@@ -116,8 +116,8 @@ it.each(["pdf", "svg", "html"])("never activates a downloaded %s attachment as a
   const host = document.createElement("div"); document.body.append(host);
   const mounted = createRoot(host);
   const name = `hostile.${extension}`;
-  const path = `${page.item_path}/attachments/${name}`;
-  const item = { ...page, attachments: [{ ...page.attachments[0]!, stored_name: name, state: "downloaded" as const, relative_path: `attachments/${name}` }] };
+  const path = `${page.item_path}/_files/${name}`;
+  const item = { ...page, attachments: [{ ...page.attachments[0]!, stored_name: name, state: "downloaded" as const, relative_path: `_files/${name}` }] };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers })),
     libraryListing: vi.fn(async () => ({ root: { root_id: "library:fs", kind: "library", label: "Library", path: "/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] })),

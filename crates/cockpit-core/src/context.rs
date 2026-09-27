@@ -1287,8 +1287,7 @@ fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'sta
         if name == ".git" {
             return Some("Git metadata is not exposed");
         }
-        if kind == ContextRootKind::Library && (name == ".cockpit" || name == ".cockpit-item.json")
-        {
+        if kind == ContextRootKind::Library && first && name == ".cockpit" {
             return Some("Cockpit Library metadata is not exposed");
         }
         if kind == ContextRootKind::Companion {

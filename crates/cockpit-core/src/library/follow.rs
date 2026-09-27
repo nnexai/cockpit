@@ -1035,8 +1035,8 @@ mod tests {
             assert_eq!(reason(&report, &after["201"]), Some("moved"));
             assert_eq!(after["201"].parent_item_id.as_ref(), Some(&after["110"].item_id));
             assert_eq!(after["201"].ancestors.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["100", "110"]);
-            // A move re-renders the page but never moves its Library directory.
-            assert_eq!(after["201"].item_path, before["201"].item_path);
+            // A move re-renders the page and moves its directory and subtree.
+            assert_ne!(after["201"].item_path, before["201"].item_path);
             assert_ne!(after["201"].revision, before["201"].revision);
             assert_eq!(after["202"].parent_item_id.as_ref(), Some(&after["200"].item_id));
             assert_eq!(after["112"].state, LibraryItemState::RemovedAtSource);
@@ -1053,13 +1053,16 @@ mod tests {
             assert_eq!(reason(&report, &moved["110"]), Some("moved to OPS"));
             assert_eq!(moved["110"].state, LibraryItemState::RemovedAtSource);
             assert!(f.provider.take_fetched().is_empty());
-            // A title change alone is fetched; paths still never move.
+            // A title change moves the page directory and every saved descendant with it.
             f.provider.site().pages.get_mut("200").unwrap().title = "T renamed".into();
             let report = refresh(service, LibraryRefreshRequest::All).await;
             assert_eq!(report.updated, 1);
             let renamed = pages(service).await;
             assert_eq!(renamed["200"].title, "T renamed");
-            assert_eq!(renamed["200"].item_path, before["200"].item_path);
+            assert_ne!(renamed["200"].item_path, before["200"].item_path);
+            assert!(renamed["202"].item_path.starts_with(&format!("{}/", renamed["200"].item_path)));
+            assert!(renamed["202"].document_path.as_deref().unwrap()
+                .starts_with(&format!("{}/", renamed["200"].item_path)));
             assert_eq!(f.provider.take_fetched(), ["200".to_owned()].into());
         }
     }

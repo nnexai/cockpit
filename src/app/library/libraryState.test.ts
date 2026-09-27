@@ -12,7 +12,7 @@ function item(overrides: Partial<LibraryItemSummary>): LibraryItemSummary {
   return {
     item_id: "source:x", logical_id: "source:x", kind: "provider_snapshot", provider_id: "gitlab", provider_instance: "https://gitlab.test", resource_type: "issue",
     canonical_id: "platform/api#1", container: null, parent_item_id: null, ancestors: [], order: null, title: "Title",
-    document_path: "x/document.md", item_path: "x", source_url: null, original_url: null, source_revision: null, revision: "r",
+    document_path: "gitlab/gitlab.test/platform/api/issues/1/Title.md", item_path: "gitlab/gitlab.test/platform/api/issues/1", source_url: null, original_url: null, source_revision: null, revision: "r",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
     ...overrides,
   };

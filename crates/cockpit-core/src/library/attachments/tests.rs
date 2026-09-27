@@ -330,15 +330,15 @@ async fn space_shared_layout_manifest_and_edited_obsolete_attachments() {
     let add = finished(&service, service.start_space_add(SpaceAddRequest { target: target(), item_ids: vec![saved.item_id.clone()], follow_ids: vec![] }).await.unwrap()).await;
     assert_eq!(add.phases[0].state, LibraryPhaseState::Done, "{add:?}");
     let row = service.space_listing(target()).await.unwrap().rows.remove(0);
-    let doc = row.paths.iter().find(|p| p.ends_with("/document.md")).unwrap();
+    let doc = row.paths.iter().find(|p| p.ends_with(".md")).unwrap();
     let parent = Path::new(doc).parent().unwrap();
-    let a = parent.join("attachments/release-flow.png"); let b = parent.join("attachments/edited.png");
+    let a = parent.join("_files/release-flow.png"); let b = parent.join("_files/edited.png");
     assert_eq!(std::fs::read(root.join(doc)).unwrap(), document(&f, &saved));
     assert_eq!(std::fs::read(root.join(&a)).unwrap(), bytes(&f, &saved, 0));
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("context-manifest.json")).unwrap()).unwrap();
-    let file = manifest["entries"].as_array().unwrap().iter().find(|e| e["library_file"] == "attachments/release-flow.png").unwrap();
+    let file = manifest["entries"].as_array().unwrap().iter().find(|e| e["library_file"] == "_files/release-flow.png").unwrap();
     assert_eq!(file["content_hash"], store::hash(b"first"));
-    assert!(String::from_utf8(document(&f, &saved)).unwrap().contains("path: \"attachments/release-flow.png\""));
+    assert!(String::from_utf8(document(&f, &saved)).unwrap().contains("path: \"_files/release-flow.png\""));
     action(&service, &saved, &["a", "b"], LibraryAttachmentAction::RemoveDownloaded).await;
     assert_ne!(item(&service).await.revision, saved.revision);
     assert_eq!(service.space_listing(target()).await.unwrap().rows[0].state, SpaceCopyState::LibraryNewer);
@@ -480,7 +480,7 @@ async fn confirmed_replace_redownloads_locally_edited_attachments() {
         assert_eq!(conflict_op.report.unwrap().conflict, 1);
         let conflicted = item(&f.service).await;
         assert_eq!(conflicted.state, LibraryItemState::Conflict);
-        assert!(conflicted.conflict.iter().any(|file| file.path == "attachments/a.png"));
+        assert!(conflicted.conflict.iter().any(|file| file.path == "_files/a.png"));
 
         let replaced = finished(
             &f.service,

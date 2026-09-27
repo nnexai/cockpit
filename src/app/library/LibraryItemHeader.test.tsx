@@ -11,7 +11,7 @@ it("shows folder lineage, partial and exclusion counts, and explicitly re-copies
   const item: LibraryItemSummary = {
     item_id: "folder:notes", logical_id: "folder:notes", kind: "folder_copy", provider_id: null, provider_instance: null, resource_type: null,
     canonical_id: null, container: null, parent_item_id: null, ancestors: [], order: null, title: "Design notes",
-    document_path: "folders/notes-12345678/README.md", item_path: "folders/notes-12345678", source_url: null, original_url: null, source_revision: null, revision: "r1",
+    document_path: "folders/Design notes/README.md", item_path: "folders/Design notes", source_url: null, original_url: null, source_revision: null, revision: "r1",
     state: "partial", partial: { unit: "files", have: 512, total: 600, reason: "file limit" }, conflict: [], fetched_at: "2026-09-26T00:00:00Z", checked_at: null,
     follow_id: null, attachments: [], diagnostics: [],
     folder: { origin_path: "/home/user/notes", git_working_tree: true, files: 512, bytes: 4100000, skipped_symlinks: 3, skipped_special: 1, skipped_ignored: 14, skipped_other: 2 },
@@ -50,7 +50,7 @@ it("shows a Confluence page's path, version, ancestors and last editor, and list
     item_id: "source:page-98765", logical_id: "source:confluence:page:98765", kind: "provider_snapshot", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki",
     resource_type: "page", canonical_id: "98765", container: { container_id: "SD", label: "SD · Software Development" }, parent_item_id: null,
     ancestors: [{ id: "1", title: "Engineering home" }, { id: "10", title: "Release process" }], order: 1, title: "Release checklist",
-    document_path: "pages/sd-98765/document.md", item_path: "pages/sd-98765", source_url: "https://nnexai.atlassian.net/wiki/spaces/SD/pages/98765/Release+checklist", original_url: null,
+    document_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Release process/Release checklist/Release checklist.md", item_path: "confluence/nnexai.atlassian.net/SD - Software Development/Engineering home/Release process/Release checklist", source_url: "https://nnexai.atlassian.net/wiki/spaces/SD/pages/98765/Release+checklist", original_url: null,
     source_revision: "7", revision: "r2", state: "changed", partial: null, conflict: [], fetched_at: "2026-09-26T00:00:00Z", checked_at: null, follow_id: null, folder: null, diagnostics: [],
     attachments: [
       { attachment_id: "source:page-98765#attachment:a1", original_name: "release-flow.png", stored_name: "release-flow.png", media_type: "image/png", bytes: 84_000, version: "1", state: "not_downloaded", relative_path: null },

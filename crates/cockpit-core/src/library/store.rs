@@ -19,7 +19,6 @@ use uuid::Uuid;
 const MAX_INDEX: u64 = 64 * 1024 * 1024;
 const MAX_RECORD: u64 = 64 * 1024 * 1024;
 const MAX_FILE: u64 = 1024 * 1024 * 1024;
-const MARKER: &str = ".cockpit-item.json";
 const MAX_TREE_ENTRIES: usize = 1_000_000;
 const MAX_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024 + MAX_RECORD;
 const MAX_TREE_DEPTH: usize = 64;
@@ -30,8 +29,7 @@ pub(crate) struct LibraryIndexEntry {
     pub summary: LibraryItemSummary,
     /// Validated provider URL used for future refreshes, never the user's input.
     pub canonical_url: Option<String>,
-    pub marker_hash: Option<String>,
-    /// Trusted complete tree, including directories and marker; never rebuilt from a changed marker.
+    /// Trusted inventory of this item's owned entries; not reconstructed from disk.
     pub inventory: Vec<MarkerFile>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +43,7 @@ pub(crate) struct Index {
 impl Default for Index {
     fn default() -> Self {
         Self {
-            schema: 1,
+            schema: 2,
             generation: Uuid::new_v4().to_string(),
             items: vec![],
             follows: vec![],
@@ -59,14 +57,6 @@ pub(crate) struct MarkerFile {
     pub hash: String,
     pub bytes: u64,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Marker {
-    pub schema: u32,
-    pub item_id: String,
-    pub revision: String,
-    pub files: Vec<MarkerFile>,
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Method {
@@ -74,6 +64,9 @@ enum Method {
     TwoRename,
     NewTarget,
     Remove,
+    RemoveOwned,
+    Merge,
+    Move,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +83,12 @@ struct Intent {
     new_entry: Option<LibraryIndexEntry>,
     old_entry: Option<LibraryIndexEntry>,
     predecessor: Option<Vec<MarkerFile>>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    moved_entries: Option<Vec<LibraryIndexEntry>>,
+    #[serde(default)]
+    move_inventory: Option<Vec<MarkerFile>>,
 }
 
 pub(crate) struct Store {
@@ -239,8 +238,15 @@ fn lock_file(dir: &Dir, name: &str) -> Result<File, InspectionError> {
     Ok(file)
 }
 fn item_path(value: &str) -> bool {
-    let leaf = value.strip_prefix("folders/").unwrap_or(value);
-    component(leaf) && !leaf.starts_with('.')
+    let mut components = value.split('/');
+    let Some(first) = components.next() else {
+        return false;
+    };
+    component(first)
+        && first != ".cockpit"
+        && components
+            .all(|part| component(part) && part != "." && part != "..")
+        && value.split('/').count() <= MAX_TREE_DEPTH
 }
 
 impl Store {
@@ -267,8 +273,17 @@ impl Store {
         if !exists(&store.meta, "index.json")? {
             store.commit(&mut Index::default())?;
         }
+        store.ensure_readme()?;
         store.recover()?;
         Ok(store)
+    }
+    fn ensure_readme(&self) -> Result<(), InspectionError> {
+        const README: &str = "# Library\n\nThis directory is a human-readable mirror of saved provider content.\nProvider items are nested under provider, host, and source hierarchy; each Markdown document is named after its title. Attachments are stored in `_files/` beside the document. `.cockpit/` contains private Library index, journal, staging, and lock state and must not be edited.\n";
+        let current = self.root.read("README.md").ok();
+        if current.as_deref() != Some(README.as_bytes()) {
+            atomic_write_bytes(&self.root, "README.md", README.as_bytes()).map_err(io_error)?;
+        }
+        Ok(())
     }
     pub fn recover_pending(&self) -> Result<(), InspectionError> {
         let _lock = self.exclusive()?;
@@ -306,9 +321,19 @@ impl Store {
         if !exists(&self.meta, "index.json")? {
             return Ok(Index::default());
         }
-        let index: Index = read_json_bounded(&self.meta, "index.json", MAX_INDEX)
+        let value: serde_json::Value = read_json_bounded(&self.meta, "index.json", MAX_INDEX)
             .map_err(|e| corrupt(e.message))?;
-        if index.schema != 1 || index.items.len() > 1_000_000 {
+        if value.get("schema").and_then(serde_json::Value::as_u64) == Some(1) {
+            return Err(error(
+                "library_layout_outdated",
+                format!(
+                    "Library layout at {} is outdated; delete this Library root and re-add it",
+                    self.path.display()
+                ),
+            ));
+        }
+        let index: Index = serde_json::from_value(value).map_err(|e| corrupt(e.to_string()))?;
+        if index.schema != 2 || index.items.len() > 1_000_000 {
             return Err(corrupt("unsupported or oversized Library index"));
         }
         let mut ids = std::collections::HashSet::new();
@@ -368,11 +393,27 @@ impl Store {
         if !item_path(path) {
             return Err(corrupt("invalid Library item path"));
         }
-        if let Some(leaf) = path.strip_prefix("folders/") {
-            Ok((self.root.open_dir_nofollow("folders").map_err(io_error)?, leaf))
-        } else {
-            Ok((self.root.try_clone().map_err(io_error)?, path))
+        let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
+        let mut dir = self.root.try_clone().map_err(io_error)?;
+        if !parent.is_empty() {
+            for component in parent.split('/') {
+                dir = dir.open_dir_nofollow(component).map_err(io_error)?;
+            }
         }
+        Ok((dir, leaf))
+    }
+    fn create_item_parent<'a>(&self, path: &'a str) -> Result<(Dir, &'a str), InspectionError> {
+        if !item_path(path) {
+            return Err(corrupt("invalid Library item path"));
+        }
+        let (parent, leaf) = path.rsplit_once('/').unwrap_or(("", path));
+        let mut dir = self.root.try_clone().map_err(io_error)?;
+        if !parent.is_empty() {
+            for component in parent.split('/') {
+                dir = open_child(&dir, component)?;
+            }
+        }
+        Ok((dir, leaf))
     }
     pub(crate) fn item_dir(&self, path: &str) -> Result<Dir, InspectionError> {
         let (parent, leaf) = self.item_parent(path)?;
@@ -414,9 +455,16 @@ impl Store {
             + markdown
                 .strip_prefix("---\n")
                 .ok_or_else(|| corrupt("source document has no frontmatter"))?;
-        atomic_write_bytes(&stage.dir, "document.md", markdown.as_bytes()).map_err(io_error)?;
+        let document = entry
+            .summary
+            .document_path
+            .as_deref()
+            .and_then(|path| path.strip_prefix(&format!("{}/", entry.summary.item_path)))
+            .filter(|name| component(name))
+            .ok_or_else(|| corrupt("provider item has invalid document path"))?;
+        atomic_write_bytes(&stage.dir, document, markdown.as_bytes()).map_err(io_error)?;
         files.push(MarkerFile {
-            path: "document.md".into(),
+            path: document.into(),
             hash: hash(markdown.as_bytes()),
             bytes: markdown.len() as u64,
         });
@@ -427,20 +475,12 @@ impl Store {
         &self,
         stage: &Stage,
         entry: &mut LibraryIndexEntry,
-        files: Vec<MarkerFile>,
+        _files: Vec<MarkerFile>,
     ) -> Result<(), InspectionError> {
-        let marker = Marker {
-            schema: 1,
-            item_id: entry.summary.item_id.clone(),
-            revision: entry.summary.revision.clone(),
-            files,
-        };
-        bounded_write(&stage.dir, MARKER, &marker, MAX_RECORD)?;
-        entry.marker_hash = Some(file_hash(&stage.dir, MARKER)?.0);
-        entry.inventory = inventory(&stage.dir)?;
+        entry.inventory = owned_inventory(&stage.dir, entry)?;
         // Newly created intermediate directories must be durable as well as the
         // item root: a file's fsync alone does not persist its ancestors.
-        for directory in entry.inventory.iter().rev().filter(|file| file.hash == "directory") {
+        for directory in inventory(&stage.dir)?.iter().rev().filter(|file| file.hash == "directory") {
             let mut dir = stage.dir.try_clone().map_err(io_error)?;
             for component in Path::new(&directory.path).components() {
                 dir = dir.open_dir_nofollow(component.as_os_str()).map_err(io_error)?;
@@ -455,7 +495,7 @@ impl Store {
         entry: &LibraryIndexEntry,
     ) -> Result<Vec<LibraryConflictFile>, InspectionError> {
         let dir = self.item_dir(&entry.summary.item_path)?;
-        Ok(conflicts(entry, &inventory(&dir)?))
+        Ok(conflicts(entry, &owned_inventory(&dir, entry)?))
     }
     pub fn check_confirmation(
         &self,
@@ -476,17 +516,23 @@ impl Store {
         let _lock = self.exclusive()?;
         self.recover()?;
         let mut index = self.index()?;
-        if entry.summary.item_path.starts_with("folders/") {
-            open_child(&self.root, "folders")?;
-            sync(&self.root)?;
-        }
-        let (target_root, target_name) = self.item_parent(&entry.summary.item_path)?;
+        let (target_root, target_name) = self.create_item_parent(&entry.summary.item_path)?;
+        sync(&target_root)?;
         let target_name = target_name.to_owned();
-        let old = index
+        let mut old = index
             .items
             .iter()
             .find(|e| e.summary.item_id == entry.summary.item_id)
             .cloned();
+        if index.items.iter().any(|item| {
+            item.summary.item_id != entry.summary.item_id
+                && item.summary.item_path == entry.summary.item_path
+        }) {
+            return Err(error(
+                "library_conflict",
+                "Library destination is already owned by another item",
+            ));
+        }
         if old.is_none() && exists(&target_root, &target_name)? {
             return Err(error(
                 "library_conflict",
@@ -500,10 +546,7 @@ impl Store {
             ));
         }
         let predecessor = if let Some(old) = &old {
-            if old.summary.item_path != entry.summary.item_path {
-                return Err(corrupt("item path changed"));
-            }
-            let snapshot = inventory(&self.item_dir(&old.summary.item_path)?)?;
+            let snapshot = owned_inventory(&self.item_dir(&old.summary.item_path)?, old)?;
             check_confirmation(&conflicts(old, &snapshot), confirmed)?;
             Some(snapshot)
         } else {
@@ -515,27 +558,68 @@ impl Store {
                 "Library item limit reached; remove an item before adding another",
             ));
         }
-        upsert(&mut index, entry.clone());
-        index.generation = Uuid::new_v4().to_string();
-        let prospective = serde_json::to_vec_pretty(&index).map_err(|e| corrupt(e.to_string()))?;
+        let mut prospective_index = index.clone();
+        upsert(&mut prospective_index, entry.clone());
+        prospective_index.generation = Uuid::new_v4().to_string();
+        let prospective = serde_json::to_vec_pretty(&prospective_index)
+            .map_err(|e| corrupt(e.to_string()))?;
         if prospective.len() as u64 > MAX_INDEX {
             return Err(error(
                 "library_full",
                 "Library index capacity reached; remove an item before adding another",
             ));
         }
-        let mut method = if old.is_some() {
-            Method::Exchange
+        if let Some(previous_entry) = old.as_ref()
+            && previous_entry.summary.item_path != entry.summary.item_path
+        {
+            if index.items.iter().any(|item| {
+                item.summary.item_id != previous_entry.summary.item_id
+                    && item.summary.item_path == entry.summary.item_path
+            }) || exists(&target_root, &target_name)?
+            {
+                return Err(error("library_conflict", "Library destination is already occupied"));
+            }
+            old = Some(self.move_item(&mut index, previous_entry, &entry.summary.item_path)?);
+        }
+        upsert(&mut index, entry.clone());
+        index.generation = Uuid::new_v4().to_string();
+        let mut method = if let Some(old) = &old {
+            if old.summary.kind == LibraryItemKind::FolderCopy {
+                Method::Exchange
+            } else {
+                Method::Merge
+            }
         } else {
             Method::NewTarget
         };
         #[cfg(test)]
-        if old.is_some()
+        if old
+            .as_ref()
+            .is_some_and(|entry| entry.summary.kind == LibraryItemKind::FolderCopy)
             && self
                 .force_two_rename
                 .load(std::sync::atomic::Ordering::SeqCst)
         {
             method = Method::TwoRename;
+        }
+        if let Some(old) = &old {
+            if old.summary.kind != LibraryItemKind::FolderCopy {
+                let owned = owned_roots(old);
+                for name in owned_roots(&entry) {
+                    if exists(&target_root, &target_name)?
+                        && !owned.iter().any(|old_name| old_name == &name)
+                        && exists(
+                            &target_root.open_dir_nofollow(&target_name).map_err(io_error)?,
+                            &name,
+                        )?
+                    {
+                        return Err(error(
+                            "library_conflict",
+                            format!("Library destination entry is already occupied: {name}"),
+                        ));
+                    }
+                }
+            }
         }
         let id = Uuid::new_v4().to_string();
         let mut intent = Intent {
@@ -550,6 +634,9 @@ impl Store {
             previous_revision: previous.map(str::to_owned),
             old_entry: old.clone(),
             predecessor,
+            source: None,
+            moved_entries: None,
+            move_inventory: None,
             new_entry: Some(entry),
         };
         self.write_intent(&intent)?;
@@ -567,6 +654,11 @@ impl Store {
                     }
                     Err(e) => return Err(io_error(e)),
                 }
+            }
+            if method == Method::Merge {
+                let target = target_root.open_dir_nofollow(&target_name).map_err(io_error)?;
+                self.publish_owned_entries(&target, &stage.dir, &intent)?;
+                self.fault("entry_published")?;
             }
             if method == Method::TwoRename {
                 rename_special(
@@ -633,14 +725,18 @@ impl Store {
             return Err(error("library_conflict", "Library revision changed"));
         }
         let (target_root, target_name) = self.item_parent(&entry.summary.item_path)?;
-        let predecessor = inventory(&self.item_dir(&entry.summary.item_path)?)?;
+        let predecessor = owned_inventory(&self.item_dir(&entry.summary.item_path)?, entry)?;
         check_confirmation(&conflicts(entry, &predecessor), None)?;
         let intent_id = Uuid::new_v4().to_string();
         let intent = Intent {
             schema: 1,
             intent_id: intent_id.clone(),
             op: "remove".into(),
-            method: Method::Remove,
+            method: if entry.summary.kind == LibraryItemKind::FolderCopy {
+                Method::Remove
+            } else {
+                Method::RemoveOwned
+            },
             item_id: id.into(),
             target: entry.summary.item_path.clone(),
             staging: None,
@@ -648,17 +744,29 @@ impl Store {
             previous_revision: Some(revision.into()),
             old_entry: Some(entry.clone()),
             predecessor: Some(predecessor),
+            source: None,
+            moved_entries: None,
+            move_inventory: None,
             new_entry: None,
         };
         self.write_intent(&intent)?;
-        rename_special(
-            &target_root,
-            target_name,
-            &self.trash,
-            &intent.backup,
-            false,
-        )
-        .map_err(io_error)?;
+        if intent.method == Method::Remove {
+            rename_special(
+                &target_root,
+                target_name,
+                &self.trash,
+                &intent.backup,
+                false,
+            ).map_err(io_error)?;
+        } else {
+            let target = self.item_dir(&entry.summary.item_path)?;
+            let backup = open_child(&self.trash, &intent.backup)?;
+            for name in owned_roots(entry) {
+                if exists(&target, &name)? {
+                    rename_special(&target, &name, &backup, &name, false).map_err(io_error)?;
+                }
+            }
+        }
         self.fault("rename_unsynced")?;
         sync(&target_root)?;
         sync(&self.trash)?;
@@ -666,7 +774,28 @@ impl Store {
         index.items.retain(|e| e.summary.item_id != id);
         self.commit(&mut index)?;
         self.fault("index_commit")?;
-        self.finish(&intent)
+        self.finish(&intent)?;
+        if intent.method == Method::RemoveOwned {
+            self.prune_empty(&intent.target)?;
+        }
+        Ok(())
+    }
+    fn prune_empty(&self, path: &str) -> Result<(), InspectionError> {
+        let parts = path.split('/').collect::<Vec<_>>();
+        for count in (2..=parts.len()).rev() {
+            let prefix = parts[..count].join("/");
+            let (parent, leaf) = self.item_parent(&prefix)?;
+            let Ok(dir) = parent.open_dir_nofollow(leaf) else {
+                continue;
+            };
+            if dir.entries().map_err(io_error)?.next().is_none() {
+                parent.remove_dir(leaf).map_err(io_error)?;
+                sync(&parent)?;
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
     fn write_intent(&self, intent: &Intent) -> Result<(), InspectionError> {
         bounded_write(
@@ -701,6 +830,33 @@ impl Store {
             validate_intent(&intent, &name)?;
             let (target_root, target_name) = self.item_parent(&intent.target)?;
             let target = exists(&target_root, target_name)?;
+            if intent.method == Method::Move {
+                let source = intent.source.as_deref().ok_or_else(|| corrupt("move intent has no source"))?;
+                let (source_root, source_name) = self.item_parent(source)?;
+                let source_exists = exists(&source_root, source_name)?;
+                let expected = intent.move_inventory.as_ref().ok_or_else(|| corrupt("move intent has no inventory"))?;
+                let at_source = source_exists
+                    && source_root.open_dir_nofollow(source_name).ok()
+                        .is_some_and(|dir| inventory(&dir).is_ok_and(|actual| actual == *expected));
+                let at_target = target
+                    && target_root.open_dir_nofollow(target_name).ok()
+                        .is_some_and(|dir| inventory(&dir).is_ok_and(|actual| actual == *expected));
+                if at_source && !target {
+                    self.sync_transition(&intent)?;
+                    self.finish(&intent)?;
+                    continue;
+                }
+                if at_target && !source_exists {
+                    self.sync_transition(&intent)?;
+                    for moved in intent.moved_entries.as_ref().ok_or_else(|| corrupt("move intent has no entries"))? {
+                        upsert(&mut index, moved.clone());
+                    }
+                    self.commit(&mut index)?;
+                    self.finish(&intent)?;
+                    continue;
+                }
+                return Err(corrupt("move journal does not match a recoverable filesystem state"));
+            }
             let backup = exists(&self.trash, &intent.backup)?;
             let target_new = intent.new_entry.as_ref().is_some_and(|entry| {
                 target_root
@@ -710,16 +866,27 @@ impl Store {
             });
             let is_old = |parent: &Dir, name: &str| {
                 intent.predecessor.as_ref().is_some_and(|snapshot| {
-                    parent
-                        .open_dir_nofollow(name)
-                        .ok()
-                        .is_some_and(|dir| inventory(&dir).is_ok_and(|actual| actual == *snapshot))
+                    intent.old_entry.as_ref().is_some_and(|entry| {
+                        parent
+                            .open_dir_nofollow(name)
+                            .ok()
+                            .is_some_and(|dir| owned_inventory(&dir, entry).is_ok_and(|actual| actual == *snapshot))
+                    })
                 })
             };
             let target_old = is_old(&target_root, target_name);
             let mut forward = false;
             let mut rollback = false;
             match intent.method {
+                Method::Merge if target_old && !backup => rollback = true,
+                Method::Merge if target && target_new => forward = true,
+                Method::Merge if target => {
+                    let target_dir = target_root.open_dir_nofollow(target_name).map_err(io_error)?;
+                    let stage = intent.staging.as_ref().unwrap();
+                    let stage_dir = self.staging.open_dir_nofollow(stage).map_err(io_error)?;
+                    self.publish_owned_entries(&target_dir, &stage_dir, &intent)?;
+                    forward = true;
+                }
                 Method::Remove if target && !backup => rollback = target_old,
                 Method::Remove if !target && backup && is_old(&self.trash, &intent.backup) => {
                     self.sync_transition(&intent)?;
@@ -727,6 +894,25 @@ impl Store {
                     self.commit(&mut index)?;
                     self.finish(&intent)?;
                     continue;
+                }
+                Method::RemoveOwned if target => {
+                    let target_dir = target_root.open_dir_nofollow(target_name).map_err(io_error)?;
+                    let backup_dir = open_child(&self.trash, &intent.backup)?;
+                    let old = intent.old_entry.as_ref().unwrap();
+                    for name in owned_roots(old) {
+                        if exists(&target_dir, &name)? && !exists(&backup_dir, &name)? {
+                            rename_special(&target_dir, &name, &backup_dir, &name, false)
+                                .map_err(io_error)?;
+                        }
+                    }
+                    if owned_inventory(&backup_dir, old)? == *intent.predecessor.as_ref().unwrap() {
+                        self.sync_transition(&intent)?;
+                        index.items.retain(|e| e.summary.item_id != intent.item_id);
+                        self.commit(&mut index)?;
+                        self.finish(&intent)?;
+                        self.prune_empty(&intent.target)?;
+                        continue;
+                    }
                 }
                 Method::NewTarget if !target => rollback = true,
                 Method::NewTarget if target_new => forward = true,
@@ -803,14 +989,165 @@ impl Store {
         }
         Ok(())
     }
+    fn move_item(
+        &self,
+        index: &mut Index,
+        old: &LibraryIndexEntry,
+        new_path: &str,
+    ) -> Result<LibraryIndexEntry, InspectionError> {
+        let source_dir = self.item_dir(&old.summary.item_path)?;
+        let move_inventory = inventory(&source_dir)?;
+        let old_prefix = format!("{}/", old.summary.item_path);
+        let mut moved_entries = Vec::with_capacity(index.items.len());
+        for item in &index.items {
+            let mut moved = if item.summary.item_id == old.summary.item_id {
+                old.clone()
+            } else {
+                item.clone()
+            };
+            if moved.summary.item_path == old.summary.item_path
+                || moved.summary.item_path.starts_with(&old_prefix)
+            {
+                moved.summary.item_path = format!(
+                    "{new_path}{}",
+                    moved.summary.item_path.strip_prefix(&old.summary.item_path).unwrap()
+                );
+                if let Some(document) = moved.summary.document_path.as_mut()
+                    && (document == &old.summary.item_path || document.starts_with(&old_prefix))
+                {
+                    *document = format!(
+                        "{new_path}{}",
+                        document.strip_prefix(&old.summary.item_path).unwrap()
+                    );
+                }
+            }
+            moved_entries.push(moved);
+        }
+        let moved_ids = moved_entries
+            .iter()
+            .map(|entry| entry.summary.item_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        if moved_entries.iter().any(|entry| {
+            index.items.iter().any(|existing| {
+                !moved_ids.contains(existing.summary.item_id.as_str())
+                    && existing.summary.item_path == entry.summary.item_path
+            })
+        }) {
+            return Err(error("library_conflict", "Moved Library item collides with an existing path"));
+        }
+        let moved_entry = moved_entries
+            .iter()
+            .find(|entry| entry.summary.item_id == old.summary.item_id)
+            .cloned()
+            .ok_or_else(|| corrupt("moved item disappeared from index"))?;
+        let mut prospective = index.clone();
+        for moved in &moved_entries {
+            upsert(&mut prospective, moved.clone());
+        }
+        prospective.generation = Uuid::new_v4().to_string();
+        if serde_json::to_vec_pretty(&prospective)
+            .map_err(|e| corrupt(e.to_string()))?
+            .len() as u64 > MAX_INDEX
+        {
+            return Err(error(
+                "library_full",
+                "Library index capacity reached; remove an item before moving it",
+            ));
+        }
+        let (source_root, source_name) = self.item_parent(&old.summary.item_path)?;
+        let (target_root, target_name) = self.create_item_parent(new_path)?;
+        if exists(&target_root, target_name)? {
+            return Err(error("library_conflict", "Library destination is already occupied"));
+        }
+        let id = Uuid::new_v4().to_string();
+        let intent = Intent {
+            schema: 1,
+            intent_id: id.clone(),
+            op: "move".into(),
+            method: Method::Move,
+            item_id: old.summary.item_id.clone(),
+            target: new_path.to_owned(),
+            staging: None,
+            backup: id,
+            previous_revision: Some(old.summary.revision.clone()),
+            new_entry: Some(moved_entry.clone()),
+            old_entry: Some(old.clone()),
+            predecessor: Some(owned_inventory(&source_dir, old)?),
+            source: Some(old.summary.item_path.clone()),
+            moved_entries: Some(moved_entries.clone()),
+            move_inventory: Some(move_inventory),
+        };
+        self.write_intent(&intent)?;
+        let result = (|| {
+            self.fault("move_journal")?;
+            rename_special(&source_root, source_name, &target_root, target_name, false)
+                .map_err(io_error)?;
+            sync(&source_root)?;
+            sync(&target_root)?;
+            self.fault("move_renamed")?;
+            for moved in moved_entries {
+                upsert(index, moved);
+            }
+            self.commit(index)?;
+            self.fault("move_index_commit")?;
+            self.finish(&intent)
+        })();
+        if let Err(error) = &result {
+            if error.code != "library_test_crash" {
+                self.recover()?;
+            }
+        }
+        result?;
+        self.prune_empty(intent.source.as_deref().unwrap())?;
+        Ok(moved_entry)
+    }
+    fn publish_owned_entries(
+        &self,
+        target: &Dir,
+        stage: &Dir,
+        intent: &Intent,
+    ) -> Result<(), InspectionError> {
+        let old_roots = intent.old_entry.as_ref().map(owned_roots).unwrap_or_default();
+        let new_roots = owned_roots(intent.new_entry.as_ref().ok_or_else(|| corrupt("merge has no new entry"))?);
+        let backup = open_child(&self.trash, &intent.backup)?;
+        for name in &old_roots {
+            if exists(target, name)? && !exists(&backup, name)? {
+                rename_special(target, name, &backup, name, false).map_err(io_error)?;
+            }
+        }
+        sync(target)?;
+        sync(&backup)?;
+        self.fault("entries_backed_up")?;
+        for name in &new_roots {
+            if exists(stage, name)? {
+                if exists(target, name)? {
+                    return Err(error(
+                        "library_conflict",
+                        format!("Library destination entry is already occupied: {name}"),
+                    ));
+                }
+                rename_special(stage, name, target, name, false).map_err(io_error)?;
+            }
+        }
+        sync(target)?;
+        sync(stage)?;
+        sync(&self.trash)?;
+        verify_entry(target, intent.new_entry.as_ref().unwrap())
+    }
     fn sync_transition(&self, intent: &Intent) -> Result<(), InspectionError> {
         self.fault("recovery_sync")?;
         sync(&self.item_parent(&intent.target)?.0)?;
         if intent.staging.is_some() {
             sync(&self.staging)?;
         }
-        if matches!(intent.method, Method::TwoRename | Method::Remove) {
+        if matches!(
+            intent.method,
+            Method::TwoRename | Method::Remove | Method::RemoveOwned | Method::Merge
+        ) {
             sync(&self.trash)?;
+        }
+        if let Some(source) = &intent.source {
+            sync(&self.item_parent(source)?.0)?;
         }
         Ok(())
     }
@@ -842,6 +1179,21 @@ fn validate_entry(entry: &LibraryIndexEntry) -> Result<(), InspectionError> {
     {
         return Err(corrupt("invalid trusted item inventory"));
     }
+    if entry.summary.kind == LibraryItemKind::ProviderSnapshot {
+        let document = entry.summary.document_path.as_deref()
+            .and_then(|path| path.strip_prefix(&format!("{}/", entry.summary.item_path)))
+            .filter(|path| component(path) && path.ends_with(".md"))
+            .ok_or_else(|| corrupt("provider entry has invalid document path"))?;
+        if entry.inventory.iter().any(|file| {
+            file.path != document && file.path != crate::library::layout::FILES_DIR
+                && !file.path.starts_with(&format!("{}/", crate::library::layout::FILES_DIR))
+        }) {
+            return Err(corrupt("provider inventory contains an unowned path"));
+        }
+    }
+    for file in &entry.inventory {
+        safe_file_path(&file.path)?;
+    }
     Ok(())
 }
 fn validate_intent(i: &Intent, name: &str) -> Result<(), InspectionError> {
@@ -856,8 +1208,35 @@ fn validate_intent(i: &Intent, name: &str) -> Result<(), InspectionError> {
     {
         return Err(corrupt("invalid journal paths"));
     }
-    if i.method == Method::Remove {
-        if i.op != "remove" || i.new_entry.is_some() || i.staging.is_some() {
+    if i.method == Method::Move {
+        let old = i.old_entry.as_ref().ok_or_else(|| corrupt("move has no old entry"))?;
+        let new = i.new_entry.as_ref().ok_or_else(|| corrupt("move has no new entry"))?;
+        let source = i.source.as_deref().ok_or_else(|| corrupt("move has no source"))?;
+        validate_entry(old)?;
+        validate_entry(new)?;
+        let moved = i.moved_entries.as_ref().ok_or_else(|| corrupt("move has no entries"))?;
+        if i.op != "move"
+            || i.staging.is_some()
+            || i.target == source
+            || old.summary.item_id != i.item_id
+            || old.summary.item_path != source
+            || new.summary.item_id != i.item_id
+            || new.summary.item_path != i.target
+            || old.summary.revision != new.summary.revision
+            || i.previous_revision.as_deref() != Some(old.summary.revision.as_str())
+            || i.predecessor.is_none()
+            || i.move_inventory.is_none()
+            || !moved.iter().any(|entry| entry.summary.item_id == i.item_id && entry.summary.item_path == i.target)
+        {
+            return Err(corrupt("invalid move intent"));
+        }
+        for entry in moved {
+            validate_entry(entry)?;
+        }
+        return Ok(());
+    }
+    if matches!(i.method, Method::Remove | Method::RemoveOwned) {
+        if i.op != "remove" || i.new_entry.is_some() || i.staging.is_some() || i.old_entry.is_none() {
             return Err(corrupt("invalid remove intent"));
         }
     } else {
@@ -927,21 +1306,6 @@ fn remove_tree(dir: &Dir, name: &str) -> Result<(), InspectionError> {
         sync(dir)?;
     }
     Ok(())
-}
-fn read_marker(dir: &Dir) -> Result<Marker, InspectionError> {
-    let marker: Marker =
-        read_json_bounded(dir, MARKER, MAX_RECORD).map_err(|e| corrupt(e.message))?;
-    if marker.schema != 1 || marker.files.len() > 100_000 {
-        return Err(corrupt("unsupported marker"));
-    }
-    let mut paths = std::collections::HashSet::new();
-    for file in &marker.files {
-        if !paths.insert(&file.path) || file.path == MARKER || file.bytes > MAX_FILE {
-            return Err(corrupt("invalid marker file"));
-        }
-        safe_file_path(&file.path)?;
-    }
-    Ok(marker)
 }
 fn safe_file_path(path: &str) -> Result<(), InspectionError> {
     if path.is_empty()
@@ -1067,6 +1431,51 @@ fn inventory(dir: &Dir) -> Result<Vec<MarkerFile>, InspectionError> {
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }
+fn owned_inventory(
+    dir: &Dir,
+    entry: &LibraryIndexEntry,
+) -> Result<Vec<MarkerFile>, InspectionError> {
+    if entry.summary.kind == LibraryItemKind::FolderCopy {
+        return inventory(dir);
+    }
+    let mut files = Vec::new();
+    if let Some(document) = entry
+        .summary
+        .document_path
+        .as_deref()
+        .and_then(|path| path.strip_prefix(&format!("{}/", entry.summary.item_path)))
+        .filter(|name| component(name))
+    {
+        if exists(dir, document)? {
+            let (hash, bytes) = file_hash(dir, document)?;
+            files.push(MarkerFile {
+                path: document.to_owned(),
+                hash,
+                bytes,
+            });
+        }
+    }
+    if exists(dir, crate::library::layout::FILES_DIR)? {
+        let files_dir = dir
+            .open_dir_nofollow(crate::library::layout::FILES_DIR)
+            .map_err(io_error)?;
+        files.push(MarkerFile {
+            path: crate::library::layout::FILES_DIR.into(),
+            hash: "directory".into(),
+            bytes: 0,
+        });
+        files.extend(
+            inventory(&files_dir)?
+                .into_iter()
+                .map(|mut file| {
+                    file.path = format!("{}/{}", crate::library::layout::FILES_DIR, file.path);
+                    file
+                }),
+        );
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
 fn conflicts(entry: &LibraryIndexEntry, actual: &[MarkerFile]) -> Vec<LibraryConflictFile> {
     let mut expected = entry.inventory.iter().peekable();
     let mut current = actual.iter().peekable();
@@ -1124,30 +1533,37 @@ fn check_confirmation(
     }
     Ok(())
 }
-fn verify(dir: &Dir, id: &str, revision: &str) -> Result<(), InspectionError> {
-    let marker = read_marker(dir)?;
-    if marker.item_id != id || marker.revision != revision {
-        return Err(corrupt("marker identity mismatch"));
-    }
-    for file in marker.files {
-        let (hash, bytes) = file_hash(dir, &file.path)?;
-        if hash != file.hash || bytes != file.bytes {
-            return Err(corrupt("marker file hash mismatch"));
-        }
+
+fn verify_entry(dir: &Dir, entry: &LibraryIndexEntry) -> Result<(), InspectionError> {
+    if owned_inventory(dir, entry)? != entry.inventory {
+        return Err(corrupt(
+            "published owned-entry inventory differs from the journaled entry",
+        ));
     }
     Ok(())
 }
-
-fn verify_entry(dir: &Dir, entry: &LibraryIndexEntry) -> Result<(), InspectionError> {
-    if inventory(dir)? != entry.inventory {
-        return Err(corrupt(
-            "published inventory differs from the journaled entry",
-        ));
+fn owned_roots(entry: &LibraryIndexEntry) -> Vec<String> {
+    let mut roots = Vec::new();
+    if entry.summary.kind == LibraryItemKind::FolderCopy {
+        return roots;
     }
-    if entry.marker_hash.as_deref() != Some(&file_hash(dir, MARKER)?.0) {
-        return Err(corrupt("published marker differs from the journaled entry"));
+    if let Some(name) = entry
+        .summary
+        .document_path
+        .as_deref()
+        .and_then(|path| path.strip_prefix(&format!("{}/", entry.summary.item_path)))
+        .filter(|name| component(name))
+    {
+        roots.push(name.to_owned());
     }
-    verify(dir, &entry.summary.item_id, &entry.summary.revision)
+    if entry
+        .inventory
+        .iter()
+        .any(|file| file.path == crate::library::layout::FILES_DIR || file.path.starts_with("_files/"))
+    {
+        roots.push(crate::library::layout::FILES_DIR.to_owned());
+    }
+    roots
 }
 
 #[cfg(test)]
@@ -1222,10 +1638,7 @@ mod tests {
             serde_json::to_value(&index.items[0]).unwrap(),
             serde_json::to_value(expected).unwrap()
         );
-        let dir = store
-            .root
-            .open_dir_nofollow(&expected.summary.item_path)
-            .unwrap();
+        let dir = store.item_dir(&expected.summary.item_path).unwrap();
         assert_eq!(dir.read("first.txt").unwrap(), bytes);
         assert_eq!(dir.read("second.txt").unwrap(), bytes);
         assert_eq!(store.journal.entries().unwrap().count(), 0);
@@ -1435,14 +1848,9 @@ mod tests {
             let lock = reader_store.shared().unwrap();
             held_tx.send(()).unwrap();
             release_rx.recv().unwrap();
-            let dir = reader_store
-                .root
-                .open_dir_nofollow(&old_for_reader.summary.item_path)
-                .unwrap();
-            assert_eq!(
-                read_marker(&dir).unwrap().revision,
-                old_for_reader.summary.revision
-            );
+            let dir = reader_store.item_dir(&old_for_reader.summary.item_path).unwrap();
+            assert!(verify_entry(&dir, &old_for_reader).is_ok());
+            assert!(!exists(&dir, ".cockpit-item.json").unwrap());
             assert_eq!(dir.read("first.txt").unwrap(), b"old");
             assert_eq!(dir.read("second.txt").unwrap(), b"old");
             drop(lock);
@@ -1478,10 +1886,7 @@ mod tests {
         store.publish(stage, old.clone(), None, None).unwrap();
         let (stage, new) = folder(&store, &origin, Some(&old), b"new");
         let name = stage.name.clone();
-        let target = store
-            .root
-            .open_dir_nofollow(&old.summary.item_path)
-            .unwrap();
+        let target = store.item_dir(&old.summary.item_path).unwrap();
         atomic_write_bytes(&target, "second.txt", b"user edited during fetch").unwrap();
         assert_eq!(
             store
@@ -1533,11 +1938,9 @@ mod tests {
         let store = f.service.open().unwrap();
         let origin = f.root.join("origin.txt");
         let (stage, entry) = folder(&store, &origin, None, b"new");
-        store.root.create_dir(&entry.summary.item_path).unwrap();
-        let occupied = store
-            .root
-            .open_dir_nofollow(&entry.summary.item_path)
-            .unwrap();
+        let (parent, leaf) = store.create_item_parent(&entry.summary.item_path).unwrap();
+        parent.create_dir(leaf).unwrap();
+        let occupied = store.item_dir(&entry.summary.item_path).unwrap();
         atomic_write_bytes(&occupied, "user.txt", b"keep me").unwrap();
 
         assert_eq!(
@@ -1550,8 +1953,7 @@ mod tests {
         assert_eq!(reopened.journal.entries().unwrap().count(), 0);
         assert_eq!(
             reopened
-                .root
-                .open_dir_nofollow(&entry.summary.item_path)
+                .item_dir(&entry.summary.item_path)
                 .unwrap()
                 .read("user.txt")
                 .unwrap(),
@@ -1594,16 +1996,13 @@ mod tests {
         assert_eq!(recovered.journal.entries().unwrap().count(), 0);
     }
     #[test]
-    fn added_files_and_directories_refuse_replacement_and_removal_without_confirmation() {
+    fn unowned_files_and_child_directories_survive_replace_and_remove() {
         let f = fixture();
         let store = f.service.open().unwrap();
         let mut old = asset_entry(&asset(1, "old"), None);
         let stage = store.stage_asset(&mut old, &asset(1, "old")).unwrap();
         store.publish(stage, old.clone(), None, None).unwrap();
-        let target = store
-            .root
-            .open_dir_nofollow(&old.summary.item_path)
-            .unwrap();
+        let target = store.item_dir(&old.summary.item_path).unwrap();
         atomic_write_bytes(&target, "notes.md", b"user notes").unwrap();
         target.create_dir("empty").unwrap();
         target.create_dir("nested").unwrap();
@@ -1613,109 +2012,49 @@ mod tests {
             b"user draft",
         )
         .unwrap();
-        let confirmed = store.conflicts(&old).unwrap();
-        assert_eq!(
-            confirmed
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["empty", "nested", "nested/draft.md", "notes.md"]
-        );
+        assert!(store.conflicts(&old).unwrap().is_empty());
         let mut new = asset_entry(&asset(1, "new"), Some(&old));
         let stage = store.stage_asset(&mut new, &asset(1, "new")).unwrap();
-        assert_eq!(
-            store
-                .publish(stage, new, Some(&old.summary.revision), None)
-                .unwrap_err()
-                .code,
-            "library_conflict"
-        );
-        assert_eq!(
-            store
-                .remove(&old.summary.item_id, &old.summary.revision)
-                .unwrap_err()
-                .code,
-            "library_conflict"
-        );
+        store.publish(stage, new.clone(), Some(&old.summary.revision), None).unwrap();
         assert_eq!(target.read("notes.md").unwrap(), b"user notes");
         assert_eq!(
-            target
-                .open_dir_nofollow("nested")
-                .unwrap()
-                .read("draft.md")
-                .unwrap(),
+            target.open_dir_nofollow("nested").unwrap().read("draft.md").unwrap(),
             b"user draft"
         );
-        assert!(target.open_dir_nofollow("empty").is_ok());
-        atomic_write_bytes(&target, "notes.md", b"later notes").unwrap();
-        let mut new = asset_entry(&asset(1, "new"), Some(&old));
-        let stage = store.stage_asset(&mut new, &asset(1, "new")).unwrap();
+        store.remove(&new.summary.item_id, &new.summary.revision).unwrap();
+        assert_eq!(target.read("notes.md").unwrap(), b"user notes");
         assert_eq!(
-            store
-                .publish(stage, new, Some(&old.summary.revision), Some(&confirmed))
-                .unwrap_err()
-                .code,
-            "library_conflict"
+            target.open_dir_nofollow("nested").unwrap().read("draft.md").unwrap(),
+            b"user draft"
         );
-        assert_eq!(target.read("notes.md").unwrap(), b"later notes");
     }
 
     #[test]
-    fn tampered_or_missing_marker_never_bypasses_document_publish_cas() {
-        for missing in [false, true] {
-            let f = fixture();
-            let store = f.service.open().unwrap();
-            let mut old = asset_entry(&asset(1, "old"), None);
-            let stage = store.stage_asset(&mut old, &asset(1, "old")).unwrap();
-            store.publish(stage, old.clone(), None, None).unwrap();
-            let target = store
-                .root
-                .open_dir_nofollow(&old.summary.item_path)
-                .unwrap();
-            if missing {
-                target.remove_file(MARKER).unwrap();
-            } else {
-                atomic_write_bytes(
-                    &target,
-                    MARKER,
-                    br#"{"schema":1,"item_id":"forged","revision":"forged","files":[]}"#,
-                )
-                .unwrap();
-            }
-            atomic_write_bytes(&target, "document.md", b"confirmed edit").unwrap();
-            atomic_write_bytes(&target, "notes.md", b"added notes").unwrap();
-            let confirmed = store.conflicts(&old).unwrap();
-            assert_eq!(
-                confirmed
-                    .iter()
-                    .map(|f| f.path.as_str())
-                    .collect::<Vec<_>>(),
-                vec![MARKER, "document.md", "notes.md"]
-            );
-            store.check_confirmation(&old, Some(&confirmed)).unwrap();
-            let mut new = asset_entry(&asset(1, "new"), Some(&old));
-            let stage = store.stage_asset(&mut new, &asset(1, "new")).unwrap();
-            atomic_write_bytes(&target, "document.md", b"edited after confirmation").unwrap();
-            assert_eq!(
-                store
-                    .publish(stage, new, Some(&old.summary.revision), Some(&confirmed))
-                    .unwrap_err()
-                    .code,
-                "library_conflict"
-            );
-            assert_eq!(
-                store
-                    .remove(&old.summary.item_id, &old.summary.revision)
-                    .unwrap_err()
-                    .code,
-                "library_conflict"
-            );
-            assert_eq!(
-                target.read("document.md").unwrap(),
-                b"edited after confirmation"
-            );
-            assert_eq!(target.read("notes.md").unwrap(), b"added notes");
-        }
+    fn edited_owned_document_blocks_publish_while_user_files_remain_unowned() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let mut old = asset_entry(&asset(1, "old"), None);
+        let stage = store.stage_asset(&mut old, &asset(1, "old")).unwrap();
+        store.publish(stage, old.clone(), None, None).unwrap();
+        let target = store.item_dir(&old.summary.item_path).unwrap();
+        let document = old.summary.document_path.as_deref()
+            .unwrap().strip_prefix(&format!("{}/", old.summary.item_path)).unwrap();
+        atomic_write_bytes(&target, document, b"user edit").unwrap();
+        atomic_write_bytes(&target, "notes.txt", b"user note").unwrap();
+        let child = open_child(&target, "child").unwrap();
+        atomic_write_bytes(&child, "child.md", b"child document").unwrap();
+        assert_eq!(
+            store.conflicts(&old).unwrap().iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            vec![document]
+        );
+        let mut new = asset_entry(&asset(1, "old"), Some(&old));
+        let stage = store.stage_asset(&mut new, &asset(1, "old")).unwrap();
+        assert_eq!(
+            store.publish(stage, new, Some(&old.summary.revision), None).unwrap_err().code,
+            "library_conflict"
+        );
+        assert_eq!(target.read("notes.txt").unwrap(), b"user note");
+        assert_eq!(child.read("child.md").unwrap(), b"child document");
     }
 
     #[test]
@@ -1736,7 +2075,6 @@ mod tests {
                 .unwrap();
             atomic_write_bytes(&target, "first.txt", b"confirmed user edit").unwrap();
             atomic_write_bytes(&target, "notes.md", b"confirmed addition").unwrap();
-            target.remove_file(MARKER).unwrap();
             let confirmed = store.conflicts(&old).unwrap();
             let snapshot = inventory(&target).unwrap();
             let (stage, new) = folder(&store, &origin, Some(&old), b"new");
@@ -1903,5 +2241,113 @@ mod tests {
             assert_eq!(std::fs::read(&origin).unwrap(), b"outside content");
         }
         assert_eq!(target.read("second.txt").unwrap(), b"old");
+    }
+    #[test]
+    fn merge_publication_recovers_per_owned_entry_transition() {
+        for (point, expect_new) in [("journal", false), ("entries_backed_up", true), ("entry_published", true)] {
+            let f = fixture();
+            let store = f.service.open().unwrap();
+            let mut old = asset_entry(&asset(1, "old body"), None);
+            let stage = store.stage_asset(&mut old, &asset(1, "old body")).unwrap();
+            store.publish(stage, old.clone(), None, None).unwrap();
+            let mut new = asset_entry(&asset(1, "new body"), Some(&old));
+            let stage = store.stage_asset(&mut new, &asset(1, "new body")).unwrap();
+            fault(&store, point);
+            assert_eq!(
+                store.publish(stage, new.clone(), Some(&old.summary.revision), None).unwrap_err().code,
+                "library_test_crash"
+            );
+            let recovered = reopen(&f).open().unwrap();
+            let current = recovered.index().unwrap().items.remove(0);
+            if expect_new {
+                assert_eq!(current.summary.revision, new.summary.revision);
+                let dir = recovered.item_dir(&current.summary.item_path).unwrap();
+                let name = current.summary.document_path.as_deref().unwrap()
+                    .strip_prefix(&format!("{}/", current.summary.item_path)).unwrap();
+                assert!(String::from_utf8(dir.read(name).unwrap()).unwrap().contains("new body"));
+            } else {
+                assert_eq!(current.summary.revision, old.summary.revision);
+                let dir = recovered.item_dir(&current.summary.item_path).unwrap();
+                let name = current.summary.document_path.as_deref().unwrap()
+                    .strip_prefix(&format!("{}/", current.summary.item_path)).unwrap();
+                assert!(String::from_utf8(dir.read(name).unwrap()).unwrap().contains("old body"));
+            }
+            assert_eq!(recovered.journal.entries().unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn moving_parent_recovers_index_and_descendant_paths() {
+        for (point, moved) in [("move_journal", false), ("move_renamed", true)] {
+            let f = fixture();
+            let store = f.service.open().unwrap();
+            let mut parent_asset = asset(1, "parent body");
+            parent_asset.title = "Parent".into();
+            parent_asset.source.provider_id = "confluence".into();
+            parent_asset.source.provider_instance = "https://acme.atlassian.net/wiki".into();
+            parent_asset.source.resource_type = "page".into();
+            parent_asset.source.canonical_id = "100".into();
+            parent_asset.source_url = Some("https://acme.atlassian.net/wiki/pages/100".into());
+            parent_asset.container = Some(crate::sources::SourceContainer {
+                id: "SPACE".into(),
+                label: "SPACE · Space".into(),
+            });
+            let mut parent = asset_entry(&parent_asset, None);
+            let stage = store.stage_asset(&mut parent, &parent_asset).unwrap();
+            store.publish(stage, parent.clone(), None, None).unwrap();
+
+            let mut child_asset = asset(2, "child body");
+            child_asset.title = "Child".into();
+            child_asset.source.provider_id = "confluence".into();
+            child_asset.source.provider_instance = "https://acme.atlassian.net/wiki".into();
+            child_asset.source.resource_type = "page".into();
+            child_asset.source.canonical_id = "101".into();
+            child_asset.source_url = Some("https://acme.atlassian.net/wiki/pages/101".into());
+            child_asset.container = parent_asset.container.clone();
+            let mut child = asset_entry(&child_asset, None);
+            child.summary.parent_item_id = Some(parent.summary.item_id.clone());
+            child.summary.item_path = format!("{}/Child", parent.summary.item_path);
+            child.summary.document_path = Some(format!("{}/Child.md", child.summary.item_path));
+            let stage = store.stage_asset(&mut child, &child_asset).unwrap();
+            store.publish(stage, child.clone(), None, None).unwrap();
+
+            let mut renamed_asset = parent_asset.clone();
+            renamed_asset.title = "Parent Renamed".into();
+            let mut renamed = asset_entry(&renamed_asset, Some(&parent));
+            let stage = store.stage_asset(&mut renamed, &renamed_asset).unwrap();
+            fault(&store, point);
+            assert_eq!(
+                store.publish(stage, renamed.clone(), Some(&parent.summary.revision), None).unwrap_err().code,
+                "library_test_crash"
+            );
+            let recovered = reopen(&f).open().unwrap();
+            let items = recovered.index().unwrap().items;
+            let saved_parent = items.iter().find(|item| item.summary.item_id == parent.summary.item_id).unwrap();
+            let saved_child = items.iter().find(|item| item.summary.item_id == child.summary.item_id).unwrap();
+            if moved {
+                assert_eq!(saved_parent.summary.item_path, renamed.summary.item_path);
+                assert_eq!(saved_child.summary.item_path, format!("{}/Child", renamed.summary.item_path));
+                assert_eq!(
+                    saved_child.summary.document_path.as_deref(),
+                    Some(format!("{}/Child/Child.md", renamed.summary.item_path).as_str())
+                );
+            } else {
+                assert_eq!(saved_parent.summary.item_path, parent.summary.item_path);
+                assert_eq!(saved_child.summary.item_path, child.summary.item_path);
+                assert_eq!(saved_child.summary.document_path, child.summary.document_path);
+            }
+            assert_eq!(recovered.journal.entries().unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn schema_one_index_requires_readding_library() {
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        atomic_write_bytes(&store.meta, "index.json", br#"{"schema":1}"#).unwrap();
+        let error = store.index().unwrap_err();
+        assert_eq!(error.code, "library_layout_outdated");
+        assert!(error.message.contains(&store.path.display().to_string()));
+        assert!(error.message.contains("delete this Library root and re-add it"));
     }
 }

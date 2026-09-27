@@ -143,7 +143,11 @@ it("indexes unopened nested files for the picker and opens the selected result",
   const mounted = createRoot(host);
   const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
     binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: request.path === ""
-      ? [{ entry_id: "nested", name: "nested", path: "nested", kind: "directory", bytes: null, revision: "r1", refusal: null }]
+      ? [
+        { entry_id: "internal", name: ".cockpit", path: ".cockpit", kind: "directory", bytes: null, revision: "r1", refusal: null },
+        { entry_id: "internal-file", name: "index.json", path: ".cockpit/index.json", kind: "file", bytes: 12, revision: "r1", refusal: null },
+        { entry_id: "nested", name: "nested", path: "nested", kind: "directory", bytes: null, revision: "r1", refusal: null },
+      ]
       : [{ entry_id: "target", name: "target.md", path: "nested/target.md", kind: "file", bytes: 12, revision: "r2", refusal: null }],
   }));
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r2", content_hash: null, bytes: 12, media_type: "text/markdown", text: "# Target", truncated: false, diagnostics: [] }));
@@ -161,6 +165,8 @@ it("indexes unopened nested files for the picker and opens the selected result",
     await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
     await settle(); await settle(); await settle();
     expect(directory.mock.calls.map((call) => call[2].path)).toContain("nested");
+    expect(directory.mock.calls.map((call) => call[2].path)).not.toContain(".cockpit");
+    expect(host.querySelector(".file-picker-results")?.textContent).not.toContain(".cockpit");
     const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.textContent?.includes("nested/target.md"));
     expect(result).toBeDefined();
     await act(async () => result?.click());
@@ -388,7 +394,7 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
   const item: LibraryItemSummary = {
     item_id: "source:mr", logical_id: "source:gitlab:https://gitlab.test:review:platform/api!482", kind: "provider_snapshot", provider_id: "gitlab", provider_instance: "https://gitlab.test", resource_type: "review",
     canonical_id: "platform/api!482", container: { container_id: "platform/api", label: "platform/api" }, parent_item_id: null, ancestors: [], order: null, title: "Fix token refresh race",
-    document_path: "gitlab/mr-482/document.md", item_path: "gitlab/mr-482", source_url: "https://gitlab.test/platform/api/-/merge_requests/482", original_url: null, source_revision: "abc", revision: "sha256:r1",
+    document_path: "gitlab/gitlab.test/platform/api/merge-requests/482/Fix token refresh race.md", item_path: "gitlab/gitlab.test/platform/api/merge-requests/482", source_url: "https://gitlab.test/platform/api/-/merge_requests/482", original_url: null, source_revision: "abc", revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
   };
   const listing: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
@@ -427,7 +433,7 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
 
     await act(async () => row.click());
     await flush();
-    expect(client.libraryDocument).toHaveBeenCalledWith({ path: "gitlab/mr-482/document.md", expected_revision: null, offset: null }, expect.any(AbortSignal));
+    expect(client.libraryDocument).toHaveBeenCalledWith({ path: "gitlab/gitlab.test/platform/api/merge-requests/482/Fix token refresh race.md", expected_revision: null, offset: null }, expect.any(AbortSignal));
     expect(host.querySelector(".library-kind-chip")?.textContent).toBe("GitLab MR");
 
     const listingReads = vi.mocked(client.libraryListing).mock.calls.length;
@@ -470,7 +476,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
   const item: LibraryItemSummary = {
     item_id: "folder:notes", logical_id: "folder:notes", kind: "folder_copy", provider_id: null, provider_instance: null, resource_type: null,
     canonical_id: null, container: null, parent_item_id: null, ancestors: [], order: null, title: "Design notes",
-    document_path: "folders/notes-12345678/README.md", item_path: "folders/notes-12345678", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    document_path: "folders/Design notes/README.md", item_path: "folders/Design notes", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], diagnostics: [],
     folder: { origin_path: "/home/user/notes", git_working_tree: false, files: 2, bytes: 20, skipped_symlinks: 0, skipped_special: 0, skipped_ignored: 0, skipped_other: 0 },
   };
@@ -480,7 +486,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     libraryListing: vi.fn(async () => library),
     projectConfiguration: vi.fn(async () => ({ providers: [] })),
     libraryDirectory: vi.fn(async (request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "library", root_id: "library:fs", path: request.path, truncated: false, diagnostics: [],
-      entries: request.path === "" ? [entry("folders/notes-12345678", "directory")] : [entry("folders/notes-12345678/README.md", "file"), entry("folders/notes-12345678/docs/guide.md", "file")] })),
+      entries: request.path === "" ? [entry("folders/Design notes", "directory")] : [entry("folders/Design notes/README.md", "file"), entry("folders/Design notes/docs/guide.md", "file")] })),
     libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 10, media_type: "text/markdown", text: request.path.endsWith("guide.md") ? "# Guide body" : "# Readme body", truncated: false, diagnostics: [] })),
   } as unknown as CockpitClient;
   function Harness() {
@@ -498,7 +504,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.textContent?.includes("docs/guide.md"));
     await act(async () => result!.click());
     await flush();
-    expect(client.libraryDocument).toHaveBeenCalledWith(expect.objectContaining({ path: "folders/notes-12345678/docs/guide.md" }), expect.any(AbortSignal));
+    expect(client.libraryDocument).toHaveBeenCalledWith(expect.objectContaining({ path: "folders/Design notes/docs/guide.md" }), expect.any(AbortSignal));
     // The listing doesn't name this file, but it is part of the folder copy: it stays open.
     expect(host.textContent).toContain("Guide body");
   } finally {
@@ -933,7 +939,7 @@ it("adds a Library item to the Space and rereads its standing after provider ref
   const item: LibraryItemSummary = {
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
@@ -1070,7 +1076,7 @@ it("keeps a failed Add to <Space> visible with its retry when no durable attempt
   const item: LibraryItemSummary = {
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
@@ -1123,7 +1129,7 @@ it("clears a header's failed Add to <Space> once another surface copies the item
   const item: LibraryItemSummary = {
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
+    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r1",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
@@ -1179,7 +1185,7 @@ it("offers the copy's Update, Replace and Remove for the target Space in the Lib
   const item: LibraryItemSummary = {
     item_id: "source:ops-311", logical_id: "source:jira:ops-311", kind: "provider_snapshot", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue",
     canonical_id: "OPS-311", container: { container_id: "OPS", label: "OPS" }, parent_item_id: null, ancestors: [], order: null, title: "Rotate signing keys",
-    document_path: "jira/ops-311/document.md", item_path: "jira/ops-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r2",
+    document_path: "jira/nnexai.atlassian.net/OPS/OPS-311/Rotate signing keys.md", item_path: "jira/nnexai.atlassian.net/OPS/OPS-311", source_url: null, original_url: null, source_revision: null, revision: "sha256:r2",
     state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
   };
   const library: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };

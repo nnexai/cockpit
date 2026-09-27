@@ -1249,7 +1249,7 @@ fn valid_extended_metadata(asset: &SourceAsset) -> bool {
                     .as_deref()
                     .is_none_or(|url| bounded_text(url, MAX_URL_BYTES))
                 && attachment.path.as_deref().is_none_or(|path| {
-                    path.strip_prefix("attachments/").is_some_and(|name| {
+                    path.strip_prefix("_files/").is_some_and(|name| {
                         bounded_text(name, 255)
                             && !matches!(name, "." | "..")
                             && !name.contains(['/', '\\'])
@@ -1570,11 +1570,11 @@ mod tests {
             document.contains("labels: [\"a: b\",\"quoted\\\\\\\"\"]\nversion: 7\nattachments:\n")
         );
         assert!(document.contains("    not_downloaded: \"not_requested\"\n"));
-        source.attachments[0].path = Some("attachments/reference.png".into());
+        source.attachments[0].path = Some("_files/reference.png".into());
         source.attachments[0].not_downloaded = None;
         assert_eq!(content_revision(&source), revision);
         let downloaded = library_markdown(&source, &revision);
-        assert!(downloaded.contains("    path: \"attachments/reference.png\"\n"));
+        assert!(downloaded.contains("    path: \"_files/reference.png\"\n"));
         assert!(!downloaded.contains("not_downloaded:"));
         source.attachments[0].source_revision = Some("2".into());
         assert_ne!(content_revision(&source), revision);
@@ -1584,7 +1584,7 @@ mod tests {
             "source_asset_invalid"
         );
         source.fields[0].key = "labels".into();
-        source.attachments[0].path = Some("attachments/../escape".into());
+        source.attachments[0].path = Some("_files/../escape".into());
         assert_eq!(
             validate_asset(&source).unwrap_err().code,
             "source_asset_invalid"

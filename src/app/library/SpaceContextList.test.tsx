@@ -34,7 +34,7 @@ it("shows one aggregate row per followed space, and each row's Update writes onl
   const updated: LibraryOperation = {
     operation_id: "op-update-sd", kind: "space_update", item_ids: ["source:n", "source:a1"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "space", state: "done", done: 2, total: 2, message: null, error: null }],
-    space: { space_id: "space-x", copy_mode: "reflink", written: ["sources/confluence/page/SD/40-n/document.md", "sources/confluence/page/SD/11-a1/document.md"], skipped_edited: [], companion_root_id: "companion:x" },
+    space: { space_id: "space-x", copy_mode: "reflink", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Release Checklist/Release Checklist.md", "confluence/nnexai.atlassian.net/SD - Software Development/Home/Article 1/Article 1.md"], skipped_edited: [], companion_root_id: "companion:x" },
   };
   const client = {
     projectConfiguration: vi.fn(async () => ({ providers: [{ id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "confluence" }] })),

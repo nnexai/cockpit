@@ -573,7 +573,7 @@ it("recognizes a Cloud page link, asks for the provider only when several config
   const saved: LibraryOperation = {
     operation_id: "op-page", kind: "add", item_ids: ["source:page-98765"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }, { phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/confluence/page/sd-98765.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", copy_mode: "reflink", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Release checklist/Release checklist.md"], skipped_edited: [], companion_root_id: "companion:c1" },
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: confluenceProviders })),
@@ -720,7 +720,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
   const followed: LibraryOperation = {
     operation_id: "op-follow", kind: "add", item_ids: ["source:h", "source:a", "source:t"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "library", state: "done", done: 3, total: 3, message: null, error: null }, { phase: "space", state: "done", done: 3, total: 3, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/confluence/page/SD/1-home/document.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", copy_mode: "reflink", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Home/Home.md", "confluence/nnexai.atlassian.net/SD - Software Development/Home/Article/Article.md", "confluence/nnexai.atlassian.net/SD - Software Development/Topic/Topic.md"], skipped_edited: [], companion_root_id: "companion:c1" },
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0], confluenceProviders[2]], limits: { library_space_pages: 200 } })),
@@ -798,7 +798,7 @@ it("offers following a page's whole space, warns when the page limit makes it pa
   const copied: LibraryOperation = {
     operation_id: "op-follow-space", kind: "space_add", item_ids: [], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
     phases: [{ phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
-    space: { space_id: "space-1", copy_mode: "copy", written: ["sources/confluence/page/SD/1-home/document.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+    space: { space_id: "space-1", copy_mode: "copy", written: ["confluence/nnexai.atlassian.net/SD - Software Development/Home/Home.md"], skipped_edited: [], companion_root_id: "companion:c1" },
   };
   const client = githubClient({
     projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[0]], limits: { library_space_pages: 200 } })),

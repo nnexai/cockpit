@@ -229,11 +229,14 @@ function keyFor(rootId: string, path: string): string {
   return `${rootId}\u0000${path}`;
 }
 
-/** A Library path that belongs to `item`: its document, a downloaded attachment, or any file a folder copy captured (its `document_path` is only the first). */
+/** Provider items own their document and `_files/*`, not child items in their directory. */
 function libraryItemHolds(item: LibraryItemSummary, path: string): boolean {
+  const itemRoot = item.item_path.replace(/\/+$/, "");
+  const attachmentPrefix = `${itemRoot}/_files/`;
+  const relativeAttachment = path.startsWith(attachmentPrefix) ? path.slice(attachmentPrefix.length) : "";
   return item.document_path === path
-    || (item.folder !== null && path.startsWith(`${item.item_path.replace(/\/+$/, "")}/`))
-    || item.attachments.some((attachment) => attachmentPath(item, attachment) === path);
+    || (item.folder !== null && path.startsWith(`${itemRoot}/`))
+    || (item.folder === null && relativeAttachment !== "" && !relativeAttachment.includes("/"));
 }
 
 function readableError(error: unknown): string {
@@ -967,8 +970,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
             if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) return;
             incomplete ||= data.truncated;
             for (const entry of data.entries) {
-              if (entry.kind === "directory" && entry.path) pending.push(entry.path);
-              if (entry.kind === "file" && entry.path && !entry.refusal) {
+              if (!entry.path || entry.path.split("/").includes(".cockpit")) continue;
+              if (entry.kind === "directory") pending.push(entry.path);
+              if (entry.kind === "file" && !entry.refusal) {
                 if (entries.has(entry.path) || entries.size < MAX_PICKER_FILES) entries.set(entry.path, entry);
                 else incomplete = true;
               }

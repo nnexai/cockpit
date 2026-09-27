@@ -26,14 +26,14 @@ export function byteSize(bytes: number | null): string {
 
 /**
  * The Library-root path of a downloaded attachment: its item-relative
- * `attachments/<stored name>` under the item's directory (D22), read through
- * the Library reader like any other file. Anything else is never opened.
+ * `_files/<stored name>` under the item's directory, read through the
+ * Library reader like any other file. Anything else is never opened.
  */
 export function attachmentPath(item: LibraryItemSummary, attachment: LibraryAttachment): string | null {
   if (attachment.state !== "downloaded" || !attachment.relative_path) return null;
   const parts = attachment.relative_path.split("/");
   const name = parts[1] ?? "";
-  if (parts.length !== 2 || parts[0] !== "attachments" || name === "" || name === "." || name === ".." || name.includes("\\") || name !== attachment.stored_name) return null;
+  if (parts.length !== 2 || parts[0] !== "_files" || name === "" || name === "." || name === ".." || name.includes("\\") || name !== attachment.stored_name) return null;
   return `${item.item_path.replace(/\/+$/, "")}/${attachment.relative_path}`;
 }
 
