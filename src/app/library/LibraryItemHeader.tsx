@@ -1,7 +1,7 @@
 import { Fragment, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import type { LibraryItemSummary, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { instanceHost, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip } from "./libraryState";
+import { instanceHost, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, relativeTime } from "./libraryState";
 import { LibraryMenu, itemMenuEntries, menuAnchor, type LibraryItemActions } from "./LibraryTree";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { spaceAddFailure } from "./SpaceContextList";
@@ -46,6 +46,8 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   const chip = libraryStateChip(item.state);
   const freshness = libraryFreshness(item, now);
   const container = item.container?.label ?? null;
+  const folder = item.folder;
+  const copiedAgo = relativeTime(item.fetched_at, now);
   const refresh = () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]);
   const spaceAction = space ? headerSpaceAction(space.row, space.label) : null;
   const spaceAdding = Boolean(space && (space.adding || space.attempt?.state === "pending"));
@@ -64,18 +66,18 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   return <div className="library-item-header">
     <div className="library-item-line">
       <span className="document-source-kind library-kind-chip">{itemKindLabel(item, providers)}</span>
-      <span className="library-item-path">{rootCrumb ? <><span>Library</span><span aria-hidden="true"> › </span></> : null}{container ?? instanceHost(item.provider_instance)}{itemDisplayId(item, providers) ? <span className="library-item-id"> {itemDisplayId(item, providers)}</span> : null}</span>
+      <span className="library-item-path">{rootCrumb ? <><span>Library</span><span aria-hidden="true"> › </span></> : null}{folder ? "Folders" : container ?? instanceHost(item.provider_instance)}{itemDisplayId(item, providers) ? <span className="library-item-id"> {itemDisplayId(item, providers)}</span> : null}</span>
       <span className="context-toolbar-spacer" />
       {details}
     </div>
     <h2 className="library-item-title" title={item.title}>{item.title}</h2>
     <div className="library-item-line library-item-state">
       {pending
-        ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />Refreshing…</span>
+        ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />{folder ? "Re-copying…" : "Refreshing…"}</span>
         : <span className={`context-source-chip library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span>}
-      <span className="library-item-phrase">{freshness.phrase}</span>
+      <span className="library-item-phrase">{folder ? <>Copied{copiedAgo ? ` ${copiedAgo}` : ""} from <code>{folder.origin_path}</code> · {folder.files} files · {folder.bytes >= 1_000_000 ? `${(folder.bytes / 1_000_000).toFixed(1)} MB` : `${folder.bytes} bytes`}{folder.git_working_tree ? " · Git working tree" : ""}</> : freshness.phrase}</span>
       <span className="context-toolbar-spacer" />
-      {narrow ? null : <button type="button" onClick={refresh} disabled={actions.refreshBusy}>Refresh</button>}
+      {narrow ? null : <button type="button" onClick={refresh} disabled={actions.refreshBusy} title={folder ? `Re-copy from ${folder.origin_path}` : undefined}>{folder ? "Re-copy" : "Refresh"}</button>}
       {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
         {spaceAdding ? <span className="context-source-chip library-state is-muted" role="status"><span className="library-spinner" aria-hidden="true" />{`Adding to ${space.label}…`}</span> : null}
         {!spaceAdding && !narrow && spaceAction?.text ? <span className={`library-state library-space-state is-${spaceAction.tone}`}>{spaceAction.text}</span> : null}
@@ -95,6 +97,16 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
     <details className="library-metadata">
       <summary>Metadata</summary>
       <dl>
+        {folder ? <>
+          <dt>Copied from</dt><dd><code>{folder.origin_path}</code></dd>
+          <dt>Inventory</dt><dd>{folder.git_working_tree ? "Git tracked and untracked, non-ignored files" : "Regular files with default exclusions"}</dd>
+          <dt>Copied</dt><dd>{folder.files} files · {folder.bytes} bytes</dd>
+          <dt>Skipped symlinks</dt><dd>{folder.skipped_symlinks}</dd>
+          <dt>Skipped special files</dt><dd>{folder.skipped_special}</dd>
+          <dt>Skipped ignored files</dt><dd>{folder.skipped_ignored}</dd>
+          <dt>Skipped other files</dt><dd>{folder.skipped_other}</dd>
+          <dt>Updates</dt><dd>Source edits do not change this copy until an explicit re-copy. Space copies update separately.</dd>
+        </> : null}
         {item.canonical_id ? <><dt>Source identity</dt><dd><code>{item.canonical_id}</code></dd></> : null}
         {item.provider_instance ? <><dt>Provider</dt><dd>{item.provider_id} · {item.provider_instance}</dd></> : null}
         {item.source_url ? <><dt>Source link</dt><dd><code>{item.source_url}</code></dd></> : null}

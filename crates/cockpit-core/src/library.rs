@@ -1,4 +1,5 @@
 //! Durable, session-independent provider snapshots. Legacy source caches are inert.
+mod folder;
 mod operations;
 mod reader;
 pub(crate) mod store;
@@ -115,6 +116,9 @@ impl LibraryService {
         &self,
         request: LibraryResolveRequest,
     ) -> Result<LibraryResolution, InspectionError> {
+        if folder::recognizes(&request.input) {
+            return self.resolve_folder(&request.input).await;
+        }
         let store = self.open()?;
         let fetch = self.request(&request.input, request.provider_id.as_deref())?;
         let artifact = resolve_artifact(&self.configuration, &fetch.artifact_url)?;
@@ -163,6 +167,9 @@ impl LibraryService {
                 "source_capability_unavailable",
                 "This provider snapshot operation does not support follows or downloads",
             ));
+        }
+        if folder::recognizes(&request.input) {
+            return self.start_folder_add(request).await;
         }
         let handle = operations::runtime()?;
         let store = self.open()?;
@@ -481,6 +488,15 @@ impl LibraryService {
                     None,
                 );
             }
+        }
+        if entry.summary.kind == LibraryItemKind::FolderCopy {
+            let input = entry.summary.folder.as_ref().ok_or_else(||
+                error("library_corrupt", "Folder item has no origin"))?.origin_path.clone();
+            return match self.save_folder(store, operation, &input, None, Some(entry.clone()),
+                confirmed.as_deref(), None).await {
+                Ok(()) => Ok(()),
+                Err(e) => self.fetch_failed(store, operation, entry, e),
+            };
         }
         let result = async {
             let url = entry.canonical_url.as_deref().ok_or_else(|| {

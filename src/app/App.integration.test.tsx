@@ -182,7 +182,6 @@ class AppFixture {
     contextSearch: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
-    contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(),
     librarySpaceList: vi.fn(async (request: { target: { session_id: string; space_id: string } }) => ({ target: request.target, companion: { status: "available" as const, companion_root_id: "companion:fixture", companion_label: "Context" }, attempts: [], rows: [], behind: 0, diagnostics: [] })),

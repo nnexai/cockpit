@@ -13,7 +13,7 @@ Herdr owns live sessions, Spaces, tabs, panes, focus and layout. Cockpit project
 | Herdr methods and process evidence | `crates/cockpit-herdr/src/cli/` | Adapter fixtures against the supported schema |
 | Task setup and recovery | `crates/cockpit-core/src/projects.rs`, `project_store.rs`, `project_teardown.rs` | Ownership, idempotency and uncertain-outcome fixtures |
 | Context path authorization | `crates/cockpit-core/src/context.rs` | Traversal, replacement and companion tests |
-| Local snapshot/generated-file writes | `crates/cockpit-core/src/context_assets.rs` | Dirty/untracked snapshots, generated refresh and user-edit conflict tests |
+| Library folder capture and per-file Space copies | `crates/cockpit-core/src/library/folder.rs`, `library/space.rs`, `context_assets.rs` | D15 source boundaries/limits, D22 layout and edited-file transitions |
 | Provider authority and fetch | `crates/cockpit-core/src/sources.rs` and `crates/cockpit-providers/src/` | Configured-instance and canonical-identity fixtures |
 | Durable Library storage and operations | `crates/cockpit-core/src/library.rs`, `crates/cockpit-core/src/library/*` | Library store, operation and reader tests |
 | Library HTTP/native transport | `crates/cockpit-host/src/server/library.rs`, `src-tauri/src/library.rs` | Equivalent browser/native DTOs and owned-runtime smoke |

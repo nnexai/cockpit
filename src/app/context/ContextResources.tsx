@@ -1,38 +1,29 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ContextRoot, ContextSnapshotResponse } from "../../protocol/generated/v1";
+import type { ContextRoot } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import type { LibrarySpace } from "../library/libraryState";
 import { SpaceContextList } from "../library/SpaceContextList";
 import type { SpaceListingState } from "../library/useLibraryOperation";
-import { SnapshotImport } from "./SnapshotImport";
 
 /**
  * The companion root's `Context resources` overlay (design §4.8): the Library
- * context held by this pane's Space, then the local snapshot import.
+ * context held by this pane's Space. Add uses the Library-first workflow.
  */
 export function ContextResources({
   client,
-  sessionId,
-  paneId,
-  bindingId,
   root,
   space,
   spaceListing,
   onAdd,
-  onImported,
   onClose,
 }: {
   client: CockpitClient;
-  sessionId: string;
-  paneId: string;
-  bindingId: string;
   root: ContextRoot;
   /** The pane's own Space; its listing is read only while Herdr is live. */
   space: LibrarySpace | null;
   spaceListing: SpaceListingState;
   onAdd: () => void;
-  onImported: (result: ContextSnapshotResponse) => void;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
@@ -73,7 +64,6 @@ export function ContextResources({
     <div className="context-resources-body">
       {space?.live ? <SpaceContextList client={client} space={space} state={spaceListing} onAdd={onAdd} /> : null}
       {space && !space.live ? <p className="context-resource-empty space-context-offline">Herdr isn't live, so {space.label}'s Library context can't be checked.</p> : null}
-      <SnapshotImport client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} rootId={root.root_id} onImported={onImported} />
     </div>
   </section>;
 }

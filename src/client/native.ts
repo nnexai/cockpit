@@ -10,7 +10,6 @@ import {
   parseSpaceUpdateRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
-import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
   matchContextResponse, matchPanePresentation, parseContextDirectory,
@@ -680,13 +679,6 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const parsed = parseReviewFileRequest(value);
       const response = await invokeAndParse(invoke, "cockpit_review_file", { sessionId, paneId, request: parsed }, "Review file", parseReviewFile);
       signal?.throwIfAborted(); return matchReviewFile(response, sessionId, paneId, parsed);
-    },
-    async contextSnapshot(sessionId, paneId, value) {
-      validateSessionId(sessionId);
-      validateResourceId(paneId);
-      const request = parseContextSnapshotRequest(value);
-      const response = await invokeAndParse(invoke, "cockpit_context_snapshot", { sessionId, paneId, request }, "Context snapshot", parseContextSnapshotResponse);
-      return matchContextSnapshot(response, request);
     },
     async contextSearch(sessionId, paneId, value, signal) {
       signal?.throwIfAborted();

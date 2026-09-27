@@ -5,10 +5,7 @@ use std::time::Duration;
 
 use cap_fs_ext::{DirExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, Metadata, OpenOptions};
-use cockpit_protocol::context_assets::{
-    ContextSnapshotCopyMode, ContextSnapshotMode, ContextSnapshotResponse,
-};
-use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, RepositoryCandidate};
+use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::library::{
     LibraryConflictFile, LibraryItemKind, LibraryItemState, LibraryItemSummary,
     SpaceCopyMode, SpaceCopyRow, SpaceCopyState,
@@ -21,15 +18,15 @@ use uuid::Uuid;
 
 use crate::InspectionError;
 use crate::process::run_bounded_command;
-use crate::project_store::{CompanionManifest, atomic_write_json, read_json_bounded, timestamp};
+use crate::project_store::{CompanionManifest, read_json_bounded, timestamp};
+#[cfg(test)]
+use crate::project_store::atomic_write_json;
 
 const MANIFEST_NAME: &str = "context-manifest.json";
 const MANIFEST_SCHEMA_VERSION: u32 = 2;
 const PENDING_SOURCE_INTENT_SCHEMA_VERSION: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_SNAPSHOT_FILES: usize = 512;
 const MAX_SNAPSHOT_FILE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_SNAPSHOT_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +64,10 @@ struct SpaceFollowRecord {
 struct LibraryCopyRecord {
     item_id: String,
     files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    logical_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
 }
 
 #[cfg(test)]
@@ -134,7 +135,7 @@ impl LibraryItemView<'_> {
 pub(crate) enum LibraryCopyMode<'a> {
     NewOnly,
     Update,
-    Replace { expected_hash: &'a LibraryConflictFile },
+    Replace { confirmed: &'a [LibraryConflictFile] },
 }
 
 pub(crate) struct LibraryCopyResult {
@@ -151,8 +152,7 @@ fn library_destination(item: &LibraryItemView<'_>, file: &str, file_count: usize
     let summary = item.summary;
     let canonical = readable_name(summary.canonical_id.as_deref().unwrap_or(&summary.item_id));
     if summary.kind == LibraryItemKind::FolderCopy {
-        return format!("folders/{}-{}/{}", readable_name(&summary.title),
-            short_hash(summary.item_id.as_bytes()), file);
+        return format!("{}/{file}", summary.item_path);
     }
     let base = format!("sources/{}/{}",
         readable_name(summary.provider_id.as_deref().unwrap_or("unknown")),
@@ -177,61 +177,69 @@ pub(crate) fn materialize_library_item(
     recover_pending_source_intent(root, &mut manifest)?;
     let updating = !matches!(mode, LibraryCopyMode::NewOnly);
     let file_count = item.files().count();
-    if updating {
-        let mut entries = manifest.entries.iter()
-            .filter(|entry| entry.library_item_id.as_deref() == Some(item.summary.item_id.as_str()));
-        let entry = entries.next();
-        if item.summary.state == LibraryItemState::RemovedAtSource || entry.is_none() {
-            return Ok(LibraryCopyResult { written: vec![], skipped_edited: vec![], copy_mode: None });
-        }
-        let entry = entry.expect("linked update");
-        if file_count != 1 || entries.next().is_some()
-            || entry.library_file.as_deref() != item.files().next().map(|file| file.path.as_str())
-            || entry.library_follow_id.is_some()
-            || manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id && copy.files.len() != 1)
+    let linked = manifest.entries.iter().filter(|entry|
+        entry.library_item_id.as_deref() == Some(item.summary.item_id.as_str())).collect::<Vec<_>>();
+    if updating && (item.summary.state == LibraryItemState::RemovedAtSource
+        || (linked.is_empty() && !manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id))) {
+        return Ok(LibraryCopyResult { written: vec![], skipped_edited: vec![], copy_mode: None });
+    }
+    if updating && linked.iter().any(|entry| entry.library_follow_id.is_some()) {
+        return Err(InspectionError::new("source_capability_unavailable", "Followed Space updates are not available"));
+    }
+    let confirmed = match &mode {
+        LibraryCopyMode::Replace { confirmed } => *confirmed,
+        _ => &[],
+    };
+    // Validate every confirmation before changing any selected file. A confirmation
+    // authorizes one exact path and hash, never all files belonging to the item.
+    for expected in confirmed {
+        if !linked.iter().find(|entry| entry.relative_path == expected.path)
+            .is_some_and(|entry| read_space_file(root, entry)
+                .is_ok_and(|file| file.hash == expected.current_hash))
         {
-            return Err(InspectionError::new("source_capability_unavailable", "Multi-file and followed Space updates are not available"));
-        }
-        if let LibraryCopyMode::Replace { expected_hash } = &mode {
-            if expected_hash.path != entry.relative_path
-                || read_stable_source(root, &safe_companion_relative(&expected_hash.path)?)
-                    .map(|file| file.hash != expected_hash.current_hash).unwrap_or(true)
-            {
-                return Err(space_copy_conflict());
-            }
+            return Err(space_copy_conflict());
         }
     }
     let mut written = Vec::new();
+    let mut skipped_edited = Vec::new();
     let mut modes = Vec::new();
-    if !manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id
-        && copy.files.iter().map(String::as_str).eq(item.files().map(|file| file.path.as_str())))
-    {
+    let inventory_changed = !manifest.library_copies.iter().any(|copy| copy.item_id == item.summary.item_id
+        && copy.files.iter().map(String::as_str).eq(item.files().map(|file| file.path.as_str()))
+        && copy.revision.as_deref() == Some(item.summary.revision.as_str()));
+    if inventory_changed {
         manifest.library_copies.retain(|copy| copy.item_id != item.summary.item_id);
         manifest.library_copies.push(LibraryCopyRecord {
             item_id: item.summary.item_id.clone(),
             files: item.files().map(|file| file.path.clone()).collect(),
+            logical_id: Some(item.summary.logical_id.clone()),
+            revision: Some(item.summary.revision.clone()),
         });
     }
     for file in item.files() {
-        let logical_id = if file.path == "document.md" || file_count == 1 {
-            item.summary.logical_id.clone()
-        } else { format!("{}#{}", item.summary.logical_id, file.path) };
-        let previous = manifest.entries.iter().find(|entry| entry.logical_id == logical_id).cloned();
+        let previous = manifest.entries.iter().find(|entry|
+            entry.library_item_id.as_deref() == Some(item.summary.item_id.as_str())
+                && entry.library_file.as_deref() == Some(file.path.as_str())).cloned();
+        let logical_id = previous.as_ref().map(|entry| entry.logical_id.clone()).unwrap_or_else(|| {
+            if item.summary.kind != LibraryItemKind::FolderCopy && (file.path == "document.md" || file_count == 1) {
+                item.summary.logical_id.clone()
+            } else { format!("{}#{}", item.summary.logical_id, file.path) }
+        });
+        let previous = previous.or_else(|| manifest.entries.iter()
+            .find(|entry| entry.logical_id == logical_id && entry.library_item_id.is_none()).cloned());
         let mut missing = false;
         let mut expected_previous_hash = None;
         if let Some(entry) = &previous {
-            match read_stable_source(root, &safe_companion_relative(&entry.relative_path)?) {
+            match read_space_file(root, entry) {
                 Ok(current) => {
-                    if let LibraryCopyMode::Replace { expected_hash } = &mode {
+                    if let Some(expected_hash) = confirmed.iter().find(|file| file.path == entry.relative_path) {
                         if expected_hash.path != entry.relative_path || expected_hash.current_hash != current.hash {
                             return Err(space_copy_conflict());
                         }
                         expected_previous_hash = Some(current.hash.clone());
                     } else if current.hash != entry.content_hash {
                         if updating {
-                            return Ok(LibraryCopyResult {
-                                written: vec![], skipped_edited: vec![entry.relative_path.clone()], copy_mode: None,
-                            });
+                            skipped_edited.push(entry.relative_path.clone());
+                            continue;
                         }
                         return Err(InspectionError::new("source_sync_conflict", "An edited Space copy will not be overwritten"));
                     }
@@ -243,24 +251,38 @@ pub(crate) fn materialize_library_item(
                             if !updating {
                                 return Err(InspectionError::new("source_sync_conflict", "An existing Space revision requires an explicit update"));
                             }
-                        } else if current.hash == file.hash {
+                        }
+                        if current.hash == file.hash {
                             modes.extend(match entry.copy_mode.as_str() {
                                 "reflink" => Some(SpaceCopyMode::Reflink),
                                 "copy" => Some(SpaceCopyMode::Copy), _ => None,
                             });
+                            if updating && (entry.library_revision.as_deref() != Some(item.summary.revision.as_str())
+                                || entry.content_hash != file.hash)
+                            {
+                                let mut adopted = entry.clone();
+                                adopted.library_revision = Some(item.summary.revision.clone());
+                                adopted.revision = item.summary.revision.clone();
+                                adopted.content_hash = file.hash.clone();
+                                adopted.bytes = file.bytes;
+                                adopted.source_hash_before = file.hash.clone();
+                                adopted.source_hash_after = file.hash.clone();
+                                replace_source_manifest_entry(&mut manifest, adopted);
+                                write_manifest_durable(root, &manifest)?;
+                            }
                             continue;
                         }
                     }
                 }
                 Err(error) if error.code == "context_snapshot_file_missing" => {
-                    if matches!(mode, LibraryCopyMode::Replace { .. }) { return Err(space_copy_conflict()); }
+                    if confirmed.iter().any(|file| file.path == entry.relative_path) { return Err(space_copy_conflict()); }
                     missing = true;
                 }
                 Err(error) => return Err(error),
             }
         }
         let source_path = safe_source_relative(&file.path)?;
-        let source = read_stable_source(item.root, &source_path)?;
+        let source = read_stable_source_bounded(item.root, &source_path, file.bytes)?;
         if source.hash != file.hash || source.bytes.len() as u64 != file.bytes {
             return Err(InspectionError::new("library_conflict", "Library file differs from its recorded revision"));
         }
@@ -269,7 +291,7 @@ pub(crate) fn materialize_library_item(
             if manifest.entries.iter().any(|entry| entry.relative_path == candidate)
                 || root.symlink_metadata(&candidate).is_ok()
             {
-                if file_count != 1 { return Err(source_publish_conflict()); }
+                if file_count != 1 || item.summary.kind == LibraryItemKind::FolderCopy { return Err(source_publish_conflict()); }
                 format!("{}-{}.md", candidate.trim_end_matches(".md"), short_hash(logical_id.as_bytes()))
             } else { candidate }
         };
@@ -291,7 +313,7 @@ pub(crate) fn materialize_library_item(
                 Err(error) => return Err(io_error("source_materialize_failed")(error)),
             };
             destination.sync_all().map_err(io_error("source_materialize_failed"))?;
-            if read_regular(&parent, Path::new(&temporary))?.hash != file.hash {
+            if read_regular_bounded(&parent, Path::new(&temporary), file.bytes)?.hash != file.hash {
                 return Err(InspectionError::new("library_conflict", "Library source changed during copy"));
             }
             Ok(mode)
@@ -350,15 +372,35 @@ pub(crate) fn materialize_library_item(
             return Err(InspectionError::new("library_test_crash", "Space file published before remaining files"));
         }
     }
-    Ok(LibraryCopyResult { written, skipped_edited: vec![], copy_mode: aggregate_copy_mode(modes.into_iter()) })
+    if updating {
+        let obsolete = manifest.entries.iter().filter(|entry|
+            entry.library_item_id.as_deref() == Some(item.summary.item_id.as_str())
+                && !item.files().any(|file| entry.library_file.as_deref() == Some(file.path.as_str())))
+            .cloned().collect::<Vec<_>>();
+        for entry in obsolete {
+            // Update never discards an edited Space-only file, even when the
+            // replacement dialog confirmed edits elsewhere in this item.
+            match library_remove_expected(root, &entry, &[]) {
+                Ok(expected) => {
+                    remove_library_entry(root, &mut manifest, &entry, expected.as_deref())?;
+                    written.push(entry.relative_path);
+                }
+                Err(error) if error.code == "space_copy_conflict" => skipped_edited.push(entry.relative_path),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    if file_count == 0 && inventory_changed {
+        write_manifest_durable(root, &manifest)?;
+    }
+    Ok(LibraryCopyResult { written, skipped_edited, copy_mode: aggregate_copy_mode(modes.into_iter()) })
 }
 
 fn space_copy_conflict() -> InspectionError {
     InspectionError::new("space_copy_conflict", "The Space copy changed; reload it before confirming")
 }
 
-/// Remove only a manifest-owned file; edited bytes require an exact confirmation.
-/// Multi-file removal is refused until it can journal the complete inventory.
+/// Remove manifest-owned files; all edited bytes require exact confirmations.
 pub(crate) fn remove_library_copy(
     root: &Dir, companion_id: &str, logical_id: &str, confirmed: &[LibraryConflictFile],
 ) -> Result<(), InspectionError> {
@@ -368,50 +410,91 @@ pub(crate) fn remove_library_copy(
     recover_pending_source_intent(root, &mut manifest)?;
     let entry = manifest.entries.iter().find(|entry| entry.logical_id == logical_id
         || entry.library_file.as_deref().is_some_and(|file| entry.logical_id.strip_suffix(file)
-            .and_then(|prefix| prefix.strip_suffix('#')) == Some(logical_id)))
-        .cloned().ok_or_else(|| InspectionError::new("library_item_not_found", "Space copy does not exist"))?;
-    if entry.library_follow_id.is_some() || entry.library_item_id.as_ref().is_some_and(|id|
-        manifest.entries.iter().filter(|entry| entry.library_item_id.as_ref() == Some(id)).count() != 1
-        || manifest.library_copies.iter().any(|copy| &copy.item_id == id && copy.files.len() != 1))
-    {
-        return Err(InspectionError::new("source_capability_unavailable", "Multi-file and followed Space removal is not available"));
+            .and_then(|prefix| prefix.strip_suffix('#')) == Some(logical_id))).cloned();
+    let Some(entry) = entry else {
+        let position = manifest.library_copies.iter().position(|copy|
+            copy.logical_id.as_deref().unwrap_or(&copy.item_id) == logical_id)
+            .ok_or_else(|| InspectionError::new("library_item_not_found", "Space copy does not exist"))?;
+        if !confirmed.is_empty() { return Err(space_copy_conflict()); }
+        manifest.library_copies.remove(position);
+        return write_manifest_durable(root, &manifest);
+    };
+    let entries = manifest.entries.iter().filter(|candidate|
+        if let Some(id) = &entry.library_item_id { candidate.library_item_id.as_ref() == Some(id) }
+        else { candidate.logical_id == entry.logical_id }).cloned().collect::<Vec<_>>();
+    if entries.iter().any(|entry| entry.library_follow_id.is_some()) {
+        return Err(InspectionError::new("source_capability_unavailable", "Followed Space removal is not available"));
     }
-    if confirmed.len() > 1 || confirmed.first().is_some_and(|file| file.path != entry.relative_path) {
+    if confirmed.iter().any(|file| !entries.iter().any(|entry| entry.relative_path == file.path)) {
         return Err(space_copy_conflict());
     }
-    let path = safe_companion_relative(&entry.relative_path)?;
-    let current = match read_stable_source(root, &path) {
+    let expected = entries.iter().map(|entry| library_remove_expected(root, entry, confirmed))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (entry, expected) in entries.iter().zip(expected) {
+        remove_library_entry(root, &mut manifest, entry, expected.as_deref())?;
+    }
+    if manifest.library_copies.iter().any(|copy| Some(&copy.item_id) == entry.library_item_id.as_ref()) {
+        manifest.library_copies.retain(|copy| Some(&copy.item_id) != entry.library_item_id.as_ref());
+        write_manifest_durable(root, &manifest)?;
+    }
+    Ok(())
+}
+
+fn library_remove_expected(
+    root: &Dir, entry: &ContextManifestEntry, confirmed: &[LibraryConflictFile],
+) -> Result<Option<String>, InspectionError> {
+    let current = match read_space_file(root, entry) {
         Ok(file) => Some(file),
         Err(error) if error.code == "context_snapshot_file_missing" => None,
         Err(error) => return Err(error),
     };
-    let expected = confirmed.first().map(|file| file.current_hash.as_str()).unwrap_or(&entry.content_hash);
+    let confirmation = confirmed.iter().find(|file| file.path == entry.relative_path);
+    let expected = confirmation.map(|file| file.current_hash.as_str()).unwrap_or(&entry.content_hash);
     if current.as_ref().is_some_and(|file| file.hash != expected)
-        || (current.is_none() && !confirmed.is_empty())
+        || (current.is_none() && confirmation.is_some())
     {
         return Err(space_copy_conflict());
     }
+    Ok(current.map(|_| expected.to_owned()))
+}
+
+fn remove_library_entry(
+    root: &Dir, manifest: &mut ContextManifest, entry: &ContextManifestEntry, expected: Option<&str>,
+) -> Result<(), InspectionError> {
+    let path = safe_companion_relative(&entry.relative_path)?;
     manifest.pending_library_remove = Some(entry.clone());
-    write_manifest_durable(root, &manifest)?;
-    if current.is_some() {
+    write_manifest_durable(root, manifest)?;
+    if let Some(expected) = expected {
         let (parent, leaf) = resolve_parent(root, &path).map_err(|_| space_copy_conflict())?;
         let mut expected_entry = entry.clone();
         expected_entry.content_hash = expected.into();
         if recheck_source_destination(root, &path, &parent, &leaf, &Some(expected_entry)).is_err() {
             manifest.pending_library_remove = None;
-            write_manifest_durable(root, &manifest)?;
+            write_manifest_durable(root, manifest)?;
             return Err(space_copy_conflict());
         }
         parent.remove_file(&leaf).map_err(io_error("source_materialize_failed"))?;
         sync_directory(&parent).map_err(io_error("source_materialize_failed"))?;
+    } else if !matches!(read_space_file(root, entry), Err(error) if error.code == "context_snapshot_file_missing") {
+        manifest.pending_library_remove = None;
+        write_manifest_durable(root, manifest)?;
+        return Err(space_copy_conflict());
     }
-    finish_library_remove(&mut manifest, &entry);
-    write_manifest_durable(root, &manifest)
+    finish_library_remove(manifest, entry);
+    write_manifest_durable(root, manifest)
 }
 
 fn finish_library_remove(manifest: &mut ContextManifest, entry: &ContextManifestEntry) {
     manifest.entries.retain(|candidate| candidate.logical_id != entry.logical_id);
-    manifest.library_copies.retain(|copy| Some(&copy.item_id) != entry.library_item_id.as_ref());
+    if let Some(id) = &entry.library_item_id {
+        if manifest.entries.iter().any(|candidate| candidate.library_item_id.as_ref() == Some(id)) {
+            if let Some(copy) = manifest.library_copies.iter_mut().find(|copy| &copy.item_id == id) {
+                copy.files.retain(|file| Some(file) != entry.library_file.as_ref());
+            }
+        } else {
+            manifest.library_copies.retain(|copy| &copy.item_id != id || copy.files.is_empty());
+        }
+    }
     manifest.pending_library_remove = None;
     manifest.updated_at = timestamp();
 }
@@ -456,7 +539,7 @@ pub(crate) fn library_space_rows(
                 .any(|entry| entry.library_file.as_ref() == Some(file))));
         let mut edited = Vec::new();
         for entry in entries {
-            match read_stable_source(root, &safe_companion_relative(&entry.relative_path)?) {
+            match read_space_file(root, entry) {
                 Ok(file) if file.hash != entry.content_hash => edited.push(LibraryConflictFile {
                     path: entry.relative_path.clone(), current_hash: file.hash,
                 }),
@@ -485,6 +568,24 @@ pub(crate) fn library_space_rows(
             current_library_revision: current.map(|item| item.revision.clone()), follow: None,
         });
     }
+    // Empty folders and an interrupted first-file publication still have a
+    // durable item inventory, even though no per-file row exists yet.
+    for copy in manifest.library_copies.iter().filter(|copy| !groups.contains_key(&copy.item_id)) {
+        let current = library.iter().find(|item| item.item_id == copy.item_id);
+        let newer = current.is_some_and(|item| copy.revision.as_deref() != Some(item.revision.as_str()));
+        rows.push(SpaceCopyRow {
+            item_id: Some(copy.item_id.clone()),
+            logical_id: current.map(|item| &item.logical_id).or(copy.logical_id.as_ref()).unwrap_or(&copy.item_id).clone(),
+            title: current.map(|item| &item.title).unwrap_or(&copy.item_id).clone(),
+            provider_id: current.and_then(|item| item.provider_id.clone()),
+            resource_type: current.and_then(|item| item.resource_type.clone()),
+            kind: current.map(|item| item.kind).unwrap_or(LibraryItemKind::FolderCopy),
+            state: space_copy_state(!copy.files.is_empty(), false, true, current, newer),
+            library_newer: newer, paths: vec![], edited: vec![], copy_mode: None,
+            library_revision_copied: copy.revision.clone(),
+            current_library_revision: current.map(|item| item.revision.clone()), follow: None,
+        });
+    }
     rows.sort_by(|a, b| {
         let rank = |state| match state { SpaceCopyState::UpToDate => 1, SpaceCopyState::NotLinked => 2, _ => 0 };
         (rank(a.state), &a.title, &a.logical_id).cmp(&(rank(b.state), &b.title, &b.logical_id))
@@ -492,8 +593,8 @@ pub(crate) fn library_space_rows(
     Ok(rows)
 }
 
-/// Materialize one immutable provider payload through the same companion lock,
-/// manifest, and no-follow descriptor policy used by repository snapshots.
+/// Materialize one immutable provider payload through the companion lock,
+/// manifest, and no-follow descriptor policy.
 #[cfg(test)]
 pub(crate) fn materialize_source_markdown(
     root: &Dir,
@@ -638,351 +739,26 @@ pub(crate) fn materialize_source_markdown(
 
 
 #[derive(Debug)]
-struct SourceBytes {
-    bytes: Vec<u8>,
-    hash: String,
-    identity: String,
+pub(crate) struct SourceBytes {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) hash: String,
+    pub(crate) identity: String,
 }
 
 #[derive(Debug)]
-struct Gitlink {
-    path: PathBuf,
-    commit: String,
+pub(crate) struct Gitlink {
+    pub(crate) path: PathBuf,
+    pub(crate) commit: String,
 }
 
 struct CompanionLock {
     _file: std::fs::File,
 }
 
-/// Snapshot a freshly-resolved catalog repository into an already-authorized
-/// companion directory. Both paths are capabilities supplied by ContextService;
-/// callers cannot nominate either filesystem root.
-pub(crate) async fn snapshot_working_tree(
-    configuration: &ProjectConfiguration,
-    companion_id: &str,
-    companion_root: &Dir,
-    companion_path: &Path,
-    repository: &RepositoryCandidate,
-) -> Result<ContextSnapshotResponse, InspectionError> {
-    let source_path = checked_candidate_path(Path::new(&repository.checkout_path))?;
-    if paths_overlap(&source_path, companion_path) {
-        return Err(InspectionError::new(
-            "context_snapshot_nested_destination",
-            "the companion destination must not contain, or be contained by, the source checkout",
-        ));
-    }
-    let source_root = open_absolute_dir_nofollow(&source_path).map_err(|error| {
-        InspectionError::new(
-            "context_snapshot_source_unavailable",
-            format!("cannot open source checkout: {error}"),
-        )
-    })?;
-    if !source_root
-        .dir_metadata()
-        .map_err(|error| {
-            InspectionError::new("context_snapshot_source_unavailable", error.to_string())
-        })?
-        .is_dir()
-    {
-        return Err(InspectionError::new(
-            "context_snapshot_source_unavailable",
-            "the resolved repository checkout is not a directory",
-        ));
-    }
 
-    revalidate_repository(configuration, &source_path, repository, &source_root).await?;
 
-    let mut diagnostics = limits_diagnostics();
-    let (paths, gitlinks, excluded, source_head, dirty) =
-        git_inventory(configuration, &source_path).await?;
-    if paths.len() > MAX_SNAPSHOT_FILES {
-        return Err(InspectionError::new(
-            "context_snapshot_file_limit",
-            "the working tree exceeds Cockpit's snapshot file limit",
-        ));
-    }
 
-    let _companion_lock = acquire_companion_lock(companion_root)?;
-    source_root_revalidate(&source_root, &source_path)?;
-    let association = read_companion_association(companion_root)?;
-    let mut manifest = read_manifest(companion_root, companion_id, &association)?;
-    reject_unmanaged_repositories_root(companion_root, &manifest)?;
-    for path in excluded {
-        diagnostics.push(diagnostic(
-            "context_snapshot_excluded_path",
-            "the source path is excluded by snapshot policy",
-            Some(&path.to_string_lossy()),
-        ));
-    }
-
-    let repository_dir = snapshot_repository_directory(&manifest, repository);
-    let generation = snapshot_generation(companion_root, &repository_dir);
-    let staging_name = format!(".context-snapshot-{generation}.tmp");
-    companion_root.create_dir(&staging_name).map_err(|error| {
-        InspectionError::new(
-            "context_snapshot_destination_unavailable",
-            format!("cannot create snapshot staging directory: {error}"),
-        )
-    })?;
-    let result = snapshot_into_staging(
-        &source_root,
-        companion_root,
-        &staging_name,
-        repository,
-        &paths,
-        &gitlinks,
-        source_head.as_deref(),
-        &repository_dir,
-        &generation,
-        &mut manifest,
-        &mut diagnostics,
-    );
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = companion_root.remove_dir_all(&staging_name);
-            return Err(error);
-        }
-    };
-
-    let repositories = ensure_directory(companion_root, "repos")?;
-    let repository_root = ensure_directory(&repositories, &repository_dir)?;
-    let snapshots = ensure_directory(&repository_root, "snapshots")?;
-    snapshots
-        .symlink_metadata(&generation)
-        .map(|_| {
-            Err(InspectionError::new(
-                "context_snapshot_destination_collision",
-                "a snapshot generation already exists",
-            ))
-        })
-        .unwrap_or_else(|error| {
-            if error.kind() == ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(InspectionError::new(
-                    "context_snapshot_destination_unavailable",
-                    error.to_string(),
-                ))
-            }
-        })?;
-    companion_root
-        .rename(&staging_name, &snapshots, &generation)
-        .map_err(|error| {
-            InspectionError::new(
-                "context_snapshot_publish_failed",
-                format!("cannot publish complete snapshot generation: {error}"),
-            )
-        })?;
-
-    manifest.entries.extend(result.entries);
-    manifest.updated_at = timestamp();
-    publish_manifest(companion_root, &snapshots, &generation, &manifest)?;
-
-    let copy_mode = match (result.reflink_files, result.copy_files) {
-        (reflinks, 0) if reflinks > 0 => ContextSnapshotCopyMode::Reflink,
-        (0, _) => ContextSnapshotCopyMode::Copy,
-        _ => ContextSnapshotCopyMode::Mixed,
-    };
-    diagnostics.push(diagnostic(
-        "context_snapshot_copy_mode",
-        match copy_mode {
-            ContextSnapshotCopyMode::Reflink => "all snapshot files used descriptor-safe reflink copies",
-            ContextSnapshotCopyMode::Copy => "reflink was unsupported or cross-device; snapshot files used independent byte copies",
-            ContextSnapshotCopyMode::Mixed => "some files used descriptor-safe reflink copies and unsupported files used independent byte copies",
-        },
-        None,
-    ));
-    Ok(ContextSnapshotResponse {
-        binding_id: String::new(),
-        root_id: String::new(),
-        repository_id: repository.repository_id.clone(),
-        snapshot_path: format!("repos/{repository_dir}/snapshots/{generation}"),
-        generation,
-        mode: ContextSnapshotMode::WorkingTree,
-        copy_mode,
-        files: result.files,
-        bytes: result.bytes,
-        source_head,
-        dirty,
-        diagnostics,
-    })
-}
-
-fn publish_manifest(
-    companion_root: &Dir,
-    snapshots: &Dir,
-    generation: &str,
-    manifest: &ContextManifest,
-) -> Result<(), InspectionError> {
-    if let Err(error) = atomic_write_json(companion_root, MANIFEST_NAME, manifest) {
-        let rollback = snapshots.remove_dir_all(generation).err();
-        let detail = rollback.map_or_else(
-            || error.to_string(),
-            |rollback| format!("{error}; published generation rollback failed: {rollback}"),
-        );
-        return Err(InspectionError::new(
-            "context_snapshot_manifest_failed",
-            detail,
-        ));
-    }
-    Ok(())
-}
-
-struct StagedSnapshot {
-    entries: Vec<ContextManifestEntry>,
-    files: u64,
-    bytes: u64,
-    reflink_files: u64,
-    copy_files: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FileCopyMode {
-    Reflink,
-    Copy,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn snapshot_into_staging(
-    source_root: &Dir,
-    companion_root: &Dir,
-    staging_name: &str,
-    repository: &RepositoryCandidate,
-    paths: &[PathBuf],
-    gitlinks: &[Gitlink],
-    source_head: Option<&str>,
-    repository_dir: &str,
-    generation: &str,
-    _manifest: &mut ContextManifest,
-    diagnostics: &mut Vec<ProjectDiagnostic>,
-) -> Result<StagedSnapshot, InspectionError> {
-    let stage = open_directory(companion_root, Path::new(staging_name))?;
-    let mut entries = Vec::new();
-    let mut total_bytes = 0u64;
-    let mut reflink_files = 0u64;
-    let mut copy_files = 0u64;
-    for relative in paths {
-        let source = match read_stable_source(source_root, relative) {
-            Ok(source) => source,
-            Err(error) if is_skippable(&error.code) => {
-                diagnostics.push(diagnostic(
-                    &error.code,
-                    &error.message,
-                    Some(&relative.to_string_lossy()),
-                ));
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        if total_bytes.saturating_add(source.bytes.len() as u64) > MAX_SNAPSHOT_BYTES {
-            return Err(InspectionError::new(
-                "context_snapshot_byte_limit",
-                "the working tree exceeds Cockpit's snapshot byte limit",
-            ));
-        }
-        let copy_mode = write_new_file(&stage, relative, source_root, &source)?;
-        match copy_mode {
-            FileCopyMode::Reflink => reflink_files += 1,
-            FileCopyMode::Copy => copy_files += 1,
-        }
-        let destination = read_stable_source(&stage, relative)?;
-        if destination.hash != source.hash || destination.bytes.len() != source.bytes.len() {
-            return Err(InspectionError::new(
-                "context_snapshot_hash_mismatch",
-                "the published snapshot bytes did not match the source",
-            ));
-        }
-        let final_source = read_stable_source(source_root, relative)?;
-        if final_source.hash != source.hash || final_source.identity != source.identity {
-            return Err(InspectionError::new(
-                "context_snapshot_source_changed",
-                "a source file changed during snapshot; retry to capture a complete generation",
-            ));
-        }
-        let relative_path = format!(
-            "repos/{repository_dir}/snapshots/{generation}/{}",
-            relative.to_string_lossy()
-        );
-        entries.push(ContextManifestEntry {
-            logical_id: format!(
-                "repository:{}:{}",
-                repository.repository_id,
-                relative.to_string_lossy()
-            ),
-            relative_path,
-            kind: "repository_snapshot".to_owned(),
-            source: "local_repository".to_owned(),
-            generated: true,
-            revision: source_head.unwrap_or("unborn").to_owned(),
-            content_hash: source.hash.clone(),
-            bytes: source.bytes.len() as u64,
-            copy_mode: match copy_mode {
-                FileCopyMode::Reflink => "reflink",
-                FileCopyMode::Copy => "copy",
-            }
-            .to_owned(),
-            status: "complete".to_owned(),
-            updated_at: timestamp(),
-            source_repository_id: repository.repository_id.clone(),
-            source_checkout_path: repository.checkout_path.clone(),
-            source_identity: source.identity,
-            source_hash_before: source.hash.clone(),
-            source_hash_after: source.hash,
-            library_item_id: None,
-            library_revision: None,
-            library_file: None,
-            library_follow_id: None,
-        });
-        total_bytes += entries.last().expect("pushed entry").bytes;
-    }
-    for gitlink in gitlinks {
-        let relative_path = format!(
-            "repos/{repository_dir}/snapshots/{generation}/{}",
-            gitlink.path.to_string_lossy()
-        );
-        entries.push(ContextManifestEntry {
-            logical_id: format!(
-                "repository:{}:{}",
-                repository.repository_id,
-                gitlink.path.to_string_lossy()
-            ),
-            relative_path,
-            kind: "gitlink".to_owned(),
-            source: "local_repository".to_owned(),
-            generated: true,
-            revision: gitlink.commit.clone(),
-            content_hash: hash(gitlink.commit.as_bytes()),
-            bytes: 0,
-            copy_mode: "none".to_owned(),
-            status: "skipped_gitlink".to_owned(),
-            updated_at: timestamp(),
-            source_repository_id: repository.repository_id.clone(),
-            source_checkout_path: repository.checkout_path.clone(),
-            source_identity: "gitlink".to_owned(),
-            source_hash_before: hash(gitlink.commit.as_bytes()),
-            source_hash_after: hash(gitlink.commit.as_bytes()),
-            library_item_id: None,
-            library_revision: None,
-            library_file: None,
-            library_follow_id: None,
-        });
-        diagnostics.push(diagnostic(
-            "context_snapshot_gitlink",
-            "submodule gitlink was recorded but its working tree was not traversed",
-            Some(&gitlink.path.to_string_lossy()),
-        ));
-    }
-    Ok(StagedSnapshot {
-        files: reflink_files + copy_files,
-        bytes: total_bytes,
-        entries,
-        reflink_files,
-        copy_files,
-    })
-}
-
-async fn git_inventory(
+pub(crate) async fn git_inventory(
     configuration: &ProjectConfiguration,
     source: &Path,
 ) -> Result<
@@ -1106,7 +882,7 @@ async fn git_inventory(
     ))
 }
 
-async fn git_output(
+pub(crate) async fn git_output(
     configuration: &ProjectConfiguration,
     source: &Path,
     args: &[&str],
@@ -1206,8 +982,7 @@ fn recover_pending_source_intent(
     manifest: &mut ContextManifest,
 ) -> Result<(), InspectionError> {
     if let Some(entry) = manifest.pending_library_remove.clone() {
-        let path = safe_companion_relative(&entry.relative_path)?;
-        match read_stable_source(root, &path) {
+        match read_space_file(root, &entry) {
             Err(error) if error.code == "context_snapshot_file_missing" => finish_library_remove(manifest, &entry),
             _ => manifest.pending_library_remove = None,
         }
@@ -1218,7 +993,9 @@ fn recover_pending_source_intent(
     };
     validate_pending_source_intent(&intent)?;
     let path = safe_companion_relative(&intent.relative_path)?;
-    let current = match read_stable_source(root, &path) {
+    let max_bytes = intent.previous_entry.as_ref().map_or(0, |entry| entry.bytes)
+        .max(intent.intended_entry.bytes).max(MAX_SNAPSHOT_FILE_BYTES as u64);
+    let current = match read_stable_source_bounded(root, &path, max_bytes) {
         Ok(current) => current,
         Err(error)
             if error.code == "context_snapshot_file_missing" && intent.previous_entry.is_none() =>
@@ -1287,7 +1064,7 @@ fn recheck_source_destination(
             )),
         };
     };
-    let current = read_stable_source(root, path).map_err(|_| {
+    let current = read_stable_source_bounded(root, path, previous.bytes.max(MAX_SNAPSHOT_FILE_BYTES as u64)).map_err(|_| {
         InspectionError::new(
             "source_sync_conflict",
             "a generated source changed while Cockpit was refreshing it",
@@ -1414,29 +1191,17 @@ fn sync_directory(dir: &Dir) -> std::io::Result<()> {
     dir.open(Path::new("."))?.sync_all()
 }
 
-fn reject_unmanaged_repositories_root(
-    root: &Dir,
-    manifest: &ContextManifest,
-) -> Result<(), InspectionError> {
-    match root.symlink_metadata("repos") {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            Err(InspectionError::new(
-                "context_snapshot_destination_unavailable",
-                "the companion repositories path is not a real directory",
-            ))
-        }
-        Ok(_) if manifest.entries.is_empty() => Err(InspectionError::new(
-            "context_snapshot_destination_conflict",
-            "the companion repositories path exists without Cockpit manifest ownership",
-        )),
-        Ok(_) | Err(_) => Ok(()),
-    }
+
+pub(crate) fn read_stable_source(root: &Dir, relative: &Path) -> Result<SourceBytes, InspectionError> {
+    read_stable_source_bounded(root, relative, MAX_SNAPSHOT_FILE_BYTES as u64)
 }
 
-fn read_stable_source(root: &Dir, relative: &Path) -> Result<SourceBytes, InspectionError> {
+pub(crate) fn read_stable_source_bounded(
+    root: &Dir, relative: &Path, max_bytes: u64,
+) -> Result<SourceBytes, InspectionError> {
     let (parent, leaf) = resolve_parent(root, relative)?;
-    let before = read_regular(&parent, &leaf)?;
-    let after = read_regular(&parent, &leaf)?;
+    let before = read_regular_bounded(&parent, &leaf, max_bytes)?;
+    let after = read_regular_bounded(&parent, &leaf, max_bytes)?;
     if before.identity != after.identity || before.hash != after.hash {
         return Err(InspectionError::new(
             "context_snapshot_source_changed",
@@ -1446,7 +1211,16 @@ fn read_stable_source(root: &Dir, relative: &Path) -> Result<SourceBytes, Inspec
     Ok(before)
 }
 
-fn read_regular(parent: &Dir, leaf: &Path) -> Result<SourceBytes, InspectionError> {
+fn read_space_file(root: &Dir, entry: &ContextManifestEntry) -> Result<SourceBytes, InspectionError> {
+    let path = safe_companion_relative(&entry.relative_path)?;
+    if entry.bytes <= MAX_SNAPSHOT_FILE_BYTES as u64 {
+        read_stable_source(root, &path)
+    } else {
+        read_stable_source_bounded(root, &path, entry.bytes)
+    }
+}
+
+fn read_regular_bounded(parent: &Dir, leaf: &Path, max_bytes: u64) -> Result<SourceBytes, InspectionError> {
     let metadata = parent.symlink_metadata(leaf).map_err(|error| {
         InspectionError::new(
             if error.kind() == ErrorKind::NotFound {
@@ -1469,7 +1243,7 @@ fn read_regular(parent: &Dir, leaf: &Path) -> Result<SourceBytes, InspectionErro
             "only regular files are eligible for snapshots",
         ));
     }
-    if metadata.len() > MAX_SNAPSHOT_FILE_BYTES as u64 {
+    if metadata.len() > max_bytes {
         return Err(InspectionError::new(
             "context_snapshot_file_bytes",
             "a source file exceeds Cockpit's snapshot file limit",
@@ -1502,12 +1276,12 @@ fn read_regular(parent: &Dir, leaf: &Path) -> Result<SourceBytes, InspectionErro
         ));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_SNAPSHOT_FILE_BYTES.saturating_add(1) as u64)
+    file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| {
             InspectionError::new("context_snapshot_file_unavailable", error.to_string())
         })?;
-    if bytes.len() > MAX_SNAPSHOT_FILE_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return Err(InspectionError::new(
             "context_snapshot_file_bytes",
             "a source file grew beyond Cockpit's snapshot file limit",
@@ -1526,57 +1300,6 @@ fn read_regular(parent: &Dir, leaf: &Path) -> Result<SourceBytes, InspectionErro
     })
 }
 
-fn write_new_file(
-    root: &Dir,
-    relative: &Path,
-    source_root: &Dir,
-    source: &SourceBytes,
-) -> Result<FileCopyMode, InspectionError> {
-    let (parent, leaf) = create_parent(root, relative)?;
-    if parent.symlink_metadata(&leaf).is_ok() {
-        return Err(InspectionError::new(
-            "context_snapshot_destination_collision",
-            "a snapshot destination path already exists",
-        ));
-    }
-    let mut options = OpenOptions::new();
-    options
-        .write(true)
-        .create_new(true)
-        .follow(cap_fs_ext::FollowSymlinks::No);
-    let mut file = parent.open_with(&leaf, &options).map_err(|error| {
-        InspectionError::new(
-            "context_snapshot_destination_unavailable",
-            error.to_string(),
-        )
-    })?;
-    let source_file = open_source_for_clone(source_root, relative, &source.identity)?;
-    let mode = match reflink(&file, &source_file) {
-        Ok(()) => FileCopyMode::Reflink,
-        Err(error) if reflink_fallback(&error) => {
-            file.write_all(&source.bytes).map_err(|error| {
-                InspectionError::new(
-                    "context_snapshot_destination_unavailable",
-                    error.to_string(),
-                )
-            })?;
-            FileCopyMode::Copy
-        }
-        Err(error) => {
-            return Err(InspectionError::new(
-                "context_snapshot_reflink_failed",
-                format!("reflink could not create an independent snapshot file: {error}"),
-            ));
-        }
-    };
-    file.sync_all().map_err(|error| {
-        InspectionError::new(
-            "context_snapshot_destination_unavailable",
-            error.to_string(),
-        )
-    })?;
-    Ok(mode)
-}
 
 fn open_source_for_clone(
     root: &Dir,
@@ -1638,7 +1361,7 @@ fn reflink_fallback(error: &std::io::Error) -> bool {
         || error.raw_os_error() == Some(nix::libc::EOPNOTSUPP)
 }
 
-fn create_parent(root: &Dir, relative: &Path) -> Result<(Dir, PathBuf), InspectionError> {
+pub(crate) fn create_parent(root: &Dir, relative: &Path) -> Result<(Dir, PathBuf), InspectionError> {
     let leaf = relative.file_name().ok_or_else(|| {
         InspectionError::new("context_snapshot_path", "snapshot path has no file name")
     })?;
@@ -1755,7 +1478,7 @@ fn safe_relative(value: &str) -> Result<PathBuf, InspectionError> {
     Ok(result)
 }
 
-fn excluded_source_path(path: &Path) -> bool {
+pub(crate) fn excluded_source_path(path: &Path) -> bool {
     path.components().any(|component| {
         let Component::Normal(name) = component else {
             return true;
@@ -1767,74 +1490,8 @@ fn excluded_source_path(path: &Path) -> bool {
     })
 }
 
-fn is_skippable(code: &str) -> bool {
-    matches!(
-        code,
-        "context_snapshot_symlink"
-            | "context_snapshot_special_file"
-            | "context_snapshot_hardlink"
-            | "context_snapshot_native_binary"
-            | "context_snapshot_file_missing"
-    )
-}
 
-fn checked_candidate_path(path: &Path) -> Result<PathBuf, InspectionError> {
-    if !path.is_absolute() {
-        return Err(InspectionError::new(
-            "context_snapshot_source_unavailable",
-            "repository checkout path is not absolute",
-        ));
-    }
-    for component in path.components() {
-        if matches!(component, Component::ParentDir | Component::Prefix(_)) {
-            return Err(InspectionError::new(
-                "context_snapshot_source_unavailable",
-                "repository checkout path is not a canonical catalog path",
-            ));
-        }
-    }
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        InspectionError::new("context_snapshot_source_unavailable", error.to_string())
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(InspectionError::new(
-            "context_snapshot_source_unavailable",
-            "repository checkout symlinks are not accepted as snapshot roots",
-        ));
-    }
-    if !metadata.is_dir() {
-        return Err(InspectionError::new(
-            "context_snapshot_source_unavailable",
-            "repository checkout is not a directory",
-        ));
-    }
-    Ok(path.to_path_buf())
-}
-
-async fn revalidate_repository(
-    configuration: &ProjectConfiguration,
-    source: &Path,
-    repository: &RepositoryCandidate,
-    source_root: &Dir,
-) -> Result<(), InspectionError> {
-    let top = git_output(configuration, source, &["rev-parse", "--show-toplevel"]).await?;
-    if !top.status.success() {
-        return Err(InspectionError::new(
-            "context_snapshot_repository_changed",
-            "the selected catalog repository is no longer a usable Git checkout",
-        ));
-    }
-    let reported = single_line_utf8(&top.stdout, "context_snapshot_git_output")?;
-    if Path::new(&reported) != Path::new(&repository.checkout_path) {
-        return Err(InspectionError::new(
-            "context_snapshot_repository_changed",
-            "Git checkout identity no longer matches the fresh catalog candidate",
-        ));
-    }
-    source_root_revalidate(source_root, source)
-}
-
-fn source_root_revalidate(source_root: &Dir, source: &Path) -> Result<(), InspectionError> {
+pub(crate) fn source_root_revalidate(source_root: &Dir, source: &Path) -> Result<(), InspectionError> {
     let opened = source_root.dir_metadata().map_err(|error| {
         InspectionError::new("context_snapshot_repository_changed", error.to_string())
     })?;
@@ -1881,7 +1538,7 @@ fn acquire_companion_lock(root: &Dir) -> Result<CompanionLock, InspectionError> 
     Ok(CompanionLock { _file: file })
 }
 
-fn open_absolute_dir_nofollow(path: &Path) -> std::io::Result<Dir> {
+pub(crate) fn open_absolute_dir_nofollow(path: &Path) -> std::io::Result<Dir> {
     let mut dir = Dir::open_ambient_dir(Path::new("/"), cap_std::ambient_authority())?;
     for component in path.components() {
         match component {
@@ -1898,9 +1555,6 @@ fn open_absolute_dir_nofollow(path: &Path) -> std::io::Result<Dir> {
     Ok(dir)
 }
 
-fn paths_overlap(first: &Path, second: &Path) -> bool {
-    first == second || first.strip_prefix(second).is_ok() || second.strip_prefix(first).is_ok()
-}
 
 /// A file or directory name a person can read: letters, digits, `.`, `_` and
 /// `-`, with other characters replaced by `-`. Never empty or hidden.
@@ -1933,69 +1587,6 @@ fn short_hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))[..8].to_owned()
 }
 
-/// Snapshots of a repository live under its name. A different repository with
-/// the same name already there gets the name with a short hash.
-fn snapshot_repository_directory(
-    manifest: &ContextManifest,
-    repository: &RepositoryCandidate,
-) -> String {
-    let name = readable_name(&repository.name);
-    let prefix = format!("repos/{name}/");
-    let taken = manifest.entries.iter().any(|entry| {
-        entry.relative_path.starts_with(&prefix)
-            && entry.source_repository_id != repository.repository_id
-    });
-    if taken {
-        format!("{name}-{}", short_hash(repository.repository_id.as_bytes()))
-    } else {
-        name
-    }
-}
-
-/// A snapshot is named by its UTC capture time, `2026-09-25_07-14-32`.
-fn snapshot_generation(companion_root: &Dir, repository_dir: &str) -> String {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let base = utc_timestamp_name(seconds);
-    let mut generation = base.clone();
-    let mut attempt = 2;
-    while companion_root
-        .symlink_metadata(format!("repos/{repository_dir}/snapshots/{generation}"))
-        .is_ok()
-    {
-        generation = format!("{base}-{attempt}");
-        attempt += 1;
-    }
-    generation
-}
-
-fn utc_timestamp_name(seconds: u64) -> String {
-    let days = (seconds / 86_400) as i64;
-    let rest = seconds % 86_400;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}_{:02}-{:02}-{:02}",
-        rest / 3_600,
-        rest % 3_600 / 60,
-        rest % 60
-    )
-}
 
 fn hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -2084,21 +1675,6 @@ fn single_line_utf8(bytes: &[u8], code: &str) -> Result<String, InspectionError>
     Ok(text.to_owned())
 }
 
-fn limits_diagnostics() -> Vec<ProjectDiagnostic> {
-    vec![diagnostic(
-        "context_snapshot_limits",
-        "snapshot limits: 512 files, 4 MiB per file, 32 MiB total; Git output and timeout use configured project limits",
-        None,
-    )]
-}
-
-fn diagnostic(code: &str, message: &str, path: Option<&str>) -> ProjectDiagnostic {
-    ProjectDiagnostic {
-        code: code.to_owned(),
-        message: message.to_owned(),
-        path: path.map(str::to_owned),
-    }
-}
 
 fn io_error(code: &'static str) -> impl FnOnce(std::io::Error) -> InspectionError {
     move |error| InspectionError::new(code, error.to_string())
@@ -2108,10 +1684,7 @@ fn io_error(code: &'static str) -> impl FnOnce(std::io::Error) -> InspectionErro
 mod tests {
     use super::*;
     use cap_std::fs::Dir;
-    use cockpit_protocol::projects::{ProjectLimits, ProjectProvider};
-    use std::collections::BTreeMap;
     use std::fs;
-    use std::process::Command as ProcessCommand;
 
     fn temp_dir(name: &str) -> PathBuf {
         let path =
@@ -2120,43 +1693,6 @@ mod tests {
         path
     }
 
-    fn configuration() -> ProjectConfiguration {
-        ProjectConfiguration {
-            version: 1,
-            repository_roots: Vec::new(),
-            worktree_root: "worktrees".to_owned(),
-            companion_root: "companions".to_owned(),
-            state_root: "state".to_owned(),
-            library_root: "library".to_owned(),
-            branch_template: "{repo}/{task_id}".to_owned(),
-            checkout_template: "{repo}-{task_id}".to_owned(),
-            providers: vec![ProjectProvider {
-                id: "test".to_owned(),
-                base_url: "https://example.test".to_owned(),
-                executable: "tea".to_owned(),
-                login: None,
-            }],
-            limits: ProjectLimits {
-                catalog_depth: 1,
-                catalog_entries: 16,
-                git_timeout_ms: 2_000,
-                git_output_bytes: 64 * 1024,
-                operation_timeout_ms: 2_000,
-                context_preview_bytes: 1024,
-                context_preview_lines: 100,
-                context_directory_entries: 100,
-                context_tree_depth: 16,
-                library_folder_files: 512,
-                library_folder_bytes: 32 * 1024 * 1024,
-                library_file_bytes: 4 * 1024 * 1024,
-                library_space_pages: 200,
-                library_attachment_bytes: 25 * 1024 * 1024,
-                library_item_attachment_bytes: 100 * 1024 * 1024,
-                library_max_items: 20_000,
-            },
-            origins: BTreeMap::new(),
-        }
-    }
 
     fn association(workspace: &str, checkout: &Path) -> CompanionManifest {
         CompanionManifest {
@@ -2219,28 +1755,6 @@ mod tests {
             .expect("replace source atomically");
     }
 
-    fn candidate(checkout: &Path) -> RepositoryCandidate {
-        RepositoryCandidate {
-            repository_id: "repository-test".to_owned(),
-            name: "repository-test".to_owned(),
-            root: checkout.to_string_lossy().into_owned(),
-            checkout_path: checkout.to_string_lossy().into_owned(),
-            common_dir: checkout.join(".git").to_string_lossy().into_owned(),
-            branch: Some("main".to_owned()),
-            is_linked_worktree: false,
-            is_detached: false,
-            provenance: "test".to_owned(),
-        }
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let status = ProcessCommand::new("git")
-            .current_dir(root)
-            .args(args)
-            .status()
-            .expect("run git");
-        assert!(status.success(), "git {:?} failed", args);
-    }
 
     #[test]
     fn generated_names_are_readable_and_safe() {
@@ -2249,15 +1763,6 @@ mod tests {
         assert_eq!(super::readable_name("../..//"), "item");
         assert_eq!(super::readable_name(".hidden"), "hidden");
         assert!(super::readable_name(&"x".repeat(500)).len() <= 80);
-        assert_eq!(super::utc_timestamp_name(0), "1970-01-01_00-00-00");
-        assert_eq!(
-            super::utc_timestamp_name(1_790_320_522),
-            "2026-09-25_07-15-22"
-        );
-        assert_eq!(
-            super::utc_timestamp_name(951_782_400),
-            "2000-02-29_00-00-00"
-        );
     }
 
     #[test]
@@ -2277,24 +1782,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn copy_creates_independent_regular_file() {
-        let root = temp_dir("copy");
-        fs::create_dir(root.join("src")).expect("source directory");
-        fs::write(root.join("src/main.rs"), b"fn main() {}\n").expect("source");
-        let root_dir =
-            Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
-        root_dir.create_dir("stage").expect("stage");
-        let stage = open_directory(&root_dir, Path::new("stage")).expect("open stage");
-        let source = read_stable_source(&root_dir, Path::new("src/main.rs")).expect("read source");
-        write_new_file(&stage, Path::new("src/main.rs"), &root_dir, &source).expect("copy");
-        let copied = read_stable_source(&stage, Path::new("src/main.rs")).expect("read copy");
-        assert_eq!(copied.bytes, b"fn main() {}\n");
-        assert!(!hardlinked(
-            &stage.symlink_metadata("src/main.rs").expect("metadata")
-        ));
-        fs::remove_dir_all(root).expect("cleanup");
-    }
 
     #[test]
     fn changed_source_rejects_the_pending_copy() {
@@ -2302,12 +1789,10 @@ mod tests {
         fs::write(root.join("source.rs"), b"before").expect("source");
         let root_dir =
             Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
-        root_dir.create_dir("stage").expect("stage");
-        let stage = open_directory(&root_dir, Path::new("stage")).expect("open stage");
         let source = read_stable_source(&root_dir, Path::new("source.rs")).expect("read source");
         fs::write(root.join("source.rs"), b"after").expect("mutate source");
         assert_eq!(
-            write_new_file(&stage, Path::new("source.rs"), &root_dir, &source)
+            open_source_for_clone(&root_dir, Path::new("source.rs"), &source.identity)
                 .expect_err("changed source must fail")
                 .code,
             "context_snapshot_source_changed"
@@ -2316,7 +1801,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_owner_mismatch_is_refused_and_publish_failure_rolls_back() {
+    fn manifest_owner_mismatch_is_refused() {
         let root = temp_dir("manifest");
         let root_dir =
             Dir::open_ambient_dir(&root, cap_std::ambient_authority()).expect("open root");
@@ -2343,208 +1828,9 @@ mod tests {
             "context_manifest_owner_mismatch"
         );
 
-        root_dir
-            .remove_file(MANIFEST_NAME)
-            .expect("remove manifest");
-        root_dir
-            .create_dir(MANIFEST_NAME)
-            .expect("make manifest path fail");
-        let snapshots = ensure_directory(
-            &ensure_directory(
-                &ensure_directory(&root_dir, "repos").expect("repos"),
-                "repo",
-            )
-            .expect("repo"),
-            "snapshots",
-        )
-        .expect("snapshots");
-        snapshots.create_dir("generation").expect("generation");
-        let error = publish_manifest(&root_dir, &snapshots, "generation", &manifest)
-            .expect_err("manifest publish fails");
-        assert_eq!(error.code, "context_snapshot_manifest_failed");
-        assert!(
-            matches!(snapshots.symlink_metadata("generation"), Err(error) if error.kind() == ErrorKind::NotFound)
-        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn replaced_catalog_checkout_symlink_is_refused_before_opening() {
-        use std::os::unix::fs::symlink;
-        let root = temp_dir("candidate-symlink");
-        let replacement = temp_dir("candidate-replacement");
-        let link = root.join("checkout");
-        symlink(&replacement, &link).expect("symlink");
-        assert_eq!(
-            checked_candidate_path(&link)
-                .expect_err("catalog checkout replacement")
-                .code,
-            "context_snapshot_source_unavailable"
-        );
-        fs::remove_dir_all(root).expect("cleanup root");
-        fs::remove_dir_all(replacement).expect("cleanup replacement");
-    }
-
-    #[tokio::test]
-    async fn working_tree_snapshot_keeps_dirty_and_untracked_bytes_but_omits_ignored() {
-        let source = temp_dir("repository");
-        let companion = temp_dir("companion");
-        git(&source, &["init", "--quiet"]);
-        git(&source, &["config", "user.email", "test@example.invalid"]);
-        git(&source, &["config", "user.name", "Cockpit test"]);
-        fs::write(source.join("tracked.txt"), b"clean\n").expect("tracked");
-        fs::write(source.join(".gitignore"), b"ignored.txt\n").expect("ignore");
-        fs::create_dir(source.join("target")).expect("excluded directory");
-        fs::write(source.join("target/tracked.cache"), b"cached\n").expect("excluded tracked");
-        git(
-            &source,
-            &["add", "tracked.txt", ".gitignore", "target/tracked.cache"],
-        );
-        git(&source, &["commit", "--quiet", "-m", "initial"]);
-        fs::write(source.join("tracked.txt"), b"dirty\n").expect("dirty");
-        fs::write(source.join("untracked.txt"), b"untracked\n").expect("untracked");
-        fs::write(source.join("ignored.txt"), b"ignored\n").expect("ignored");
-
-        let companion_dir = Dir::open_ambient_dir(&companion, cap_std::ambient_authority())
-            .expect("open companion");
-        atomic_write_json(
-            &companion_dir,
-            "manifest.json",
-            &association("workspace-a", &source),
-        )
-        .expect("association");
-        let response = snapshot_working_tree(
-            &configuration(),
-            "companion-a",
-            &companion_dir,
-            &companion,
-            &candidate(&source),
-        )
-        .await
-        .expect("snapshot");
-        assert!(response.dirty);
-        assert!(matches!(
-            response.copy_mode,
-            ContextSnapshotCopyMode::Reflink | ContextSnapshotCopyMode::Copy
-        ));
-        let snapshot = companion.join(&response.snapshot_path);
-        assert_eq!(
-            fs::read(snapshot.join("tracked.txt")).expect("dirty copy"),
-            b"dirty\n"
-        );
-        assert_eq!(
-            fs::read(snapshot.join("untracked.txt")).expect("untracked copy"),
-            b"untracked\n"
-        );
-        assert!(!snapshot.join("ignored.txt").exists());
-        assert!(!snapshot.join("target/tracked.cache").exists());
-        assert!(
-            response
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "context_snapshot_excluded_path")
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            assert_ne!(
-                fs::metadata(source.join("tracked.txt"))
-                    .expect("source metadata")
-                    .ino(),
-                fs::metadata(snapshot.join("tracked.txt"))
-                    .expect("snapshot metadata")
-                    .ino(),
-            );
-        }
-        // An edit to an older immutable generation must not block unrelated
-        // source imports or a new snapshot generation; neither overwrites it.
-        fs::write(snapshot.join("tracked.txt"), b"user annotation\n").unwrap();
-        let imported = materialize_source_markdown(
-            &companion_dir,
-            "companion-a",
-            "tea",
-            "https://forge.test",
-            "issue",
-            "acme/repo#1",
-            Some("1"),
-            "issue-hash",
-            b"issue body\n",
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read(companion.join(imported.0)).unwrap(),
-            b"issue body\n"
-        );
-        let next = snapshot_working_tree(
-            &configuration(),
-            "companion-a",
-            &companion_dir,
-            &companion,
-            &candidate(&source),
-        )
-        .await
-        .unwrap();
-        assert_ne!(response.snapshot_path, next.snapshot_path);
-        assert_eq!(
-            fs::read(snapshot.join("tracked.txt")).unwrap(),
-            b"user annotation\n"
-        );
-        assert_eq!(
-            fs::read(companion.join(next.snapshot_path).join("tracked.txt")).unwrap(),
-            b"dirty\n"
-        );
-        fs::remove_dir_all(source).expect("cleanup source");
-        fs::remove_dir_all(companion).expect("cleanup companion");
-    }
-
-    #[tokio::test]
-    async fn concurrent_snapshots_preserve_both_manifest_generations() {
-        let source = temp_dir("concurrent-repository");
-        let companion = temp_dir("concurrent-companion");
-        git(&source, &["init", "--quiet"]);
-        git(&source, &["config", "user.email", "test@example.invalid"]);
-        git(&source, &["config", "user.name", "Cockpit test"]);
-        fs::write(source.join("tracked.txt"), b"snapshot\n").expect("tracked");
-        git(&source, &["add", "tracked.txt"]);
-        git(&source, &["commit", "--quiet", "-m", "initial"]);
-        let companion_dir = Dir::open_ambient_dir(&companion, cap_std::ambient_authority())
-            .expect("open companion");
-        let association = association("workspace-a", &source);
-        atomic_write_json(&companion_dir, "manifest.json", &association).expect("association");
-        let configuration = configuration();
-        let repository = candidate(&source);
-        let first = snapshot_working_tree(
-            &configuration,
-            "companion-a",
-            &companion_dir,
-            &companion,
-            &repository,
-        );
-        let second = snapshot_working_tree(
-            &configuration,
-            "companion-a",
-            &companion_dir,
-            &companion,
-            &repository,
-        );
-        let (first, second) = tokio::join!(first, second);
-        let first = first.expect("first snapshot");
-        let second = second.expect("second snapshot");
-        assert_ne!(first.generation, second.generation);
-        let manifest =
-            read_manifest(&companion_dir, "companion-a", &association).expect("manifest");
-        assert_eq!(
-            manifest
-                .entries
-                .iter()
-                .filter(|entry| entry.status == "complete")
-                .count(),
-            2
-        );
-        fs::remove_dir_all(source).expect("cleanup source");
-        fs::remove_dir_all(companion).expect("cleanup companion");
-    }
 
     #[cfg(unix)]
     #[test]
@@ -2928,24 +2214,196 @@ mod library_copy_tests {
         assert!(!f.first.exists(MANIFEST_NAME));
     }
 
-    #[test]
-    fn unsupported_multi_file_mutations_do_not_partially_change_bytes_or_inventory() {
-        let f = Fixture::new();
+    fn folder_item() -> LibraryItemSummary {
         let mut summary = item();
-        let files = [f.file("document.md", b"body"), f.file("attachments/image.png", b"image")];
+        summary.kind = LibraryItemKind::FolderCopy;
+        summary.item_id = "folder:01234567".into();
+        summary.logical_id = "folder:01234567".into();
+        summary.item_path = "folders/notes-01234567".into();
+        summary.document_path = None;
+        summary
+    }
+
+    #[test]
+    fn empty_folder_remains_linked_through_add_update_and_remove() {
+        let f = Fixture::new();
+        let mut summary = folder_item();
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &[] }, LibraryCopyMode::NewOnly).unwrap();
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        summary.revision = "revision-two".into();
+        let files = [f.file("only.txt", b"only")];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update).unwrap();
+        assert_eq!(f.first.read("folders/notes-01234567/only.txt").unwrap(), b"only");
+        summary.revision = "revision-three".into();
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &[] }, LibraryCopyMode::Update).unwrap();
+        assert!(!f.first.exists("folders/notes-01234567/only.txt"));
+        let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap().remove(0);
+        assert_eq!(row.state, SpaceCopyState::UpToDate);
+        assert!(row.paths.is_empty());
+        assert_eq!(library_space_rows(&f.first, "companion", &[]).unwrap()[0].state, SpaceCopyState::NotInLibrary);
+        remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
+        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn folder_copy_uses_recorded_size_above_the_default_capture_limit() {
+        let f = Fixture::new();
+        let mut summary = folder_item();
+        let mut bytes = vec![b'a'; MAX_SNAPSHOT_FILE_BYTES + 1];
+        let files = [f.file("large.txt", &bytes)];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let path = "folders/notes-01234567/large.txt";
+        assert_eq!(f.first.read(path).unwrap(), bytes);
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        bytes[0] = b'b';
+        summary.revision = "revision-two".into();
+        let files = [f.file("large.txt", &bytes)];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update).unwrap();
+        assert_eq!(f.first.read(path).unwrap(), bytes);
+        remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
+        assert!(!f.first.exists(path));
+    }
+
+    #[test]
+    fn interrupted_folder_remove_retains_other_files_and_unmanaged_notes() {
+        let f = Fixture::new();
+        let summary = folder_item();
+        let files = [f.file("a.txt", b"a"), f.file("nested/b.txt", b"b")];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let association = read_companion_association(&f.first).unwrap();
+        let mut manifest = read_manifest(&f.first, "companion", &association).unwrap();
+        let entry = manifest.entries[0].clone();
+        manifest.pending_library_remove = Some(entry.clone());
+        write_manifest_durable(&f.first, &manifest).unwrap();
+        f.first.remove_file(&entry.relative_path).unwrap();
+        f.first.write("folders/notes-01234567/personal.txt", b"unmanaged notes").unwrap();
+        recover_pending_source_intent(&f.first, &mut manifest).unwrap();
+        assert_eq!(manifest.library_copies[0].files, ["nested/b.txt"]);
+        assert_eq!(f.first.read("folders/notes-01234567/nested/b.txt").unwrap(), b"b");
+        remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
+        assert!(!f.first.exists("folders/notes-01234567/nested/b.txt"));
+        assert_eq!(f.first.read("folders/notes-01234567/personal.txt").unwrap(), b"unmanaged notes");
+    }
+
+    #[test]
+    fn folder_add_mirrors_relative_layout_with_per_file_hashes() {
+        let f = Fixture::new();
+        let summary = folder_item();
+        let files = [f.file("README.md", b"readme"), f.file("src/nested/code.rs", b"code")];
         let copied = materialize_library_item(&f.first, "companion",
             &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
-        let manifest = f.first.read(MANIFEST_NAME).unwrap();
-        summary.revision = "new-revision".into();
-        let changed = [f.file("document.md", b"new body")];
-        let view = LibraryItemView { root: &f.library, summary: &summary, files: &changed };
-        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update)
-            .err().unwrap().code, "source_capability_unavailable");
-        assert_eq!(remove_library_copy(&f.first, "companion", &summary.logical_id, &[])
-            .unwrap_err().code, "source_capability_unavailable");
-        assert_eq!(f.first.read(&copied.written[0]).unwrap(), b"body");
-        assert_eq!(f.first.read(&copied.written[1]).unwrap(), b"image");
-        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), manifest);
+        assert_eq!(copied.written, ["folders/notes-01234567/README.md", "folders/notes-01234567/src/nested/code.rs"]);
+        let manifest = read_manifest(&f.first, "companion", &read_companion_association(&f.first).unwrap()).unwrap();
+        for file in &files {
+            let entry = manifest.entries.iter().find(|entry| entry.library_file.as_ref() == Some(&file.path)).unwrap();
+            assert_eq!(entry.content_hash, file.hash);
+            assert_eq!(entry.library_revision.as_ref(), Some(&summary.revision));
+            assert_eq!(f.first.read(&entry.relative_path).unwrap(), f.library.read(&file.path).unwrap());
+        }
+        assert_eq!(library_space_rows(&f.first, "companion", &[summary]).unwrap()[0].state, SpaceCopyState::UpToDate);
+    }
+
+    #[test]
+    fn folder_update_copies_changes_adds_files_restores_missing_and_deletes_unedited_space_only() {
+        let f = Fixture::new();
+        let mut summary = folder_item();
+        let files = [f.file("keep.txt", b"keep"), f.file("changed.txt", b"old"),
+            f.file("nested/missing.txt", b"restore"), f.file("gone.txt", b"gone")];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let unchanged = identity(&f.first.metadata("folders/notes-01234567/keep.txt").unwrap());
+        f.first.remove_dir_all("folders/notes-01234567/nested").unwrap();
+        summary.revision = "revision-two".into();
+        let files = [f.file("keep.txt", b"keep"), f.file("changed.txt", b"new"),
+            f.file("nested/missing.txt", b"restore"), f.file("added/deep.txt", b"added")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update).unwrap();
+        assert!(copied.skipped_edited.is_empty());
+        assert_eq!(f.first.read("folders/notes-01234567/changed.txt").unwrap(), b"new");
+        assert_eq!(f.first.read("folders/notes-01234567/nested/missing.txt").unwrap(), b"restore");
+        assert_eq!(f.first.read("folders/notes-01234567/added/deep.txt").unwrap(), b"added");
+        assert!(!f.first.exists("folders/notes-01234567/gone.txt"));
+        assert_eq!(identity(&f.first.metadata("folders/notes-01234567/keep.txt").unwrap()), unchanged);
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        let before = f.first.read(MANIFEST_NAME).unwrap();
+        assert!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Update).unwrap().written.is_empty());
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
+    }
+
+    #[test]
+    fn folder_update_preserves_and_reports_edited_space_only_files() {
+        let f = Fixture::new();
+        let mut summary = folder_item();
+        let files = [f.file("edited.txt", b"baseline"), f.file("gone.txt", b"gone"), f.file("live.txt", b"old")];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let edited = "folders/notes-01234567/edited.txt";
+        f.first.write(edited, b"my notes").unwrap();
+        summary.revision = "revision-two".into();
+        let files = [f.file("live.txt", b"new")];
+        let copied = materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::Update).unwrap();
+        assert_eq!(copied.skipped_edited, [edited]);
+        assert_eq!(f.first.read(edited).unwrap(), b"my notes");
+        assert_eq!(f.first.read("folders/notes-01234567/live.txt").unwrap(), b"new");
+        assert!(!f.first.exists("folders/notes-01234567/gone.txt"));
+        let row = library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap().remove(0);
+        assert_eq!(row.state, SpaceCopyState::EditedInSpace);
+        assert_eq!(row.edited.iter().map(|file| (file.path.as_str(), file.current_hash.as_str())).collect::<Vec<_>>(),
+            vec![(edited, hash(b"my notes").as_str())]);
+        let before = f.first.read(MANIFEST_NAME).unwrap();
+        assert_eq!(remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap_err().code, "space_copy_conflict");
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
+        remove_library_copy(&f.first, "companion", &summary.logical_id, &row.edited).unwrap();
+        assert!(!f.first.exists(edited));
+        assert!(!f.first.exists("folders/notes-01234567/live.txt"));
+        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn folder_confirmation_is_per_path_and_stale_cas_preflights_all_files() {
+        let f = Fixture::new();
+        let mut summary = folder_item();
+        let files = [f.file("a.txt", b"a"), f.file("b.txt", b"b"), f.file("c.txt", b"c")];
+        materialize_library_item(&f.first, "companion",
+            &LibraryItemView { root: &f.library, summary: &summary, files: &files }, LibraryCopyMode::NewOnly).unwrap();
+        let a = "folders/notes-01234567/a.txt";
+        let b = "folders/notes-01234567/b.txt";
+        let c = "folders/notes-01234567/c.txt";
+        f.first.write(a, b"edit a").unwrap();
+        f.first.write(b, b"edit b").unwrap();
+        summary.revision = "revision-two".into();
+        let files = [f.file("a.txt", b"new a"), f.file("b.txt", b"new b"), f.file("c.txt", b"new c")];
+        let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
+        let stale = [LibraryConflictFile { path: a.into(), current_hash: hash(b"edit a") },
+            LibraryConflictFile { path: b.into(), current_hash: hash(b"stale") }];
+        let before = f.first.read(MANIFEST_NAME).unwrap();
+        assert_eq!(materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &stale }).err().unwrap().code, "space_copy_conflict");
+        assert_eq!(f.first.read(a).unwrap(), b"edit a");
+        assert_eq!(f.first.read(c).unwrap(), b"c");
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
+        let copied = materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &stale[..1] }).unwrap();
+        assert_eq!(copied.skipped_edited, [b]);
+        assert_eq!(f.first.read(a).unwrap(), b"new a");
+        assert_eq!(f.first.read(b).unwrap(), b"edit b");
+        assert_eq!(f.first.read(c).unwrap(), b"new c");
+        let before = f.first.read(MANIFEST_NAME).unwrap();
+        assert_eq!(remove_library_copy(&f.first, "companion", &summary.logical_id, &stale[1..]).unwrap_err().code, "space_copy_conflict");
+        assert_eq!(f.first.read(a).unwrap(), b"new a");
+        assert_eq!(f.first.read(MANIFEST_NAME).unwrap(), before);
+        let confirmed = [LibraryConflictFile { path: b.into(), current_hash: hash(b"edit b") }];
+        materialize_library_item(&f.first, "companion", &view, LibraryCopyMode::Replace { confirmed: &confirmed }).unwrap();
+        assert_eq!(f.first.read(b).unwrap(), b"new b");
+        assert_eq!(library_space_rows(&f.first, "companion", std::slice::from_ref(&summary)).unwrap()[0].state, SpaceCopyState::UpToDate);
+        f.first.remove_file(c).unwrap();
+        remove_library_copy(&f.first, "companion", &summary.logical_id, &[]).unwrap();
+        assert!(library_space_rows(&f.first, "companion", &[summary]).unwrap().is_empty());
     }
 
     #[test]
@@ -2962,7 +2420,7 @@ mod library_copy_tests {
         let view = LibraryItemView { root: &f.library, summary: &summary, files: &files };
         let wrong = LibraryConflictFile { path: path.clone(), current_hash: hash(b"stale edit") };
         assert_eq!(materialize_library_item(&f.first, "companion", &view,
-            LibraryCopyMode::Replace { expected_hash: &wrong }).err().unwrap().code, "space_copy_conflict");
+            LibraryCopyMode::Replace { confirmed: std::slice::from_ref(&wrong) }).err().unwrap().code, "space_copy_conflict");
         assert_eq!(f.first.read(path).unwrap(), b"my edit");
 
         let association = read_companion_association(&f.first).unwrap();
@@ -2983,7 +2441,7 @@ mod library_copy_tests {
         assert_eq!(f.first.read(path).unwrap(), b"my edit");
         let confirmed = LibraryConflictFile { path: path.clone(), current_hash: hash(b"my edit") };
         materialize_library_item(&f.first, "companion", &view,
-            LibraryCopyMode::Replace { expected_hash: &confirmed }).unwrap();
+            LibraryCopyMode::Replace { confirmed: std::slice::from_ref(&confirmed) }).unwrap();
         assert_eq!(f.first.read(path).unwrap(), b"new body");
         assert_eq!(library_space_rows(&f.first, "companion", &[summary]).unwrap()[0].state, SpaceCopyState::UpToDate);
     }

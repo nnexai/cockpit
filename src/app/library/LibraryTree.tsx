@@ -77,7 +77,7 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
   const space = actions.spaceEntry?.(item);
   return [
     ...(includeOpen ? [{ label: "Open", onSelect: () => actions.open(item), disabled: !item.document_path }] : []),
-    { label: "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
+    { label: item.folder ? `Re-copy from ${item.folder.origin_path}` : "Refresh from source", onSelect: () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]), disabled: actions.refreshBusy },
     ...(space ? [space] : []),
     { label: "Copy source link", onSelect: () => actions.copyLink(item), disabled: !actions.canCopyLink || !(item.source_url ?? item.original_url) },
     "separator",

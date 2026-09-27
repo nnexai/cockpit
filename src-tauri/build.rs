@@ -28,7 +28,6 @@ fn main() {
             "cockpit_context_document",
             "cockpit_context_open",
             "cockpit_context_search",
-            "cockpit_context_snapshot",
             "cockpit_context_invalidate",
             "cockpit_context_media",
             "cockpit_library_listing",

@@ -37,9 +37,7 @@ use crate::comment_paste::{
     CommentPasteMarkPastedRequest, CommentPastePrepareRequest, CommentPastePrepareResponse,
     CommentPasteReceipt, CommentPasteSendRequest, CommentPasteState, CommentPasteTarget,
 };
-use crate::context_assets::{
-    ContextSnapshotCopyMode, ContextSnapshotMode, ContextSnapshotRequest, ContextSnapshotResponse,
-};
+
 use crate::context_media::{ContextMedia, ContextMediaRequest};
 use crate::context_search::{
     ContextInvalidation, ContextInvalidationRequest, ContextInvalidationResponse,
@@ -380,10 +378,7 @@ pub fn render_v1() -> String {
         ReviewDiffLine::decl(&config),
         ReviewHunk::decl(&config),
         ReviewFileDiff::decl(&config),
-        ContextSnapshotRequest::decl(&config),
-        ContextSnapshotResponse::decl(&config),
-        ContextSnapshotMode::decl(&config),
-        ContextSnapshotCopyMode::decl(&config),
+
         ContextSearchRequest::decl(&config),
         ContextSearchResult::decl(&config),
         ContextSearchResponse::decl(&config),

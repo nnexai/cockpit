@@ -17,11 +17,11 @@ use std::{
 use uuid::Uuid;
 
 const MAX_INDEX: u64 = 64 * 1024 * 1024;
-const MAX_RECORD: u64 = 4 * 1024 * 1024;
-const MAX_FILE: u64 = 64 * 1024 * 1024;
+const MAX_RECORD: u64 = 64 * 1024 * 1024;
+const MAX_FILE: u64 = 1024 * 1024 * 1024;
 const MARKER: &str = ".cockpit-item.json";
-const MAX_TREE_ENTRIES: usize = 100_000;
-const MAX_TREE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_TREE_ENTRIES: usize = 1_000_000;
+const MAX_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024 + MAX_RECORD;
 const MAX_TREE_DEPTH: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +238,11 @@ fn lock_file(dir: &Dir, name: &str) -> Result<File, InspectionError> {
     }
     Ok(file)
 }
+fn item_path(value: &str) -> bool {
+    let leaf = value.strip_prefix("folders/").unwrap_or(value);
+    component(leaf) && !leaf.starts_with('.')
+}
+
 impl Store {
     pub fn open(path: &Path, max_items: usize) -> Result<Arc<Self>, InspectionError> {
         let (path, root) =
@@ -334,6 +339,20 @@ impl Store {
         *old = entry;
         self.commit(&mut index)
     }
+    fn item_parent<'a>(&self, path: &'a str) -> Result<(Dir, &'a str), InspectionError> {
+        if !item_path(path) {
+            return Err(corrupt("invalid Library item path"));
+        }
+        if let Some(leaf) = path.strip_prefix("folders/") {
+            Ok((self.root.open_dir_nofollow("folders").map_err(io_error)?, leaf))
+        } else {
+            Ok((self.root.try_clone().map_err(io_error)?, path))
+        }
+    }
+    pub(crate) fn item_dir(&self, path: &str) -> Result<Dir, InspectionError> {
+        let (parent, leaf) = self.item_parent(path)?;
+        parent.open_dir_nofollow(leaf).map_err(io_error)
+    }
     pub fn stage(self: &Arc<Self>) -> Result<Stage, InspectionError> {
         let name = Uuid::new_v4().to_string();
         self.staging.create_dir(&name).map_err(io_error)?;
@@ -389,6 +408,15 @@ impl Store {
         bounded_write(&stage.dir, MARKER, &marker, MAX_RECORD)?;
         entry.marker_hash = Some(file_hash(&stage.dir, MARKER)?.0);
         entry.inventory = inventory(&stage.dir)?;
+        // Newly created intermediate directories must be durable as well as the
+        // item root: a file's fsync alone does not persist its ancestors.
+        for directory in entry.inventory.iter().rev().filter(|file| file.hash == "directory") {
+            let mut dir = stage.dir.try_clone().map_err(io_error)?;
+            for component in Path::new(&directory.path).components() {
+                dir = dir.open_dir_nofollow(component.as_os_str()).map_err(io_error)?;
+            }
+            sync(&dir)?;
+        }
         sync(&stage.dir)?;
         sync(&self.staging)
     }
@@ -396,10 +424,7 @@ impl Store {
         &self,
         entry: &LibraryIndexEntry,
     ) -> Result<Vec<LibraryConflictFile>, InspectionError> {
-        let dir = self
-            .root
-            .open_dir_nofollow(&entry.summary.item_path)
-            .map_err(io_error)?;
+        let dir = self.item_dir(&entry.summary.item_path)?;
         Ok(conflicts(entry, &inventory(&dir)?))
     }
     pub fn check_confirmation(
@@ -421,6 +446,12 @@ impl Store {
         let _lock = self.exclusive()?;
         self.recover()?;
         let mut index = self.index()?;
+        if entry.summary.item_path.starts_with("folders/") {
+            open_child(&self.root, "folders")?;
+            sync(&self.root)?;
+        }
+        let (target_root, target_name) = self.item_parent(&entry.summary.item_path)?;
+        let target_name = target_name.to_owned();
         let old = index
             .items
             .iter()
@@ -435,12 +466,7 @@ impl Store {
             if old.summary.item_path != entry.summary.item_path {
                 return Err(corrupt("item path changed"));
             }
-            let snapshot = inventory(
-                &self
-                    .root
-                    .open_dir_nofollow(&old.summary.item_path)
-                    .map_err(io_error)?,
-            )?;
+            let snapshot = inventory(&self.item_dir(&old.summary.item_path)?)?;
             check_confirmation(&conflicts(old, &snapshot), confirmed)?;
             Some(snapshot)
         } else {
@@ -486,7 +512,7 @@ impl Store {
         let result = (|| {
             self.fault("journal")?;
             if method == Method::Exchange {
-                match rename_special(&self.staging, &stage.name, &self.root, &intent.target, true) {
+                match rename_special(&self.staging, &stage.name, &target_root, &target_name, true) {
                     Ok(()) => {}
                     Err(e) if matches!(e.raw_os_error(), Some(22 | 38 | 95)) => {
                         method = Method::TwoRename;
@@ -498,14 +524,14 @@ impl Store {
             }
             if method == Method::TwoRename {
                 rename_special(
-                    &self.root,
-                    &intent.target,
+                    &target_root,
+                    &target_name,
                     &self.trash,
                     &intent.backup,
                     false,
                 )
                 .map_err(io_error)?;
-                sync(&self.root)?;
+                sync(&target_root)?;
                 sync(&self.trash)?;
                 self.fault("old_to_backup")?;
             }
@@ -513,14 +539,14 @@ impl Store {
                 rename_special(
                     &self.staging,
                     &stage.name,
-                    &self.root,
-                    &intent.target,
+                    &target_root,
+                    &target_name,
                     false,
                 )
                 .map_err(io_error)?;
             }
             self.fault("rename_unsynced")?;
-            sync(&self.root)?;
+            sync(&target_root)?;
             sync(&self.staging)?;
             self.fault("new_to_target")?;
             upsert(&mut index, intent.new_entry.as_ref().unwrap().clone());
@@ -547,12 +573,8 @@ impl Store {
         if entry.summary.revision != revision {
             return Err(error("library_conflict", "Library revision changed"));
         }
-        let predecessor = inventory(
-            &self
-                .root
-                .open_dir_nofollow(&entry.summary.item_path)
-                .map_err(io_error)?,
-        )?;
+        let (target_root, target_name) = self.item_parent(&entry.summary.item_path)?;
+        let predecessor = inventory(&self.item_dir(&entry.summary.item_path)?)?;
         check_confirmation(&conflicts(entry, &predecessor), None)?;
         let intent_id = Uuid::new_v4().to_string();
         let intent = Intent {
@@ -571,15 +593,15 @@ impl Store {
         };
         self.write_intent(&intent)?;
         rename_special(
-            &self.root,
-            &intent.target,
+            &target_root,
+            target_name,
             &self.trash,
             &intent.backup,
             false,
         )
         .map_err(io_error)?;
         self.fault("rename_unsynced")?;
-        sync(&self.root)?;
+        sync(&target_root)?;
         sync(&self.trash)?;
         self.fault("remove_to_backup")?;
         index.items.retain(|e| e.summary.item_id != id);
@@ -618,11 +640,12 @@ impl Store {
             let intent: Intent = read_json_bounded(&self.journal, &name, MAX_RECORD)
                 .map_err(|e| corrupt(e.message))?;
             validate_intent(&intent, &name)?;
-            let target = exists(&self.root, &intent.target)?;
+            let (target_root, target_name) = self.item_parent(&intent.target)?;
+            let target = exists(&target_root, target_name)?;
             let backup = exists(&self.trash, &intent.backup)?;
             let target_new = intent.new_entry.as_ref().is_some_and(|entry| {
-                self.root
-                    .open_dir_nofollow(&intent.target)
+                target_root
+                    .open_dir_nofollow(target_name)
                     .ok()
                     .is_some_and(|dir| verify_entry(&dir, entry).is_ok())
             });
@@ -634,7 +657,7 @@ impl Store {
                         .is_some_and(|dir| inventory(&dir).is_ok_and(|actual| actual == *snapshot))
                 })
             };
-            let target_old = is_old(&self.root, &intent.target);
+            let target_old = is_old(&target_root, target_name);
             let mut forward = false;
             let mut rollback = false;
             match intent.method {
@@ -665,7 +688,7 @@ impl Store {
                         .ok()
                         .is_some_and(|dir| verify_entry(&dir, entry).is_ok());
                     if valid {
-                        rename_special(&self.staging, stage, &self.root, &intent.target, false)
+                        rename_special(&self.staging, stage, &target_root, target_name, false)
                             .map_err(io_error)?;
                         sync(&self.staging)?;
                         forward = true;
@@ -673,15 +696,15 @@ impl Store {
                         rename_special(
                             &self.trash,
                             &intent.backup,
-                            &self.root,
-                            &intent.target,
+                            &target_root,
+                            target_name,
                             false,
                         )
                         .map_err(io_error)?;
                         sync(&self.trash)?;
                         rollback = true;
                     }
-                    sync(&self.root)?;
+                    sync(&target_root)?;
                 }
                 _ => {}
             }
@@ -723,7 +746,7 @@ impl Store {
     }
     fn sync_transition(&self, intent: &Intent) -> Result<(), InspectionError> {
         self.fault("recovery_sync")?;
-        sync(&self.root)?;
+        sync(&self.item_parent(&intent.target)?.0)?;
         if intent.staging.is_some() {
             sync(&self.staging)?;
         }
@@ -746,8 +769,7 @@ impl Store {
     }
 }
 fn validate_entry(entry: &LibraryIndexEntry) -> Result<(), InspectionError> {
-    if !component(&entry.summary.item_path)
-        || entry.summary.item_path.starts_with('.')
+    if !item_path(&entry.summary.item_path)
         || entry.summary.item_id.is_empty()
         || entry.summary.revision.is_empty()
     {
@@ -768,8 +790,7 @@ fn validate_intent(i: &Intent, name: &str) -> Result<(), InspectionError> {
         || Uuid::parse_str(&i.intent_id).is_err()
         || name != format!("{}.json", i.intent_id)
         || i.backup != i.intent_id
-        || !component(&i.target)
-        || i.target.starts_with('.')
+        || !item_path(&i.target)
         || i.staging
             .as_ref()
             .is_some_and(|s| Uuid::parse_str(s).is_err())

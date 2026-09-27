@@ -1,6 +1,6 @@
 # Cockpit Architecture Context
 
-Status: architecture reference. The Herdr client, workspace setup, Context browsing and media, comments/paste, source import and snapshots, graphical Review, and inline browser are implemented. Verified delivery boundaries are recorded in `DECISIONS.md`.
+Status: architecture reference. The Herdr client, workspace setup, Context browsing and media, comments/paste, Library provider imports and copied folders, graphical Review snapshots, and inline browser are implemented. Verified delivery boundaries are recorded in `DECISIONS.md`.
 
 All filesystem roots, executable locations, Herdr endpoints, and provider settings are configurable. Example absolute paths are intentionally omitted.
 
@@ -32,7 +32,7 @@ Cockpit brings together several provider-neutral product domains:
 - **Telemetry** — optional static log and trace context.
 - **Herdr Client** — a graphical client for Herdr sessions, following Herdr semantics and authority.
 
-Forge, Issue Tracker, and Wiki are domain contracts served by configured provider adapters. Source import, refresh, and local repository snapshots are implemented.
+Forge, Issue Tracker, and Wiki are domain contracts served by configured provider adapters. Source import, refresh, and copied local-folder Library items are implemented; the companion repository-snapshot action has been replaced by the Library folder flow.
 
 ## 3. Runtime architecture
 
@@ -248,7 +248,7 @@ Cockpit does not automatically launch or configure OMP. The developer starts age
 
 Cockpit does not persist credentials, place secrets in snapshots, or export provider secrets through generated environment values. Provider wrappers retain responsibility for current local credential handling. A future passkey/key-store mechanism is outside this proof of concept.
 
-## 7. Context ingestion and snapshots
+## 7. Context ingestion and Library
 
 ### 7.1 Provider boundaries
 
@@ -287,6 +287,12 @@ Space adds save the Library item first, then copy or reflink it into a freshly v
 `SourceService` is fetch-only: provider lookup, bounded metadata/fetch, setup's short-lived `RecentReads`, and optional hydration. `LibraryService` is the persistence authority. The legacy pane-scoped source import/list/refresh transports are removed in favor of Library operations and the explicit Space list/add/attempt-dismiss transports.
 
 The old `<state_root>/sources` cache is inert: Cockpit never reads, imports, reports, modifies, or deletes it. There is no migration. It remains on disk for manual user removal after confirmation.
+
+Local folders are copied into the Library from a typed absolute or `~` path; there is no live link, two-way sync, or native folder picker. Capture rejects a directory that overlaps the Library, a Space companion, state, or worktree root. Git roots use tracked and untracked non-ignored files; plain directories use regular files. Nested `.git`, symlinks, special files, hardlinks, and native executables are excluded and counted. Fixed build/dependency exclusions apply. Paths are byte-wise sorted, and file/byte limits keep a sorted prefix with a `partial` result. The source is not changed. Refresh is an explicit re-copy: Library bytes change only after confirmation if a Library file was edited; existing Space copies remain untouched and become `Library newer`.
+
+Folder items live under `folders/<label-slug>-<8 hex>` and retain each file at its relative path. Adding a multi-file item to a Space mirrors that relative layout under the companion's `sources/` tree, with one manifest entry and content hash per file. Explicit Space update copies new or changed Library files, restores missing files, and removes unedited files no longer in the Library. Edited files are skipped until their listed path hashes are explicitly confirmed; edited Space-only files are preserved and reported. Removal applies the same per-file compare-and-swap protection. Single-file provider paths remain unchanged.
+
+The former companion repository-snapshot action and its HTTP/Tauri/client transports are removed. Existing `repos/` companion entries remain readable as `Not linked`; Cockpit does not migrate them or inspect the legacy `<state_root>/sources` cache.
 
 ### 7.4 Library Markdown format
 

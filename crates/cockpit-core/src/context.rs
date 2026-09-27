@@ -11,7 +11,6 @@ use cockpit_protocol::context::{
     ContextEntry, ContextEntryKind, ContextLaunchRequest, ContextRoot, ContextRootKind,
     DetectionConfidence, ExtensionKind, PanePresentation, ReviewLaunchRequest,
 };
-use cockpit_protocol::context_assets::{ContextSnapshotRequest, ContextSnapshotResponse};
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
@@ -202,40 +201,6 @@ impl ContextService {
         }
         authorized.max_depth = self.configuration.limits.context_tree_depth;
         Ok(authorized)
-    }
-
-    /// Materialize a freshly resolved local repository under this pane's
-    /// currently authorized companion. The request never carries a filesystem
-    /// path, so it cannot widen the Context root capability.
-    pub async fn snapshot_local_repository(
-        &self,
-        session_id: &str,
-        pane_id: &str,
-        request: &ContextSnapshotRequest,
-    ) -> Result<ContextSnapshotResponse, InspectionError> {
-        let authorized = self
-            .authorize_companion_root(session_id, pane_id, &request.binding_id, &request.root_id)
-            .await?;
-        let companion_id = authorized.root.companion_id.as_deref().ok_or_else(|| {
-            InspectionError::new(
-                "context_snapshot_companion_unavailable",
-                "the authorized companion has no durable identity",
-            )
-        })?;
-        let repository = RepositoryCatalog::new(self.configuration.clone())
-            .resolve(&request.repository_id)
-            .await?;
-        let mut response = crate::context_assets::snapshot_working_tree(
-            &self.configuration,
-            companion_id,
-            &authorized.dir,
-            &authorized.canonical,
-            &repository,
-        )
-        .await?;
-        response.binding_id = request.binding_id.clone();
-        response.root_id = authorized.root.root_id;
-        Ok(response)
     }
 
     pub async fn inspect_pane(

@@ -1092,7 +1092,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
     return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
   }, [isLibrary]);
-  // A Space copy into this companion root expands the folders it wrote, as snapshot imports do;
+  // A Space copy into this companion root expands the folders it wrote;
   // an update rereads the folders on show and leaves navigation as it was.
   const companionRoot = root?.kind === "companion" ? root : null;
   useEffect(() => {
@@ -1366,12 +1366,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         }
         if (!library.listing) return <div className="context-empty">Loading…</div>;
         if (library.listing.items.length === 0) {
-          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request or Jira issue. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add context…</button></div></div>;
+          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request, Jira issue, or a folder. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add context…</button></div></div>;
         }
         return <div className="context-empty">Select a Library item to read it.</div>;
       }
       if (!selectedPath && rootEmpty) {
-        return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Add Library context or import a snapshot from Resources." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
+        return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Add Library context from Resources." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
       }
       if (!selectedPath) return <div className="context-empty">Select a file to inspect its source.</div>;
       if (!documentState || documentState.status === "loading") return <div className="context-empty">Loading source…</div>;
@@ -1537,13 +1537,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           {renderDocument()}
         </main>
       </div>
-      {resourcesOpen && presentation ? <ContextResources client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} bindingId={presentation.binding_id} root={root} space={space} spaceListing={spaceListing} onAdd={() => setLibraryAdd("space")} onClose={() => setResourcesOpen(false)} onImported={(result) => {
-          const parts = result.snapshot_path.split("/");
-          const paths = parts.map((_, index) => parts.slice(0, index + 1).join("/"));
-          setExpanded(current => new Set([...current, ...paths]));
-          void loadDirectory(root, "", true);
-          for (const path of paths) void loadDirectory(root, path, true);
-        }} /> : null}
+      {resourcesOpen && presentation ? <ContextResources client={client} root={root} space={space} spaceListing={spaceListing} onAdd={() => setLibraryAdd("space")} onClose={() => setResourcesOpen(false)} /> : null}
       {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={[
         { label: "Add…", onSelect: () => setLibraryAdd("library") },
         { label: "Refresh all", onSelect: refreshLibrary, disabled: libraryBusy || !library.listing || library.listing.items.length === 0 },

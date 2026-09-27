@@ -228,12 +228,6 @@
 .context-search-poll,
 .context-search-truncated { margin: 6px 0 0; color: var(--blocked); overflow-wrap: anywhere; }
 
-.context-snapshot { padding: 8px; border-bottom: 1px solid var(--border); font-size: var(--font-size-2xs); }
-.context-snapshot summary { cursor: pointer; }
-.context-snapshot p { color: var(--text-muted); overflow-wrap: anywhere; }
-.context-snapshot label { display: grid; gap: 4px; }
-.context-snapshot select { width: 100%; min-width: 0; }
-.context-snapshot button { margin-top: 6px; }
 
 
 .context-safe-image { max-width: 100%; height: auto; object-fit: contain; }
@@ -295,12 +289,6 @@
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
-}
-.context-resources-body > .context-snapshot {
-  min-height: 0;
-  max-height: min(40%, 280px);
-  flex: 0 1 auto;
-  overflow: auto;
 }
 .context-resources > header .context-resources-close { display: grid; width: 28px; min-width: 28px; height: 28px; min-height: 28px; place-items: center; padding: 3px; }
 

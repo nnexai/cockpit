@@ -10,7 +10,6 @@ import {
   parseSpaceUpdateRequest, parseSpaceRemoveRequest,
 } from "./libraryProtocol";
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
-import { parseContextSnapshotRequest, parseContextSnapshotResponse, matchContextSnapshot } from "./contextSnapshotProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
   matchContextResponse, matchPanePresentation, parseContextDirectory,
@@ -746,15 +745,6 @@ export function createBrowserClient(
       const parsed = parseReviewFileRequest(value);
       const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/review/file`, "Review file", parseReviewFile, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed), signal });
       signal?.throwIfAborted(); return matchReviewFile(response, sessionId, paneId, parsed);
-    },
-    async contextSnapshot(sessionId, paneId, value) {
-      validateSessionId(sessionId);
-      validateResourceId(paneId);
-      const body = parseContextSnapshotRequest(value);
-      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/snapshot`, "Context snapshot", parseContextSnapshotResponse, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      return matchContextSnapshot(response, body);
     },
     async contextSearch(sessionId, paneId, value, signal) {
       validateSessionId(sessionId);

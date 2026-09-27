@@ -1,7 +1,6 @@
 import type { ContextMedia, ContextMediaRequest } from "../protocol/generated/v1";
 import type { SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest } from "../protocol/generated/v1";
 import type { ReviewLaunchRequest, ReviewSnapshotRequest, ReviewSnapshot, ReviewFileRequest, ReviewFileDiff } from "../protocol/generated/v1";
-import type { ContextSnapshotRequest, ContextSnapshotResponse } from "../protocol/generated/v1";
 import type { CommentPastePrepareRequest, CommentPastePrepareResponse, CommentPasteReceipt, CommentPasteMarkPastedRequest, CommentPasteSendRequest } from "../protocol/generated/v1";
 import type {
   ContextSearchRequest, ContextSearchResponse, ContextInvalidationRequest, ContextInvalidationResponse,
@@ -298,7 +297,6 @@ export interface CockpitClient {
   contextDocument(sessionId: string, paneId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
   reviewSnapshot(sessionId: string, paneId: string, request: ReviewSnapshotRequest, signal?: AbortSignal): Promise<ReviewSnapshot>;
   reviewFile(sessionId: string, paneId: string, request: ReviewFileRequest, signal?: AbortSignal): Promise<ReviewFileDiff>;
-  contextSnapshot(sessionId: string, paneId: string, request: ContextSnapshotRequest): Promise<ContextSnapshotResponse>;
   contextSearch(sessionId: string, paneId: string, request: ContextSearchRequest, signal?: AbortSignal): Promise<ContextSearchResponse>;
   contextInvalidate(sessionId: string, paneId: string, request: ContextInvalidationRequest, signal?: AbortSignal): Promise<ContextInvalidationResponse>;
   contextMedia(sessionId: string, paneId: string, request: ContextMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;

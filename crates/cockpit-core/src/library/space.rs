@@ -487,11 +487,10 @@ impl LibraryService {
             for (position, row) in rows.iter().enumerate() {
                 if operations::cancelled(&worker_store, &id)? { break; }
                 let item_id = row.item_id.as_deref().expect("selected linked row");
-                let confirmation = request.replace_edited.iter().find(|file| row.paths.contains(&file.path));
-                let mode = match confirmation {
-                    Some(expected_hash) => LibraryCopyMode::Replace { expected_hash },
-                    None => LibraryCopyMode::Update,
-                };
+                let confirmed = request.replace_edited.iter()
+                    .filter(|file| row.paths.contains(&file.path)).cloned().collect::<Vec<_>>();
+                let mode = if confirmed.is_empty() { LibraryCopyMode::Update }
+                    else { LibraryCopyMode::Replace { confirmed: &confirmed } };
                 let result = service.copy_saved_item_mode(&worker_store, &request.target, item_id, mode).await;
                 let (outcome, reason) = match result {
                     Ok((authorized, copied)) => {
@@ -735,10 +734,7 @@ impl LibraryService {
         if !store.conflicts(entry)?.is_empty() {
             return Err(error("library_conflict", "Library item was edited"));
         }
-        let root = store
-            .root
-            .open_dir_nofollow(&entry.summary.item_path)
-            .map_err(io)?;
+        let root = store.item_dir(&entry.summary.item_path)?;
         let view = LibraryItemView {
             root: &root,
             summary: &entry.summary,
@@ -1443,6 +1439,52 @@ mod tests {
         }).await.unwrap()).await;
         assert_eq!(restored.space.unwrap().written, vec![b_path.clone()]);
         assert_eq!(std::fs::read(x.join(&b_path)).unwrap(), std::fs::read(y.join(&b_path)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn folder_space_update_confirms_multiple_edited_paths_in_one_operation() {
+        let f = fixture();
+        let (projects, adapter, root) = companion(&f).await;
+        let service = reopen(&f).with_projects(projects, adapter);
+        let origin = f.root.join("folder-origin");
+        std::fs::create_dir_all(origin.join("nested")).unwrap();
+        std::fs::write(origin.join("a.txt"), b"a").unwrap();
+        std::fs::write(origin.join("nested/b.txt"), b"b").unwrap();
+        let added = finished(&service, service.start_add(LibraryAddRequest {
+            input: origin.to_string_lossy().into_owned(), provider_id: None,
+            hydrate_references: false, follow_space: false, download_attachments: false,
+            refresh_existing: false, label: Some("Folder notes".into()), target: Some(target()),
+        }).await.unwrap()).await;
+        assert!(added.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done));
+        let row = service.space_listing(target()).await.unwrap().rows.remove(0);
+        for path in &row.paths {
+            std::fs::write(root.join(path), b"edited in Space").unwrap();
+        }
+        std::fs::write(origin.join("a.txt"), b"new a").unwrap();
+        std::fs::write(origin.join("nested/b.txt"), b"new b").unwrap();
+        finished(&service, service.start_refresh(LibraryRefreshRequest::Items {
+            item_ids: vec![row.item_id.clone().unwrap()],
+        }).await.unwrap()).await;
+        let edited = service.space_listing(target()).await.unwrap().rows.remove(0);
+        assert_eq!(edited.state, SpaceCopyState::EditedInSpace);
+        let update = finished(&service, service.start_space_update(SpaceUpdateRequest {
+            target: target(),
+            scope: SpaceUpdateScope::Selection { item_ids: vec![row.item_id.unwrap()], follow_ids: vec![] },
+            replace_edited: edited.edited,
+        }).await.unwrap()).await;
+        assert_eq!(update.phases[0].state, LibraryPhaseState::Done);
+        assert!(update.space.unwrap().skipped_edited.is_empty());
+        let row = service.space_listing(target()).await.unwrap().rows.remove(0);
+        assert_eq!(row.state, SpaceCopyState::UpToDate);
+        let a = row.paths.iter().find(|path| path.ends_with("/a.txt")).unwrap();
+        let b = row.paths.iter().find(|path| path.ends_with("/nested/b.txt")).unwrap();
+        assert_eq!(std::fs::read(root.join(a)).unwrap(), b"new a");
+        assert_eq!(std::fs::read(root.join(b)).unwrap(), b"new b");
+        service.space_remove(SpaceRemoveRequest {
+            target: target(), logical_id: row.logical_id, confirmed: vec![],
+        }).await.unwrap();
+        assert!(!root.join(a).exists());
+        assert!(!root.join(b).exists());
     }
 
     #[tokio::test]

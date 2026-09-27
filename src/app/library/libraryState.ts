@@ -275,6 +275,7 @@ export function reportSummary(report: LibraryRefreshReport): string {
 
 /** Recognition line for a resolved link (design §4.5). */
 export function resolutionNote(resolution: LibraryResolution, providers: readonly ProjectProvider[]): string {
+  if (resolution.kind === "folder") return `Folder${resolution.git_working_tree ? " · Git working tree" : ""}${resolution.file_count !== null ? ` · ${resolution.file_count} files` : ""} · ${resolution.title}`;
   const family = providerFamily(providers, resolution.provider_id);
   const host = instanceHost(resolution.provider_instance);
   if (family.key === "jira") return `Jira issue ${resolution.canonical_id ?? ""} · ${resolution.title} · ${host}`;
@@ -315,7 +316,11 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
         : { title: `✕ No provider configured for ${host}`, detail: "Add this instance to the Cockpit configuration file, then retry.", retry: true };
     case "invalid_artifact_url":
     case "library_input_unrecognized":
-      return { title: "✕ Not recognized", detail: "Enter an issue, merge request or pull request link, or a Jira key.", retry: false };
+      return { title: "✕ Not recognized", detail: "Enter an issue, merge request or pull request link, a Jira key, or an absolute or ~ folder path.", retry: false };
+    case "library_folder_refused":
+      return { title: "Can't copy this folder", detail: message, retry: false };
+    case "library_folder_unavailable":
+      return { title: "Folder unavailable", detail: message, retry: true };
     case "source_cli_unavailable":
       return { title: `✕ ${executable} isn't installed`, detail: `Install ${executable} and sign in with it, then retry.`, retry: true };
     case "source_auth_failed":

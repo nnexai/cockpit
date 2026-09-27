@@ -5,7 +5,6 @@ pub mod browser_view;
 pub mod comment_paste;
 pub mod comments;
 pub mod context;
-pub mod context_assets;
 pub mod library;
 pub mod context_media;
 pub mod context_search;

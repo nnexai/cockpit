@@ -114,9 +114,9 @@ type AcceptedAdd = {
 let accepted: AcceptedAdd | null = null;
 
 /**
- * Add context (design §4.5): one field for a forge issue, MR or PR link, or a
- * Jira key. It always saves to the Library first; with a live target Space the
- * destination can also copy the saved item into that Space.
+ * Add context (design §4.5): one field for a forge issue, MR or PR link, a
+ * Jira key, or a local folder path. It always saves to the Library first;
+ * with a live target Space the destination can also copy the saved item there.
  */
 export function AddContextDialog({ client, onClose, onOpenItem, space = null, defaultDestination = "library", openInSpace = null }: {
   client: CockpitClient;
@@ -147,6 +147,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [providersError, setProvidersError] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [label, setLabel] = useState<string | null>(null);
   const [jiraProviderId, setJiraProviderId] = useState<string | null>(null);
   const [linked, setLinked] = useState(false);
   const [refreshExisting, setRefreshExisting] = useState(false);
@@ -212,7 +213,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   }, [client, lookupKey]);
   const resolution = lookup.status === "ok" ? lookup.resolution : null;
   const existing = resolution?.existing_item_id ?? null;
-  const family = resolution ? providerFamily(providers, resolution.provider_id) : null;
+  const folder = resolution?.kind === "folder";
+  const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
   const forge = family !== null && family.key !== "jira";
   const destinationSpace = destination === "space" ? spaceChoice : null;
   const companion = spaceListing.listing?.companion ?? null;
@@ -273,7 +275,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
       follow_space: false,
       download_attachments: false,
       refresh_existing: Boolean(existing) && refreshExisting,
-      label: null,
+      label: folder ? label?.trim() || resolution.title : null,
       target,
     }), destinationSpace, null);
   };
@@ -294,6 +296,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setRestoredError(null);
     setAwaitingStart(false);
     setInput("");
+    setLabel(null);
     setLookup({ status: "idle" });
     setRefreshExisting(false);
     window.requestAnimationFrame(() => inputRef.current?.focus());
@@ -348,11 +351,12 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           <div className="task-setup-row">
             <label htmlFor={fieldId}>Source</label>
             <div>
-              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); setRefreshExisting(false); }}
-                placeholder="Issue, MR or PR link, or Jira key" autoComplete="off" spellCheck={false}
+              <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); } }}
+                placeholder="Issue, MR or PR link, Jira key, or folder path" autoComplete="off" spellCheck={false}
                 aria-invalid={failure ? "true" : undefined} aria-describedby={failure ? failureId : undefined} />
-              {lookup.status === "pending" ? <p className="task-setup-note">Looking up the link…</p> : null}
+              {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed.startsWith("~") ? "Checking the folder…" : "Looking up the link…"}</p> : null}
               {resolution ? <p className="task-setup-note is-valid">✓ {existing ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
+              {resolution?.diagnostics.map((diagnostic, index) => <p className="task-setup-note" key={`${diagnostic.code}:${index}`}>{diagnostic.message}</p>)}
               {existingInSpace?.text ? <p className="task-setup-note">{existingInSpace.text}</p> : null}
               {failure ? <div id={failureId} className="library-refusal" role="alert">
                 <strong>{failure.title}</strong>
@@ -362,6 +366,13 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               {providersError ? <p className="task-setup-note">{providersError}</p> : null}
             </div>
           </div>
+          {folder ? <div className="task-setup-row">
+            <label htmlFor={`${fieldId}-label`}>Label</label>
+            <div>
+              <input id={`${fieldId}-label`} type="text" value={label ?? resolution.title} onChange={(event) => setLabel(event.target.value)} autoComplete="off" />
+              <p className="task-setup-note">Copies files into the Library, not a live link. Later source edits stay outside the Library until you explicitly re-copy.</p>
+            </div>
+          </div> : null}
           {jiraKey && jira.length > 1 ? <div className="task-setup-row">
             <label htmlFor={`${fieldId}-provider`}>Provider</label>
             <div><select id={`${fieldId}-provider`} className="library-select" value={jiraProvider?.id ?? ""} onChange={(event) => setJiraProviderId(event.target.value)}>

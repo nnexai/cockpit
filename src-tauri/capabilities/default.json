@@ -25,7 +25,6 @@
     "allow-cockpit-context-document",
     "allow-cockpit-context-open",
     "allow-cockpit-context-search",
-    "allow-cockpit-context-snapshot",
     "allow-cockpit-context-invalidate",
     "allow-cockpit-review-snapshot",
     "allow-cockpit-review-file",

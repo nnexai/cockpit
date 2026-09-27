@@ -688,18 +688,6 @@ old_source: string | null, new_source: string | null, old_source_hash: string | 
  */
 old_source_offset: number, new_source_offset: number, old_source_total_bytes: number | null, new_source_total_bytes: number | null, old_total_lines: number | null, new_total_lines: number | null, old_source_truncated: boolean, new_source_truncated: boolean, truncated: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
-export type ContextSnapshotRequest = { binding_id: string, root_id: string, repository_id: string, mode: ContextSnapshotMode, };
-
-export type ContextSnapshotResponse = { binding_id: string, root_id: string, repository_id: string,
-/**
- * A path relative to the authorized companion root.
- */
-snapshot_path: string, generation: string, mode: ContextSnapshotMode, copy_mode: ContextSnapshotCopyMode, files: number, bytes: number, source_head: string | null, dirty: boolean, diagnostics: Array<ProjectDiagnostic>, };
-
-export type ContextSnapshotMode = "working_tree";
-
-export type ContextSnapshotCopyMode = "reflink" | "copy" | "mixed";
-
 export type ContextSearchRequest = { binding_id: string, root_id: string, query: string, request_generation: number, offset?: number, revision?: string, };
 
 export type ContextSearchResult = { path: string, line: number, excerpt: string, revision: string, };

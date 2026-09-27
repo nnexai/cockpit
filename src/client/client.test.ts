@@ -103,7 +103,6 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     contextSearch: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewFile: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
-    contextSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     contextInvalidate: vi.fn(async () => { throw new Error("Unexpected Context invalidation in terminal fixture"); }),
     contextMedia: vi.fn(), librarySpaceList: vi.fn(), librarySpaceAdd: vi.fn(), librarySpaceAttemptsDismiss: vi.fn(), librarySpaceUpdate: vi.fn(), librarySpaceRemove: vi.fn(), openReview: vi.fn(), openContext: vi.fn(async () => { throw new Error("Unexpected Context launch in terminal fixture"); }),
     commentBatches: vi.fn(async () => { throw new Error("Unexpected comments list in terminal fixture"); }),

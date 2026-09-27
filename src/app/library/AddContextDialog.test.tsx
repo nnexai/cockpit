@@ -459,3 +459,51 @@ it("retries an interrupted Space-only copy with the items it asked for, not the 
     host.remove();
   }
 });
+
+it("recognizes a typed folder path, defaults its label, and saves the renamed copy through Library progress", async () => {
+  vi.useFakeTimers();
+  const saved: LibraryOperation = {
+    operation_id: "op-folder", kind: "add", phases: [{ phase: "library", state: "partial", done: 1, total: 1, message: null, error: null }],
+    item_ids: ["folder:notes"], report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const client = githubClient({
+    libraryResolve: vi.fn(async () => ({ kind: "folder", provider_id: null, provider_instance: null, title: "notes", canonical_id: null, container_label: null,
+      existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: true, file_count: 600, diagnostics: [] })),
+    libraryAdd: vi.fn(async () => saved),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const onOpenItem = vi.fn();
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} onOpenItem={onOpenItem} />));
+    await advance(0);
+    await typeSource("~/notes");
+    expect(client.libraryResolve).toHaveBeenCalledWith({ input: "~/notes", provider_id: null });
+    expect(document.body.textContent).toContain("Folder · Git working tree");
+    const labelElement = [...document.body.querySelectorAll("label")].find((element) => element.textContent === "Label")!;
+    const label = document.getElementById(labelElement.htmlFor) as HTMLInputElement;
+    expect(label.value).toBe("notes");
+    expect(document.body.querySelector("input[type='checkbox']")).toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(label, "Design notes");
+      label.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      label.focus();
+      label.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith({
+      input: "~/notes", label: "Design notes", provider_id: null, target: null,
+      hydrate_references: false, follow_space: false, download_attachments: false, refresh_existing: false,
+    });
+    expect(document.body.textContent).toContain("Saved to Library, partial");
+    expect(document.activeElement).toBe(dialogButton("Open in Library"));
+    await act(async () => dialogButton("Open in Library")!.click());
+    expect(onOpenItem).toHaveBeenCalledWith("folder:notes");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

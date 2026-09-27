@@ -1770,7 +1770,6 @@ pub fn run() {
             context::cockpit_context_document,
             context::cockpit_context_open,
             context_search::cockpit_context_search,
-            context_search::cockpit_context_snapshot,
             context_search::cockpit_context_invalidate,
             context_media::cockpit_context_media,
             library::cockpit_library_listing,
