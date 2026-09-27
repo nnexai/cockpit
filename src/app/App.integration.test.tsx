@@ -18,9 +18,9 @@ import { App } from "./App";
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
-  TerminalPane: ({ request, deferAttachment, onSelect, onReady }: { request: { pane_id: string }; deferAttachment?: boolean; onSelect?: () => void; onReady?: () => void }) => {
+  TerminalPane: ({ request, deferAttachment, focusOnAttach = true, onSelect, onReady }: { request: { pane_id: string }; deferAttachment?: boolean; focusOnAttach?: boolean; onSelect?: () => void; onReady?: () => void }) => {
     if (onReady) terminalReadyCallbacks.set(request.pane_id, onReady);
-    return <button type="button" data-testid={`terminal-${request.pane_id}`} data-deferred={String(Boolean(deferAttachment))} onClick={onSelect}>terminal</button>;
+    return <button type="button" data-testid={`terminal-${request.pane_id}`} data-deferred={String(Boolean(deferAttachment))} data-focus-on-attach={String(focusOnAttach)} onClick={onSelect}>terminal</button>;
   },
 }));
 
@@ -937,5 +937,112 @@ describe("mounted App mutation and session ordering", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+function emptyLibrary(fixture: AppFixture): void {
+  vi.mocked(fixture.client.libraryListing).mockResolvedValue({
+    root: { root_id: "library:fixture", kind: "library", label: "Library", path: "/data/cockpit/library", repository_id: "", checkout_path: "", companion_id: null },
+    generation: "1", items: [], follows: [], next_offset: null, diagnostics: [],
+  });
+}
+
+async function openLibraryFromPalette(): Promise<void> {
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true })));
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true, cancelable: true })));
+  await settle();
+  click(button("All commands"));
+  click(button("Open Library"));
+  await settle();
+}
+
+function terminal(paneId: string): HTMLElement | null {
+  return container.querySelector<HTMLElement>(`[data-testid="terminal-${paneId}"]`);
+}
+
+describe("Library view presentation lifecycle", () => {
+  it("unmounts pane renderers while open and returns focus to the still-mounted sidebar invoker without terminal focus", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+    const invoker = container.querySelector<HTMLButtonElement>(".space-tree-row .resource-select")!;
+    act(() => invoker.focus());
+
+    await openLibraryFromPalette();
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+    expect(terminal("pane-1")).toBeNull();
+    expect(container.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(invoker);
+
+    click(button("Close Library"));
+    await settle();
+    expect(document.activeElement).toBe(invoker);
+    readyTerminal("pane-1");
+    await settle();
+    expect(document.activeElement).toBe(invoker);
+    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("false");
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the selected tab when the invoking terminal was unmounted by the Library view", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+    act(() => terminal("pane-1")!.focus());
+
+    await openLibraryFromPalette();
+    expect(terminal("pane-1")).toBeNull();
+    click(button("Close Library"));
+    await settle();
+    readyTerminal("pane-1");
+    await settle();
+    expect(document.activeElement).toBe(container.querySelector('.tab-button[aria-selected="true"]'));
+    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("false");
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+  });
+
+  it("lets an explicit pane selection attach with terminal focus again", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    fixture.focusCalls.mockClear();
+    await openLibraryFromPalette();
+    click(button("Close Library"));
+    await settle();
+    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("false");
+    expect(fixture.focusCalls).not.toHaveBeenCalled();
+
+    click(terminal("pane-1")!);
+    await settle();
+    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("true");
+  });
+
+  it("opens the Library from the no-session screen without any Space action", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    fixture.sessionsCalls.mockImplementation(async () => ({ sessions: [] }));
+    container = document.createElement("div");
+    document.body.append(container);
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App client={fixture.client} />);
+    });
+    await settle();
+    await settle();
+    expect(container.textContent).toContain("No Herdr sessions");
+
+    click(button("Open Library"));
+    await settle();
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+    expect(container.textContent).toContain("The Library is empty");
+    expect([...container.querySelectorAll("button")].some((candidate) => candidate.textContent?.startsWith("Add to "))).toBe(false);
+    expect(fixture.client.libraryListing).toHaveBeenCalled();
+
+    click(button("Close Library"));
+    await settle();
+    expect(document.activeElement).toBe(button("Open Library"));
+    expect(fixture.snapshotCalls).not.toHaveBeenCalled();
   });
 });

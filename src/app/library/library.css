@@ -1,0 +1,210 @@
+/* Library view: a Cockpit-owned work-area surface below the tab strip (design §4.1). */
+.library-view {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  margin: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--terminal-bg);
+  color: var(--text-primary);
+}
+.library-view:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.library-view.is-full-screen { height: 100vh; margin: 0; border: 0; }
+.library-view-header {
+  display: flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px 4px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+/* Same treatment as the sidebar section headings. */
+.library-view-header h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: lowercase;
+}
+.library-view-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.library-view-close {
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.library-view-close:hover { background: var(--surface-hover); }
+.library-view .context-viewer { min-height: 0; flex: 1 1 auto; }
+
+/* Tree rows reuse `.context-tree-row`; groups are plain labels. */
+.library-tree { display: flex; flex-direction: column; }
+.library-tree-group.is-instance .context-tree-name { color: var(--text-secondary); font-weight: 500; }
+.library-tree-group.is-container .context-tree-name { color: var(--text-secondary); }
+.library-tree .context-tree-row:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+
+/* State chips: glyph + word, colour only as a supplement (design §4.6, context.css chip pairs). */
+.library-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.library-state.is-idle { color: var(--idle); }
+.library-state.is-working { color: var(--working); }
+.library-state.is-blocked { color: var(--blocked); }
+.library-state.is-muted { color: var(--text-secondary); }
+.context-source-chip.library-state.is-idle { border-color: color-mix(in srgb, var(--idle) 55%, var(--border)); }
+.context-source-chip.library-state.is-working { border-color: color-mix(in srgb, var(--working) 55%, var(--border)); }
+.context-source-chip.library-state.is-blocked { border-color: color-mix(in srgb, var(--blocked) 55%, var(--border)); }
+
+.library-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  box-sizing: border-box;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--text-secondary);
+  border-radius: 50%;
+  animation: library-spin 0.9s linear infinite;
+}
+@keyframes library-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .library-spinner { width: auto; border: 0; animation: none; }
+  .library-spinner::before { content: "…"; }
+}
+
+/* Item header (design §4.4), extending the document header rhythm. */
+.library-item-header {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 24px 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+}
+.library-item-line { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.library-item-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-item-id { color: var(--text-muted); }
+.library-item-title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  line-height: var(--line-height-snug);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.library-item-phrase { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.library-item-state button,
+.library-report button,
+.library-report-rows button {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: var(--font-size-control);
+  cursor: pointer;
+}
+.library-item-state button:hover:not(:disabled),
+.library-report button:hover:not(:disabled),
+.library-report-rows button:hover:not(:disabled) { background: var(--surface-hover); }
+.library-item-state button:disabled { cursor: default; opacity: .6; }
+.library-more { display: grid; width: 28px; place-items: center; padding: 3px !important; }
+.library-item-notice { margin: 4px -24px 0; padding-inline: 24px; border-top: 1px solid var(--border); }
+.library-metadata > summary { width: fit-content; color: var(--text-muted); cursor: pointer; }
+.library-metadata dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 6px 0 0; }
+.library-metadata dt { color: var(--text-muted); }
+.library-metadata dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.library-metadata code { user-select: text; }
+
+/* Refresh report strip (design §4.9). */
+.library-report-block { flex: 0 0 auto; }
+.library-report { flex-wrap: wrap; }
+.library-report-note { color: var(--text-muted); }
+.library-report-error { color: var(--blocked); }
+.library-report-rows {
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-size-control);
+}
+.library-report-rows h3 { margin: 6px 0 2px; color: var(--text-secondary); font-size: var(--font-size-2xs); font-weight: 600; }
+.library-report-rows ul { margin: 0; padding: 0; list-style: none; }
+.library-report-rows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 0; }
+.library-report-rows li.is-failed .library-report-reason { color: var(--blocked); }
+.library-report-link { border: 0 !important; padding: 0 !important; min-height: 0 !important; background: none !important; color: var(--accent) !important; text-align: left; }
+.library-report-link:hover { text-decoration: underline; }
+.library-report-reason { color: var(--text-secondary); overflow-wrap: anywhere; }
+
+/* Dialogs reuse the compact task-setup dialog (design §4.5, §4.10). */
+.library-dialog-overlay { z-index: var(--z-modal); background: var(--scrim); }
+.library-refusal {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font-size: var(--font-size-2xs);
+  line-height: 16px;
+}
+.library-refusal strong { color: var(--blocked); font-weight: 600; }
+.library-refusal span { color: var(--text-secondary); }
+.library-refusal .task-setup-link { width: fit-content; margin-left: 0; font-size: inherit; }
+.library-row-label { padding-top: 7px; color: var(--text-secondary); font-size: var(--font-size-control); }
+.library-destination { margin: 7px 0 0; color: var(--text-primary); font-size: var(--font-size-control); }
+.library-select {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.library-confirm-body p { margin: 0; color: var(--text-secondary); font-size: var(--font-size-control); line-height: 1.5; }
+.task-setup .library-destructive { border-color: color-mix(in srgb, var(--blocked) 60%, var(--border)) !important; color: var(--blocked); }
+.task-setup .library-destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--blocked) 12%, var(--surface)) !important; }
+.task-setup button:focus-visible,
+.task-setup input:focus-visible,
+.task-setup select:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+.library-progress-steps { margin: 4px 0 0; padding: 0; list-style: none; }
+.library-progress-step { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-primary); font-size: var(--font-size-control); line-height: 20px; }
+.library-progress-step.is-done { color: var(--idle); }
+.library-progress-step.is-failed { color: var(--blocked); }
+.library-progress-step button {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* Window ≤ 600 px: dialogs become full-width sheets (design §5.4). */
+@media (max-width: 600px) {
+  .library-dialog-overlay { place-items: end stretch; padding: 0; }
+  .library-dialog-overlay > .task-setup { width: 100%; max-height: 90dvh; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+}
+
+/* No-session notices: `Open Library` sits beside the notice's own action. */
+.notice-actions { display: flex; flex-wrap: wrap; gap: 8px; }

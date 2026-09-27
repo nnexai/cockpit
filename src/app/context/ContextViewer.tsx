@@ -5,21 +5,21 @@ import { SafeImage } from "./SafeImage";
 import { MermaidView } from "./MermaidView";
 import type { CommentReviewRef } from "../../protocol/generated/v1";
 import { HtmlPreview } from "./HtmlPreview";
-import { Component, Fragment, useId, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, useId, useLayoutEffect, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
   ContextDirectory,
-  ContextDirectoryRequest,
   ContextDocument,
-  ContextDocumentRequest,
   ContextEntry,
   ContextInvalidation,
   ContextKnownRevision,
   ContextRoot,
   PanePresentation,
   CommentDraft,
+  LibraryItemSummary,
+  LibraryRefreshRequest,
   ReviewComparison,
 } from "../../protocol/generated/v1";
 import { CommentDrafts, InlineCommentDrafts, type CommentDraftActions } from "./CommentDrafts";
@@ -30,6 +30,14 @@ import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
 import { highlightLines } from "../viewer/highlight";
 import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
+import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
+import { AddContextDialog } from "../library/AddContextDialog";
+import { LibraryConfirmDialog } from "../library/LibraryConfirmDialog";
+import { LibraryItemHeader } from "../library/LibraryItemHeader";
+import { LibraryMenu, LibraryTree, menuAnchor, type LibraryItemActions } from "../library/LibraryTree";
+import { RefreshReport } from "../library/RefreshReport";
+import { providerFamily } from "../library/libraryState";
+import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, type LibraryListingState } from "../library/useLibraryOperation";
 import "./context.css";
 
 export type ContextViewMode = "auto" | "source" | "markdown" | "html";
@@ -119,15 +127,25 @@ export function retainReviewScrollPosition(current: Record<string, number>, iden
 }
 
 
+/** A request from outside the viewer to act on its Library root once the listing can serve it. */
+export type LibraryCommand = { token: number; kind: "refresh" } | { token: number; kind: "open"; itemId: string };
+
 export type ContextViewerProps = {
   client: CockpitClient;
-  presentation: PanePresentation;
+  /** The pane's roots and read authority; null in the Library view, which has only the Library root. */
+  presentation: PanePresentation | null;
   value: ContextViewState;
   onChange: (next: ContextViewState) => void;
   controlAllowed: boolean;
   onRequestControl: () => void;
-  onTerminalView: () => void;
+  /** Absent in the Library view, which has no terminal to return to. */
+  onTerminalView?: () => void;
+  /** The Library view's listing; a pane reads its own only while its Library root is shown. */
+  library?: LibraryListingState;
+  libraryCommand?: LibraryCommand | null;
 };
+
+const NO_PENDING_ITEMS: ReadonlySet<string> = new Set();
 
 type DirectoryState = {
   status: "idle" | "loading" | "ready" | "error";
@@ -457,9 +475,9 @@ function MarkdownView({
   state,
   onSelect,
   onScroll,
-  client, presentation,
+  media,
 }: {
-  client: CockpitClient; presentation: PanePresentation;
+  media: ContextReader["media"] | null;
   text: string;
   state: ContextFileViewState;
   onSelect: (start: number, end: number) => void;
@@ -510,9 +528,9 @@ function MarkdownView({
     img: ({ node, alt, src }) => {
       const path = localImagePath(state.path, src);
       const remote = !path && remoteImageUrl(src);
-      return <span {...blockData(node, derived.sourceLines)}>{path ? <SafeImage client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} request={{ binding_id: presentation.binding_id, root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : remote ? <RemoteImage src={remote} alt={alt ?? ""} allowed={externalAllowed} /> : <span className="context-media-refusal">{alt || "image"}</span>}</span>;
+      return <span {...blockData(node, derived.sourceLines)}>{path && media ? <SafeImage media={media} request={{ root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : remote ? <RemoteImage src={remote} alt={alt ?? ""} allowed={externalAllowed} /> : <span className="context-media-refusal">{alt || "image"}</span>}</span>;
     },
-  }), [derived.sourceLines, derived.text, client, externalAllowed, presentation.session_id, presentation.pane_id, presentation.binding_id, state.rootId, state.path]);
+  }), [derived.sourceLines, derived.text, externalAllowed, media, state.rootId, state.path]);
   return (
     <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
       if (event.target instanceof Element && event.target.closest("dialog, button, textarea")) return;
@@ -575,7 +593,7 @@ function contextTreeRows(root: ContextRoot, directories: Record<string, Director
   return rows;
 }
 
-export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView }: ContextViewerProps) {
+export function ContextViewer({ client, presentation, value, onChange, controlAllowed, onRequestControl, onTerminalView, library: viewLibrary, libraryCommand = null }: ContextViewerProps) {
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
   const [documentPageLoading, setDocumentPageLoading] = useState<string | null>(null);
@@ -583,7 +601,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const protectedDirectoryKeysRef = useRef<Set<string>>(new Set());
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [invalidationGeneration, setInvalidationGeneration] = useState(0);
-  const [rootId, setRootId] = useState<string | null>(value.rootId ?? presentation.default_root_id ?? presentation.roots[0]?.root_id ?? null);
+  const [rootId, setRootId] = useState<string | null>(value.rootId ?? (presentation ? presentation.default_root_id ?? presentation.roots[0]?.root_id ?? null : LIBRARY_ROOT_ID));
   const [commentStatus, setCommentStatus] = useState({ count: 0, canCreateLines: false, canCreateWholeFile: false });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [resourcesOpen, setResourcesOpen] = useState(false);
@@ -620,12 +638,28 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       pickerGeneration.current += 1;
     };
   }, []);
-  const root = presentation.roots.find((candidate) => candidate.root_id === rootId) ?? presentation.roots[0];
-  const sessionId = presentation.session_id;
-  const paneId = presentation.pane_id;
-  const bindingId = presentation.binding_id;
+  // The Library is a client-side root in every pane and the only root of the Library view.
+  const libraryChosen = presentation === null || rootId === LIBRARY_ROOT_ID;
+  const paneLibrary = useLibraryListing(client, viewLibrary === undefined && libraryChosen);
+  const library = viewLibrary ?? paneLibrary;
+  const serverLibraryRoot = library.listing?.root ?? null;
+  const libraryPath = serverLibraryRoot?.path ?? "";
+  const libraryRoot = useMemo<ContextRoot>(() => ({ root_id: LIBRARY_ROOT_ID, kind: "library", label: "Library", path: libraryPath, repository_id: "", checkout_path: "", companion_id: null }), [libraryPath]);
+  const roots = useMemo(() => presentation ? [...presentation.roots, libraryRoot] : [libraryRoot], [libraryRoot, presentation]);
+  const root: ContextRoot = libraryChosen || !presentation ? libraryRoot : presentation.roots.find((candidate) => candidate.root_id === rootId) ?? presentation.roots[0];
+  const isLibrary = root?.kind === "library";
+  const serverLibraryRootId = serverLibraryRoot?.root_id ?? null;
+  const sessionId = presentation?.session_id ?? null;
+  const paneId = presentation?.pane_id ?? null;
+  const paneBindingId = presentation?.binding_id ?? null;
+  // Readers follow authority identity, not each refreshed listing or presentation object.
+  const reader = useMemo<ContextReader | null>(() => {
+    if (isLibrary) return serverLibraryRoot ? libraryReader(client, serverLibraryRoot) : null;
+    return presentation ? paneReader(client, presentation) : null;
+  }, [client, isLibrary, serverLibraryRootId, sessionId, paneId, paneBindingId]);
+  const bindingId = isLibrary ? "library" : paneBindingId ?? "";
   const activeRootId = root?.root_id ?? "";
-  const identityKey = `${sessionId}\u0000${paneId}\u0000${bindingId}\u0000${activeRootId}`;
+  const identityKey = `${reader?.identity ?? "pending"}\u0000${activeRootId}`;
   const requestIdentityRef = useRef(identityKey);
   requestIdentityRef.current = identityKey;
   const currentBindingRef = useRef(bindingId);
@@ -638,7 +672,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const directoryPathForFile = selectedPath?.includes("/") ? selectedPath.slice(0, selectedPath.lastIndexOf("/")) : "";
   const selectedDirectory = root ? directories[keyFor(root.root_id, directoryPathForFile)] : undefined;
   const selectedEntry = selectedDirectory?.data?.entries.find((entry) => (entry.path ?? (directoryPathForFile ? `${directoryPathForFile}/${entry.name}` : entry.name)) === selectedPath);
-  const selectedRevision = selectedEntry?.revision ?? selectedFileState?.revision ?? null;
+  // Library files are replaced by provider refreshes; always read the current revision.
+  const selectedRevision = isLibrary ? null : selectedEntry?.revision ?? selectedFileState?.revision ?? null;
   const documentState = selectedKey ? documents[selectedKey] : undefined;
   const protectedDirectoryKeys = new Set<string>();
   if (root) {
@@ -649,7 +684,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   protectedDirectoryKeysRef.current = protectedDirectoryKeys;
   const document = documentState?.document;
   const loadDocumentPage = useCallback(async () => {
-    if (!root || !selectedPath || !selectedKey || !document || document.next_offset === undefined) return;
+    if (!reader || !root || !selectedPath || !selectedKey || !document || document.next_offset === undefined) return;
     const expectedOffset = document.next_offset;
     const requestKey = `${selectedKey}\u0000${document.revision}\u0000${expectedOffset}`;
     const controller = new AbortController();
@@ -657,8 +692,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     documentController.current = controller;
     setDocumentPageLoading(requestKey);
     try {
-      const data = await client.contextDocument(sessionId, paneId, {
-        binding_id: bindingId,
+      const data = await reader.document({
         root_id: root.root_id,
         path: selectedPath,
         expected_revision: document.revision,
@@ -684,7 +718,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (documentController.current === controller) documentController.current = null;
       setDocumentPageLoading((current) => current === requestKey ? null : current);
     }
-  }, [bindingId, client, document, paneId, root, selectedKey, selectedPath, sessionId]);
+  }, [document, reader, root, selectedKey, selectedPath]);
   const knownRevisions = useMemo<ContextKnownRevision[]>(() => Object.values(documents)
     .map((state) => state.document)
     .filter((candidate): candidate is ContextDocument => candidate !== undefined && candidate.root_id === activeRootId)
@@ -693,14 +727,16 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const treeRows = useMemo(() => root ? contextTreeRows(root, directories, expanded) : [], [directories, expanded, root]);
   const discoveryDiagnostics = useMemo(() => {
     const seen = new Set<string>();
-    return [...presentation.diagnostics, ...(root ? directories[keyFor(root.root_id, "")]?.data?.diagnostics ?? [] : [])].filter((diagnostic) => {
+    const rootDiagnostics = isLibrary ? library.listing?.diagnostics ?? [] : presentation?.diagnostics ?? [];
+    return [...rootDiagnostics, ...(root ? directories[keyFor(root.root_id, "")]?.data?.diagnostics ?? [] : [])].filter((diagnostic) => {
       const key = `${diagnostic.code}\u0000${diagnostic.message}\u0000${diagnostic.path ?? ""}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  }, [directories, presentation.diagnostics, root]);
-  const commentsEnabled = Boolean(root && (root.kind === "companion" || (root.kind === "folder" && root.root_id === presentation.default_root_id)));
+  }, [directories, isLibrary, library.listing?.diagnostics, presentation?.diagnostics, root]);
+  // The Library root has no comments: a Library path is outside every Space.
+  const commentsEnabled = Boolean(presentation && root && (root.kind === "companion" || (root.kind === "folder" && root.root_id === presentation.default_root_id)));
   const restoreSourceFocus = useCallback(() => {
     requestAnimationFrame(() => {
       const line = selectedFileState?.selectionEnd ?? selectedFileState?.selectionStart ?? 1;
@@ -742,6 +778,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }, [onChange, root, selectedFileState?.mode, selectedPath, updateFile, value]);
 
   const loadDirectory = useCallback(async (directoryRoot: ContextRoot, path: string, force = false) => {
+    if (!reader) return;
     const key = keyFor(directoryRoot.root_id, path);
     const previous = directoriesRef.current[key]?.data;
     if (!force && directoriesRef.current[key]?.status === "ready" && previous?.next_offset === undefined) return;
@@ -755,14 +792,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const requestBindingId = bindingId;
     const requestRootId = directoryRoot.root_id;
     try {
-      const request: ContextDirectoryRequest = {
-        binding_id: requestBindingId,
+      const request: ContextDirectoryRead = {
         root_id: requestRootId,
         path,
         offset: force ? undefined : previous?.next_offset,
         revision: force ? undefined : previous?.revision,
       };
-      const data = await client.contextDirectory(sessionId, paneId, request, controller.signal);
+      const data = await reader.directory(request, controller.signal);
       if (!mountedRef.current || controller.signal.aborted || directoryRequests.current[key] !== requestId
         || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
       const merged = !force && previous?.revision !== undefined && data.revision === previous.revision
@@ -776,7 +812,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     } finally {
       if (directoryControllers.current[key] === controller) delete directoryControllers.current[key];
     }
-  }, [bindingId, client, identityKey, paneId, sessionId]);
+  }, [bindingId, identityKey, reader]);
   const identityRef = useRef<string | null>(null);
   useEffect(() => {
     if (identityRef.current === identityKey) return;
@@ -800,11 +836,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     if (root && value.rootId !== root.root_id) {
       onChange({ ...value, rootId: root.root_id, path: null });
     }
-    if (root) void loadDirectory(root, "", true);
-  }, [identityKey, loadDirectory, onChange, root, value]);
+    // The Library tree comes from its listing, not from directory reads.
+    if (root && !isLibrary) void loadDirectory(root, "", true);
+  }, [identityKey, isLibrary, loadDirectory, onChange, root, value]);
 
   useEffect(() => {
-    if (!root || !selectedPath || !selectedKey) return;
+    if (!reader || !root || !selectedPath || !selectedKey) return;
     documentController.current?.abort();
     const requestId = ++documentRequestSequence.current;
     const controller = new AbortController();
@@ -814,8 +851,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     const requestRootId = root.root_id;
     setDocumentPageLoading(null);
     setDocuments((current) => retainDocumentState(current, selectedKey, { status: "loading", document: current[selectedKey]?.document }));
-    const request: ContextDocumentRequest = { binding_id: requestBindingId, root_id: requestRootId, path: selectedPath, expected_revision: selectedRevision };
-    void client.contextDocument(sessionId, paneId, request, controller.signal).then((data) => {
+    const request: ContextDocumentRead = { root_id: requestRootId, path: selectedPath, expected_revision: selectedRevision };
+    void reader.document(request, controller.signal).then((data) => {
       if (!mountedRef.current || controller.signal.aborted || requestId !== documentRequestSequence.current
         || requestIdentityRef.current !== requestIdentity || currentBindingRef.current !== requestBindingId || currentRootRef.current !== requestRootId) return;
       setDocuments((current) => retainDocumentState(current, selectedKey, { status: "ready", document: data }));
@@ -829,7 +866,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (documentController.current === controller) documentController.current = null;
       documentRequestSequence.current += 1;
     };
-  }, [bindingId, client, identityKey, paneId, refreshGeneration, selectedKey, selectedPath, selectedRevision, sessionId, root?.root_id]);
+  }, [bindingId, identityKey, reader, refreshGeneration, selectedKey, selectedPath, selectedRevision, root?.root_id]);
 
   const chooseRoot = (nextRoot: ContextRoot) => {
     setRootId(nextRoot.root_id);
@@ -837,9 +874,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     onChange({ ...value, rootId: nextRoot.root_id, path: null });
   };
   const chooseEntry = (entry: ContextEntry) => {
-    if (entry.kind !== "file" || entry.refusal || !entry.path || !root) return;
-    const fileKey = keyFor(root.root_id, entry.path);
-    const next = value.files[fileKey] ?? { rootId: root.root_id, path: entry.path, mode: "auto" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision: entry.revision };
+    if (entry.kind !== "file" || entry.refusal || !entry.path) return;
+    openFile(entry.path, entry.revision);
+  };
+  const openFile = (path: string, revision: string | null) => {
+    if (!root) return;
+    const fileKey = keyFor(root.root_id, path);
+    const next = value.files[fileKey] ?? { rootId: root.root_id, path, mode: "auto" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision };
     const files = { ...value.files };
     delete files[fileKey];
     files[fileKey] = next;
@@ -849,13 +890,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (oldest === undefined) break;
       delete files[oldest];
     }
-    onChange({ ...value, rootId: root.root_id, path: entry.path, files });
+    onChange({ ...value, rootId: root.root_id, path, files });
     overview.select();
   };
   const focusTree = useCallback(() => {
     overview.show();
     requestAnimationFrame(() => {
-      const buttons = treeRef.current?.querySelectorAll<HTMLButtonElement>("[data-context-path]");
+      const buttons = treeRef.current?.querySelectorAll<HTMLButtonElement>("[data-context-path], [data-library-row]");
       const selected = selectedPath ? [...(buttons ?? [])].find((button) => button.dataset.contextPath === selectedPath) : null;
       (selected ?? buttons?.[0] ?? treeRef.current)?.focus();
     });
@@ -871,7 +912,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     setPickerIndex({ loading: false, incomplete: false, entries: new Map() });
   }, []);
   const openFilePicker = useCallback(() => {
-    if (!root) return;
+    if (!root || !reader) return;
     pickerController.current?.abort();
     const controller = new AbortController();
     pickerController.current = controller;
@@ -892,7 +933,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           let offset: number | undefined;
           let revision: string | undefined;
           do {
-            const data = await client.contextDirectory(sessionId, paneId, { binding_id: bindingId, root_id: root.root_id, path, offset, revision }, controller.signal);
+            const data = await reader.directory({ root_id: root.root_id, path, offset, revision }, controller.signal);
             if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) return;
             incomplete ||= data.truncated;
             for (const entry of data.entries) {
@@ -914,7 +955,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (pending.length > 0 || visited.size >= MAX_PICKER_DIRECTORIES || entries.size >= MAX_PICKER_FILES) incomplete = true;
       if (!controller.signal.aborted && pickerGeneration.current === generation && requestIdentityRef.current === requestIdentity) setPickerIndex({ loading: false, incomplete, entries });
     })();
-  }, [bindingId, client, identityKey, paneId, root, sessionId]);
+  }, [bindingId, identityKey, reader, root]);
   const toggleDirectory = (entry: ContextEntry) => {
     if (!root || !entry.path || entry.kind !== "directory") return;
     const next = new Set(expanded);
@@ -928,9 +969,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     }
     setExpanded(next);
   };
+  // Rereads files on disk (and the Library index); never a provider refresh.
   const refresh = () => {
     if (!root) return;
     setRefreshGeneration((generation) => generation + 1);
+    if (isLibrary) { library.reload(); return; }
     const path = selectedPath ? directoryPathForFile : "";
     void loadDirectory(root, path, true);
   };
@@ -1004,9 +1047,93 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     }
   };
   const searchContext = useCallback((request: Parameters<CockpitClient["contextSearch"]>[2], signal: AbortSignal) =>
-    client.contextSearch(sessionId, paneId, request, signal), [client, paneId, sessionId]);
+    reader?.search ? reader.search(request, signal) : Promise.reject(new Error("Search is unavailable for this root.")), [reader]);
   const pollContext = useCallback((request: Parameters<CockpitClient["contextInvalidate"]>[2], signal: AbortSignal) =>
-    client.contextInvalidate(sessionId, paneId, request, signal), [client, paneId, sessionId]);
+    reader?.invalidate ? reader.invalidate(request, signal) : Promise.reject(new Error("Change polling is unavailable for this root.")), [reader]);
+  const [libraryPendingIds, setLibraryPendingIds] = useState<ReadonlySet<string>>(NO_PENDING_ITEMS);
+  const [libraryReportVerb, setLibraryReportVerb] = useState<"Refresh" | "Replace">("Refresh");
+  const [libraryReportDismissed, setLibraryReportDismissed] = useState(false);
+  const [libraryAddOpen, setLibraryAddOpen] = useState(false);
+  const [libraryConfirm, setLibraryConfirm] = useState<{ kind: "remove" | "replace"; item: LibraryItemSummary } | null>(null);
+  const [libraryToolbarMenu, setLibraryToolbarMenu] = useState<{ x: number; y: number } | null>(null);
+  const [libraryOpenRequest, setLibraryOpenRequest] = useState<string | null>(null);
+  const handledLibraryCommand = useRef<number | null>(null);
+  const libraryOperation = useLibraryOperation(client, () => {
+    setRefreshGeneration((generation) => generation + 1);
+  });
+  const startLibraryOperation = libraryOperation.start;
+  const libraryBusy = libraryOperation.running || libraryOperation.starting;
+  const pendingItemIds = useMemo(() => new Set([...libraryOperation.pendingItemIds, ...(libraryBusy ? libraryPendingIds : [])]), [libraryBusy, libraryOperation.pendingItemIds, libraryPendingIds]);
+  const libraryItems = library.listing?.items;
+  const selectedLibraryItem = isLibrary && selectedPath ? libraryItems?.find((item) => item.document_path === selectedPath) ?? null : null;
+  useEffect(() => {
+    if (!isLibrary) return;
+    const changed = () => setRefreshGeneration((generation) => generation + 1);
+    window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
+  }, [isLibrary]);
+  useEffect(() => {
+    if (!isLibrary || library.status !== "ready" || !library.listing || !selectedPath) return;
+    if (library.listing.items.some((item) => item.document_path === selectedPath)) return;
+    const key = keyFor(LIBRARY_ROOT_ID, selectedPath);
+    setDocuments((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    onChange({ ...value, path: null });
+  }, [isLibrary, library.listing, library.status, onChange, selectedPath, value]);
+  const startLibraryRefresh = useCallback((request: LibraryRefreshRequest, itemIds: string[]) => {
+    setLibraryReportVerb("Refresh");
+    setLibraryReportDismissed(false);
+    setLibraryPendingIds(new Set(itemIds));
+    void startLibraryOperation(() => client.libraryRefresh(request));
+  }, [client, startLibraryOperation]);
+  const refreshLibrary = useCallback(() => {
+    startLibraryRefresh({ scope: "all" }, (libraryItems ?? []).map((item) => item.item_id));
+  }, [libraryItems, startLibraryRefresh]);
+  const openLibraryItem = (item: LibraryItemSummary) => {
+    if (item.document_path) openFile(item.document_path, null);
+  };
+  const libraryActions: LibraryItemActions = {
+    open: openLibraryItem,
+    refresh: startLibraryRefresh,
+    remove: (item) => setLibraryConfirm({ kind: "remove", item }),
+    copyLink: (item) => {
+      const link = item.source_url ?? item.original_url;
+      if (link) void navigator.clipboard?.writeText(link).catch(() => undefined);
+    },
+    canCopyLink: typeof navigator !== "undefined" && Boolean(navigator.clipboard),
+    refreshBusy: libraryBusy,
+  };
+  // Palette commands and `Open in Library` wait until the listing can serve them.
+  useEffect(() => {
+    if (!isLibrary || !library.listing) return;
+    if (libraryCommand && handledLibraryCommand.current !== libraryCommand.token) {
+      if (libraryCommand.kind === "refresh") {
+        handledLibraryCommand.current = libraryCommand.token;
+        if (!libraryBusy) refreshLibrary();
+      } else {
+        const item = library.listing.items.find((candidate) => candidate.item_id === libraryCommand.itemId);
+        if (item) { handledLibraryCommand.current = libraryCommand.token; openLibraryItem(item); }
+      }
+    }
+    if (libraryOpenRequest) {
+      const item = library.listing.items.find((candidate) => candidate.item_id === libraryOpenRequest);
+      if (item) { setLibraryOpenRequest(null); openLibraryItem(item); }
+    }
+  });
+  // At pane width ≤ 420 px `Add…` and `Refresh all` move into the toolbar `⋯` menu.
+  const [compactToolbar, setCompactToolbar] = useState(false);
+  useLayoutEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || typeof ResizeObserver === "undefined") return;
+    const measure = () => { const width = viewer.getBoundingClientRect().width; if (width > 0) setCompactToolbar(width <= 420); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewer);
+    return () => observer.disconnect();
+  }, []);
   const selectSearchResult = useCallback((result: { path: string; line: number; revision: string }) => {
     if (!root) return;
     const fileKey = keyFor(root.root_id, result.path);
@@ -1098,6 +1225,16 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       ? { start: fileState.selectionStart, end: fileState.selectionEnd }
       : null;
     const renderDocumentBody = (drafts: CommentDraft[] = [], actions?: CommentDraftActions, inlineEditor?: (line: number) => ReactNode): ReactNode => {
+      if (isLibrary && !selectedPath) {
+        if (!library.listing && library.status === "error") {
+          return <div className="context-notice context-notice-error" role="alert"><strong>Library unavailable:</strong><span>{library.error}</span><span>Space context is unaffected.</span><button type="button" onClick={library.reload}>Retry</button></div>;
+        }
+        if (!library.listing) return <div className="context-empty">Loading…</div>;
+        if (library.listing.items.length === 0) {
+          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request or Jira issue. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAddOpen(true)}>Add context…</button></div></div>;
+        }
+        return <div className="context-empty">Select a Library item to read it.</div>;
+      }
       if (!selectedPath && rootEmpty) {
         return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Import a source or snapshot from Resources to add files." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
       }
@@ -1115,39 +1252,42 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       const pageRequestKey = selectedKey && document.next_offset !== undefined
         ? `${selectedKey}\u0000${document.revision}\u0000${document.next_offset}`
         : null;
+      const documentDetails = (
+        <details className="viewer-details">
+          <summary aria-label="Document details" title="Document details"><UiIcon name="info" /></summary>
+          <dl>
+            <dt>Size</dt><dd>{document.bytes} B</dd><dt>Full path</dt><dd><code>{root.path.replace(/\/$/, "")}/{selectedPath}</code></dd>
+            <dt>Relative path</dt><dd><code>{selectedPath}</code></dd>
+            <dt>Root identity</dt><dd><code>{root.root_id}</code></dd>
+            <dt>Provenance</dt><dd>{root.kind}{root.repository_id ? ` · repository ${root.repository_id}` : ""}{root.companion_id ? ` · companion ${root.companion_id}` : ""}</dd>
+            <dt>Revision</dt><dd><code>{document.revision}</code></dd>
+            <dt>Content hash</dt><dd><code>{document.content_hash ?? "Unavailable"}</code></dd>
+            <dt>Media type</dt><dd>{document.media_type || "Unavailable"}</dd>
+            {metadata.provider ? <><dt>Provider</dt><dd>{metadata.provider}</dd></> : null}
+            {metadata.canonicalId ? <><dt>Source identity</dt><dd><code>{metadata.canonicalId}</code></dd></> : null}
+            {metadata.fetchedAt ? <><dt>Freshness</dt><dd>{metadata.fetchedAt}</dd></> : null}
+            {frontmatter ? <><dt>Frontmatter</dt><dd><pre>{splitSourceLines(document.text ?? "").slice(frontmatter.start - 1, frontmatter.end).map((line) => line.raw).join("")}</pre></dd></> : null}
+            {document.diagnostics.map((diagnostic, index) => <Fragment key={`${diagnostic.code}-${index}`}><dt>Diagnostic</dt><dd><code>{diagnostic.code}</code>{diagnostic.path ? ` · ${diagnostic.path}` : ""} · {diagnostic.message}</dd></Fragment>)}
+          </dl>
+        </details>
+      );
       return (
         <>
-          <div className="context-document-header">
+          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} /> : <div className="context-document-header">
             {metadata.canonicalId ? <span className="document-source-kind">{metadata.provider ?? "Issue"}</span> : null}<strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
 
-            <details className="viewer-details">
-              <summary aria-label="Document details" title="Document details"><UiIcon name="info" /></summary>
-              <dl>
-                <dt>Size</dt><dd>{document.bytes} B</dd><dt>Full path</dt><dd><code>{root.path.replace(/\/$/, "")}/{selectedPath}</code></dd>
-                <dt>Relative path</dt><dd><code>{selectedPath}</code></dd>
-                <dt>Root identity</dt><dd><code>{root.root_id}</code></dd>
-                <dt>Provenance</dt><dd>{root.kind}{root.repository_id ? ` · repository ${root.repository_id}` : ""}{root.companion_id ? ` · companion ${root.companion_id}` : ""}</dd>
-                <dt>Revision</dt><dd><code>{document.revision}</code></dd>
-                <dt>Content hash</dt><dd><code>{document.content_hash ?? "Unavailable"}</code></dd>
-                <dt>Media type</dt><dd>{document.media_type || "Unavailable"}</dd>
-                {metadata.provider ? <><dt>Provider</dt><dd>{metadata.provider}</dd></> : null}
-                {metadata.canonicalId ? <><dt>Source identity</dt><dd><code>{metadata.canonicalId}</code></dd></> : null}
-                {metadata.fetchedAt ? <><dt>Freshness</dt><dd>{metadata.fetchedAt}</dd></> : null}
-                {frontmatter ? <><dt>Frontmatter</dt><dd><pre>{splitSourceLines(document.text ?? "").slice(frontmatter.start - 1, frontmatter.end).map((line) => line.raw).join("")}</pre></dd></> : null}
-                {document.diagnostics.map((diagnostic, index) => <Fragment key={`${diagnostic.code}-${index}`}><dt>Diagnostic</dt><dd><code>{diagnostic.code}</code>{diagnostic.path ? ` · ${diagnostic.path}` : ""} · {diagnostic.message}</dd></Fragment>)}
-              </dl>
-            </details>
-          </div>
+            {documentDetails}
+          </div>}
           {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
           {document.text !== null && document.diagnostics.some(isShownDiagnostic) ? <div className="context-notice context-notice-warning" role="status">{document.diagnostics.filter(isShownDiagnostic).map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
-          {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && (root.kind === "companion" || root.kind === "folder") && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage client={client} sessionId={sessionId} paneId={paneId} request={{ binding_id: bindingId, root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
+          {/\.pdf$/i.test(selectedPath) ? <div className="context-notice"><strong>PDF preview unavailable</strong><span>This file is retained without an active PDF renderer.</span></div> : document.text === null && reader && (root.kind === "companion" || root.kind === "folder" || root.kind === "library") && /\.(png|jpe?g)$/i.test(selectedPath) ? <div className="context-raster-preview"><SafeImage media={reader.media} request={{ root_id: root.root_id, path: selectedPath, expected_revision: document.revision }} alt={selectedPath} className="context-safe-image" /></div> : document.text === null ? <div className="context-notice context-notice-error"><strong>{/\.pdf$/i.test(selectedPath) ? "PDF preview unavailable" : "File refused"}</strong><span>{document.media_type || "Binary or unsupported content"}</span>{document.diagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : <>
             {(() => {
               const mode = effectiveMode;
               return <>
                 {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing the start of a large file.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading === pageRequestKey}>{documentPageLoading === pageRequestKey ? "Loading…" : "Load next source page"}</button></div> : null}
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
-                  {mode === "markdown" ? <MarkdownView client={client} presentation={presentation} text={document.text!} state={{ ...fileState!, mode: "markdown" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
+                  {mode === "markdown" ? <MarkdownView media={reader?.media ?? null} text={document.text!} state={{ ...fileState!, mode: "markdown" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
                 </RenderErrorBoundary>
               </>;
             })()}
@@ -1156,7 +1296,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         </>
       );
     };
-    if (!commentsEnabled) return renderDocumentBody();
+    if (!commentsEnabled || !presentation) return renderDocumentBody();
     return (
       <CommentDrafts
         client={client}
@@ -1183,8 +1323,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
 
   if (!root) {
     return <div className="context-viewer context-viewer-empty" onPointerDown={() => { if (!controlAllowed) onRequestControl(); }}>
-      <div className="context-notice context-notice-error"><strong>Context unavailable</strong><span>{presentation.reason || "This pane is not connected to an authorized Context root."}</span></div>
-      <button type="button" onClick={onTerminalView}>Show terminal view</button>
+      <div className="context-notice context-notice-error"><strong>Context unavailable</strong><span>{presentation?.reason || "This pane is not connected to an authorized Context root."}</span></div>
+      {onTerminalView ? <button type="button" onClick={onTerminalView}>Show terminal view</button> : null}
     </div>;
   }
 
@@ -1198,21 +1338,31 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     }}>
       <header className="context-toolbar">
 
-        {presentation.roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = presentation.roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{presentation.roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
+        {roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
         <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={overviewId} aria-label="Toggle file overview"><UiIcon name="sidebar" /> Files</button>
         <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file"><UiIcon name="search" /></button>
         {root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)} aria-expanded={resourcesOpen}>Resources</button> : null}
+        {isLibrary && !compactToolbar ? <>
+          <button type="button" onClick={() => setLibraryAddOpen(true)}>Add…</button>
+          <button type="button" onClick={refreshLibrary} disabled={libraryBusy || !library.listing || library.listing.items.length === 0} title="Refresh every item from its source">Refresh all</button>
+        </> : null}
+        {isLibrary && compactToolbar ? <button type="button" aria-label="More Library actions" aria-haspopup="menu" aria-expanded={libraryToolbarMenu !== null} onClick={(event) => setLibraryToolbarMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button> : null}
         <span className="context-toolbar-spacer" />
         {document && selectedPath && (isMarkdown(document, selectedPath) || isHtml(document, selectedPath)) ? <div className="viewer-segmented" role="group" aria-label="Document presentation"><button type="button" aria-pressed={selectedFileState?.mode !== "source"} onClick={() => updateFile({ mode: "auto" })}>Preview</button><button type="button" aria-pressed={selectedFileState?.mode === "source"} onClick={() => updateFile({ mode: "source" })}>Source</button></div> : null}
 
         <button type="button" className="viewer-wrap-toggle" aria-pressed={wrap} onClick={toggleWrap} title={wrap ? "Long lines wrap (Alt+Z)" : "Long lines scroll (Alt+Z)"}><UiIcon name="wrap" /><span className="viewer-wrap-label">Wrap</span></button>
         <button type="button" onClick={refresh} aria-label="Refresh Context files" title="Refresh files"><UiIcon name="refresh" /></button>
-        <button type="button" onClick={onTerminalView} aria-label="Show terminal" title="Show terminal"><UiIcon name="terminal" /></button>
+        {onTerminalView ? <button type="button" onClick={onTerminalView} aria-label="Show terminal" title="Show terminal"><UiIcon name="terminal" /></button> : null}
       </header>
+      {isLibrary && libraryOperation.operation && !libraryReportDismissed ? <RefreshReport operation={libraryOperation.operation} verb={libraryReportVerb} error={libraryOperation.error}
+        onCancel={libraryOperation.cancel} onDismiss={() => setLibraryReportDismissed(true)}
+        onOpenItem={(itemId) => { const item = libraryItems?.find((candidate) => candidate.item_id === itemId); if (item) openLibraryItem(item); }}
+        onRetry={(itemIds) => startLibraryRefresh({ scope: "items", item_ids: itemIds }, itemIds)} /> : null}
+      {isLibrary && !libraryOperation.operation && libraryOperation.error ? <div className="context-notice context-notice-error" role="alert"><strong>Library operation failed:</strong><span>{libraryOperation.error}</span></div> : null}
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
         {overview.narrow && overview.open ? <button type="button" className="viewer-overview-backdrop" aria-label="Close file overview" onClick={overview.close} /> : null}
-        <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label="Context files" ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else onTreeKeyDown(event); }}>
+        <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label={isLibrary ? "Library items" : "Context files"} ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else if (!isLibrary) onTreeKeyDown(event); }}>
         {root.kind === "companion" ? <details className="viewer-tree-search"><summary><UiIcon name="search" /> Search contents</summary><ContextSearch
           identity={identityKey}
           bindingId={bindingId}
@@ -1224,6 +1374,15 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           onInvalidate={invalidateVisibleFiles}
           disabled={!controlAllowed}
         /></details> : null}
+          {isLibrary ? <>
+            {!library.listing && library.status !== "error" ? <div className="context-tree-status">Loading…</div> : null}
+            {library.status === "error" ? <div className="context-tree-error" role="alert">
+              <span>Library unavailable: {library.error}. Space context is unaffected.</span>
+              <button type="button" onClick={library.reload}>Retry</button>
+            </div> : null}
+            {library.listing?.items.length === 0 ? <div className="context-tree-status is-empty">Empty</div> : null}
+            {library.listing ? <LibraryTree items={library.listing.items} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
+          </> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
           {directories[keyFor(root.root_id, "")]?.status === "error" && !directories[keyFor(root.root_id, "")]?.data ? <div className="context-tree-error">{directories[keyFor(root.root_id, "")]?.error}</div> : null}
           {rootEmpty ? <div className="context-tree-status is-empty">Empty</div> : null}
@@ -1242,7 +1401,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           {renderDocument()}
         </main>
       </div>
-      {resourcesOpen ? <ContextResources client={client} sessionId={sessionId} paneId={paneId} bindingId={bindingId} root={root} onClose={() => setResourcesOpen(false)} onChanged={files => {
+      {resourcesOpen && presentation ? <ContextResources client={client} sessionId={presentation.session_id} paneId={presentation.pane_id} bindingId={presentation.binding_id} root={root} onClose={() => setResourcesOpen(false)} onChanged={files => {
           const paths = files.flatMap(file => { const parts = file.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
           setExpanded(current => new Set([...current, ...paths]));
           void loadDirectory(root, "", true);
@@ -1253,6 +1412,32 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           setExpanded(current => new Set([...current, ...paths]));
           void loadDirectory(root, "", true);
           for (const path of paths) void loadDirectory(root, path, true);
+        }} /> : null}
+      {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={[
+        { label: "Add…", onSelect: () => setLibraryAddOpen(true) },
+        { label: "Refresh all", onSelect: refreshLibrary, disabled: libraryBusy || !library.listing || library.listing.items.length === 0 },
+      ]} /> : null}
+      {libraryAddOpen ? <AddContextDialog client={client} onClose={() => setLibraryAddOpen(false)} onOpenItem={setLibraryOpenRequest} /> : null}
+      {libraryConfirm?.kind === "remove" ? <LibraryConfirmDialog title={`Remove "${libraryConfirm.item.title}" from the Library?`} safeLabel="Cancel" confirmLabel="Remove from Library" destructive
+        body={<p>Deletes the Library copy. Copies already in Spaces stay as they are and stop receiving updates. {providerFamily(library.providers, libraryConfirm.item.provider_id).name} isn't changed. You can add it again from its link.</p>}
+        onClose={() => setLibraryConfirm(null)}
+        onConfirm={async () => {
+          const item = libraryConfirm.item;
+          await client.libraryRemove({ mode: "item", item_id: item.item_id, expected_revision: item.revision });
+          if (selectedPath === item.document_path) onChange({ ...value, path: null });
+          setLibraryConfirm(null);
+          announceLibraryChanged();
+        }} /> : null}
+      {libraryConfirm?.kind === "replace" ? <LibraryConfirmDialog title="Replace the edited Library file?" safeLabel="Keep file" confirmLabel="Replace with source version" destructive
+        body={<p>This Library file was changed outside Cockpit. Replacing it fetches the source version and discards those changes. Spaces aren't changed.</p>}
+        onClose={() => setLibraryConfirm(null)}
+        onConfirm={async () => {
+          const item = libraryConfirm.item;
+          setLibraryConfirm(null);
+          setLibraryReportVerb("Replace");
+          setLibraryReportDismissed(false);
+          setLibraryPendingIds(new Set([item.item_id]));
+          await startLibraryOperation(() => client.libraryReplace({ item_id: item.item_id, confirmed: item.conflict }));
         }} /> : null}
       {pickerOpen ? <FilePicker candidates={[...pickerIndex.entries.values()].map((entry) => ({ id: entry.entry_id, path: entry.path!, detail: entry.bytes === null ? undefined : `${entry.bytes} B` } satisfies FileNavigationCandidate))} loading={pickerIndex.loading} incomplete={pickerIndex.incomplete} onChoose={(candidate) => { const entry = pickerIndex.entries.get(candidate.path); if (entry) chooseEntry(entry); closeFilePicker(); focusContent(); }} onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
     </section>

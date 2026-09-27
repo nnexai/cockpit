@@ -32,7 +32,9 @@ import { TerminalPane } from "./TerminalPane";
 import { SetupDialog, setupParentFor } from "./projects/SetupDialog";
 import { TeardownDialog } from "./projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "./projects/TeardownRecoveryPanel";
-import { ContextViewer, type ContextViewState } from "./context/ContextViewer";
+import { ContextViewer, type ContextViewState, type LibraryCommand } from "./context/ContextViewer";
+import { AddContextDialog } from "./library/AddContextDialog";
+import { LibraryView } from "./library/LibraryView";
 import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
 import { BrowserPane, type BrowserPaneRecoveryRegistration } from "./browser/BrowserPane";
 
@@ -195,12 +197,17 @@ export function authoritativeMutationSnapshot(expectedSessionId: string, respons
   }
   return parsed.snapshot;
 }
-function CompatibilityNotice({ status, error, retry }: { status: CockpitStatus | null; error: StatusError | null; retry: () => void }) {
+function CompatibilityNotice({ status, error, retry, onOpenLibrary }: { status: CockpitStatus | null; error: StatusError | null; retry: () => void; onOpenLibrary: () => void }) {
   const herdr = status?.herdr;
   const title = error ? "Cockpit unavailable" : herdr?.status === "incompatible" ? "Herdr is incompatible" : "Herdr is unavailable";
   const message = error?.message ?? (herdr && herdr.status !== "compatible" ? herdr.message : undefined);
   const code = error?.code ?? (herdr && herdr.status !== "compatible" ? herdr.code : undefined);
-  return <main className="compatibility-main" aria-live="polite"><section className="notice notice-error" role="alert"><p className="eyebrow">Cockpit</p><h1>{title}</h1><p>{message ?? "Could not read the Herdr compatibility status."}</p>{code ? <code>{code}</code> : null}<button type="button" className="action-button" onClick={retry}>Retry status</button></section></main>;
+  return <main className="compatibility-main" aria-live="polite"><section className="notice notice-error" role="alert"><p className="eyebrow">Cockpit</p><h1>{title}</h1><p>{message ?? "Could not read the Herdr compatibility status."}</p>{code ? <code>{code}</code> : null}<div className="notice-actions"><button type="button" className="action-button" onClick={retry}>Retry status</button><OpenLibraryButton onOpen={onOpenLibrary} /></div></section></main>;
+}
+
+/** The Library needs no Herdr session, so every no-session screen can open it. */
+function OpenLibraryButton({ onOpen }: { onOpen: () => void }) {
+  return <button type="button" className="action-button" data-library-opener onClick={onOpen}>Open Library</button>;
 }
 
 type Mutate = (key: string, request: ResourceMutationRequest, focusFromSnapshot?: boolean) => boolean;
@@ -514,7 +521,7 @@ function viewerTitle(renderer: PaneRendererState): { title: string; subtitle: st
   return { title: "Files", subtitle: label, path: root?.path };
 }
 
-function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
+function PaneView({ pane, label, solo = false, selected, paintedSelected, retained, busy, controlAllowed, controlPending, focusError, focusEpoch, focusToken, terminalMouseInput, onRequestControl, onSelect, onContext, onRetryFocus, request, client, registerStream, onResync, mutate, style, renderer, rendererReady, deferTerminal, focusOnAttach, onRendererViewChange, onTerminalView, onRefreshRenderer, onReady }: {
   pane: Pane;
   label: string;
   /** The only Herdr pane in its tab; like Herdr, a lone terminal needs no header row. */
@@ -542,6 +549,8 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
   renderer: PaneRendererState | undefined;
   rendererReady: boolean;
   deferTerminal: boolean;
+  /** False after the Library view closes, until an explicit local pane action (D13). */
+  focusOnAttach: boolean;
   onRendererViewChange: (bindingId: string, value: ContextViewState) => void;
   onTerminalView: () => void;
   onRefreshRenderer: () => void;
@@ -606,7 +615,7 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
       {isGraphicalReview(renderer) ? <ReviewViewer client={client} presentation={renderer.presentation} value={renderer.view} onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)} onRequestControl={onRequestControl} onTerminalView={onTerminalView} /> : <ContextViewer client={client} presentation={renderer.presentation} value={renderer.view}
         onChange={(value) => onRendererViewChange(renderer.presentation.binding_id, value)}
         controlAllowed={controlAllowed} onRequestControl={onRequestControl} onTerminalView={onTerminalView} />}
-    </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} focusEpoch={focusEpoch} focusToken={focusToken} terminalMouseInput={terminalMouseInput} deferAttachment={deferTerminal} onRequestControl={onRequestControl} onSelect={onSelect} onReady={reportTerminalReady} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
+    </div> : <div className="terminal-surface"><TerminalPane client={client} request={request} selected={selected} controlAllowed={controlAllowed} controlPending={controlPending} focusEpoch={focusEpoch} focusToken={focusToken} terminalMouseInput={terminalMouseInput} deferAttachment={deferTerminal} focusOnAttach={focusOnAttach} onRequestControl={onRequestControl} onSelect={onSelect} onReady={reportTerminalReady} onResync={onResync} onClosed={onResync} onClosePane={closePane} registerStream={registerStream} /></div>}
     {renderer?.actionError || (graphical && renderer?.inspectionError) ? <div className="pane-presentation-error" role="status"><span>{renderer.actionError ?? renderer.inspectionError}</span><button type="button" onClick={onRefreshRenderer}>Refresh</button>{graphical ? <button type="button" onClick={onTerminalView}>Terminal</button> : null}</div> : null}
   </section>;
 }
@@ -631,7 +640,7 @@ function ResizeHandles({ layout, mutate }: { layout: TabLayout | undefined; muta
   })}</div>;
 }
 
-type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
+type CommandAction = { id: string; label: string; shortcut?: string; group: "Navigate" | "Space" | "Tab" | "Pane" | "Browser" | "Library"; disabled?: boolean; reason?: string; reasonDetail?: string; run: () => void };
 
 /** Picks the clause of a renderer diagnostic chain that explains one action, e.g. "Requires a safe source pane directory". */
 export function rendererReasonFor(kind: RendererActionDefinition["kind"], reason: string): string | undefined {
@@ -690,7 +699,7 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const ranked = normalized
     ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
-  const groups = ["Navigate", "Space", "Tab", "Pane", "Browser"] as const;
+  const groups = ["Navigate", "Space", "Tab", "Pane", "Browser", "Library"] as const;
   // Rows render grouped, so keep `filtered` in that order for the highlight and arrow keys. With a query, groups follow their best match.
   const groupOrder: readonly CommandAction["group"][] = normalized ? [...new Set(ranked.map((action) => action.group))] : groups;
   const filtered = normalized || showAll
@@ -893,7 +902,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const visiblePanes = panes.filter((pane) => visiblePaneIds.includes(pane.id));
   const allPaneIds = (snapshot?.panes ?? []).map((pane) => pane.id);
   const spaceGit = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
-  const renderers = usePaneRenderers(client, state.sessionId, visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
+  // While the Library view covers the work area no pane renderer is polled or mounted (D13).
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const renderers = usePaneRenderers(client, state.sessionId, libraryOpen ? [] : visiblePaneIds, (snapshot?.panes ?? []).map((pane) => pane.id), state.sync === "live", state.epoch, onReconnect);
   // Keep incoming panes mounted for fitting and first-frame rendering, but out
   // of the painted frame until each visible pane reports readiness.
   // Herdr still owns selection and layout.
@@ -948,6 +959,20 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const [setupOpen, setSetupOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [teardownSpaceId, setTeardownSpaceId] = useState<string | null>(null);
+  const [libraryAddOpen, setLibraryAddOpen] = useState(false);
+  const [libraryCommand, setLibraryCommand] = useState<LibraryCommand | null>(null);
+  const libraryCommandToken = useRef(0);
+  // Set when the Library closes; cleared by an explicit local pane, tab or Space action.
+  const [attachFocusSuppressed, setAttachFocusSuppressed] = useState(false);
+  const openLibrary = useCallback((command?: { kind: "refresh" } | { kind: "open"; itemId: string }) => {
+    setLibraryOpen(true);
+    // A command belongs to this opening only; reopening must not replay it.
+    setLibraryCommand(command ? { ...command, token: ++libraryCommandToken.current } : null);
+  }, []);
+  const closeLibrary = useCallback(() => {
+    setLibraryOpen(false);
+    setAttachFocusSuppressed(true);
+  }, []);
   const [prefixActive, setPrefixActive] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
@@ -960,7 +985,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const sidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const drawerFocusTarget = useRef<{ spaceId: string; paneId: string | null } | null>(null);
   const mutationBusy = mutations.pending !== null || renderers.busy;
-  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null;
+  const modalOpen = dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
   const sidebarSession = sessions.find((session) => session.id === state.sessionId);
   const openSessionChooser = useCallback(() => {
     setSessionChooserOpen(true);
@@ -1258,8 +1283,10 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const streamRegistry = useRef(new Set<TerminalStream>());
   const registerStream = useCallback((stream: TerminalStream, active: boolean) => { if (active) streamRegistry.current.add(stream); else streamRegistry.current.delete(stream); }, []);
   useEffect(() => () => { streamRegistry.current.forEach((stream) => stream.close()); streamRegistry.current.clear(); }, []);
+  // Selecting a Space keeps the Library open; selecting a tab, pane or agent closes it to show that pane.
   const focusSpace = (space: Space) => {
     if (modalOpen) return;
+    setAttachFocusSuppressed(false);
     setBrowserInputActive(false);
     const tabId = allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null;
     const paneId = snapshot?.panes.find((pane) => pane.space_id === space.id && pane.focused)?.id ?? null;
@@ -1268,13 +1295,17 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   };
   const focusTab = (tab: Tab) => {
     if (modalOpen) return;
+    setLibraryOpen(false);
+    setAttachFocusSuppressed(false);
     setBrowserInputActive(false);
     const paneId = snapshot?.panes.find((pane) => pane.tab_id === tab.id && pane.focused)?.id ?? null;
     onFocus({ kind: "tab", target_id: tab.id }, { spaceId: tab.space_id, tabId: tab.id, paneId });
   };
-  const focusPane = (pane: Pane) => { if (!modalOpen) { setBrowserInputActive(false); onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); } };
+  const focusPane = (pane: Pane) => { if (!modalOpen) { setLibraryOpen(false); setAttachFocusSuppressed(false); setBrowserInputActive(false); onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id }); } };
   const focusAgent = (agent: Agent) => {
     if (modalOpen) return;
+    setLibraryOpen(false);
+    setAttachFocusSuppressed(false);
     setBrowserInputActive(false);
     if (narrowViewport) drawerFocusTarget.current = { spaceId: agent.space_id, paneId: agent.pane_id };
     onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id });
@@ -1497,6 +1528,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     { id: "browser:show", label: "Show browser view", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || Boolean(selectedBrowserPresentation.visible) || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "show"); } },
     { id: "browser:hide", label: "Hide browser view", group: "Browser", disabled: !browserVisible, reason: !browserVisible ? "Open the browser view first" : undefined, run: hideBrowser },
     { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
+    { id: "library:open", label: "Open Library", group: "Library", run: () => { if (libraryOpen) closeLibrary(); else openLibrary(); } },
+    { id: "library:add", label: "Add to Library…", group: "Library", run: () => setLibraryAddOpen(true) },
+    { id: "library:refresh", label: "Refresh Library", group: "Library", run: () => openLibrary({ kind: "refresh" }) },
     ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
       const capability = kind === "review" ? selectedRenderer?.presentation.can_open_review : kind === "files" ? selectedRenderer?.presentation.can_open_files : selectedRenderer?.presentation.can_open_context;
       const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a pane with a configured repository";
@@ -1528,7 +1562,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     const deferTerminal = !incoming || !sessionAttachable || snapshot?.focused_tab_id !== pane.tab_id
       || state.focusPending?.kind === "tab" || state.focusPending?.kind === "space";
     if (!deferTerminal) nextAttachedTerminals.add(pane.id);
-    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
+    return <PaneView key={`${pane.id}:${paneRendererKey}`} pane={pane} label={pane.title ?? `Pane ${projection.panes.indexOf(pane) + 1}`} solo={projection.panes.length === 1} selected={incoming && pane.id === selection.paneId} paintedSelected={paintedSelected} retained={!incoming} busy={mutationBusy} controlAllowed={!browserInputActive && incoming && state.sync === "live" && pane.id === controlPaneId && pane.id === snapshot?.focused_pane_id && !state.focusPending && !state.focusError} controlPending={Boolean(controlPendingForPane || currentPaneStatus)} focusError={paneFocusError} focusEpoch={state.epoch} focusToken={state.focusToken} terminalMouseInput={terminalMouseInput} deferTerminal={deferTerminal} focusOnAttach={!attachFocusSuppressed} onRequestControl={() => { if (incoming && !modalOpen && state.sync === "live") { setAttachFocusSuppressed(false); setBrowserInputActive(false); if (pane.id !== snapshot?.focused_pane_id || (state.focusError && pane.id === selection.paneId)) focusPane(pane); else onRequestControl(pane.id); } }} onSelect={() => { if (incoming) focusPane(pane); }} onContext={openContext} onRetryFocus={onRetry} request={{ session_id: state.sessionId!, pane_id: pane.id }} client={client} registerStream={registerStream} onResync={onReconnect} mutate={onMutate} style={style} renderer={renderer} rendererReady={renderers.inspectedPaneIds.includes(pane.id)} onRendererViewChange={(bindingId, value) => renderers.updateView(pane.id, bindingId, value)} onTerminalView={() => renderers.choose(pane.id, "terminal")} onReady={incoming ? () => markPaneReady(pane.id) : () => undefined} onRefreshRenderer={renderers.refresh} />;
   });
   const workbenchStyle: CSSProperties & { "--sidebar-width": string; "--browser-ratio": string } = {
     "--sidebar-width": `${sidebarWidth}px`,
@@ -1541,7 +1575,9 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       ? [paneProjection]
       : [outgoingProjection, paneProjection];
   const paintedProjectionKey = paneCanvasReady ? paneProjection.key : outgoingProjection?.key ?? paneProjection.key;
-  const paneInstances = projections.flatMap((projection) => renderPaneLayer(projection, projection.key === paneProjection.key, projection.key === paintedProjectionKey));
+  const paneInstances = libraryOpen ? [] : projections.flatMap((projection) => renderPaneLayer(projection, projection.key === paneProjection.key, projection.key === paintedProjectionKey));
+  // The inline browser stays associated but hidden while the Library covers the work area.
+  const browserPresented = browserVisible && !libraryOpen;
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
@@ -1556,21 +1592,22 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
       {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={() => { if (selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open"); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="workarea-content">
-        <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }}>
+        {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} /> : <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}>
           {paneProjection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : paneInstances}
           {outgoingProjection || mutationBusy ? null : <ResizeHandles layout={layout} mutate={onMutate} />}
-        </div>
-        {browserVisible && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}
+        </div>}
+        {browserPresented && !browserOnly ? <div className={`browser-splitter${narrowViewport ? " is-horizontal" : ""}`} role="separator" tabIndex={0} aria-label="Resize browser region" aria-orientation={narrowViewport ? "horizontal" : "vertical"} aria-valuemin={BROWSER_SPLIT_MIN_RATIO * 100} aria-valuemax={BROWSER_SPLIT_MAX_RATIO * 100} aria-valuenow={Math.round(browserSplitRatio * 100)} aria-valuetext={`${Math.round(browserSplitRatio * 100)}% browser region`} onKeyDown={browserSplitterKeyDown} onPointerDown={browserSplitterPointerDown} onDoubleClick={() => updateBrowserSplitRatio(BROWSER_SPLIT_DEFAULT_RATIO)} /> : null}
         {browserBlockedByOutgoing && browserHandoff.outgoing ? <div className="browser-recovery-strip" role="status"><details><summary>Review retained browser work</summary><p>{browserHandoff.outgoing.recovery.describe()}</p><p>Discard only clears the local retry intent; an in-flight or unknown remote write is not undone.</p></details><button type="button" onClick={retryBrowserHandoff}>Retry retained work</button><button type="button" onClick={discardBrowserHandoff}>Discard retry intent</button></div> : null}
-        {browserAssociationOpen && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={!browserVisible ? { display: "none" } : browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
-          {browserVisible && browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
-          <BrowserPane key={browserKey ?? "browser-none"} client={client} target={browserTarget} viewport={browserViewport} visible={browserVisible} presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserVisible && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => selection.spaceId ? browserAction(selection.spaceId, "reconnect") : undefined} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} registerCloseGuard={registerBrowserCloseGuard} />
+        {browserAssociationOpen && browserTarget ? <div ref={browserRegionRef} className={`browser-region${browserSyncUnavailable ? " is-session-stale" : ""}`} aria-label="Inline browser region" style={!browserPresented ? { display: "none" } : browserOnly ? { flex: "1 1 0", minHeight: 0 } : undefined}>
+          {browserPresented && browserSyncUnavailable ? <div className="browser-recovery-strip" role="status"><span>{browserSyncMessage}</span><button type="button" onClick={onReconnect} aria-label="Resync Herdr session for browser view">{state.sync === "disconnected" ? "Reconnect" : "Resync"}</button></div> : null}
+          <BrowserPane key={browserKey ?? "browser-none"} client={client} target={browserTarget} viewport={browserViewport} visible={browserPresented} presentation={browserOnly ? "browser_only" : "split"} clientId={browserClientId} inputActive={browserInputActive && !browserSyncUnavailable && !modalOpen} liveInputEnabled={browserPresented && !browserKeyChanged && !browserSyncUnavailable && state.sync === "live" && !modalOpen} onInteractionFocus={() => { if (!browserSyncUnavailable && !modalOpen) setBrowserInputActive(true); }} onReconnect={() => selection.spaceId ? browserAction(selection.spaceId, "reconnect") : undefined} onFeedback={sendCapturedFeedback} onExpand={enterBrowserOnly} onBackToTerminals={browserOnly ? backToTerminals : undefined} registerCloseGuard={registerBrowserCloseGuard} />
         </div> : null}
       </div>
     </main>
     {renderMenu()}
     {dialog ? <PaneDialogOverlay dialog={dialog} panes={panes} tabs={allTabs} spaces={spaces} busy={mutationBusy} onDismiss={() => setDialog(null)} mutate={onMutate} /> : null}
     {commandsOpen ? <CommandOverlay actions={commandActions.map((action) => ({ ...action, run: () => { setCommandsOpen(false); action.run(); } }))} statusContent={commandStatus} onSwitchSession={() => { setCommandsOpen(false); void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); }} onDismiss={() => setCommandsOpen(false)} /> : null}
+    {libraryAddOpen ? <AddContextDialog client={client} onClose={() => setLibraryAddOpen(false)} onOpenItem={(itemId) => openLibrary({ kind: "open", itemId })} /> : null}
     {sessionChooserOpen ? <SessionDialogOverlay sessions={sessions} currentSessionId={state.sessionId} onRefresh={onRefreshSessions} onSession={onSession} onDismiss={() => setSessionChooserOpen(false)} /> : null}
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
@@ -1819,14 +1856,28 @@ export function App({ client }: { client: CockpitClient }) {
     if (nextControlPaneId !== undefined) setControlPaneId(nextControlPaneId);
   }, [state.snapshot, state.sync, state.epoch, state.focusPending, state.focusToken, state.focusError, controlPaneId, reconcileFocus]);
 
+  // With no session the Library opens full-screen in place of the notice screens.
+  const [noSessionLibraryOpen, setNoSessionLibraryOpen] = useState(false);
+  const returnToLibraryOpener = useRef(false);
+  useEffect(() => {
+    if (noSessionLibraryOpen || !returnToLibraryOpener.current) return;
+    returnToLibraryOpener.current = false;
+    document.querySelector<HTMLElement>("[data-library-opener]")?.focus({ preventScroll: true });
+  }, [noSessionLibraryOpen]);
+  const openNoSessionLibrary = () => setNoSessionLibraryOpen(true);
+  const noSessionLibrary = noSessionLibraryOpen
+    ? <div className="app-shell"><LibraryView client={client} fullScreen onClose={() => { returnToLibraryOpener.current = true; setNoSessionLibraryOpen(false); }} /></div>
+    : null;
   const explicitResync = () => {
     clearRecoveryTimers();
     autoResyncAttempts.current = 0;
     void refreshSessions();
     requestResync();
   };
-  if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
-  if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} /></div>;
-  if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button></section></main></div>;
+  if ((!status || !compatible) && (statusError || status) && noSessionLibrary) return noSessionLibrary;
+  if (!status || !compatible) return <div className="app-shell">{statusError || (status && !compatible) ? <CompatibilityNotice status={status} error={statusError} retry={() => setStatusAttempt((value) => value + 1)} onOpenLibrary={openNoSessionLibrary} /> : <main className="compatibility-main" aria-live="polite"><section className="notice notice-loading" role="status"><p className="eyebrow">Cockpit</p><h1>Connecting to Herdr</h1><p>Reading compatibility status...</p></section></main>}</div>;
+  if (((sessionsError && sessions.length === 0) || (sessionsLoaded && sessions.length === 0)) && noSessionLibrary) return noSessionLibrary;
+  if (sessionsError && sessions.length === 0) return <div className="app-shell"><CompatibilityNotice status={status} error={sessionsError} retry={() => setSessionsAttempt((value) => value + 1)} onOpenLibrary={openNoSessionLibrary} /></div>;
+  if (sessionsLoaded && sessions.length === 0) return <div className="app-shell"><main className="compatibility-main"><section className="notice"><h1>No Herdr sessions</h1><p>Create or start a session, then refresh the list.</p><div className="notice-actions"><button type="button" className="action-button" onClick={() => setSessionsAttempt((value) => value + 1)}>Refresh sessions</button><OpenLibraryButton onOpen={openNoSessionLibrary} /></div></section></main></div>;
   return <div className="app-shell"><Workbench key={state.epoch} client={client} state={state} sessions={sessions} selection={selection} controlPaneId={controlPaneId} terminalMouseInput={status.capabilities.terminal_mouse_input} mutations={mutations} browserHandoff={browserHandoffRef.current} onSession={switchSession} onFocus={focusAndSelect} onRequestControl={setControlPaneId} onReconnect={explicitResync} onRetry={retryFocus} onRefreshSessions={refreshSessions} onOpenSession={() => { void refreshSessions(); }} onMutate={mutate} onRetryMutation={retryMutation} /></div>;
 }

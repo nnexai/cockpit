@@ -14,12 +14,15 @@ Herdr owns live sessions, Spaces, tabs, panes, focus and layout. Cockpit project
 | Task setup and recovery | `crates/cockpit-core/src/projects.rs`, `project_store.rs`, `project_teardown.rs` | Ownership, idempotency and uncertain-outcome fixtures |
 | Context path authorization | `crates/cockpit-core/src/context.rs` | Traversal, replacement and companion tests |
 | Local snapshot/generated-file writes | `crates/cockpit-core/src/context_assets.rs` | Dirty/untracked snapshots, generated refresh and user-edit conflict tests |
-| Provider authority and source cache | `crates/cockpit-core/src/sources.rs` and Context's source facade | Origin/instance, cache pointer and conflict tests |
+| Provider authority and fetch | `crates/cockpit-core/src/sources.rs` and `crates/cockpit-providers/src/` | Configured-instance and canonical-identity fixtures |
+| Durable Library storage and operations | `crates/cockpit-core/src/library.rs`, `crates/cockpit-core/src/library/*` | Library store, operation and reader tests |
+| Library HTTP/native transport | `crates/cockpit-host/src/server/library.rs`, `src-tauri/src/library.rs` | Equivalent browser/native DTOs and owned-runtime smoke |
 | Tea JSON and CLI behavior | `crates/cockpit-providers/src/tea.rs` | Real Tea against a localhost fixture with a fake login |
 | Local diff and frozen sources | `crates/cockpit-core/src/review.rs` | Real Git fixtures; compare index and working files before/after |
 | Comment text and delivery | `crates/cockpit-core/src/comments/` | Exact payload bytes, CAS recovery and acknowledged paste tests |
 | Markdown and media display | `src/app/context/`, `context_media.rs` | Source mapping, hostile input, byte/pixel caps and browser/native rendering |
 | Host request decoding and composition | `crates/cockpit-host/src/server/`, `src-tauri/src/` | Equivalent browser/native DTOs and real native startup |
+| Library view and tree | `src/app/library/`, `src/app/context/contextSource.ts` | Library interaction and data-source tests |
 
 The core depends on narrow adapter traits. Hosts compose concrete adapters; provider behavior belongs in the provider crate. Keep stable error codes with a useful message at the module owning the failure. Clients decode and match response identities before frontend state accepts them.
 
@@ -71,7 +74,18 @@ base_url = "https://your-site.atlassian.net"
 executable = "jira"
 ```
 
-Source import verifies the companion's primary repository origin against the configured forge instance before starting its CLI. Jira work items have no repository, so they are checked against the configured site instead. A missing login, unavailable adapter or unsupported artifact returns an explicit failure. Generated source files carry provenance and a last-written hash; a refresh preserves user edits. Raw frontmatter never grants overwrite permission.
+Provider authority is resolved against the selected configured provider instance; forge owner/repository identity comes from the artifact's canonical identifier, and Jira authority comes from the configured site. API-returned canonical URLs are checked against that authority. A checkout's primary repository origin does not constrain Library imports. Provider CLIs and the user's external credential setup own tokens and logins; Cockpit does not create or store secrets. A missing login, unavailable adapter or unsupported artifact returns an explicit failure.
+
+The global Context Library is rooted at `library_root` (TOML or `COCKPIT_LIBRARY_ROOT`; default `$XDG_DATA_HOME/cockpit/library`, falling back to `~/.local/share/cockpit/library`). For example:
+
+```toml
+library_root = "/data/cockpit/library"
+
+[limits]
+library_max_items = 20000
+```
+
+The Library root must be absolute, contain no `..`, and must not overlap the state, companion, or worktree roots. The limits shown are defaults; configured values are bounded. The S1 interface stores and browses Library items only; it does not expose Space-copy, folder, Confluence, follow, or attachment actions.
 
 ## Boundaries worth preserving
 

@@ -4,7 +4,7 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { ContextDirectory, PanePresentation } from "../../protocol/generated/v1";
+import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, SourceLines } from "./ContextViewer";
 
 async function settle(): Promise<void> {
@@ -374,6 +374,89 @@ it("explains an empty root instead of asking for a file selection", async () => 
     expect(host.querySelector(".context-tree-status")?.textContent).toBe("Empty");
     expect(host.querySelector(".context-empty-message")?.textContent).toContain("This directory is empty.");
     expect(host.textContent).not.toContain("Select a file to inspect its source.");
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("shows the Library as a pane root with Add… and Refresh all instead of Resources, keeping file reread distinct from provider refresh", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const item: LibraryItemSummary = {
+    item_id: "source:mr", logical_id: "source:gitlab:https://gitlab.test:review:platform/api!482", kind: "provider_snapshot", provider_id: "gitlab", provider_instance: "https://gitlab.test", resource_type: "review",
+    canonical_id: "platform/api!482", container: { container_id: "platform/api", label: "platform/api" }, parent_item_id: null, ancestors: [], order: null, title: "Fix token refresh race",
+    document_path: "gitlab/mr-482/document.md", item_path: "gitlab/mr-482", source_url: "https://gitlab.test/platform/api/-/merge_requests/482", original_url: null, source_revision: "abc", revision: "sha256:r1",
+    state: "fresh", partial: null, conflict: [], fetched_at: null, checked_at: null, follow_id: null, attachments: [], folder: null, diagnostics: [],
+  };
+  const listing: LibraryListing = { root: { root_id: "library:fs", kind: "library", label: "Library", path: "/data/library", repository_id: "", checkout_path: "", companion_id: null }, generation: "1", items: [item], follows: [], next_offset: null, diagnostics: [] };
+  const operation: LibraryOperation = { operation_id: "op-1", kind: "refresh", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:mr"], report: { new: 0, updated: 1, unchanged: 0, removed_at_source: 0, partial: 0, failed: 0, conflict: 0, rows: [], truncated_rows: false }, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "" };
+  let documentText = "# Fix it";
+  let currentListing = listing;
+  const client = {
+    contextDirectory: vi.fn(async (): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "companion", path: "", truncated: false, diagnostics: [], entries: [] })),
+    libraryListing: vi.fn(async () => currentListing),
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" }] })),
+    libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 7, media_type: "text/markdown", text: documentText, truncated: false, diagnostics: [] })),
+    libraryRefresh: vi.fn(async () => operation),
+  } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "companion", roots: [{ root_id: "companion", kind: "companion", label: "Context", path: "/companion", repository_id: "repo", checkout_path: "/repo", companion_id: "c1" }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return createElement(ContextViewer, { client, presentation, value: view, onChange: setView, controlAllowed: true, onRequestControl: vi.fn(), onTerminalView: vi.fn() });
+  }
+  const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
+  const toolbarButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent === label || candidate.getAttribute("aria-label") === label);
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await flush();
+    expect(toolbarButton("Resources")).toBeDefined();
+    expect(client.libraryListing).not.toHaveBeenCalled();
+
+    const select = host.querySelector<HTMLSelectElement>(".context-root-select select")!;
+    await act(async () => { select.value = "library"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await flush();
+    expect(toolbarButton("Resources")).toBeUndefined();
+    expect(toolbarButton("Add…")).toBeDefined();
+    expect(toolbarButton("Refresh all")?.disabled).toBe(false);
+    const row = host.querySelector<HTMLButtonElement>('[data-library-row="source:mr"]')!;
+    expect(row.textContent).toContain("!482 Fix token refresh race");
+    expect(host.querySelector('[data-library-row^="instance:"]')?.textContent).toContain("GitLab · gitlab.test");
+
+    await act(async () => row.click());
+    await flush();
+    expect(client.libraryDocument).toHaveBeenCalledWith({ path: "gitlab/mr-482/document.md", expected_revision: null, offset: null }, expect.any(AbortSignal));
+    expect(host.querySelector(".library-kind-chip")?.textContent).toBe("GitLab MR");
+
+    const listingReads = vi.mocked(client.libraryListing).mock.calls.length;
+    await act(async () => toolbarButton("Refresh Context files")!.click());
+    await flush();
+    expect(client.libraryRefresh).not.toHaveBeenCalled();
+    expect(vi.mocked(client.libraryListing).mock.calls.length).toBeGreaterThan(listingReads);
+
+    await act(async () => toolbarButton("Refresh all")!.click());
+    await flush();
+    expect(client.libraryRefresh).toHaveBeenCalledWith({ scope: "all" });
+    expect(host.querySelector(".library-report")?.textContent).toContain("1 updated");
+    documentText = "# Updated by another source";
+    await act(async () => window.dispatchEvent(new Event("cockpit:library-changed")));
+    await flush();
+    expect(vi.mocked(client.libraryDocument).mock.calls.length).toBeGreaterThan(1);
+    expect(host.textContent).toContain("Updated by another source");
+
+    vi.mocked(client.libraryListing).mockRejectedValueOnce(new Error("listing offline"));
+    await act(async () => toolbarButton("Refresh Context files")!.click());
+    await flush();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Library unavailable: listing offline. Space context is unaffected.");
+    expect(host.querySelector(".context-tree-error button")?.textContent).toBe("Retry");
+    expect(host.querySelector('[data-library-row="source:mr"]')).not.toBeNull();
+    currentListing = { ...listing, generation: "2", items: [] };
+    await act(async () => window.dispatchEvent(new Event("cockpit:library-changed")));
+    await flush();
+    expect(host.querySelector(".library-kind-chip")).toBeNull();
+    expect(host.textContent).toContain("The Library is empty");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

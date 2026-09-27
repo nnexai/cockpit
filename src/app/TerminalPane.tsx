@@ -30,6 +30,8 @@ export type TerminalPaneProps = {
   focusToken: number;
   terminalMouseInput: boolean;
   deferAttachment?: boolean;
+  /** Whether attaching may move DOM focus into the terminal; false after the Library view closes until an explicit pane action. */
+  focusOnAttach?: boolean;
   onRequestControl?: () => void;
   onSelect?: () => void;
   onReady?: () => void;
@@ -202,7 +204,7 @@ function validTerminalGrid(cols: number, rows: number): boolean {
     && cols > 0 && rows > 0 && cols <= 65535 && rows <= 65535;
 }
 
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -294,6 +296,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   controlAllowedRef.current = controlAllowed;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const focusOnAttachRef = useRef(focusOnAttach);
+  focusOnAttachRef.current = focusOnAttach;
   const onRequestControlRef = useRef(onRequestControl);
   onRequestControlRef.current = onRequestControl;
   const onSelectRef = useRef(onSelect);
@@ -507,7 +511,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   }, []);
 
   useEffect(() => {
-    if (selected && terminalReady && !deferAttachment) terminalRef.current?.focus();
+    if (selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
   }, [deferAttachment, selected, terminalReady]);
 
   useEffect(() => {
@@ -646,7 +650,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       cols: Math.max(1, Math.min(65535, terminal.cols || 80)),
       rows: Math.max(1, Math.min(65535, terminal.rows || 24)),
     };
-    const restoreFocus = selectedRef.current && controlAllowedRef.current;
+    const restoreFocus = selectedRef.current && controlAllowedRef.current && focusOnAttachRef.current;
     const geometry = terminalCellGeometry(terminal, renderedGridRef.current ?? { cols: terminal.cols, rows: terminal.rows });
     const openRequest: TerminalOpenRequest = {
       ...request,

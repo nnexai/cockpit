@@ -211,6 +211,31 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
+  it("moves DOM focus into the terminal on ready and open only when focusOnAttach allows it", async () => {
+    for (const focusOnAttach of [false, true, undefined]) {
+      const sent: TerminalCommand[] = [];
+      const messages: Array<(value: TerminalStreamMessage) => void> = [];
+      const { client, openTerminal } = makeClient(sent, messages);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      try {
+        await act(async () => {
+          root.render(<TerminalPane {...paneProps(client, false, focusOnAttach === undefined ? {} : { focusOnAttach })} />);
+          await settle();
+        });
+        expect(openTerminal).toHaveBeenCalledOnce();
+        const terminal = mocks.terminals.at(-1)!;
+        if (focusOnAttach === false) expect(terminal.focus).not.toHaveBeenCalled();
+        else expect(terminal.focus).toHaveBeenCalled();
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+        mocks.terminals.length = 0;
+      }
+    }
+  });
+
   it("waits to attach a hidden incoming tab terminal", async () => {
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];

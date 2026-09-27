@@ -30,6 +30,11 @@ This file records current product and engineering rules, not the implementation 
 - Herdr owns extension panes, process, tab/Space membership, focus, and layout. Cockpit may replace a verified extension renderer with its Context or Review UI, but does not scrape extension-private state or create synthetic Herdr panes/tabs. Detection uses supported launch/process evidence and verified roots, not titles alone; ambiguity keeps the terminal fallback.
 - Context and Files use Cockpit's bounded filesystem model. Companion-specific operations require a verified companion; ordinary file browsing and Review can be rooted in a freshly verified local checkout without granting companion write authority. Unsafe, stale, oversized, or unsupported sources fail closed.
 - Review is Cockpit's read-only local Git view plus shared comment capture. Comments retain immutable source identity/line anchors, and source state is re-evaluated before a successful save or delivery. Stale or uncertain deliveries retain recoverable drafts/receipts and never submit Enter to an agent.
+
+- The global Context Library is a Cockpit-owned view below the tab strip, not a Herdr pane, tab, or synthetic resource.
+- With no session loaded, the view is Library-only: there is no target Space or pane authority, and Space actions are absent. Opening or closing the view never asserts Herdr focus, pane selection, or process/layout authority.
+- While the Library view is shown, visible pane renderers and live output subscriptions are unmounted; closing it lets the selected tab's panes attach/resynchronize. Do not keep hidden terminal renderers or subscriptions mounted for the Library.
+- **D13 focus policy:** on open, move DOM focus into the selected/first Library tree row. On close, restore focus to the still-connected invoker when safe, otherwise to a safe workbench target; suppress terminal attach focus so remount cannot steal focus. This changes DOM focus only and sends no Herdr focus request.
 - Pasting a prepared comment targets an explicitly selected eligible agent in the same actual tab. Preparation and send validate current payload/source; preview is optional, and sending does not submit the terminal command. Keep pending, rejected, and unknown outcomes distinct to avoid accidental duplicates.
 
 ## Inline browser
@@ -45,6 +50,8 @@ This file records current product and engineering rules, not the implementation 
 - Current setup supports configured local repositories, path-only Open, Herdr worktree creation, and configured artifact lookup/import including Jira work items. Jira lookup uses the configured `jira` CLI/site; a Jira URL or ticket key never chooses or clones a repository. Linked imports are bounded and validated before setup.
 - Prefer explicit, bounded hydration and canonical snapshots with source identity/revision where available. Freshness checks use provider metadata when available and canonical content otherwise. A failed optional import should not erase successful assets or silently become a successful import.
 - Configuration comes from supported file, environment, and invocation options. Do not persist or export secrets through context snapshots or generated environment values; external tools own credential handling.
+- Provider imports are authorized by the selected configured provider instance and the artifact's validated canonical identity/URL, not by a checkout's Git origin. Provider credentials remain external to Cockpit.
+- The Library is the durable global source: add and refresh save there first. A companion copy changes only through an explicit operation targeting that Space; Library refresh never automatically fans out or synchronizes companion copies. S1 exposes Library-only actions and does not yet offer Space-copy/update UI.
 
 ## Deferred scope
 

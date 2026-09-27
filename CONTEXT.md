@@ -136,7 +136,7 @@ New worktree setup performs this sequence:
 
 Configured repository actions run without a per-operation consent checkbox. Cockpit does not set Herdr's Git `trust_repository` override. Setup retains its operation identity after uncertain dispatch and reconciles before any further mutation.
 
-Partial artifacts are allowed. Destruction requires confirmation and removes only proven owned resources. A borrowed directory can be closed or forgotten; its files remain untouched. Central caches and unrelated resources are never removed by workspace destruction. Legacy journals gain owned-worktree status only from an exact creation receipt.
+The durable global Context Library, not a cache, survives workspace destruction. Destruction removes only proven owned resources; Library items and unrelated resources are never removed with a workspace. Library operations do not inspect, import, or modify the legacy `<state_root>/sources` cache.
 
 Independent reflink snapshots are preferred where available. Normal copies preserve correctness and report the fallback. Hardlinks and Git alternates must not couple writable context files to their originals.
 
@@ -278,39 +278,26 @@ Bounded typed traversal may automatically include:
 
 Provider failures leave successful assets in place, record retryable per-asset status, and allow the workspace/session to proceed when the primary resource is available.
 
-### 7.3 Cache and companion replication
+### 7.3 Durable Library and Space copies
 
-A configurable central cache stores normalized assets once. Selected assets are copied or reflinked into each Cockpit-owned companion context.
+The global Context Library is the durable, Cockpit-owned source for provider snapshots. It is stored under the configured `library_root`, independently of any Herdr session, Space, or companion. Adding or refreshing an item updates the Library; it does not automatically fan out changes to companion copies.
 
-When a cached asset changes, synchronization:
+Where a per-Space copy/update operation is available, it is an explicit action for that Space: the Library item is saved first, then copied or reflinked into the freshly verified companion. A later Library refresh does not silently update that copy. The current S1 Library interface is Library-only; it does not yet offer Add to Space or per-Space update actions.
 
-1. fetches and normalizes into a temporary cache object;
-2. compares adapter-provided source version/ETag/revision/hash metadata;
-3. falls back to canonical content hashing when needed;
-4. atomically replaces the central asset;
-5. atomically updates companion copies.
+The old `<state_root>/sources` cache is separate and inert with respect to Library operations: Cockpit does not inspect, import, or modify it. There is no automatic cache migration.
 
-Central caches survive workspace destruction. Companion resources do not.
+### 7.4 Library Markdown format
 
-### 7.4 Markdown snapshot format
+Provider snapshots in the Library are Markdown with a versioned frontmatter envelope. The fixed envelope includes `schema_version`, `provider`, `resource_type`, `canonical_id`, `provider_instance`, `source_url`, `original_url`, `complete`, `source_revision`, `content_hash`, and `generated`; provider-specific fields and attachment metadata may follow.
 
-Every normalized resource is Markdown with a versioned frontmatter envelope.
-
-Mandatory identity/provenance/freshness fields include:
-
-- schema version;
-- provider;
-- resource type;
-- canonical identifier;
-- source URL when available;
-- fetched timestamp;
-- source revision, ETag, version, or hash when available.
-
-The body is normalized provider data intended for human and agent reading. Raw provider payloads are not retained as the canonical snapshot.
+`content_hash` is the Library content revision (`sha256:`), not a hash of provenance or presentation metadata. For provider items it covers identity (provider instance, resource type and canonical identifier), title, source revision, body, completeness, and non-empty extra fields and attachment metadata. It excludes URLs, container presentation, diagnostics, and fetch time. The body is normalized provider data for human and agent reading; raw provider payloads are not retained as the canonical snapshot.
 
 ### 7.5 Available provider adapters
 
-Configured providers are selected by their executable and currently include Tea for Gitea, GitLab (`glab`), Jira (`jira`), and GitHub (`gh`). Source import validates provider authority, normalizes assets, tracks freshness, and preserves user edits on generated-file refresh. Provider capabilities vary; unsupported executables and operations are reported as unavailable rather than silently substituted.
+The Library currently supports GitHub issues and pull requests, GitLab, Gitea through Tea, and Jira issues. Provider authority is resolved from the selected configured instance and checked against the provider's canonical artifact identity/URL; it does not depend on a checkout's Git origin. Provider credentials remain with the provider CLI or the user's external credential setup; Cockpit does not store tokens or secrets.
+
+Self-hosted provider behavior is fixture/contract verified, not live validated. `glab`'s host selector cannot express a port, and Jira wiki-markup descriptions/comments are shown unconverted. Provider executables, logins, and supported operations vary; unsupported capabilities are reported rather than silently substituted.
+
 
 ## 8. CLI surface
 
