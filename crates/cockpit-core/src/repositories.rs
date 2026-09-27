@@ -575,14 +575,26 @@ pub fn resolve_artifact(
             "artifact URL must be credential-free HTTP(S)",
         ));
     }
+    // Confluence pages are resolved by their selected provider
+    // (`confluence_provider_for_input` + `SourceProvider::resolve_input`),
+    // never parsed here as a forge artifact.
     let provider = config
         .providers
         .iter()
+        .filter(|provider| !is_confluence_executable(&provider.executable))
         .find(|provider| provider_matches(&parsed, &provider.base_url))
         .ok_or_else(|| {
+            let confluence = config.providers.iter().any(|provider| {
+                is_confluence_executable(&provider.executable)
+                    && provider_matches(&parsed, &provider.base_url)
+            });
             InspectionError::new(
                 "unsupported_artifact",
-                "artifact host is not a configured source provider",
+                if confluence {
+                    "Confluence pages are resolved through the selected Confluence provider"
+                } else {
+                    "artifact host is not a configured source provider"
+                },
             )
         })?;
     let base = Url::parse(&provider.base_url).map_err(|_| {
@@ -912,8 +924,45 @@ pub fn is_jira_executable(executable: &str) -> bool {
         .is_some_and(|name| name == "jira")
 }
 
-/// Jira work items belong to a Jira project, not to a Git remote, so their
-/// source authority is the configured site rather than the checkout origin.
+/// pchuri/confluence-cli, selected by executable file name.
+pub fn is_confluence_executable(executable: &str) -> bool {
+    Path::new(executable)
+        .file_name()
+        .is_some_and(|name| name == "confluence")
+}
+
+/// The Confluence provider that owns `input`: the explicitly selected
+/// provider when it is a Confluence provider, otherwise the single Confluence
+/// provider whose configured base URL (scheme, host, port, path prefix)
+/// contains the HTTP(S) URL `input`. Bare page ids and space keys need an
+/// explicit selection. `None` leaves the input to forge/Jira resolution.
+pub fn confluence_provider_for_input(
+    configuration: &ProjectConfiguration,
+    input: &str,
+    selected: Option<&str>,
+) -> Option<String> {
+    let confluence = configuration
+        .providers
+        .iter()
+        .filter(|provider| is_confluence_executable(&provider.executable));
+    if let Some(selected) = selected {
+        return confluence
+            .filter(|provider| provider.id == selected)
+            .map(|provider| provider.id.clone())
+            .next();
+    }
+    let parsed = Url::parse(input.trim()).ok()?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    let mut matching = confluence.filter(|provider| provider_matches(&parsed, &provider.base_url));
+    let provider = matching.next()?;
+    matching.next().is_none().then(|| provider.id.clone())
+}
+
+/// Jira work items belong to a Jira project and Confluence pages to a site,
+/// not to a Git remote, so their source authority is the configured site
+/// rather than the checkout origin.
 pub fn provider_is_repository_independent(
     configuration: &ProjectConfiguration,
     provider_id: &str,
@@ -922,7 +971,10 @@ pub fn provider_is_repository_independent(
         .providers
         .iter()
         .find(|provider| provider.id == provider_id)
-        .is_some_and(|provider| is_jira_executable(&provider.executable))
+        .is_some_and(|provider| {
+            is_jira_executable(&provider.executable)
+                || is_confluence_executable(&provider.executable)
+        })
 }
 
 /// A Jira issue key: an uppercase project key, a dash and a positive number.
@@ -1396,5 +1448,63 @@ mod tests {
         assert!(super::is_jira_key("AB_1-42"));
         assert!(!super::is_jira_key("A-1"));
         assert!(!super::is_jira_key("SCRUM-"));
+    }
+
+    #[test]
+    fn confluence_urls_are_never_parsed_as_gitea_artifacts_but_select_their_provider() {
+        let mut config = config();
+        config.providers = vec![
+            ProjectProvider {
+                id: "wiki".into(),
+                base_url: "https://acme.atlassian.test/wiki".into(),
+                executable: "/opt/bin/confluence".into(),
+                login: Some("reader".into()),
+            },
+            ProjectProvider {
+                id: "dc".into(),
+                base_url: "https://confluence.example.test/confluence".into(),
+                executable: "confluence".into(),
+                login: Some("dc".into()),
+            },
+            ProjectProvider {
+                id: "gitea".into(),
+                base_url: "https://git.example.test".into(),
+                executable: "tea".into(),
+                login: None,
+            },
+        ];
+        // Four segments would be a Gitea issue shape if Confluence fell through.
+        let page = "https://acme.atlassian.test/wiki/spaces/SD/pages/123/Title";
+        let error = resolve_artifact(&config, page).unwrap_err();
+        assert_eq!(error.code, "unsupported_artifact");
+        assert_eq!(
+            resolve_artifact(&config, "https://acme.atlassian.test/wiki/a/b/issues/1")
+                .unwrap_err()
+                .code,
+            "unsupported_artifact"
+        );
+        assert!(super::provider_is_repository_independent(&config, "wiki"));
+        assert!(!super::provider_is_repository_independent(&config, "gitea"));
+
+        use super::confluence_provider_for_input as select;
+        assert_eq!(select(&config, page, None).as_deref(), Some("wiki"));
+        assert_eq!(
+            select(&config, "https://confluence.example.test/confluence/display/ENG/X", None)
+                .as_deref(),
+            Some("dc")
+        );
+        // Path prefix and port are part of the instance.
+        assert_eq!(select(&config, "https://confluence.example.test/other/display/ENG/X", None), None);
+        assert_eq!(select(&config, "https://acme.atlassian.test:8443/wiki/spaces/SD", None), None);
+        assert_eq!(select(&config, "https://git.example.test/acme/app/issues/1", None), None);
+        // Bare ids and keys need an explicit Confluence selection.
+        assert_eq!(select(&config, "123", None), None);
+        assert_eq!(select(&config, "123", Some("dc")).as_deref(), Some("dc"));
+        assert_eq!(select(&config, "123", Some("gitea")), None);
+
+        // Two Confluence providers claiming the same URL are ambiguous.
+        config.providers[1].base_url = "https://acme.atlassian.test/wiki".into();
+        assert_eq!(select(&config, page, None), None);
+        assert_eq!(select(&config, page, Some("dc")).as_deref(), Some("dc"));
     }
 }

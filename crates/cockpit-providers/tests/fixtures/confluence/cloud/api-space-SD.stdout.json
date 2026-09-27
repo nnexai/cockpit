@@ -1,0 +1,30 @@
+{
+  "id": 98314,
+  "ari": "ari:cloud:confluence:acb964dd-7a0a-46a8-9f2e-925190488955:space/98314",
+  "key": "SD",
+  "alias": "SD",
+  "name": "Software Development",
+  "type": "onboarding",
+  "status": "current",
+  "_expandable": {
+    "settings": "/rest/api/space/SD/settings",
+    "metadata": "",
+    "operations": "",
+    "lookAndFeel": "/rest/api/settings/lookandfeel?spaceKey=SD",
+    "identifiers": "",
+    "permissions": "",
+    "roles": "",
+    "icon": "",
+    "typeSettings": "",
+    "description": "",
+    "theme": "/rest/api/space/SD/theme",
+    "history": ""
+  },
+  "_links": {
+    "context": "/wiki",
+    "self": "https://nnexai.atlassian.net/wiki/rest/api/space/SD",
+    "collection": "/rest/api/space",
+    "webui": "/spaces/SD",
+    "base": "https://nnexai.atlassian.net/wiki"
+  }
+}

@@ -132,10 +132,11 @@ function listEntries(attempts: readonly SpaceAddAttempt[], rows: readonly SpaceC
   ];
 }
 
-/** `GitLab` `MR`, `Jira` `issue`, `Folder`: the provider and kind chips of a Space row. */
+/** `GitLab` `MR`, `Jira` `issue`, `Confluence` `page`, `Folder`: the provider and kind chips of a Space row. */
 function kindChips(row: SpaceCopyRow, providers: readonly ProjectProvider[]): string[] {
   if (row.kind === "folder_copy") return ["Folder"];
   const family = providerFamily(providers, row.provider_id);
+  if (row.resource_type === "page") return [family.name, "page"];
   return [family.name, family.key !== "jira" && row.resource_type === "review" ? family.review : "issue"];
 }
 

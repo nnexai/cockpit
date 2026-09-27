@@ -1,0 +1,19 @@
+{
+  "id": 98305,
+  "key": "ENG",
+  "name": "Engineering",
+  "type": "global",
+  "status": "current",
+  "homepage": {
+    "id": "524289",
+    "type": "page",
+    "status": "current",
+    "title": "Engineering Home"
+  },
+  "_links": {
+    "webui": "/display/ENG",
+    "base": "https://confluence.example.com/confluence",
+    "context": "/confluence",
+    "self": "https://confluence.example.com/confluence/rest/api/space/ENG"
+  }
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryItemState, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
-import { itemKindLabel, itemTreeLabel, libraryInputUrl, libraryStateChip, libraryTree } from "./libraryState";
+import { confluencePageInput, itemKindLabel, itemTreeLabel, libraryInputUrl, libraryStateChip, libraryTree } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -56,5 +56,34 @@ describe("Library vocabulary", () => {
     expect(libraryInputUrl(" OPS-311 ", providers[2])).toBe("https://jira.test/jira/browse/OPS-311");
     expect(libraryInputUrl("https://gitlab.test/platform/api/-/merge_requests/482", providers[2])).toBe("https://gitlab.test/platform/api/-/merge_requests/482");
     expect(libraryInputUrl("OPS-311", undefined)).toBe("OPS-311");
+  });
+});
+
+describe("Confluence page recognition", () => {
+  const withConfluence: ProjectProvider[] = [
+    ...providers,
+    { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "/opt/homebrew/bin/confluence", login: "default" },
+    { id: "dc", base_url: "https://confluence.example.com/confluence/", executable: "confluence", login: "dc" },
+  ];
+  const recognized = (input: string) => {
+    const page = confluencePageInput(input, withConfluence);
+    return page && { ...page, providers: page.providers.map((provider) => provider.id) };
+  };
+
+  it("reads Cloud, Data Center display and page-id links against the configured instance that contains them", () => {
+    expect(recognized("https://nnexai.atlassian.net/wiki/spaces/SD/pages/98765/Release+checklist")).toEqual({ pageId: "98765", spaceKey: "SD", title: null, host: "nnexai.atlassian.net", providers: ["cloud"] });
+    expect(recognized("https://confluence.example.com/confluence/display/ENG/Release+Checklist")).toEqual({ pageId: null, spaceKey: "ENG", title: "Release Checklist", host: "confluence.example.com", providers: ["dc"] });
+    expect(recognized("https://confluence.example.com/confluence/pages/viewpage.action?pageId=4242")).toEqual({ pageId: "4242", spaceKey: null, title: null, host: "confluence.example.com", providers: ["dc"] });
+    // Outside the configured path prefix, or on another host, no instance can read it.
+    expect(recognized("https://confluence.example.com/display/ENG/Release+Checklist")?.providers).toEqual([]);
+    expect(recognized("http://nnexai.atlassian.net/wiki/spaces/SD/pages/98765")?.providers).toEqual([]);
+  });
+
+  it("offers every Confluence instance for a bare id and leaves other providers' links, keys and paths alone", () => {
+    expect(recognized(" 98765 ")?.providers).toEqual(["cloud", "dc"]);
+    expect(recognized("https://gitlab.test/display/group/project")).toBeNull();
+    expect(recognized("OPS-311")).toBeNull();
+    expect(recognized("~/notes")).toBeNull();
+    expect(recognized("https://nnexai.atlassian.net/wiki/spaces/SD/overview")).toBeNull();
   });
 });

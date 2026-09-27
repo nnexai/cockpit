@@ -302,9 +302,9 @@ Provider snapshots in the Library are Markdown with a versioned frontmatter enve
 
 ### 7.5 Available provider adapters
 
-The Library currently supports GitHub issues and pull requests, GitLab, Gitea through Tea, and Jira issues. Provider authority is resolved from the selected configured instance and checked against the provider's canonical artifact identity/URL; it does not depend on a checkout's Git origin. Provider credentials remain with the provider CLI or the user's external credential setup; Cockpit does not store tokens or secrets.
+The Library currently supports GitHub issues and pull requests, GitLab, Gitea through Tea, Jira issues, and Confluence pages. Confluence accepts Cloud page IDs/links and Data Center display links from a configured `confluence` CLI profile. A page snapshot includes page body and bounded metadata (space, ancestors, version, editor display name, labels, and attachment metadata); attachment bytes are not downloaded. Confluence URL authority and canonical page identity are checked against the configured instance; a checkout's Git origin does not select or constrain it. Provider credentials remain with the provider CLI or external credential setup; Cockpit does not store tokens or secrets.
 
-Self-hosted provider behavior is fixture/contract verified, not live validated. `glab`'s host selector cannot express a port, and Jira wiki-markup descriptions/comments are shown unconverted. Provider executables, logins, and supported operations vary; unsupported capabilities are reported rather than silently substituted.
+Self-hosted provider behavior is fixture/contract verified, not live validated. `glab`'s host selector cannot express a port, and Jira wiki-markup descriptions/comments are shown unconverted. Confluence Cloud and Data Center protocol paths are covered by synthetic CLI fixtures. The existing read-only Confluence profile exposed no page or attachment in the inspected SD space, so there is no live page/attachment validation. Provider executables, logins, and supported operations vary; unsupported capabilities are reported rather than silently substituted.
 
 
 ## 8. CLI surface

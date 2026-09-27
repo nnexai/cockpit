@@ -1,0 +1,15 @@
+{
+  "spaceCount": 2,
+  "spaces": [
+    {
+      "key": "~5af4129ca857e32dd9db6ce1",
+      "name": "nnex.ai",
+      "type": "personal"
+    },
+    {
+      "key": "SD",
+      "name": "Software Development",
+      "type": "onboarding"
+    }
+  ]
+}

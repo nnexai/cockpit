@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "id": "524289",
+      "type": "page",
+      "status": "current",
+      "title": "Engineering Home",
+      "space": {
+        "key": "ENG",
+        "name": "Engineering"
+      },
+      "version": {
+        "number": 3
+      },
+      "ancestors": []
+    },
+    {
+      "id": "524301",
+      "type": "page",
+      "status": "current",
+      "title": "Release Checklist",
+      "space": {
+        "key": "ENG",
+        "name": "Engineering"
+      },
+      "version": {
+        "number": 12
+      },
+      "ancestors": [
+        {
+          "id": "524289",
+          "type": "page",
+          "title": "Engineering Home"
+        }
+      ]
+    }
+  ],
+  "start": 0,
+  "limit": 2,
+  "size": 2,
+  "totalSize": 3,
+  "cqlQuery": "space=\"ENG\" and type=page",
+  "_links": {
+    "next": "/rest/api/content/search?cql=space%3D%22ENG%22+and+type%3Dpage&limit=2&expand=version,ancestors,space&start=2",
+    "base": "https://confluence.example.com/confluence",
+    "context": "/confluence",
+    "self": "https://confluence.example.com/confluence/rest/api/content/search?cql=space%3D%22ENG%22+and+type%3Dpage&limit=2&expand=version,ancestors,space"
+  }
+}

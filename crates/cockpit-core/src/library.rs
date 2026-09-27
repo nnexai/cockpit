@@ -8,10 +8,11 @@ pub mod space;
 use crate::{
     InspectionError,
     project_store::timestamp,
-    repositories::resolve_artifact,
+    repositories::{confluence_provider_for_input, resolve_artifact},
     sources::{
-        FetchedAssets, SourceAsset, SourceFetchRequest, SourceRef, SourceService, content_revision,
-        instance_authority,
+        ConfluencePage, FetchedAssets, FrontmatterValue, ProviderResolution, SourceAsset,
+        SourceFetchRequest, SourceRef, SourceService, content_revision, confluence_page_id,
+        confluence_page_url, confluence_space_key, instance_authority, site_authority,
     },
 };
 use cockpit_protocol::{
@@ -24,7 +25,77 @@ use std::{
     sync::{Arc, OnceLock},
 };
 use store::{Lease, LibraryIndexEntry, Store, error};
-
+fn confluence_instance_authority(
+    configuration: &ProjectConfiguration,
+    selected_provider_id: &str,
+    page: &ConfluencePage,
+    canonical_url: &str,
+) -> Result<crate::sources::SourceAuthority, InspectionError> {
+    let provider = configuration.providers.iter().find(|p| p.id == selected_provider_id)
+        .ok_or_else(|| error("source_authority_mismatch", "selected Confluence provider is not configured"))?;
+    if !crate::repositories::is_confluence_executable(&provider.executable)
+        || !confluence_url_belongs_to_instance(&provider.base_url, &page.source_url)
+        || !confluence_page_id(&page.page_id)
+        || !confluence_space_key(&page.space_key)
+        || page.title.trim().is_empty()
+        || page.title.chars().any(char::is_control)
+    {
+        return Err(error("source_identity_mismatch", "Confluence page identity is invalid"));
+    }
+    let authority = site_authority(configuration, selected_provider_id)?;
+    let expected = confluence_page_url(&authority.provider_instance, &page.page_id);
+    if page.canonical_url != expected || canonical_url != expected {
+        return Err(error("source_identity_mismatch", "Confluence page does not belong to the selected provider instance"));
+    }
+    Ok(authority)
+}
+fn confluence_url_belongs_to_instance(base_url: &str, source_url: &str) -> bool {
+    let (Ok(base), Ok(source)) = (
+        url::Url::parse(base_url),
+        url::Url::parse(source_url),
+    ) else {
+        return false;
+    };
+    let base_path = base.path().trim_end_matches('/');
+    let source_path = source.path();
+    base.scheme() == source.scheme()
+        && base.host_str().map(str::to_ascii_lowercase)
+            == source.host_str().map(str::to_ascii_lowercase)
+        && base.port_or_known_default() == source.port_or_known_default()
+        && source.username().is_empty()
+        && source.password().is_none()
+        && source.query().is_none()
+        && source.fragment().is_none()
+        && (base_path.is_empty()
+            || source_path == base_path
+            || source_path.starts_with(&format!("{base_path}/")))
+}
+fn confluence_input_matches_instance(base_url: &str, input: &str) -> bool {
+    let (Ok(base), Ok(input)) = (url::Url::parse(base_url), url::Url::parse(input)) else {
+        return false;
+    };
+    let base_path = base.path().trim_end_matches('/');
+    let input_path = input.path();
+    input.username().is_empty()
+        && input.password().is_none()
+        && base.scheme() == input.scheme()
+        && base.host_str().map(str::to_ascii_lowercase)
+            == input.host_str().map(str::to_ascii_lowercase)
+        && base.port_or_known_default() == input.port_or_known_default()
+        && (base_path.is_empty()
+            || input_path == base_path
+            || input_path.starts_with(&format!("{base_path}/")))
+}
+fn looks_like_confluence_url(input: &str) -> bool {
+    let Ok(url) = url::Url::parse(input) else {
+        return false;
+    };
+    let path = url.path();
+    path.contains("/spaces/")
+        || path.contains("/display/")
+        || path.ends_with("/pages/viewpage.action")
+        || url.query_pairs().any(|(key, _)| key == "pageId")
+}
 #[derive(Clone)]
 pub struct LibraryService {
     configuration: ProjectConfiguration,
@@ -33,6 +104,7 @@ pub struct LibraryService {
     herdr: Option<Arc<dyn crate::HerdrAdapter>>,
     store: Arc<OnceLock<Arc<Store>>>,
 }
+
 impl LibraryService {
     pub fn new(configuration: ProjectConfiguration, sources: Arc<SourceService>) -> Self {
         Self {
@@ -112,12 +184,142 @@ impl LibraryService {
             authority,
         })
     }
+    async fn confluence_request(
+        &self,
+        input: &str,
+        selected: Option<&str>,
+    ) -> Result<Option<(ConfluencePage, SourceFetchRequest)>, InspectionError> {
+        let Some(provider_id) =
+            confluence_provider_for_input(&self.configuration, input, selected)
+        else {
+            let page_id = !input.trim().is_empty()
+                && input.trim().bytes().all(|byte| byte.is_ascii_digit());
+            if page_id
+                && (selected.is_some()
+                    || self.configuration.providers.iter().any(|provider| {
+                        crate::repositories::is_confluence_executable(&provider.executable)
+                    }))
+            {
+                return Err(error(
+                    "source_authority_mismatch",
+                    "Select a configured Confluence provider for this page id",
+                ));
+            }
+            if self.configuration.providers.iter().any(|provider| {
+                crate::repositories::is_confluence_executable(&provider.executable)
+                    && confluence_input_matches_instance(&provider.base_url, input)
+            }) {
+                return Err(error(
+                    "source_authority_mismatch",
+                    "Confluence URL requires an unambiguous selected provider",
+                ));
+            }
+            if looks_like_confluence_url(input) {
+                return Err(error(
+                    "source_authority_mismatch",
+                    "Select the configured Confluence provider for this URL",
+                ));
+            }
+            return Ok(None);
+        };
+        let page = match self.sources.resolve_input(&provider_id, input).await? {
+            ProviderResolution::ConfluencePage(page) => page,
+            ProviderResolution::ConfluenceSpace { .. } => {
+                return Err(error(
+                    "source_capability_unavailable",
+                    "Confluence spaces are not available in this Library operation",
+                ));
+            }
+        };
+        let authority = confluence_instance_authority(
+            &self.configuration,
+            &provider_id,
+            &page,
+            &page.canonical_url,
+        )?;
+        Ok(Some((
+            page.clone(),
+            SourceFetchRequest {
+                provider_id,
+                artifact_url: confluence_page_url(&authority.provider_instance, &page.page_id),
+                authority,
+            },
+        )))
+    }
     pub async fn resolve(
         &self,
         request: LibraryResolveRequest,
     ) -> Result<LibraryResolution, InspectionError> {
         if folder::recognizes(&request.input) {
             return self.resolve_folder(&request.input).await;
+        }
+        if let Some((page, fetch)) = self
+            .confluence_request(&request.input, request.provider_id.as_deref())
+            .await?
+        {
+            let fetched = self.sources.fetch_assets(fetch.clone(), false).await?;
+            let asset = fetched
+                .assets
+                .into_iter()
+                .find(|asset| {
+                    asset.source.provider_id == fetch.provider_id
+                        && asset.source.resource_type == "page"
+                        && asset.source.canonical_id == page.page_id
+                })
+                .ok_or_else(|| {
+                    error(
+                        "source_identity_mismatch",
+                        "Confluence provider omitted the requested page",
+                    )
+                })?;
+            let asset_page = ConfluencePage {
+                page_id: asset.source.canonical_id.clone(),
+                space_key: asset
+                    .container
+                    .as_ref()
+                    .map(|container| container.id.clone())
+                    .unwrap_or_default(),
+                title: asset.title.clone(),
+                version: asset.source_revision.as_deref().and_then(|version| version.parse().ok()),
+                source_url: asset.source_url.clone().ok_or_else(|| {
+                    error("source_identity_mismatch", "Confluence page has no validated source URL")
+                })?,
+                canonical_url: page.canonical_url.clone(),
+            };
+            let authority = confluence_instance_authority(
+                &self.configuration,
+                &fetch.provider_id,
+                &asset_page,
+                &page.canonical_url,
+            )?;
+            if asset.source.provider_instance != authority.provider_instance {
+                return Err(error(
+                    "source_identity_mismatch",
+                    "Confluence page belongs to a different configured site",
+                ));
+            }
+            let source = asset.source;
+            let store = self.open()?;
+            let _lock = store.shared()?;
+            let existing = store
+                .index()?
+                .items
+                .into_iter()
+                .find(|entry| entry.summary.item_id == item_id(&source));
+            return Ok(LibraryResolution {
+                kind: LibraryInputKind::ConfluencePage,
+                provider_id: Some(source.provider_id),
+                provider_instance: Some(source.provider_instance),
+                title: asset.title,
+                canonical_id: Some(page.page_id),
+                container_label: asset.container.map(|container| container.label),
+                existing_item_id: existing.map(|entry| entry.summary.item_id),
+                existing_follow_id: None,
+                page_count: None,
+                git_working_tree: None,
+                file_count: None,
+                diagnostics: vec![],
+            });
         }
         let store = self.open()?;
         let fetch = self.request(&request.input, request.provider_id.as_deref())?;
@@ -171,16 +373,36 @@ impl LibraryService {
         if folder::recognizes(&request.input) {
             return self.start_folder_add(request).await;
         }
+        let page_request = self
+            .confluence_request(&request.input, request.provider_id.as_deref())
+            .await?;
+        if page_request.is_some() && request.hydrate_references {
+            return Err(error(
+                "source_capability_unavailable",
+                "Confluence page imports do not hydrate linked artifacts",
+            ));
+        }
         let handle = operations::runtime()?;
         let store = self.open()?;
-        let fetch = self.request(&request.input, request.provider_id.as_deref())?;
-        let artifact = resolve_artifact(&self.configuration, &fetch.artifact_url)?;
-        let primary_id = item_id(&SourceRef {
-            provider_id: fetch.provider_id.clone(),
-            provider_instance: fetch.authority.provider_instance.clone(),
-            resource_type: artifact.kind,
-            canonical_id: artifact.canonical_id,
-        });
+        let (fetch, primary_id) = if let Some((page, fetch)) = page_request {
+            let primary_id = item_id(&SourceRef {
+                provider_id: fetch.provider_id.clone(),
+                provider_instance: fetch.authority.provider_instance.clone(),
+                resource_type: "page".into(),
+                canonical_id: page.page_id,
+            });
+            (fetch, primary_id)
+        } else {
+            let fetch = self.request(&request.input, request.provider_id.as_deref())?;
+            let artifact = resolve_artifact(&self.configuration, &fetch.artifact_url)?;
+            let primary_id = item_id(&SourceRef {
+                provider_id: fetch.provider_id.clone(),
+                provider_instance: fetch.authority.provider_instance.clone(),
+                resource_type: artifact.kind,
+                canonical_id: artifact.canonical_id,
+            });
+            (fetch, primary_id)
+        };
         let lease = store.lease(&primary_id)?;
         let (record, operation_lease) =
             operations::create(&store, LibraryOperationKind::Add, None)?;
@@ -505,8 +727,38 @@ impl LibraryService {
                     "Item has no refreshable provider origin",
                 )
             })?;
-            let request = self.request(url, entry.summary.provider_id.as_deref())?;
-            self.sources.fetch_assets(request, false).await
+            let confluence = entry.summary.provider_id.as_deref().is_some_and(|provider_id| {
+                self.configuration.providers.iter().any(|provider| {
+                    provider.id == provider_id
+                        && crate::repositories::is_confluence_executable(&provider.executable)
+                })
+            });
+            if confluence && entry.summary.resource_type.as_deref() != Some("page") {
+                return Err(error(
+                    "source_identity_mismatch",
+                    "Confluence Library item is not a page",
+                ));
+            }
+            if confluence {
+                let provider_id = entry.summary.provider_id.as_deref().unwrap_or_default();
+                let Some((page, request)) = self.confluence_request(url, Some(provider_id)).await?
+                else {
+                    return Err(error(
+                        "source_identity_mismatch",
+                        "Confluence page no longer resolves to its selected provider",
+                    ));
+                };
+                if entry.summary.canonical_id.as_deref() != Some(page.page_id.as_str()) {
+                    return Err(error(
+                        "source_identity_mismatch",
+                        "Confluence page identity changed during refresh",
+                    ));
+                }
+                self.sources.fetch_assets(request, false).await
+            } else {
+                let request = self.request(url, entry.summary.provider_id.as_deref())?;
+                self.sources.fetch_assets(request, false).await
+            }
         }
         .await;
         if operations::cancelled(store, operation)? {
@@ -595,19 +847,84 @@ impl LibraryService {
                 "Provider asset has no validated canonical URL",
             )
         })?;
-        let canonical = resolve_artifact(&self.configuration, canonical_url)?;
-        if canonical.provider_id != asset.source.provider_id
-            || canonical.kind != asset.source.resource_type
-            || canonical.canonical_id != asset.source.canonical_id
-        {
+        let is_confluence = self.configuration.providers.iter().any(|provider| {
+            provider.id == asset.source.provider_id
+                && crate::repositories::is_confluence_executable(&provider.executable)
+        });
+        if is_confluence && asset.source.resource_type != "page" {
             return Err(error(
                 "source_identity_mismatch",
-                "Provider canonical URL identifies a different item",
+                "Confluence provider returned a non-page Library asset",
             ));
         }
-        self.request(canonical_url, Some(&asset.source.provider_id))?;
+        let canonical_url = if is_confluence {
+            if !confluence_page_id(&asset.source.canonical_id) {
+                return Err(error(
+                    "source_identity_mismatch",
+                    "Confluence provider asset has an invalid page id",
+                ));
+            }
+            let site = site_authority(&self.configuration, &asset.source.provider_id)?;
+            let canonical = confluence_page_url(&site.provider_instance, &asset.source.canonical_id);
+            let page = ConfluencePage {
+                page_id: asset.source.canonical_id.clone(),
+                space_key: asset
+                    .container
+                    .as_ref()
+                    .map(|container| container.id.clone())
+                    .unwrap_or_default(),
+                title: asset.title.clone(),
+                version: asset.source_revision.as_deref().and_then(|version| version.parse().ok()),
+                source_url: canonical_url.to_owned(),
+                canonical_url: canonical.clone(),
+            };
+            let authority = confluence_instance_authority(
+                &self.configuration,
+                &asset.source.provider_id,
+                &page,
+                &canonical,
+            )?;
+            if asset.source.provider_instance != authority.provider_instance {
+                return Err(error(
+                    "source_identity_mismatch",
+                    "Confluence asset belongs to a different configured site",
+                ));
+            }
+            canonical
+        } else {
+            let canonical = resolve_artifact(&self.configuration, canonical_url)?;
+            if canonical.provider_id != asset.source.provider_id
+                || canonical.kind != asset.source.resource_type
+                || canonical.canonical_id != asset.source.canonical_id
+            {
+                return Err(error(
+                    "source_identity_mismatch",
+                    "Provider canonical URL identifies a different item",
+                ));
+            }
+            self.request(canonical_url, Some(&asset.source.provider_id))?;
+            canonical.canonical_url
+        };
         let mut entry = asset_entry(&asset, old.as_ref());
-        entry.canonical_url = Some(canonical.canonical_url);
+        entry.canonical_url = Some(canonical_url);
+        if is_confluence {
+            if let Some(parent_id) = field_string(&asset, "parent_id") {
+                let _lock = store.shared()?;
+                entry.summary.parent_item_id = store
+                    .index()?
+                    .items
+                    .iter()
+                    .find(|candidate| {
+                        candidate.summary.provider_id.as_deref()
+                            == Some(asset.source.provider_id.as_str())
+                            && candidate.summary.provider_instance.as_deref()
+                                == Some(asset.source.provider_instance.as_str())
+                            && candidate.summary.resource_type.as_deref() == Some("page")
+                            && candidate.summary.canonical_id.as_deref() == Some(parent_id.as_str())
+                    })
+                    .map(|candidate| candidate.summary.item_id.clone());
+            }
+        }
         if let Some(old) = &old {
             let check = {
                 let _lock = store.shared()?;
@@ -736,6 +1053,27 @@ fn item_id(source: &SourceRef) -> String {
     }
     format!("source:{:x}", hash.finalize())
 }
+fn field_strings(asset: &SourceAsset, key: &str) -> Vec<String> {
+    asset
+        .fields
+        .iter()
+        .find(|field| field.key == key)
+        .and_then(|field| match &field.value {
+            FrontmatterValue::Strings(values) => Some(values.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+fn field_string(asset: &SourceAsset, key: &str) -> Option<String> {
+    asset
+        .fields
+        .iter()
+        .find(|field| field.key == key)
+        .and_then(|field| match &field.value {
+            FrontmatterValue::String(value) => Some(value.clone()),
+            _ => None,
+        })
+}
 fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryIndexEntry {
     let id = item_id(&asset.source);
     let revision = content_revision(asset);
@@ -755,6 +1093,17 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
     let path = old
         .map(|e| e.summary.item_path.clone())
         .unwrap_or_else(|| format!("{}-{}", slug.trim_matches('-'), &id[7..]));
+    let ancestor_titles = field_strings(asset, "ancestors");
+    let ancestor_ids = field_strings(asset, "ancestor_ids");
+    let ancestors = if asset.source.resource_type == "page" {
+        ancestor_ids
+            .into_iter()
+            .zip(ancestor_titles)
+            .map(|(id, title)| LibraryAncestor { id, title })
+            .collect()
+    } else {
+        vec![]
+    };
     LibraryIndexEntry {
         inventory: old.map(|e| e.inventory.clone()).unwrap_or_default(),
         marker_hash: old.and_then(|e| e.marker_hash.clone()),
@@ -778,7 +1127,7 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
                 label: c.label.clone(),
             }),
             parent_item_id: None,
-            ancestors: vec![],
+            ancestors,
             order: old.and_then(|e| e.summary.order),
             title: asset.title.clone(),
             document_path: Some(format!("{path}/document.md")),
@@ -1552,6 +1901,392 @@ mod tests {
         assert_eq!(
             operations::runtime().unwrap_err().code,
             "library_unavailable"
+        );
+    }
+}
+#[cfg(test)]
+mod confluence {
+    use super::*;
+    use crate::sources::{
+        FrontmatterField, ProviderResolution, SourceAttachment, SourceContainer, SourceProvider,
+    };
+    use async_trait::async_trait;
+    use cockpit_protocol::{
+        projects::ProjectProvider,
+        sources::SourceCapability,
+    };
+    use std::sync::{Arc, Mutex};
+
+    struct PageState {
+        version: u64,
+        body: String,
+        foreign_identity: bool,
+        fetches: usize,
+    }
+    struct FakeConfluence {
+        base_url: String,
+        state: Mutex<PageState>,
+    }
+    impl FakeConfluence {
+        fn set_page(&self, version: u64, body: &str) {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.version = version;
+            state.body = body.to_owned();
+        }
+    }
+    #[async_trait]
+    impl SourceProvider for FakeConfluence {
+        fn provider_id(&self) -> &str {
+            "confluence"
+        }
+        fn capabilities(&self) -> Vec<SourceCapability> {
+            vec![]
+        }
+        async fn resolve_input(
+            &self,
+            input: &str,
+        ) -> Result<ProviderResolution, InspectionError> {
+            let page_id = if input.bytes().all(|byte| byte.is_ascii_digit()) {
+                input.to_owned()
+            } else if let Some((_, id)) = input.split_once("pageId=") {
+                id.split('&').next().unwrap_or_default().to_owned()
+            } else {
+                input
+                    .split("/pages/")
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let foreign = self.state.lock().unwrap_or_else(|e| e.into_inner()).foreign_identity;
+            let canonical_base = if foreign {
+                "https://other.example/wiki"
+            } else {
+                &self.base_url
+            };
+            Ok(ProviderResolution::ConfluencePage(ConfluencePage {
+                page_id: page_id.clone(),
+                space_key: "SD".into(),
+                title: "Release checklist".into(),
+                version: Some(1),
+                source_url: format!("{}/spaces/SD/pages/{page_id}/Release", self.base_url),
+                canonical_url: confluence_page_url(canonical_base, &page_id),
+            }))
+        }
+        async fn fetch(
+            &self,
+            request: &SourceFetchRequest,
+        ) -> Result<Vec<SourceAsset>, InspectionError> {
+            assert_eq!(request.provider_id, "confluence");
+            assert_eq!(request.authority.provider_instance, self.base_url);
+            let page_id = request
+                .artifact_url
+                .split("pageId=")
+                .nth(1)
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                request.artifact_url,
+                confluence_page_url(&self.base_url, &page_id)
+            );
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.fetches += 1;
+            let version = state.version;
+            let body = state.body.clone();
+            Ok(vec![SourceAsset {
+                source: SourceRef {
+                    provider_id: "confluence".into(),
+                    provider_instance: request.authority.provider_instance.clone(),
+                    resource_type: "page".into(),
+                    canonical_id: page_id.clone(),
+                },
+                title: "Release checklist".into(),
+                source_url: Some(format!(
+                    "{}/spaces/SD/pages/{page_id}/Release",
+                    self.base_url
+                )),
+                original_url: None,
+                source_revision: Some(version.to_string()),
+                complete: true,
+                diagnostics: vec![],
+                body,
+                container: Some(SourceContainer {
+                    id: "SD".into(),
+                    label: "SD · Software Development".into(),
+                }),
+                fields: vec![
+                    FrontmatterField {
+                        key: "space_key".into(),
+                        value: FrontmatterValue::String("SD".into()),
+                    },
+                    FrontmatterField {
+                        key: "space_name".into(),
+                        value: FrontmatterValue::String("Software Development".into()),
+                    },
+                    FrontmatterField {
+                        key: "page_id".into(),
+                        value: FrontmatterValue::String(page_id.clone()),
+                    },
+                    FrontmatterField {
+                        key: "parent_id".into(),
+                        value: FrontmatterValue::String("41".into()),
+                    },
+                    FrontmatterField {
+                        key: "ancestors".into(),
+                        value: FrontmatterValue::Strings(vec!["Release process".into()]),
+                    },
+                    FrontmatterField {
+                        key: "ancestor_ids".into(),
+                        value: FrontmatterValue::Strings(vec!["41".into()]),
+                    },
+                    FrontmatterField {
+                        key: "version".into(),
+                        value: FrontmatterValue::Number(version as i64),
+                    },
+                    FrontmatterField {
+                        key: "last_modified".into(),
+                        value: FrontmatterValue::String("2026-09-27T10:00:00Z".into()),
+                    },
+                    FrontmatterField {
+                        key: "last_modified_by".into(),
+                        value: FrontmatterValue::String("Casey Maintainer".into()),
+                    },
+                    FrontmatterField {
+                        key: "labels".into(),
+                        value: FrontmatterValue::Strings(vec!["release".into()]),
+                    },
+                ],
+                attachments: vec![SourceAttachment {
+                    id: "att-10".into(),
+                    title: "release-flow.png".into(),
+                    media_type: Some("image/png".into()),
+                    size: Some(2048),
+                    source_url: None,
+                    source_revision: Some("3".into()),
+                    path: None,
+                    not_downloaded: Some("not downloaded".into()),
+                }],
+            }])
+        }
+    }
+
+    struct Fixture {
+        _base: tests::Fixture,
+        service: LibraryService,
+        provider: Arc<FakeConfluence>,
+    }
+    fn fixture(base_url: &str, foreign_identity: bool) -> Fixture {
+        let base = tests::fixture();
+        let mut configuration = base.service.configuration.clone();
+        configuration.providers = vec![ProjectProvider {
+            id: "confluence".into(),
+            base_url: base_url.into(),
+            executable: "/usr/local/bin/confluence".into(),
+            login: Some("read-only".into()),
+        }];
+        let provider = Arc::new(FakeConfluence {
+            base_url: base_url.into(),
+            state: Mutex::new(PageState {
+                version: 1,
+                body: "Initial page body".into(),
+                foreign_identity,
+                fetches: 0,
+            }),
+        });
+        let sources = Arc::new(
+            SourceService::new(&configuration, vec![provider.clone()]).unwrap(),
+        );
+        Fixture {
+            _base: base,
+            service: LibraryService::new(configuration, sources),
+            provider,
+        }
+    }
+    fn add_request(input: &str, provider_id: Option<&str>) -> LibraryAddRequest {
+        LibraryAddRequest {
+            input: input.into(),
+            provider_id: provider_id.map(str::to_owned),
+            hydrate_references: false,
+            follow_space: false,
+            download_attachments: false,
+            refresh_existing: false,
+            label: None,
+            target: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_and_dc_page_resolve_add_and_refresh_use_selected_authority() {
+        for base_url in [
+            "https://acme.atlassian.net/wiki",
+            "https://dc.example.test/confluence",
+        ] {
+            let fixture = fixture(base_url, false);
+            let page_url = format!("{base_url}/spaces/SD/pages/123456/Release");
+            let resolved = fixture
+                .service
+                .resolve(LibraryResolveRequest {
+                    input: page_url.clone(),
+                    provider_id: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(resolved.kind, LibraryInputKind::ConfluencePage);
+            assert_eq!(resolved.provider_id.as_deref(), Some("confluence"));
+            assert_eq!(resolved.provider_instance.as_deref(), Some(base_url));
+            assert_eq!(resolved.canonical_id.as_deref(), Some("123456"));
+            assert_eq!(resolved.title, "Release checklist");
+            assert_eq!(
+                resolved.container_label.as_deref(),
+                Some("SD · Software Development")
+            );
+
+            let resolved_by_id = fixture
+                .service
+                .resolve(LibraryResolveRequest {
+                    input: "123456".into(),
+                    provider_id: Some("confluence".into()),
+                })
+                .await
+                .unwrap();
+            assert_eq!(resolved_by_id.canonical_id.as_deref(), Some("123456"));
+            let unselected_id = fixture
+                .service
+                .resolve(LibraryResolveRequest {
+                    input: "123456".into(),
+                    provider_id: None,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(unselected_id.code, "source_authority_mismatch");
+
+            let operation = fixture
+                .service
+                .start_add(add_request(&page_url, Some("confluence")))
+                .await
+                .unwrap();
+            let operation = tests::finished(&fixture.service, operation).await;
+            assert!(operation.finished);
+            let listing = fixture.service.listing(None).await.unwrap();
+            assert_eq!(listing.items.len(), 1);
+            let initial = listing.items[0].clone();
+            assert_eq!(initial.provider_id.as_deref(), Some("confluence"));
+            assert_eq!(initial.provider_instance.as_deref(), Some(base_url));
+            assert_eq!(initial.resource_type.as_deref(), Some("page"));
+            assert_eq!(initial.canonical_id.as_deref(), Some("123456"));
+            assert_eq!(initial.source_revision.as_deref(), Some("1"));
+            assert_eq!(
+                initial.container.as_ref().map(|container| container.container_id.as_str()),
+                Some("SD")
+            );
+            assert_eq!(
+                initial.container.as_ref().map(|container| container.label.as_str()),
+                Some("SD · Software Development")
+            );
+            assert_eq!(initial.ancestors.len(), 1);
+            assert_eq!(initial.ancestors[0].id, "41");
+            assert_eq!(initial.ancestors[0].title, "Release process");
+            assert_eq!(initial.parent_item_id, None);
+            assert_eq!(initial.attachments.len(), 1);
+            assert_eq!(
+                initial.attachments[0].state,
+                LibraryAttachmentState::NotDownloaded
+            );
+            assert_eq!(initial.attachments[0].bytes, Some(2048));
+            let document = std::fs::read_to_string(
+                Path::new(&fixture.service.configuration.library_root)
+                    .join(initial.document_path.as_ref().unwrap()),
+            )
+            .unwrap();
+            assert!(document.contains("space_name: \"Software Development\""));
+            assert!(document.contains("space_key: \"SD\""));
+            assert!(document.contains("page_id: \"123456\""));
+            assert!(document.contains("parent_id: \"41\""));
+            assert!(document.contains("ancestors: [\"Release process\"]"));
+            assert!(document.contains("version: 1"));
+            assert!(document.contains("last_modified: \"2026-09-27T10:00:00Z\""));
+            assert!(document.contains("labels: [\"release\"]"));
+            assert!(document.contains("last_modified_by: \"Casey Maintainer\""));
+            assert!(document.contains("Release process"));
+            assert!(document.contains("not_downloaded: \"not downloaded\""));
+            assert!(!document.contains("casey@example.test"));
+            assert!(document.contains("Initial page body"));
+
+            fixture.provider.set_page(2, "Updated page body");
+            let operation = fixture
+                .service
+                .start_refresh(LibraryRefreshRequest::Items {
+                    item_ids: vec![initial.item_id.clone()],
+                })
+                .await
+                .unwrap();
+            let operation = tests::finished(&fixture.service, operation).await;
+            assert!(operation.finished);
+            let refreshed = fixture.service.listing(None).await.unwrap().items.remove(0);
+            assert_eq!(refreshed.source_revision.as_deref(), Some("2"));
+            assert_eq!(refreshed.state, LibraryItemState::Changed);
+            assert_ne!(refreshed.revision, initial.revision);
+            let document = std::fs::read_to_string(
+                Path::new(&fixture.service.configuration.library_root)
+                    .join(refreshed.document_path.as_ref().unwrap()),
+            )
+            .unwrap();
+            assert!(document.contains("Updated page body"));
+            assert!(document.contains("version: 2"));
+            assert_eq!(
+                fixture.provider.state.lock().unwrap_or_else(|e| e.into_inner()).fetches,
+                4
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_foreign_canonical_identity_before_fetch_or_save() {
+        let fixture = fixture("https://acme.atlassian.net/wiki", true);
+        let request = LibraryResolveRequest {
+            input: "https://acme.atlassian.net/wiki/spaces/SD/pages/123456/Release".into(),
+            provider_id: Some("confluence".into()),
+        };
+        let error = fixture.service.resolve(request).await.unwrap_err();
+        assert_eq!(error.code, "source_identity_mismatch");
+        assert_eq!(
+            fixture.provider.state.lock().unwrap_or_else(|e| e.into_inner()).fetches,
+            0
+        );
+        assert!(fixture.service.listing(None).await.unwrap().items.is_empty());
+        let add_error = fixture
+            .service
+            .start_add(add_request(
+                "https://acme.atlassian.net/wiki/spaces/SD/pages/123456/Release",
+                Some("confluence"),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(add_error.code, "source_identity_mismatch");
+        assert_eq!(
+            fixture.provider.state.lock().unwrap_or_else(|e| e.into_inner()).fetches,
+            0
+        );
+        let authority = site_authority(&fixture.service.configuration, "confluence").unwrap();
+        let canonical = confluence_page_url(&authority.provider_instance, "123456");
+        let page = ConfluencePage {
+            page_id: "123456".into(),
+            space_key: "SD".into(),
+            title: "Release checklist".into(),
+            version: Some(1),
+            source_url: "https://other.example/wiki/spaces/SD/pages/123456/Release".into(),
+            canonical_url: canonical.clone(),
+        };
+        assert_eq!(
+            confluence_instance_authority(
+                &fixture.service.configuration,
+                "confluence",
+                &page,
+                &canonical,
+            )
+            .unwrap_err()
+            .code,
+            "source_identity_mismatch"
         );
     }
 }

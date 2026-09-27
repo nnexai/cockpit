@@ -4,7 +4,7 @@ import type { LibraryOperation, LibraryResolution, ProjectProvider } from "../..
 import { createPortal } from "react-dom";
 import { UiIcon } from "../UiIcon";
 import { trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
-import { JIRA_KEY, errorText, jiraProviders, libraryInputUrl, lookupFailure, providerFamily, resolutionNote, type LibrarySpace, type LookupFailure } from "./libraryState";
+import { JIRA_KEY, confluencePageInput, confluenceSite, errorText, jiraProviders, libraryInputUrl, lookupFailure, providerFamily, resolutionNote, type LibrarySpace, type LookupFailure } from "./libraryState";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { useLibraryOperation, useSpaceContextListing } from "./useLibraryOperation";
 import "../projects/setup.css";
@@ -115,8 +115,9 @@ let accepted: AcceptedAdd | null = null;
 
 /**
  * Add context (design §4.5): one field for a forge issue, MR or PR link, a
- * Jira key, or a local folder path. It always saves to the Library first;
- * with a live target Space the destination can also copy the saved item there.
+ * Jira key, a Confluence page link or id, or a local folder path. It always
+ * saves to the Library first; with a live target Space the destination can
+ * also copy the saved item there.
  */
 export function AddContextDialog({ client, onClose, onOpenItem, space = null, defaultDestination = "library", openInSpace = null }: {
   client: CockpitClient;
@@ -148,7 +149,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [providersError, setProvidersError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [label, setLabel] = useState<string | null>(null);
-  const [jiraProviderId, setJiraProviderId] = useState<string | null>(null);
+  // The provider picked where several configured instances could read the input.
+  const [chosenProviderId, setChosenProviderId] = useState<string | null>(null);
   const [linked, setLinked] = useState(false);
   const [refreshExisting, setRefreshExisting] = useState(false);
   const [lookup, setLookup] = useState<Lookup>({ status: "idle" });
@@ -188,15 +190,25 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const trimmed = input.trim();
   const jira = jiraProviders(providers);
   const jiraKey = JIRA_KEY.test(trimmed);
-  const jiraProvider = jiraKey ? jira.find((provider) => provider.id === jiraProviderId) ?? jira[0] : undefined;
-  const requestUrl = libraryInputUrl(trimmed, jiraProvider);
-  const requestProviderId = jiraProvider?.id ?? null;
-  const lookupKey = `${requestUrl}\u0000${requestProviderId ?? ""}\u0000${lookupRetry}\u0000${jiraKey && !providersLoaded}`;
+  const confluencePage = jiraKey ? null : confluencePageInput(trimmed, providers);
+  // A Jira key or Confluence page names its provider here; every other input by its own link.
+  const choices = jiraKey ? jira : confluencePage?.providers ?? [];
+  const chosen = choices.find((provider) => provider.id === chosenProviderId) ?? choices[0];
+  const needsProvider = jiraKey || confluencePage !== null;
+  const requestUrl = libraryInputUrl(trimmed, jiraKey ? chosen : undefined);
+  const requestProviderId = chosen?.id ?? null;
+  const lookupKey = `${requestUrl}\u0000${requestProviderId ?? ""}\u0000${lookupRetry}\u0000${needsProvider && !providersLoaded}`;
   useEffect(() => {
     if (!trimmed) { setLookup({ status: "idle" }); return; }
-    if (jiraKey && !providersLoaded) { setLookup({ status: "pending" }); return; }
+    if (needsProvider && !providersLoaded) { setLookup({ status: "pending" }); return; }
     if (jiraKey && jira.length === 0) {
       setLookup({ status: "error", failure: { title: "✕ No Jira provider configured", detail: "Add a Jira instance to the Cockpit configuration file, or paste the issue's link.", retry: false } });
+      return;
+    }
+    if (confluencePage && confluencePage.providers.length === 0) {
+      setLookup({ status: "error", failure: confluencePage.host
+        ? { title: `✕ No provider configured for ${confluencePage.host}`, detail: "Add this Confluence instance to the Cockpit configuration file, then retry.", retry: false }
+        : { title: "✕ No Confluence provider configured", detail: "Add a Confluence instance to the Cockpit configuration file, or paste the page's link.", retry: false } });
       return;
     }
     let current = true;
@@ -205,17 +217,17 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
       client.libraryResolve({ input: requestUrl, provider_id: requestProviderId }).then((resolution) => {
         if (current) setLookup({ status: "ok", resolution });
       }, (cause: unknown) => {
-        if (current) setLookup({ status: "error", failure: lookupFailure(cause, requestUrl, providers) });
+        if (current) setLookup({ status: "error", failure: lookupFailure(cause, requestUrl, providers, chosen) });
       });
     }, LOOKUP_DELAY_MS);
     return () => { current = false; window.clearTimeout(timer); };
-    // `providers` only improves failure wording; it never re-requests a lookup.
+    // `providers` only improves failure wording and is loaded before a provider-named lookup starts.
   }, [client, lookupKey]);
   const resolution = lookup.status === "ok" ? lookup.resolution : null;
   const existing = resolution?.existing_item_id ?? null;
   const folder = resolution?.kind === "folder";
   const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
-  const forge = family !== null && family.key !== "jira";
+  const forge = resolution?.kind === "artifact" && family !== null && family.key !== "jira" && family.key !== "confluence";
   const destinationSpace = destination === "space" ? spaceChoice : null;
   const companion = spaceListing.listing?.companion ?? null;
   // An item already in the target Space: the header's Space state decides whether adding applies.
@@ -352,10 +364,13 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
             <label htmlFor={fieldId}>Source</label>
             <div>
               <input ref={inputRef} id={fieldId} type="text" value={input} onChange={(event) => { setInput(event.target.value); if (event.target.value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); } }}
-                placeholder="Issue, MR or PR link, Jira key, or folder path" autoComplete="off" spellCheck={false}
+                placeholder="Issue, MR or PR link, Jira key, Confluence page, or folder path" autoComplete="off" spellCheck={false}
                 aria-invalid={failure ? "true" : undefined} aria-describedby={failure ? failureId : undefined} />
-              {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed.startsWith("~") ? "Checking the folder…" : "Looking up the link…"}</p> : null}
+              {lookup.status === "pending" ? <p className="task-setup-note">{trimmed.startsWith("/") || trimmed.startsWith("~") ? "Checking the folder…"
+                : confluencePage ? `Looking up Confluence page ${confluencePage.pageId ?? `“${confluencePage.title}”`}${confluencePage.spaceKey ? ` in ${confluencePage.spaceKey}` : ""}${chosen ? ` on ${confluenceSite(chosen.base_url)}` : ""}…`
+                : "Looking up the link…"}</p> : null}
               {resolution ? <p className="task-setup-note is-valid">✓ {existing ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
+              {resolution?.kind === "confluence_page" ? <p className="task-setup-note">{[resolution.container_label, confluenceSite(resolution.provider_instance)].filter(Boolean).join(" · ")}</p> : null}
               {resolution?.diagnostics.map((diagnostic, index) => <p className="task-setup-note" key={`${diagnostic.code}:${index}`}>{diagnostic.message}</p>)}
               {existingInSpace?.text ? <p className="task-setup-note">{existingInSpace.text}</p> : null}
               {failure ? <div id={failureId} className="library-refusal" role="alert">
@@ -373,10 +388,10 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               <p className="task-setup-note">Copies files into the Library, not a live link. Later source edits stay outside the Library until you explicitly re-copy.</p>
             </div>
           </div> : null}
-          {jiraKey && jira.length > 1 ? <div className="task-setup-row">
+          {choices.length > 1 ? <div className="task-setup-row">
             <label htmlFor={`${fieldId}-provider`}>Provider</label>
-            <div><select id={`${fieldId}-provider`} className="library-select" value={jiraProvider?.id ?? ""} onChange={(event) => setJiraProviderId(event.target.value)}>
-              {jira.map((provider) => <option key={provider.id} value={provider.id}>{provider.id} · {provider.base_url}</option>)}
+            <div><select id={`${fieldId}-provider`} className="library-select" value={chosen?.id ?? ""} onChange={(event) => setChosenProviderId(event.target.value)}>
+              {choices.map((provider) => <option key={provider.id} value={provider.id}>{provider.id} · {provider.base_url}</option>)}
             </select></div>
           </div> : null}
           {resolution && forge && !existing ? <label className="task-setup-check"><input type="checkbox" checked={linked} onChange={(event) => setLinked(event.target.checked)} /> Include linked issues and {family?.review}s within import limits</label> : null}

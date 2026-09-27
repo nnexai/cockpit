@@ -7,6 +7,7 @@ use cockpit_core::sources::{SourceAsset, SourceFetchRequest, SourceProvider};
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
 
+pub mod confluence;
 pub mod github;
 pub mod gitlab;
 pub mod jira;
@@ -49,6 +50,11 @@ pub fn configured_providers(
             } else if github::executable(&provider.executable) {
                 Some(
                     github::GithubSourceProvider::configured(configuration, &provider.id)
+                        .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
+                )
+            } else if confluence::executable(&provider.executable) {
+                Some(
+                    confluence::ConfluenceSourceProvider::configured(configuration, &provider.id)
                         .map(|provider| Arc::new(provider) as Arc<dyn SourceProvider>),
                 )
             } else {
@@ -119,6 +125,14 @@ mod tests {
         assert!(github::executable("gh"));
         assert!(github::executable("/usr/local/bin/gh"));
         assert!(!github::executable("github"));
+    }
+
+    #[test]
+    fn detects_confluence_cli_by_executable_basename() {
+        assert!(super::confluence::executable("confluence"));
+        assert!(super::confluence::executable("/home/linuxbrew/.linuxbrew/bin/confluence"));
+        assert!(!super::confluence::executable("confluence-cli"));
+        assert!(!super::confluence::executable("/opt/confluence/bin/start"));
     }
 
     #[test]

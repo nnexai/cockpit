@@ -137,6 +137,85 @@ pub struct SourceHydration {
     pub total_bytes: u64,
 }
 
+/// A Confluence page identity proved by the selected provider: `Info` answered
+/// for this id from the configured instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfluencePage {
+    /// Decimal page id, 1–20 digits.
+    pub page_id: String,
+    pub space_key: String,
+    pub title: String,
+    pub version: Option<u64>,
+    /// The page URL reported by the CLI, validated against the configured
+    /// instance's scheme, host, port and path prefix.
+    pub source_url: String,
+    /// [`confluence_page_url`] for the provider instance; the fetch URL for
+    /// both add and refresh.
+    pub canonical_url: String,
+}
+
+/// What a provider recognized in a user input (URL, id or key).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderResolution {
+    ConfluencePage(ConfluencePage),
+    ConfluenceSpace { space_key: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpaceSummary {
+    pub key: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpacePage {
+    pub page_id: String,
+    pub title: String,
+    pub version: u64,
+    /// Ancestor page/folder ids, root first.
+    pub ancestors: Vec<String>,
+    pub position: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpacePageListing {
+    pub space_name: String,
+    pub homepage_id: Option<String>,
+    pub pages: Vec<SpacePage>,
+    pub total: Option<u64>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRef {
+    pub id: String,
+    pub title: String,
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadedAttachment {
+    pub attachment_id: String,
+    /// One path component inside the download destination.
+    pub file_name: String,
+}
+
+/// Stable page URL for a Confluence instance, valid on Cloud and Data Center
+/// and independent of the page's title, space or parent.
+pub fn confluence_page_url(provider_instance: &str, page_id: &str) -> String {
+    format!(
+        "{}/pages/viewpage.action?pageId={page_id}",
+        provider_instance.trim_end_matches('/')
+    )
+}
+
+fn capability_unavailable<T>() -> Result<T, InspectionError> {
+    Err(InspectionError::new(
+        "source_capability_unavailable",
+        "selected source provider does not support this operation",
+    ))
+}
+
 /// Resolve authority from the selected configured instance, never a checkout.
 pub fn instance_authority(
     configuration: &ProjectConfiguration,
@@ -306,6 +385,35 @@ pub trait SourceProvider: Send + Sync {
         &self,
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError>;
+    /// Recognize a page or space input for this provider instance.
+    async fn resolve_input(&self, _input: &str) -> Result<ProviderResolution, InspectionError> {
+        capability_unavailable()
+    }
+    async fn list_spaces(&self) -> Result<Vec<SpaceSummary>, InspectionError> {
+        capability_unavailable()
+    }
+    async fn list_space_pages(
+        &self,
+        _space_key: &str,
+        _max_pages: u32,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SpacePageListing, InspectionError> {
+        capability_unavailable()
+    }
+    /// The page's current space key; `None` when the page no longer exists.
+    async fn page_space(&self, _page_id: &str) -> Result<Option<String>, InspectionError> {
+        capability_unavailable()
+    }
+    async fn download_attachment(
+        &self,
+        _page_id: &str,
+        _attachment: &AttachmentRef,
+        _siblings: &[AttachmentRef],
+        _dest: &cap_std::fs::Dir,
+        _dest_path: &std::path::Path,
+    ) -> Result<DownloadedAttachment, InspectionError> {
+        capability_unavailable()
+    }
 }
 #[derive(Clone)]
 pub struct SourceService {
@@ -512,6 +620,57 @@ impl SourceService {
             );
         }
     }
+    /// Let the selected provider recognize a page or space input, within the
+    /// operation deadline. The result is checked structurally here; callers
+    /// still bind a page to its configured instance before fetching.
+    pub async fn resolve_input(
+        &self,
+        provider_id: &str,
+        input: &str,
+    ) -> Result<ProviderResolution, InspectionError> {
+        if !bounded_text(input.trim(), MAX_URL_BYTES) {
+            return Err(InspectionError::new(
+                "library_input_unrecognized",
+                "input must be a bounded page URL, page id or space key",
+            ));
+        }
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id() == provider_id)
+            .ok_or_else(|| {
+                InspectionError::new(
+                    "source_provider_unsupported",
+                    "selected source provider is unavailable",
+                )
+            })?;
+        let resolution = timeout(self.operation_timeout, provider.resolve_input(input.trim()))
+            .await
+            .map_err(|_| {
+                InspectionError::new(
+                    "source_fetch_timeout",
+                    "source resolution exceeded the configured operation deadline",
+                )
+            })??;
+        let valid = match &resolution {
+            ProviderResolution::ConfluencePage(page) => {
+                confluence_page_id(&page.page_id)
+                    && confluence_space_key(&page.space_key)
+                    && bounded_text(&page.title, MAX_METADATA_BYTES)
+                    && bounded_text(&page.source_url, MAX_URL_BYTES)
+                    && bounded_text(&page.canonical_url, MAX_URL_BYTES)
+            }
+            ProviderResolution::ConfluenceSpace { space_key } => confluence_space_key(space_key),
+        };
+        if !valid {
+            return Err(InspectionError::new(
+                "source_provider_contract",
+                "source provider returned an invalid page or space identity",
+            ));
+        }
+        Ok(resolution)
+    }
+
     /// Fetch and validate provider assets without accessing persistent state.
     pub async fn fetch_assets(
         &self,
@@ -606,6 +765,7 @@ impl SourceService {
             validate_provider_asset(&request, asset)?;
             validate_asset(asset)?;
         }
+        validate_confluence_page(&request, &primary)?;
         if hydrate_references
             && (primary.len() > hydration::HYDRATION_MAX_ASSETS
                 || primary.iter().map(|asset| asset.body.len()).sum::<usize>()
@@ -687,6 +847,47 @@ fn validate_provider_asset(
         ));
     }
     Ok(())
+}
+
+/// A provider that answers with a Confluence page answers with exactly the
+/// requested page of the requested instance.
+fn validate_confluence_page(
+    request: &SourceFetchRequest,
+    assets: &[SourceAsset],
+) -> Result<(), InspectionError> {
+    if !assets
+        .iter()
+        .any(|asset| asset.source.resource_type == "page")
+    {
+        return Ok(());
+    }
+    let [asset] = assets else {
+        return Err(InspectionError::new(
+            "source_provider_contract",
+            "a Confluence page fetch returns exactly one page",
+        ));
+    };
+    if !confluence_page_id(&asset.source.canonical_id)
+        || request.artifact_url
+            != confluence_page_url(&request.authority.provider_instance, &asset.source.canonical_id)
+    {
+        return Err(InspectionError::new(
+            "source_identity_mismatch",
+            "provider returned a different Confluence page than requested",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn confluence_page_id(value: &str) -> bool {
+    (1..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+pub(crate) fn confluence_space_key(value: &str) -> bool {
+    (1..=255).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'~' | b'_' | b'-'))
 }
 
 fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
@@ -1490,6 +1691,29 @@ mod tests {
         assert_eq!(
             service.fetch_assets(request(), false).await.expect_err("metadata").code,
             "source_asset_invalid"
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+    #[tokio::test]
+    async fn a_page_answer_must_be_exactly_the_requested_confluence_page() {
+        let mut page = asset("body");
+        page.source.resource_type = "page".into();
+        page.source.canonical_id = "7".into();
+        let (service, shared, root) = service(page.clone());
+        let mut request = request();
+        request.artifact_url = confluence_page_url(&request.authority.provider_instance, "7");
+        service.fetch_assets(request.clone(), false).await.expect("requested page");
+        for canonical_id in ["8", "7a"] {
+            shared.lock().expect("asset").source.canonical_id = canonical_id.into();
+            assert_eq!(
+                service.fetch_assets(request.clone(), false).await.expect_err(canonical_id).code,
+                "source_identity_mismatch"
+            );
+        }
+        // Unsupported providers keep the default, never a fallback resolver.
+        assert_eq!(
+            service.resolve_input("tea", "7").await.expect_err("unsupported").code,
+            "source_capability_unavailable"
         );
         std::fs::remove_dir_all(root).expect("cleanup");
     }

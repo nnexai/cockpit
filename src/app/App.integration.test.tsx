@@ -1040,6 +1040,7 @@ describe("Library view presentation lifecycle", () => {
     await settle();
     expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
     expect(container.textContent).toContain("The Library is empty");
+    expect(container.textContent).toContain("Confluence page");
     expect([...container.querySelectorAll("button")].some((candidate) => candidate.textContent?.startsWith("Add to "))).toBe(false);
     expect(fixture.client.libraryListing).toHaveBeenCalled();
 

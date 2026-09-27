@@ -1,14 +1,27 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import type { LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
+import type { LibraryAttachment, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, type LibraryContainerNode, type LibraryInstanceNode } from "./libraryState";
+import { isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, type LibraryContainerNode, type LibraryInstanceNode } from "./libraryState";
 import "./library.css";
 
 export type LibraryMenuEntry = { label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean } | "separator";
 
 const MENU_WIDTH = 286;
 const MENU_GUTTER = 8;
+
+export const ATTACHMENT_STATE: Record<LibraryAttachment["state"], string> = {
+  not_downloaded: "not downloaded",
+  over_limit: "not downloaded: over limit",
+  downloaded: "✓ downloaded",
+  failed: "✕ download failed",
+};
+
+export function byteSize(bytes: number | null): string {
+  if (bytes === null) return "—";
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  return bytes >= 1_000 ? `${Math.round(bytes / 1_000)} KB` : `${bytes} bytes`;
+}
 
 /**
  * Row / header / toolbar action menu. Reuses the workbench `context-menu`
@@ -85,17 +98,72 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
   ];
 }
 
+/** A Confluence page's place under its space: a Library page, or an ancestor known only by its title. */
+type PageNode = { key: string; title: string; item: LibraryItemSummary | null; children: PageNode[] };
+
+/**
+ * Pages beneath their space (design §4.3). Each page's ancestor chain, root
+ * first, is its path, so a page sits under the Library copy of its parent, or
+ * under the parent's title when only the child was added.
+ */
+function pageForest(container: LibraryContainerNode): PageNode[] {
+  const nodes = new Map<string, PageNode>();
+  const roots: PageNode[] = [];
+  for (const item of container.items) {
+    const chain = [...item.ancestors, { id: item.canonical_id ?? item.item_id, title: item.title }];
+    let parent: PageNode | null = null;
+    for (const [index, page] of chain.entries()) {
+      let node = nodes.get(page.id);
+      if (!node) {
+        node = { key: `${container.key}\u0000page:${page.id}`, title: page.title, item: null, children: [] };
+        nodes.set(page.id, node);
+        (parent?.children ?? roots).push(node);
+      }
+      if (index === chain.length - 1) Object.assign(node, { key: item.item_id, title: item.title, item });
+      parent = node;
+    }
+  }
+  return roots;
+}
+
+function pageItemIds(page: PageNode): string[] {
+  return [...(page.item ? [page.item.item_id] : []), ...page.children.flatMap(pageItemIds)];
+}
+
 type Row =
   | { kind: "instance"; key: string; depth: 0; parent: null; node: LibraryInstanceNode; open: boolean }
   | { kind: "container"; key: string; depth: 1; parent: string; node: LibraryContainerNode; open: boolean }
-  | { kind: "item"; key: string; depth: number; parent: string; item: LibraryItemSummary };
+  /** An ancestor page that isn't in the Library itself: a plain group. */
+  | { kind: "ancestor"; key: string; depth: number; parent: string; node: PageNode; open: boolean }
+  /** A Library page with child pages or attachments: the chevron expands, the label opens (design §4.3). */
+  | { kind: "page"; key: string; depth: number; parent: string; node: PageNode; item: LibraryItemSummary; open: boolean }
+  | { kind: "item"; key: string; depth: number; parent: string; item: LibraryItemSummary }
+  /** A page's `Attachments (N)` group, after its child pages. */
+  | { kind: "attachments"; key: string; depth: number; parent: string; item: LibraryItemSummary; open: boolean }
+  /** Attachment metadata only: read-only until downloads exist (S7). */
+  | { kind: "attachment"; key: string; depth: number; parent: string; attachment: LibraryAttachment };
 
-type Menu = { x: number; y: number; row: Row };
+/** Attachment rows have no actions yet, so no row menu. */
+type MenuRow = Exclude<Row, { kind: "attachments" | "attachment" }>;
+type Menu = { x: number; y: number; row: MenuRow };
+
+function rowLabel(row: Row): string {
+  switch (row.kind) {
+    case "item": case "page": return row.item.title;
+    case "attachments": return `Attachments (${row.item.attachments.length})`;
+    case "attachment": return row.attachment.stored_name;
+    case "ancestor": return row.node.title;
+    default: return row.node.label;
+  }
+}
 
 /**
- * Library tree (design §4.3): provider instance → container → item. Rows are
- * buttons with the Context tree keys; Shift+F10 or the Menu key opens the
- * row menu. Labels are display names, and the full path is the tooltip.
+ * Library tree (design §4.3): provider instance → container → item, with
+ * Confluence pages under their ancestors. Rows are buttons with the Context
+ * tree keys; Shift+F10 or the Menu key opens the row menu. Attachment rows are
+ * read-only metadata, not buttons: arrow keys reach them, Tab skips them, and
+ * they have no click, Enter or menu until downloads exist (S7). Labels are
+ * display names, and the full path is the tooltip.
  */
 export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, actions }: {
   items: readonly LibraryItemSummary[];
@@ -110,6 +178,22 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
   const tree = useMemo(() => libraryTree(items, providers), [items, providers]);
   const rows = useMemo(() => {
     const visible: Row[] = [];
+    const pushPages = (pages: readonly PageNode[], depth: number, parent: string) => {
+      for (const page of pages) {
+        const open = !collapsed.has(page.key);
+        const attachments = page.item?.attachments ?? [];
+        if (page.item && page.children.length === 0 && attachments.length === 0) visible.push({ kind: "item", key: page.key, depth, parent, item: page.item });
+        else if (page.item) visible.push({ kind: "page", key: page.key, depth, parent, node: page, item: page.item, open });
+        else visible.push({ kind: "ancestor", key: page.key, depth, parent, node: page, open });
+        if (!open) continue;
+        pushPages(page.children, depth + 1, page.key);
+        if (!page.item || attachments.length === 0) continue;
+        const groupKey = `${page.key}\u0000attachments`;
+        const groupOpen = !collapsed.has(groupKey);
+        visible.push({ kind: "attachments", key: groupKey, depth: depth + 1, parent: page.key, item: page.item, open: groupOpen });
+        if (groupOpen) for (const attachment of attachments) visible.push({ kind: "attachment", key: attachment.attachment_id, depth: depth + 2, parent: groupKey, attachment });
+      }
+    };
     for (const instance of tree) {
       const instanceOpen = !collapsed.has(instance.key);
       visible.push({ kind: "instance", key: instance.key, depth: 0, parent: null, node: instance, open: instanceOpen });
@@ -122,33 +206,35 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
         }
         const containerOpen = !collapsed.has(container.key);
         visible.push({ kind: "container", key: container.key, depth: 1, parent: instance.key, node: container, open: containerOpen });
-        if (containerOpen) for (const item of container.items) visible.push({ kind: "item", key: item.item_id, depth: 2, parent: container.key, item });
+        if (!containerOpen) continue;
+        if (container.items.every(isConfluencePage)) pushPages(pageForest(container), 2, container.key);
+        else for (const item of container.items) visible.push({ kind: "item", key: item.item_id, depth: 2, parent: container.key, item });
       }
     }
     return visible;
   }, [collapsed, tree]);
   const focusRow = (key: string) => window.requestAnimationFrame(() => {
-    [...(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-library-row]") ?? [])].find((button) => button.dataset.libraryRow === key)?.focus();
+    [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === key)?.focus();
   });
   const toggle = (key: string) => setCollapsed((current) => {
     const next = new Set(current);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
-  const groupIds = (row: Row): string[] => row.kind === "instance"
-    ? row.node.containers.flatMap((container) => container.items.map((item) => item.item_id))
-    : row.kind === "container" ? row.node.items.map((item) => item.item_id) : [row.item.item_id];
-  const menuEntries = (row: Row): LibraryMenuEntry[] => {
-    if (row.kind === "item") return itemMenuEntries(row.item, actions, true);
-    const ids = groupIds(row);
+  const menuEntries = (row: MenuRow): LibraryMenuEntry[] => {
+    if (row.kind === "item" || row.kind === "page") return itemMenuEntries(row.item, actions, true);
+    const ids = row.kind === "instance" ? row.node.containers.flatMap((container) => container.items.map((item) => item.item_id))
+      : row.kind === "container" ? row.node.items.map((item) => item.item_id) : pageItemIds(row.node);
     const request: LibraryRefreshRequest = row.kind === "container" && row.node.instance && row.node.containerId
       ? { scope: "container", provider_instance: row.node.instance, container_id: row.node.containerId }
       : { scope: "items", item_ids: ids };
-    return [{ label: `Refresh all in ${row.node.label}`, onSelect: () => actions.refresh(request, ids), disabled: actions.refreshBusy || ids.length === 0 }];
+    return [{ label: `Refresh all in ${rowLabel(row)}`, onSelect: () => actions.refresh(request, ids), disabled: actions.refreshBusy || ids.length === 0 }];
   };
-  const openMenu = (row: Row, x: number, y: number) => setMenu({ x, y, row });
+  const openMenu = (row: Row, x: number, y: number) => {
+    if (row.kind !== "attachments" && row.kind !== "attachment") setMenu({ x, y, row });
+  };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>("[data-library-row]") : null;
+    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-library-row]") : null;
     const index = target ? rows.findIndex((row) => row.key === target.dataset.libraryRow) : -1;
     const row = rows[index];
     if (!target || !row || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -166,7 +252,7 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
       if (next) focusRow(next.key);
       return;
     }
-    if (event.key === "ArrowRight" && row.kind !== "item") {
+    if (event.key === "ArrowRight" && "open" in row) {
       event.preventDefault();
       if (!row.open) toggle(row.key);
       else if (rows[index + 1]?.depth > row.depth) focusRow(rows[index + 1]!.key);
@@ -174,13 +260,14 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
     }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      if (row.kind !== "item" && row.open) toggle(row.key);
+      if ("open" in row && row.open) toggle(row.key);
       else if (row.parent) focusRow(row.parent);
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      if (row.kind === "item") actions.open(row.item); else toggle(row.key);
+      // Only page nodes differ from a directory: Enter opens the page (design §4.3). Attachments stay read-only.
+      if (row.kind === "item" || row.kind === "page") actions.open(row.item); else if ("open" in row) toggle(row.key);
     }
   };
   const onContextMenu = (row: Row) => (event: MouseEvent<HTMLButtonElement>) => {
@@ -192,18 +279,24 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
   return <div className="library-tree" ref={listRef} onKeyDown={onKeyDown}>
     {rows.map((row) => {
       const indent = { paddingLeft: `${8 + row.depth * 16}px` };
-      if (row.kind === "item") {
+      if (row.kind === "item" || row.kind === "page") {
         const item = row.item;
         const chip = libraryStateChip(item.state);
         const pending = pendingItemIds.has(item.item_id);
         const label = itemTreeLabel(item, providers);
-        return <div className="context-tree-node" key={`item:${row.key}`}>
+        return <div className={`context-tree-node${row.kind === "page" ? " library-page-node" : ""}`} key={`item:${row.key}`}>
+          {row.kind === "page" ? <button type="button" tabIndex={-1} className="library-page-disclosure" style={{ left: `${2 + row.depth * 16}px` }}
+            aria-label={`Expand ${item.title}`} aria-expanded={row.open}
+            onMouseDown={(event) => event.preventDefault()} onClick={() => { toggle(row.key); focusRow(row.key); }}>
+            <UiIcon name={row.open ? "down" : "right"} />
+          </button> : null}
           <button type="button" data-library-row={row.key} data-context-path={item.document_path ?? undefined}
             className={`context-tree-row library-tree-row${item.item_id === selectedItemId ? " is-selected" : ""}`} style={indent}
             aria-current={item.item_id === selectedItemId ? "true" : undefined}
             aria-label={`${itemAccessibleName(item, providers)}${pending ? ", refreshing" : ""}`}
             onClick={() => actions.open(item)} onContextMenu={onContextMenu(row)}>
-            <span className="context-tree-disclosure" />
+            {/* A page node's chevron is its own hit target, drawn over this space. */}
+            <span className="context-tree-disclosure" aria-hidden="true">{row.kind === "page" ? "\u00a0" : null}</span>
             <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
             <span className="context-tree-name" title={item.item_path}>{label}</span>
             {pending ? <span className="context-tree-meta library-state is-muted"><span className="library-spinner" aria-hidden="true" />Refreshing…</span>
@@ -211,16 +304,35 @@ export function LibraryTree({ items, providers, selectedItemId, pendingItemIds, 
           </button>
         </div>;
       }
-      const meta = row.kind === "instance" && row.node.unavailable ? "Unavailable" : null;
+      if (row.kind === "attachment") {
+        const attachment = row.attachment;
+        const detail = [attachment.bytes === null ? null : byteSize(attachment.bytes), attachment.media_type, ATTACHMENT_STATE[attachment.state]].filter(Boolean).join(" · ");
+        // Read-only metadata: reachable by arrow keys only, with no click, Enter or menu (downloads arrive in S7).
+        return <div className="context-tree-node" key={`attachment:${row.key}`}>
+          <div role="group" tabIndex={-1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ ...indent, cursor: "default" }}
+            aria-label={`${attachment.stored_name}, attachment, ${detail}`}>
+            <span className="context-tree-disclosure" aria-hidden="true" />
+            <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
+            {/* The safe stored name is shown; the original name only as a tooltip, never as markup (P11). */}
+            <span className="context-tree-name" title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</span>
+            <span className={`context-tree-meta library-state is-${attachment.state === "downloaded" ? "idle" : attachment.state === "failed" ? "blocked" : "muted"}`}>{detail}</span>
+          </div>
+        </div>;
+      }
+      const label = rowLabel(row);
+      // Pages added one by one; a followed space reads `◉ Following` (S6).
+      const meta = row.kind === "instance" && row.node.unavailable ? "Unavailable"
+        : row.kind === "container" && row.node.items.every((item) => isConfluencePage(item) && !item.follow_id) ? "Pages"
+        : row.kind === "attachments" ? `${row.item.attachments.filter((attachment) => attachment.state === "downloaded").length} downloaded` : null;
       return <div className="context-tree-node" key={`${row.kind}:${row.key}`}>
         <button type="button" data-library-row={row.key} className={`context-tree-row library-tree-group is-${row.kind}`} style={indent} aria-expanded={row.open}
           onClick={() => toggle(row.key)} onContextMenu={onContextMenu(row)}>
           <span className="context-tree-disclosure"><UiIcon name={row.open ? "down" : "right"} /></span>
-          <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? row.node.label : row.node.label}>{row.node.label}</span>
-          {meta ? <span className="context-tree-meta library-state is-blocked">{meta}</span> : null}
+          <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? label : label}>{label}</span>
+          {meta ? <span className={`context-tree-meta library-state ${meta === "Unavailable" ? "is-blocked" : "is-muted"}`}>{meta}</span> : null}
         </button>
       </div>;
     })}
-    {menu ? <LibraryMenu x={menu.x} y={menu.y} label={menu.row.kind === "item" ? `${menu.row.item.title} actions` : `${menu.row.node.label} actions`} entries={menuEntries(menu.row)} onDismiss={() => setMenu(null)} /> : null}
+    {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${rowLabel(menu.row)} actions`} entries={menuEntries(menu.row)} onDismiss={() => setMenu(null)} /> : null}
   </div>;
 }

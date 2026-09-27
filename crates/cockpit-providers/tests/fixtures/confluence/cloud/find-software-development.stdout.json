@@ -1,0 +1,20 @@
+{
+  "title": "Software Development",
+  "space": {
+    "key": "SD",
+    "name": "Software Development",
+    "type": "onboarding",
+    "metadata": {},
+    "status": "current",
+    "_expandable": {
+      "operations": "",
+      "permissions": "",
+      "roles": "",
+      "description": ""
+    },
+    "_links": {
+      "self": "https://nnexai.atlassian.net/wiki/rest/api/space/SD"
+    }
+  },
+  "url": ""
+}

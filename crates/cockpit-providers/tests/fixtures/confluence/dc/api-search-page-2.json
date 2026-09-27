@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "id": "524330",
+      "type": "page",
+      "status": "current",
+      "title": "Retired Services",
+      "space": {
+        "key": "ENG",
+        "name": "Engineering"
+      },
+      "version": {
+        "number": 1
+      },
+      "ancestors": []
+    }
+  ],
+  "start": 2,
+  "limit": 2,
+  "size": 1,
+  "totalSize": 3,
+  "cqlQuery": "space=\"ENG\" and type=page",
+  "_links": {
+    "base": "https://confluence.example.com/confluence",
+    "context": "/confluence",
+    "self": "https://confluence.example.com/confluence/rest/api/content/search?cql=space%3D%22ENG%22+and+type%3Dpage&limit=2&expand=version,ancestors,space&start=2"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "results": [
+    {
+      "prefix": "global",
+      "name": "release",
+      "id": "2001"
+    },
+    {
+      "prefix": "global",
+      "name": "checklist",
+      "id": "2002"
+    }
+  ],
+  "start": 0,
+  "limit": 200,
+  "size": 2,
+  "_links": {
+    "self": "https://confluence.example.com/confluence/rest/api/content/524301/label",
+    "base": "https://confluence.example.com/confluence",
+    "context": "/confluence"
+  }
+}

@@ -507,3 +507,165 @@ it("recognizes a typed folder path, defaults its label, and saves the renamed co
     host.remove();
   }
 });
+
+const CLOUD_PAGE = "https://nnexai.atlassian.net/wiki/spaces/SD/pages/98765/Release+checklist";
+const DC_DISPLAY = "https://confluence.example.com/confluence/display/ENG/Release+Checklist";
+const confluenceProviders = [
+  { id: "cloud", base_url: "https://nnexai.atlassian.net/wiki", executable: "/opt/homebrew/bin/confluence", login: "default" },
+  { id: "cloud-reader", base_url: "https://nnexai.atlassian.net/wiki/", executable: "confluence", login: "reader" },
+  { id: "dc", base_url: "https://confluence.example.com/confluence", executable: "confluence", login: "dc" },
+  { id: "github", base_url: "https://github.com", executable: "gh" },
+];
+
+function pageResolution(providerId: string | null) {
+  const cloud = providerId !== "dc";
+  return {
+    kind: "confluence_page", provider_id: providerId, provider_instance: cloud ? "https://nnexai.atlassian.net/wiki" : "https://confluence.example.com/confluence",
+    title: cloud ? "Release checklist" : "Release Checklist", canonical_id: cloud ? "98765" : "4242", container_label: cloud ? "SD · Software Development" : "ENG · Engineering",
+    existing_item_id: null, existing_follow_id: null, page_count: null, git_working_tree: null, file_count: null, diagnostics: [],
+  };
+}
+
+function providerSelect(): HTMLSelectElement | null {
+  const label = [...document.body.querySelectorAll("label")].find((element) => element.textContent === "Provider");
+  return label ? document.getElementById(label.htmlFor) as HTMLSelectElement : null;
+}
+
+it("recognizes a Cloud page link, asks for the provider only when several configured instances can read it, and adds through the chosen one", async () => {
+  vi.useFakeTimers();
+  const target = { session_id: "session", space_id: "space-1" };
+  const saved: LibraryOperation = {
+    operation_id: "op-page", kind: "add", item_ids: ["source:page-98765"], report: null, target, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }, { phase: "space", state: "done", done: 1, total: 1, message: null, error: null }],
+    space: { space_id: "space-1", copy_mode: "reflink", written: ["sources/confluence/page/sd-98765.md"], skipped_edited: [], companion_root_id: "companion:c1" },
+  };
+  const client = githubClient({
+    projectConfiguration: vi.fn(async () => ({ providers: confluenceProviders })),
+    libraryResolve: vi.fn(async (request: { provider_id: string | null }) => pageResolution(request.provider_id)),
+    libraryAdd: vi.fn(async () => saved),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} space={{ target, label: "api-review", live: true }} defaultDestination="space" />));
+    await advance(0);
+    await typeSource(CLOUD_PAGE);
+    // Both profiles of the Cloud site can read the link; the Data Center instance can't.
+    expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: CLOUD_PAGE, provider_id: "cloud" });
+    expect([...providerSelect()!.options].map((option) => option.value)).toEqual(["cloud", "cloud-reader"]);
+    expect(document.body.textContent).toContain("✓ Confluence page · Release checklist · SD");
+    expect(document.body.textContent).toContain("SD · Software Development · nnexai.atlassian.net");
+    // Forge-only options never apply to a page.
+    expect(document.body.querySelector("input[type='checkbox']")).toBeNull();
+
+    await act(async () => {
+      const select = providerSelect()!;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "cloud-reader");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await advance(450);
+    expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: CLOUD_PAGE, provider_id: "cloud-reader" });
+    expect(document.body.querySelector<HTMLInputElement>("input[type='text']")!.value).toBe(CLOUD_PAGE);
+
+    // A bare id can be read by every configured Confluence instance; the pick and the typed id are kept.
+    await typeSource("98765");
+    expect([...providerSelect()!.options].map((option) => option.value)).toEqual(["cloud", "cloud-reader", "dc"]);
+    expect(providerSelect()!.value).toBe("cloud-reader");
+    expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: "98765", provider_id: "cloud-reader" });
+    const radios = [...document.body.querySelectorAll<HTMLInputElement>("input[type='radio']")];
+    expect(radios[1]?.checked).toBe(true);
+
+    await act(async () => dialogButton("Add to Library and api-review")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith({
+      input: "98765", provider_id: "cloud-reader", target, label: null,
+      hydrate_references: false, follow_space: false, download_attachments: false, refresh_existing: false,
+    });
+    expect(document.body.textContent).toContain("✓ Saved to Library");
+    expect(document.body.textContent).not.toContain("@");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("refuses a bare page id without a Confluence provider, and resolves ids and Data Center links through the only one", async () => {
+  vi.useFakeTimers();
+  const unconfigured = githubClient({});
+  const host = document.createElement("div");
+  document.body.append(host);
+  let root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={unconfigured} onClose={vi.fn()} />));
+    await advance(0);
+    await typeSource("123456");
+    expect(unconfigured.libraryResolve).not.toHaveBeenCalled();
+    expect(document.body.querySelector("[role='alert']")?.textContent).toContain("✕ No Confluence provider configured");
+    expect(document.body.querySelector<HTMLInputElement>("input[type='text']")!.getAttribute("aria-invalid")).toBe("true");
+    expect(dialogButton("Add to Library")!.disabled).toBe(true);
+    await act(async () => root.unmount());
+
+    const saved: LibraryOperation = {
+      operation_id: "op-dc", kind: "add", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:page-4242"],
+      report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+    };
+    const client = githubClient({
+      projectConfiguration: vi.fn(async () => ({ providers: [confluenceProviders[2]] })),
+      libraryResolve: vi.fn(async (request: { provider_id: string | null }) => pageResolution(request.provider_id)),
+      libraryAdd: vi.fn(async () => saved),
+    });
+    root = createRoot(host);
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} onOpenItem={vi.fn()} />));
+    await advance(0);
+    await typeSource("4242");
+    expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: "4242", provider_id: "dc" });
+    expect(providerSelect()).toBeNull();
+    expect(document.body.textContent).toContain("✓ Confluence page · Release Checklist · ENG");
+    expect(document.body.textContent).toContain("ENG · Engineering · confluence.example.com/confluence");
+    await typeSource(DC_DISPLAY);
+    expect(client.libraryResolve).toHaveBeenLastCalledWith({ input: DC_DISPLAY, provider_id: "dc" });
+    const input = document.body.querySelector<HTMLInputElement>("input[type='text']")!;
+    await act(async () => {
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: DC_DISPLAY, provider_id: "dc", target: null, follow_space: false, download_attachments: false }));
+    expect(document.activeElement).toBe(dialogButton("Open in Library"));
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("explains a Confluence sign-in failure and a missing confluence CLI without creating an item", async () => {
+  vi.useFakeTimers();
+  const client = githubClient({
+    projectConfiguration: vi.fn(async () => ({ providers: confluenceProviders.slice(2) })),
+    libraryResolve: vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("Confluence rejected the profile"), { code: "source_auth_failed" }))
+      .mockRejectedValueOnce(Object.assign(new Error("confluence executable not found"), { code: "source_cli_unavailable" })),
+    libraryAdd: vi.fn(),
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} />));
+    await advance(0);
+    await typeSource(DC_DISPLAY);
+    const alert = () => document.body.querySelector("[role='alert']")!;
+    expect(alert().querySelector("strong")?.textContent).toBe("✕ Confluence sign-in failed");
+    expect(alert().textContent).toContain("confluence.example.com rejected the confluence CLI's credentials. Cockpit doesn't store credentials: sign in with the CLI's read-only profile, then retry.");
+    await act(async () => dialogButton("Retry lookup")!.click());
+    await advance(450);
+    expect(alert().querySelector("strong")?.textContent).toBe("✕ confluence isn't installed");
+    expect(alert().textContent).toContain("Install it with brew install pchuri/tap/confluence-cli, configure a read-only profile, then retry.");
+    expect(dialogButton("Add to Library")!.disabled).toBe(true);
+    expect(client.libraryAdd).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

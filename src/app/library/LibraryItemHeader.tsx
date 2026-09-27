@@ -1,8 +1,8 @@
 import { Fragment, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import type { LibraryItemSummary, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { instanceHost, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, relativeTime } from "./libraryState";
-import { LibraryMenu, itemMenuEntries, menuAnchor, type LibraryItemActions } from "./LibraryTree";
+import { instanceHost, isConfluencePage, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, relativeTime } from "./libraryState";
+import { ATTACHMENT_STATE, LibraryMenu, byteSize, itemMenuEntries, menuAnchor, type LibraryItemActions } from "./LibraryTree";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { spaceAddFailure } from "./SpaceContextList";
 
@@ -22,13 +22,17 @@ export type ItemSpaceState = {
   onAdd: () => void;
 };
 
+/** A Confluence page's last edit, from the page document's frontmatter; `by` is a display name, never an email. */
+export type PageUpdate = { at: string | null; by: string | null };
+
 /**
  * Library item header (design §4.4): kind chip and container path, title,
  * state chip with its freshness phrase and actions, then `Metadata`. The one
  * Space action comes from `headerSpaceAction`; S2 offers only `Add to <Space>`.
+ * A Confluence page adds its page metadata and a read-only attachments table.
  * At pane width ≤ 520 px `Refresh` and the Space action move into `⋯`.
  */
-export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null }: {
+export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null }: {
   item: LibraryItemSummary;
   providers: readonly ProjectProvider[];
   narrow: boolean;
@@ -40,6 +44,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   /** The viewer's document details disclosure, kept at the end of line 1. */
   details: ReactNode;
   space?: ItemSpaceState | null;
+  pageUpdate?: PageUpdate | null;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const now = Date.now();
@@ -48,6 +53,13 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   const container = item.container?.label ?? null;
   const folder = item.folder;
   const copiedAgo = relativeTime(item.fetched_at, now);
+  const page = isConfluencePage(item);
+  // `SD / Release process`: the space key, then the page's ancestors.
+  const pagePath = page ? [item.container?.container_id ?? instanceHost(item.provider_instance), ...item.ancestors.map((ancestor) => ancestor.title)].join(" / ") : null;
+  const version = page && item.source_revision ? `v${item.source_revision}` : null;
+  // Display names only: a value that looks like an email is never shown.
+  const updatedBy = page && pageUpdate?.by && !/\S+@\S+/.test(pageUpdate.by) ? pageUpdate.by : null;
+  const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded").length;
   const refresh = () => actions.refresh({ scope: "items", item_ids: [item.item_id] }, [item.item_id]);
   const spaceAction = space ? headerSpaceAction(space.row, space.label) : null;
   const spaceAdding = Boolean(space && (space.adding || space.attempt?.state === "pending"));
@@ -66,7 +78,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   return <div className="library-item-header">
     <div className="library-item-line">
       <span className="document-source-kind library-kind-chip">{itemKindLabel(item, providers)}</span>
-      <span className="library-item-path">{rootCrumb ? <><span>Library</span><span aria-hidden="true"> › </span></> : null}{folder ? "Folders" : container ?? instanceHost(item.provider_instance)}{itemDisplayId(item, providers) ? <span className="library-item-id"> {itemDisplayId(item, providers)}</span> : null}</span>
+      <span className="library-item-path" title={page ? [item.container?.label, ...item.ancestors.map((ancestor) => ancestor.title)].filter(Boolean).join(" › ") : undefined}>{rootCrumb ? <><span>Library</span><span aria-hidden="true"> › </span></> : null}{folder ? "Folders" : pagePath ?? container ?? instanceHost(item.provider_instance)}{itemDisplayId(item, providers) ? <span className="library-item-id"> {itemDisplayId(item, providers)}</span> : null}</span>
       <span className="context-toolbar-spacer" />
       {details}
     </div>
@@ -75,7 +87,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
       {pending
         ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />{folder ? "Re-copying…" : "Refreshing…"}</span>
         : <span className={`context-source-chip library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span>}
-      <span className="library-item-phrase">{folder ? <>Copied{copiedAgo ? ` ${copiedAgo}` : ""} from <code>{folder.origin_path}</code> · {folder.files} files · {folder.bytes >= 1_000_000 ? `${(folder.bytes / 1_000_000).toFixed(1)} MB` : `${folder.bytes} bytes`}{folder.git_working_tree ? " · Git working tree" : ""}</> : freshness.phrase}</span>
+      <span className="library-item-phrase">{folder ? <>Copied{copiedAgo ? ` ${copiedAgo}` : ""} from <code>{folder.origin_path}</code> · {folder.files} files · {folder.bytes >= 1_000_000 ? `${(folder.bytes / 1_000_000).toFixed(1)} MB` : `${folder.bytes} bytes`}{folder.git_working_tree ? " · Git working tree" : ""}</> : `${freshness.phrase}${version ? ` · ${version}` : ""}${updatedBy ? ` by ${updatedBy}` : ""}`}</span>
       <span className="context-toolbar-spacer" />
       {narrow ? null : <button type="button" onClick={refresh} disabled={actions.refreshBusy} title={folder ? `Re-copy from ${folder.origin_path}` : undefined}>{folder ? "Re-copy" : "Refresh"}</button>}
       {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
@@ -107,11 +119,18 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
           <dt>Skipped other files</dt><dd>{folder.skipped_other}</dd>
           <dt>Updates</dt><dd>Source edits do not change this copy until an explicit re-copy. Space copies update separately.</dd>
         </> : null}
-        {item.canonical_id ? <><dt>Source identity</dt><dd><code>{item.canonical_id}</code></dd></> : null}
+        {page ? <>
+          {item.container ? <><dt>Space</dt><dd>{item.container.label}</dd></> : null}
+          {item.canonical_id ? <><dt>Page id</dt><dd><code>{item.canonical_id}</code></dd></> : null}
+          {item.ancestors.length ? <><dt>Parent</dt><dd>{item.ancestors.at(-1)!.title}</dd></> : null}
+          <dt>Ancestors</dt><dd>{item.ancestors.length ? item.ancestors.map((ancestor) => ancestor.title).join(" / ") : "None (top-level page)"}</dd>
+          {version ? <><dt>Version</dt><dd>{version}</dd></> : null}
+          {pageUpdate?.at || updatedBy ? <><dt>Last updated</dt><dd>{[pageUpdate?.at, updatedBy ? `by ${updatedBy}` : null].filter(Boolean).join(" ")}</dd></> : null}
+        </> : item.canonical_id ? <><dt>Source identity</dt><dd><code>{item.canonical_id}</code></dd></> : null}
         {item.provider_instance ? <><dt>Provider</dt><dd>{item.provider_id} · {item.provider_instance}</dd></> : null}
         {item.source_url ? <><dt>Source link</dt><dd><code>{item.source_url}</code></dd></> : null}
         {item.original_url && item.original_url !== item.source_url ? <><dt>Added from</dt><dd><code>{item.original_url}</code></dd></> : null}
-        {item.source_revision ? <><dt>Source revision</dt><dd><code>{item.source_revision}</code></dd></> : null}
+        {item.source_revision && !page ? <><dt>Source revision</dt><dd><code>{item.source_revision}</code></dd></> : null}
         {item.fetched_at ? <><dt>Fetched</dt><dd>{item.fetched_at}</dd></> : null}
         {item.checked_at ? <><dt>Checked</dt><dd>{item.checked_at}</dd></> : null}
         <dt>Library path</dt><dd><code>{item.item_path}</code></dd>
@@ -120,6 +139,25 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
         {item.diagnostics.map((diagnostic, index) => <Fragment key={`${diagnostic.code}:${index}`}><dt>Diagnostic</dt><dd><code>{diagnostic.code}</code> · {diagnostic.message}</dd></Fragment>)}
       </dl>
     </details>
+    {page && item.attachments.length > 0 ? <div className="library-attachments">
+      <div className="library-attachments-heading">Attachments <span>{item.attachments.length} · {downloaded} downloaded</span></div>
+      {narrow ? <ul aria-label="Attachments">
+        {item.attachments.map((attachment) => <li key={attachment.attachment_id}>
+          <span title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</span>
+          <span className="library-attachment-detail">{byteSize(attachment.bytes)} · {ATTACHMENT_STATE[attachment.state]}</span>
+        </li>)}
+      </ul> : <table aria-label="Attachments">
+        <thead><tr><th scope="col">Name</th><th scope="col">Size</th><th scope="col">Type</th><th scope="col">State</th></tr></thead>
+        <tbody>
+          {item.attachments.map((attachment) => <tr key={attachment.attachment_id}>
+            <td title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</td>
+            <td>{byteSize(attachment.bytes)}</td>
+            <td>{attachment.media_type ?? "—"}</td>
+            <td className={`library-state is-${attachment.state === "downloaded" ? "idle" : attachment.state === "failed" ? "blocked" : "muted"}`}>{ATTACHMENT_STATE[attachment.state]}</td>
+          </tr>)}
+        </tbody>
+      </table>}
+    </div> : null}
     {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${item.title} actions`} entries={itemMenuEntries(item, actions, false)} onDismiss={() => setMenu(null)} /> : null}
   </div>;
 }

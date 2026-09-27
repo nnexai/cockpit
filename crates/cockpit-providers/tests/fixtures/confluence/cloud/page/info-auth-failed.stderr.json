@@ -1,0 +1,6 @@
+{
+  "error": "Authentication failed (401 Unauthorized).\nPlease verify your email and API token are correct.\nGenerate a token at: https://id.atlassian.com/manage-profile/security/api-tokens",
+  "code": "AUTH_FAILED",
+  "status": 401,
+  "details": "Unauthorized"
+}

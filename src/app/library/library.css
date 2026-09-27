@@ -59,6 +59,25 @@
 .library-tree-group.is-instance .context-tree-name { color: var(--text-secondary); font-weight: 500; }
 .library-tree-group.is-container .context-tree-name { color: var(--text-secondary); }
 .library-tree .context-tree-row:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+/* Page nodes (design §4.3): the chevron is its own hit target over the row's disclosure slot; the label opens the page. */
+.library-page-node { position: relative; }
+.library-page-disclosure {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  display: grid;
+  width: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.library-page-disclosure:hover { background: var(--surface-hover); color: var(--text-primary); }
+.library-page-disclosure .ui-icon { width: 14px; height: 14px; color: inherit; }
 
 /* State chips: glyph + word, colour only as a supplement (design §4.6, context.css chip pairs). */
 .library-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
@@ -224,3 +243,16 @@
 .library-space-slot:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .library-progress-files { width: 100%; max-height: 96px; margin: 0; padding: 0 0 0 16px; overflow: auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .library-progress-files code { overflow-wrap: anywhere; user-select: text; }
+
+/* Confluence page attachments (design §4.4): read-only metadata until downloads land. */
+.library-attachments { display: flex; flex-direction: column; gap: 4px; }
+.library-attachments-heading { color: var(--text-muted); }
+.library-attachments-heading span { color: var(--text-secondary); }
+.library-attachments table { width: 100%; border-collapse: collapse; }
+.library-attachments th { padding: 2px 10px 2px 0; color: var(--text-muted); font-weight: 400; text-align: left; }
+.library-attachments td { padding: 2px 10px 2px 0; overflow-wrap: anywhere; }
+.library-attachments td:first-child { color: var(--text-primary); user-select: text; }
+.library-attachments ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.library-attachments li { display: flex; flex-direction: column; }
+.library-attachments li > span:first-child { color: var(--text-primary); overflow-wrap: anywhere; }
+.library-attachment-detail { color: var(--text-muted); }

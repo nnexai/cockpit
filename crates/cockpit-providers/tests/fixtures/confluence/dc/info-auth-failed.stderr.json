@@ -1,0 +1,6 @@
+{
+  "error": "Authentication failed (401 Unauthorized).\nPlease verify your personal access token is valid and not expired.",
+  "code": "AUTH_FAILED",
+  "status": 401,
+  "details": null
+}

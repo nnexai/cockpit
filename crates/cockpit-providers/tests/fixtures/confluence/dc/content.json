@@ -1,0 +1,55 @@
+{
+  "id": "524301",
+  "type": "page",
+  "status": "current",
+  "title": "Release Checklist",
+  "space": {
+    "id": 98305,
+    "key": "ENG",
+    "name": "Engineering",
+    "type": "global",
+    "_links": {
+      "webui": "/display/ENG",
+      "self": "https://confluence.example.com/confluence/rest/api/space/ENG"
+    }
+  },
+  "history": {
+    "latest": true,
+    "lastUpdated": {
+      "by": {
+        "type": "known",
+        "username": "<username>",
+        "userKey": "<user-key>",
+        "displayName": "<display-name>"
+      },
+      "when": "2026-09-24T17:40:00.000+02:00",
+      "number": 12
+    }
+  },
+  "version": {
+    "by": {
+      "type": "known",
+      "username": "<username>",
+      "userKey": "<user-key>",
+      "displayName": "<display-name>"
+    },
+    "when": "2026-09-24T17:40:00.000+02:00",
+    "number": 12,
+    "minorEdit": false
+  },
+  "ancestors": [
+    {
+      "id": "524289",
+      "type": "page",
+      "status": "current",
+      "title": "Engineering Home"
+    }
+  ],
+  "_links": {
+    "webui": "/display/ENG/Release+Checklist",
+    "tinyui": "/x/DQAI",
+    "base": "https://confluence.example.com/confluence",
+    "context": "/confluence",
+    "self": "https://confluence.example.com/confluence/rest/api/content/524301"
+  }
+}

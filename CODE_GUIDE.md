@@ -50,7 +50,7 @@ Create a uniquely named Herdr session with isolated XDG config/state, a fixture 
 
 ## Local provider configuration
 
-A provider selects an executable and an existing Tea login by name. Cockpit does not create credentials or perform remote writes. For example, in a task-specific Cockpit TOML configuration:
+A provider selects an executable and an existing CLI login/profile by name. Cockpit does not create credentials or perform remote writes. For example, in a task-specific Cockpit TOML configuration:
 
 ```toml
 [[providers]]
@@ -74,6 +74,18 @@ base_url = "https://your-site.atlassian.net"
 executable = "jira"
 ```
 
+Confluence pages use the installed `confluence` CLI and an existing profile; the provider's base URL must include the site's context path when present:
+
+```toml
+[[providers]]
+id = "confluence"
+base_url = "https://example.atlassian.net/wiki"
+executable = "confluence"
+login = "my-existing-confluence-profile"
+```
+
+Cockpit invokes only its read-operation allowlist and passes `CONFLUENCE_READ_ONLY=true` and `CONFLUENCE_CLI_ANALYTICS=false`. Page links must belong to the configured instance. Confluence imports preserve page body, identity, version, ancestor, label, editor-display-name, and attachment metadata. Attachments remain not downloaded; Cockpit never fetches their binary data. Verified against Confluence CLI 2.25.2; Data Center protocol behavior is fixture-verified, not live-validated.
+
 Provider authority is resolved against the selected configured provider instance; forge owner/repository identity comes from the artifact's canonical identifier, and Jira authority comes from the configured site. API-returned canonical URLs are checked against that authority. A checkout's primary repository origin does not constrain Library imports. Provider CLIs and the user's external credential setup own tokens and logins; Cockpit does not create or store secrets. A missing login, unavailable adapter or unsupported artifact returns an explicit failure.
 
 The global Context Library is rooted at `library_root` (TOML or `COCKPIT_LIBRARY_ROOT`; default `$XDG_DATA_HOME/cockpit/library`, falling back to `~/.local/share/cockpit/library`). For example:
@@ -85,7 +97,7 @@ library_root = "/data/cockpit/library"
 library_max_items = 20000
 ```
 
-The Library root must be absolute, contain no `..`, and must not overlap the state, companion, or worktree roots. The limits shown are defaults; configured values are bounded. S2 stores and browses Library items, refreshes providers, and adds saved items into a live Space; S3 adds explicit per-Space update, replace, and remove. Updates affect only the selected Space, restore missing files, skip edited copies, and use expected-hash compare-and-swap before replacing/removing edited files. Library refresh never writes to Space companions. Confluence, follow, and attachment actions remain deferred to S5–S7.
+The Library root must be absolute, contain no `..`, and must not overlap the state, companion, or worktree roots. The limits shown are defaults; configured values are bounded. The Library stores and browses source snapshots, refreshes providers, and adds saved items into a live Space. S3 adds explicit per-Space update, replace, and remove. Updates affect only the selected Space, restore missing files, skip edited copies, and use expected-hash compare-and-swap before replacing/removing edited files. Library refresh never writes to Space companions. Confluence page snapshots include read-only attachment metadata but no attachment bytes; whole-space follow and attachment downloads are not part of this slice.
 
 Setup passes `Arc<LibraryService>` and validated fetch results through `ProjectService::start` and its execution boundary; `resume` passes the Library dependency without retaining provider results. Do not store LibraryService on ProjectService: LibraryService already owns ProjectService for fresh Space/companion authorization. Both HTTP and Tauri compose the same acyclic graph. Pre-start validation fetches without persistence, and `add_fetched_and_copy` commits the validated primary and linked assets plus their pending attempts in one Library operation before any companion copy starts. A failed copy is durable and resumes through `start_space_add`, without provider refetch. `SourceService` has no disk cache or persisted import/list/refresh routes, and the old `<state_root>/sources` contents must remain untouched.
 

@@ -1,0 +1,14 @@
+{
+  "attachmentCount": 1,
+  "attachments": [
+    {
+      "id": "att101",
+      "title": "release-flow.png",
+      "mediaType": "image/png",
+      "fileSize": 2048,
+      "fileSizeFormatted": "2 KB",
+      "version": 1,
+      "downloadLink": "https://nnexai.atlassian.net/wiki/download/attachments/123456789/release-flow.png?version=1&modificationDate=1790000000000&api=v2"
+    }
+  ]
+}

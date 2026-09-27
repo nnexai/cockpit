@@ -1,0 +1,14 @@
+{
+  "id": "524301",
+  "title": "Release Checklist",
+  "space": {
+    "key": "ENG",
+    "name": "Engineering",
+    "type": "global",
+    "_links": {
+      "webui": "/display/ENG",
+      "self": "https://confluence.example.com/confluence/rest/api/space/ENG"
+    }
+  },
+  "url": "/display/ENG/Release+Checklist"
+}

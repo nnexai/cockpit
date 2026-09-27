@@ -265,18 +265,27 @@ type SourceMetadata = {
   canonicalId: string | null;
   provider: string | null;
   fetchedAt: string | null;
+  /** A Confluence page's last edit (P10 `last_modified`, `last_modified_by`). */
+  lastModified: string | null;
+  lastModifiedBy: string | null;
 };
+
+const SOURCE_METADATA_KEYS: Record<string, true> = { canonical_id: true, fetched_at: true, provider: true, last_modified: true, last_modified_by: true };
 
 function sourceMetadata(source: string): SourceMetadata {
   const lines = splitSourceLines(source);
-  if (lines[0]?.text.trim() !== "---") return { canonicalId: null, provider: null, fetchedAt: null };
   const fields: Record<string, string> = {};
-  for (const line of lines.slice(1)) {
+  if (lines[0]?.text.trim() === "---") for (const line of lines.slice(1)) {
     if (line.text.trim() === "---" || line.text.trim() === "...") break;
     const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.text);
-    if (match && (match[1] === "canonical_id" || match[1] === "fetched_at" || match[1] === "provider")) fields[match[1]] = match[2];
+    if (match && SOURCE_METADATA_KEYS[match[1]]) fields[match[1]] = match[2];
   }
-  return { canonicalId: fields.canonical_id ?? null, provider: fields.provider ?? null, fetchedAt: fields.fetched_at ?? null };
+  // Page fields are written as JSON-quoted scalars.
+  const scalar = (value: string | undefined): string | null => {
+    if (!value) return null;
+    try { return value.startsWith("\"") ? String(JSON.parse(value)) : value; } catch { return value; }
+  };
+  return { canonicalId: fields.canonical_id ?? null, provider: fields.provider ?? null, fetchedAt: fields.fetched_at ?? null, lastModified: scalar(fields.last_modified), lastModifiedBy: scalar(fields.last_modified_by) };
 }
 
 /** Preview-limit diagnostics are already explained by the bounded-window notice. */
@@ -1366,7 +1375,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         }
         if (!library.listing) return <div className="context-empty">Loading…</div>;
         if (library.listing.items.length === 0) {
-          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request, Jira issue, or a folder. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add context…</button></div></div>;
+          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request, Jira issue, Confluence page, or a folder. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add context…</button></div></div>;
         }
         return <div className="context-empty">Select a Library item to read it.</div>;
       }
@@ -1408,7 +1417,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       );
       return (
         <>
-          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} space={itemSpace(selectedLibraryItem)} /> : <div className="context-document-header">
+          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} space={itemSpace(selectedLibraryItem)} pageUpdate={{ at: metadata.lastModified, by: metadata.lastModifiedBy }} /> : <div className="context-document-header">
             {metadata.canonicalId ? <span className="document-source-kind">{metadata.provider ?? "Issue"}</span> : null}<strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
 
