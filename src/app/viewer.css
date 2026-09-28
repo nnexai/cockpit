@@ -476,11 +476,16 @@
 .review-pane .review-toolbar > button { min-height: 26px; padding: 4px 5px; }
 .viewer-wrap-toggle[aria-pressed="true"] { color: var(--text-primary); background: var(--surface-selected); }
 
+/* Not inherited: changing the width while dragging restyles only the viewer body, not every tree row and document node below it. */
+@property --viewer-tree-width { syntax: "<length>"; inherits: false; initial-value: 176px; }
 .context-viewer .context-body,
 .review-pane .review-body { position: relative; }
 .context-viewer .context-body.has-file-overview,
 .review-pane .review-body.has-file-overview { grid-template-columns: min(var(--viewer-tree-width, 176px), 60%) minmax(0, 1fr); }
-.viewer-splitter { position: absolute; z-index: var(--z-raised); top: 0; bottom: 0; left: calc(min(var(--viewer-tree-width, 176px), 60%) - 3px); width: 6px; cursor: col-resize; touch-action: none; }
+/* `left` is set inline from the same width. */
+.viewer-splitter { position: absolute; z-index: var(--z-raised); top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
+/* Off-screen rows skip layout and paint, so resizing a tree of thousands of pages only lays out what is visible. */
+.context-viewer .context-tree-node { content-visibility: auto; contain-intrinsic-size: auto 28px; }
 .viewer-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: transparent; transition: background 80ms; }
 .viewer-splitter:hover::after,
 .viewer-splitter:focus-visible::after,

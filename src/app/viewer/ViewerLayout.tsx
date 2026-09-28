@@ -55,23 +55,36 @@ export function useTreeWidth() {
   return { width, setWidth, style };
 }
 
+/** Splitter left edge, in step with the grid column in viewer.css. */
+const splitterLeft = (width: number) => `calc(min(${width}px, 60%) - 3px)`;
+
 export function TreeSplitter({ width, onChange }: { width: number; onChange: (width: number, persist?: boolean) => void }) {
-  const drag = useRef<{ pointer: number; startX: number; startWidth: number; width: number } | null>(null);
+  const drag = useRef<{ pointer: number; startX: number; startWidth: number; width: number; frame: number } | null>(null);
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { pointer: event.pointerId, startX: event.clientX, startWidth: width, width };
+    drag.current = { pointer: event.pointerId, startX: event.clientX, startWidth: width, width, frame: 0 };
   };
+  // While dragging, write the width straight to the layout, once per frame: re-rendering the
+  // viewer (and a tree of thousands of rows) on every pointer move made resizing lag.
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
     if (!current || current.pointer !== event.pointerId) return;
     current.width = clampWidth(current.startWidth + event.clientX - current.startX);
-    onChange(current.width, false);
+    if (current.frame) return;
+    const splitter = event.currentTarget;
+    current.frame = requestAnimationFrame(() => {
+      current.frame = 0;
+      splitter.parentElement?.style.setProperty("--viewer-tree-width", `${current.width}px`);
+      splitter.style.left = splitterLeft(current.width);
+      splitter.setAttribute("aria-valuenow", String(current.width));
+    });
   };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
     if (!current || current.pointer !== event.pointerId) return;
+    cancelAnimationFrame(current.frame);
     drag.current = null;
     onChange(current.width);
   };
@@ -86,7 +99,7 @@ export function TreeSplitter({ width, onChange }: { width: number; onChange: (wi
     }
   };
   return <div className="viewer-splitter" role="separator" aria-orientation="vertical" aria-label="Resize file list" title="Drag to resize · double-click to reset"
-    tabIndex={0} aria-valuemin={MIN_TREE_WIDTH} aria-valuemax={MAX_TREE_WIDTH} aria-valuenow={width}
+    tabIndex={0} aria-valuemin={MIN_TREE_WIDTH} aria-valuemax={MAX_TREE_WIDTH} aria-valuenow={width} style={{ left: splitterLeft(width) }}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
     onDoubleClick={() => onChange(DEFAULT_TREE_WIDTH)} onKeyDown={onKeyDown} />;
 }
