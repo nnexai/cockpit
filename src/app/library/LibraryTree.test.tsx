@@ -122,7 +122,12 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
   const key = (target: HTMLElement, name: string, init: KeyboardEventInit = {}) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, ...init })); });
   try {
     await act(async () => root.render(<LibraryTree items={[solo, child, mixed]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
-    // Child pages come first, then the page's Attachments group; page-tree order is kept.
+    // Child pages come first, then the page's Attachments group, folded until opened; page-tree order is kept.
+    expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home",
+      "Release process", "Release checklist", "Attachments (1)", "Architecture overview", "Attachments (2)"]);
+    expect(named("Attachments (1)").getAttribute("aria-expanded")).toBe("false");
+    await act(async () => named("Attachments (1)").click());
+    await act(async () => named("Attachments (2)").click());
     expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home",
       "Release process", "Release checklist", "Attachments (1)", "runbook.pdf",
       "Architecture overview", "Attachments (2)", "release-flow.png", "Q3_plan_.pdf"]);

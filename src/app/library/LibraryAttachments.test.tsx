@@ -71,6 +71,7 @@ it("keeps metadata-only selection local, polls an explicit download, then opens 
   vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:s7-png"), revokeObjectURL: vi.fn() });
   try {
     await act(async () => root.render(<Harness />)); await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>(".library-tree-group.is-attachments")!.click());
     await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="png"]')!.click()); await flush();
     expect(host.textContent).toContain("Not downloaded. 68 bytes · image/png · version 1.");
     expect(client.libraryMedia).not.toHaveBeenCalled();

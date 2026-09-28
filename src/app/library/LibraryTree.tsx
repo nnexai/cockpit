@@ -249,6 +249,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   pendingItemIds: ReadonlySet<string>;
   actions: LibraryItemActions;
 }) {
+  // Keys the user toggled: other rows start open, `Attachments (N)` groups start folded.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [menu, setMenu] = useState<Menu | null>(null);
   const [removing, setRemoving] = useState<LibraryFollowSummary | null>(null);
@@ -269,7 +270,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         pushPages(page.children, depth + 1, page.key);
         if (!page.item || attachments.length === 0) continue;
         const groupKey = `${page.key}\u0000attachments`;
-        const groupOpen = !collapsed.has(groupKey);
+        const groupOpen = collapsed.has(groupKey);
         visible.push({ kind: "attachments", key: groupKey, depth: depth + 1, parent: page.key, item: page.item, open: groupOpen });
         if (groupOpen) for (const attachment of attachments) visible.push({ kind: "attachment", key: attachment.attachment_id, depth: depth + 2, parent: groupKey, item: page.item, attachment });
       }

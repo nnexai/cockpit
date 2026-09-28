@@ -177,7 +177,8 @@ const MAX_RETAINED_FILE_STATES = 64;
 const MAX_RETAINED_DIRECTORY_STATES = 128;
 const MAX_RETAINED_EXPANDED_DIRECTORIES = 64;
 const MAX_RETAINED_DOCUMENT_BYTES = 8 * 1024 * 1024;
-const MAX_PICKER_DIRECTORIES = 512;
+const MAX_PICKER_DIRECTORIES = 10_000;
+const PICKER_DIRECTORY_CONCURRENCY = 8;
 const MAX_PICKER_FILES = 10_000;
 
 function retainedDocumentBytes(state: DocumentState | undefined): number {
@@ -988,16 +989,14 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       const visited = new Set<string>();
       const entries = new Map<string, ContextEntry>();
       let incomplete = false;
-      while (pending.length > 0 && visited.size < MAX_PICKER_DIRECTORIES && entries.size < MAX_PICKER_FILES && !controller.signal.aborted) {
-        const path = pending.shift()!;
-        if (visited.has(path)) continue;
-        visited.add(path);
+      let stale = false;
+      const readDirectory = async (path: string) => {
         try {
           let offset: number | undefined;
           let revision: string | undefined;
           do {
             const data = await reader.directory({ root_id: root.root_id, path, offset, revision }, controller.signal);
-            if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) return;
+            if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) { stale = true; return; }
             incomplete ||= data.truncated;
             for (const entry of data.entries) {
               if (!entry.path || entry.path.split("/").includes(".cockpit")) continue;
@@ -1009,14 +1008,32 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
             }
             offset = data.next_offset;
             revision = data.revision;
-            setPickerIndex({ loading: true, incomplete, entries: new Map(entries) });
           } while (offset !== undefined && !controller.signal.aborted && entries.size < MAX_PICKER_FILES);
         } catch {
-          if (controller.signal.aborted || pickerGeneration.current !== generation) return;
+          if (controller.signal.aborted || pickerGeneration.current !== generation) { stale = true; return; }
           incomplete = true;
         }
+      };
+      // A bounded pool of folder reads: a followed space stores each page as its own folder.
+      const inFlight = new Set<Promise<void>>();
+      let lastPublished = 0;
+      while (!stale && !controller.signal.aborted && (pending.length > 0 || inFlight.size > 0)) {
+        while (pending.length > 0 && inFlight.size < PICKER_DIRECTORY_CONCURRENCY && visited.size < MAX_PICKER_DIRECTORIES && entries.size < MAX_PICKER_FILES) {
+          const path = pending.shift()!;
+          if (visited.has(path)) continue;
+          visited.add(path);
+          const read: Promise<void> = readDirectory(path).finally(() => inFlight.delete(read));
+          inFlight.add(read);
+        }
+        if (inFlight.size === 0) break;
+        await Promise.race(inFlight);
+        if (!stale && Date.now() - lastPublished > 100) {
+          lastPublished = Date.now();
+          setPickerIndex({ loading: true, incomplete, entries: new Map(entries) });
+        }
       }
-      if (pending.length > 0 || visited.size >= MAX_PICKER_DIRECTORIES || entries.size >= MAX_PICKER_FILES) incomplete = true;
+      if (stale) return;
+      if (pending.some((path) => !visited.has(path)) || visited.size >= MAX_PICKER_DIRECTORIES || entries.size >= MAX_PICKER_FILES) incomplete = true;
       if (!controller.signal.aborted && pickerGeneration.current === generation && requestIdentityRef.current === requestIdentity) setPickerIndex({ loading: false, incomplete, entries });
     })();
   }, [bindingId, identityKey, reader, root]);
