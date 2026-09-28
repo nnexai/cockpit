@@ -744,13 +744,40 @@ async fn subscription_and_terminal_are_delegated() {
 }
 
 #[tokio::test]
-async fn terminal_rejects_pane_reported_in_a_hidden_tab() {
+async fn terminal_attaches_to_a_pane_in_an_unfocused_tab() {
     let adapter = fake();
     let snapshots = adapter.snapshots.clone();
     let terminals = adapter.terminal_calls.clone();
-    let mut hidden = snapshot("session-a");
-    hidden.panes[0].tab_id = "tab-2".into();
-    *snapshots.lock().await = Ok(hidden);
+    let mut other_focus = snapshot("session-a");
+    other_focus.focused_tab_id = Some("tab-2".into());
+    *snapshots.lock().await = Ok(other_focus);
+    let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
+
+    service
+        .open_terminal(&TerminalOpenRequest {
+            session_id: "session-a".into(),
+            pane_id: "pane-1".into(),
+            mode: TerminalMode::Control,
+            takeover: false,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(terminals.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn terminal_rejects_pane_missing_from_its_tab_layout() {
+    let adapter = fake();
+    let snapshots = adapter.snapshots.clone();
+    let terminals = adapter.terminal_calls.clone();
+    let mut moved = snapshot("session-a");
+    moved.panes[0].tab_id = "tab-2".into();
+    *snapshots.lock().await = Ok(moved);
     let service = CockpitService::new(CockpitMode::Normal, Arc::new(adapter));
 
     let error = service
@@ -770,8 +797,8 @@ async fn terminal_rejects_pane_reported_in_a_hidden_tab() {
     assert_eq!(
         error,
         InspectionError::new(
-            "pane_not_visible",
-            "terminal pane is not visible in the focused tab"
+            "pane_not_in_layout",
+            "terminal pane is not in its tab's layout"
         )
     );
     assert!(terminals.lock().await.is_empty());
@@ -802,7 +829,7 @@ async fn terminal_rejects_missing_pane_before_adapter_launch() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.code, "pane_not_visible");
+    assert_eq!(error.code, "pane_not_in_layout");
     assert!(terminals.lock().await.is_empty());
 }
 

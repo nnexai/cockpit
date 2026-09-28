@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { FocusRequest, FocusResponse } from "../../protocol/generated/v1";
 import type { SessionAction, SessionState } from "./sessionStore";
-import { useFocusCoordinator, type FocusLocation } from "./focusCoordinator";
+import { FOCUS_PREPARE_MS, useFocusCoordinator, type FocusLocation } from "./focusCoordinator";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -52,7 +52,8 @@ function accepted(id: string): FocusResponse {
 const location: FocusLocation = { spaceId: "space-1", tabId: null, paneId: null };
 
 type MountedCoordinator = {
-  focus(request: FocusRequest, location: FocusLocation): void;
+  focus(request: FocusRequest, location: FocusLocation, prepare?: { paneId: string }): void;
+  panePrepared(paneId: string): void;
   reset(): void;
   setState(state: SessionState): void;
   unmount(): Promise<void>;
@@ -78,7 +79,8 @@ function mountCoordinator(client: CockpitClient, dispatch: (action: SessionActio
   const root = createRoot(host);
   act(() => { root.render(<Harness />); });
   return {
-    focus(request, nextLocation) { coordinator!.focus(request, nextLocation); },
+    focus(request, nextLocation, prepare) { coordinator!.focus(request, nextLocation, prepare); },
+    panePrepared(paneId) { coordinator!.panePrepared(paneId); },
     reset() { coordinator!.reset(); },
     setState(state) { stateRef.current = state; },
     async unmount() { await act(async () => { root.unmount(); }); host.remove(); },
@@ -229,5 +231,50 @@ describe("useFocusCoordinator", () => {
       code: "focus_error",
       message: "offline",
     }));
+  });
+
+  describe("preparing the target pane before Herdr focuses its tab", () => {
+    it("sends focus once the pane reports its first frame, not before", async () => {
+      const focus = vi.fn().mockResolvedValue(accepted("tab-a"));
+      const coordinator = mountCoordinator({ focus } as unknown as CockpitClient, vi.fn());
+      mounted.push(coordinator);
+      await act(async () => { coordinator.focus(request("tab-a"), location, { paneId: "pane-a" }); });
+      expect(focus).not.toHaveBeenCalled();
+      await act(async () => { coordinator.panePrepared("other-pane"); });
+      expect(focus).not.toHaveBeenCalled();
+      await act(async () => { coordinator.panePrepared("pane-a"); await settlePromises(); });
+      expect(focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("focuses anyway when the pane never attaches", async () => {
+      vi.useFakeTimers();
+      try {
+        const focus = vi.fn().mockResolvedValue(accepted("tab-a"));
+        const coordinator = mountCoordinator({ focus } as unknown as CockpitClient, vi.fn());
+        mounted.push(coordinator);
+        await act(async () => { coordinator.focus(request("tab-a"), location, { paneId: "pane-a" }); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(FOCUS_PREPARE_MS - 1); });
+        expect(focus).not.toHaveBeenCalled();
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        expect(focus).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("drops a waiting request when a newer focus supersedes it", async () => {
+      const focus = vi.fn().mockResolvedValue(accepted("tab-b"));
+      const coordinator = mountCoordinator({ focus } as unknown as CockpitClient, vi.fn());
+      mounted.push(coordinator);
+      await act(async () => {
+        coordinator.focus(request("tab-a"), location, { paneId: "pane-a" });
+        coordinator.focus(request("tab-b"), location);
+        await settlePromises();
+      });
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenLastCalledWith("session-1", request("tab-b"));
+      await act(async () => { coordinator.panePrepared("pane-a"); await settlePromises(); });
+      expect(focus).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -456,7 +456,7 @@ impl CockpitService {
             .await?;
         self.session_result(
             &request.session_id,
-            validate_terminal_pane_visible(&request.session_id, &request.pane_id, &snapshot),
+            validate_terminal_pane_in_layout(&request.session_id, &request.pane_id, &snapshot),
         )
         .await?;
         self.session_result(
@@ -834,33 +834,36 @@ fn validate_snapshot_session(
         ))
     }
 }
-fn validate_terminal_pane_visible(
+/// A terminal may attach while its tab is not focused, so the client can size
+/// the pane before Herdr shows it; the pane only has to be in its own tab's layout.
+fn validate_terminal_pane_in_layout(
     session_id: &str,
     pane_id: &str,
     snapshot: &SessionSnapshotResponse,
 ) -> Result<(), InspectionError> {
     validate_snapshot_session(session_id, snapshot)?;
-    let Some(focused_tab_id) = snapshot.focused_tab_id.as_deref() else {
-        return Err(pane_not_visible());
-    };
-    let belongs_to_focused_tab = snapshot
+    let Some(tab_id) = snapshot
         .panes
         .iter()
-        .any(|pane| pane.id == pane_id && pane.tab_id == focused_tab_id);
-    let present_in_focused_layout = snapshot.layouts.iter().any(|layout| {
-        layout.tab_id == focused_tab_id && layout.panes.iter().any(|pane| pane.pane_id == pane_id)
+        .find(|pane| pane.id == pane_id)
+        .map(|pane| pane.tab_id.as_str())
+    else {
+        return Err(pane_not_in_layout());
+    };
+    let present_in_layout = snapshot.layouts.iter().any(|layout| {
+        layout.tab_id == tab_id && layout.panes.iter().any(|pane| pane.pane_id == pane_id)
     });
-    if belongs_to_focused_tab && present_in_focused_layout {
+    if present_in_layout {
         Ok(())
     } else {
-        Err(pane_not_visible())
+        Err(pane_not_in_layout())
     }
 }
 
-fn pane_not_visible() -> InspectionError {
+fn pane_not_in_layout() -> InspectionError {
     InspectionError::new(
-        "pane_not_visible",
-        "terminal pane is not visible in the focused tab",
+        "pane_not_in_layout",
+        "terminal pane is not in its tab's layout",
     )
 }
 

@@ -236,6 +236,31 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
+  it("focuses a switched-to terminal only once it is painted and control is confirmed", async () => {
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const render = (overrides: Partial<Parameters<typeof TerminalPane>[0]>) => act(async () => {
+      root.render(<TerminalPane {...paneProps(client, false, overrides)} />);
+      await settle();
+    });
+    try {
+      await render({ controlAllowed: false, controlPending: true, presented: false });
+      const terminal = mocks.terminals.at(-1)!;
+      terminal.focus.mockClear();
+      await render({ controlAllowed: true, controlPending: false, presented: false });
+      expect(terminal.focus).not.toHaveBeenCalled();
+      await render({ controlAllowed: true, controlPending: false, presented: true });
+      expect(terminal.focus).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("waits to attach a hidden incoming tab terminal", async () => {
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];

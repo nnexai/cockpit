@@ -25,6 +25,8 @@ export type TerminalPaneProps = {
   client: CockpitClient;
   request: Omit<TerminalOpenRequest, "mode" | "takeover" | "cols" | "rows" | "cell_width_px" | "cell_height_px">;
   selected: boolean;
+  /** Whether the pane is painted; a hidden element cannot take DOM focus, so a tab switch focuses only once its pane is shown. */
+  presented?: boolean;
   controlAllowed: boolean;
   controlPending: boolean;
   focusEpoch: number;
@@ -229,7 +231,7 @@ function validTerminalGrid(cols: number, rows: number): boolean {
     && cols > 0 && rows > 0 && cols <= 65535 && rows <= 65535;
 }
 
-export function TerminalPane({ client, request, selected, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, presented = true, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -323,7 +325,6 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   selectedRef.current = selected;
   const focusOnAttachRef = useRef(focusOnAttach);
   focusOnAttachRef.current = focusOnAttach;
-  const wasControlAllowedRef = useRef(controlAllowed);
   const onRequestControlRef = useRef(onRequestControl);
   onRequestControlRef.current = onRequestControl;
   const onSelectRef = useRef(onSelect);
@@ -556,11 +557,13 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
   useEffect(() => {
     if (selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
   }, [deferAttachment, focusEpoch, selected, terminalReady]);
+  const wasInputReadyRef = useRef(controlAllowed && presented);
   useEffect(() => {
-    const regainedControl = controlAllowed && !wasControlAllowedRef.current;
-    wasControlAllowedRef.current = controlAllowed;
-    if (regainedControl && selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
-  }, [controlAllowed, deferAttachment, selected, terminalReady]);
+    const inputReady = controlAllowed && presented;
+    const gainedInput = inputReady && !wasInputReadyRef.current;
+    wasInputReadyRef.current = inputReady;
+    if (gainedInput && selected && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
+  }, [controlAllowed, deferAttachment, presented, selected, terminalReady]);
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
@@ -730,8 +733,8 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
           : null;
       const code = typed?.operationCode ?? typed?.code;
       const message = typed?.message ?? "";
-      const visibilityRace = code === "pane_not_visible"
-        || /not visible in the focused tab|terminal websocket closed/i.test(message);
+      const visibilityRace = code === "pane_not_in_layout"
+        || /not in its tab's layout|terminal websocket closed/i.test(message);
       if (!visibilityRace || retryScheduled || attachRetryCountRef.current >= 4) return false;
       const delay = 40 * 2 ** attachRetryCountRef.current;
       attachRetryCountRef.current += 1;
