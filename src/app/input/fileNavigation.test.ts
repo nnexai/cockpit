@@ -3,15 +3,33 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { FilePicker } from "./FilePicker";
-import { FILE_NAVIGATION_EVENT, rankFileMatches, rankFuzzyMatches } from "./fileNavigation";
+import { FILE_NAVIGATION_EVENT, filePathParts, rankFileMatches, rankFuzzyMatches } from "./fileNavigation";
 
 describe("file navigation", () => {
-  it("uses case-insensitive subsequence matches and favors contiguous basename matches", () => {
+  it("uses case-insensitive subsequence matches and favors basename matches", () => {
     expect(rankFileMatches("ctx", [
       { id: "spread", path: "src/context/ContextViewer.tsx" },
       { id: "basename", path: "src/ctx.ts" },
-      { id: "later", path: "src/components/contextual.ts" },
-    ]).map((match) => match.id)).toEqual(["basename", "spread", "later"]);
+      { id: "directory", path: "ctx/readme.md" },
+    ]).map((match) => match.id)).toEqual(["basename", "spread", "directory"]);
+  });
+  it("prefers the page title over a matching Library ancestor and takes path tokens in any order", () => {
+    const pages = [
+      { id: "under-deploy", path: "confluence/site/SD - Software/Deploy guide/Rollback/Rollback.md" },
+      { id: "deploy", path: "confluence/site/OPS - Operations/Deploy/Deploy.md" },
+      { id: "sd-deploy", path: "confluence/site/SD - Software/Release/Deploy checklist/Deploy checklist.md" },
+    ];
+    expect(rankFileMatches("deploy", pages).map((match) => match.id)).toEqual(["deploy", "sd-deploy", "under-deploy"]);
+    expect(rankFileMatches("deploy sd", pages).map((match) => match.id)).toEqual(["sd-deploy", "deploy", "under-deploy"]);
+    const [match] = rankFileMatches("soft chk", [pages[2]]);
+    const characters = Array.from(pages[2].path);
+    expect(match.matchedIndices.filter((index) => index >= characters.lastIndexOf("/")).map((index) => characters[index]).join("")).toBe("chk");
+  });
+  it("splits display paths into title, extension and parents without the duplicated page folder", () => {
+    const parts = filePathParts("confluence/site/SD/Parent/Page/Page.md");
+    expect([parts.stem, parts.extension, parts.directories.map((directory) => directory.text)]).toEqual(["Page", ".md", ["confluence", "site", "SD", "Parent"]]);
+    expect(filePathParts("src/ctx.ts").directories.map((directory) => directory.text)).toEqual(["src"]);
+    expect(filePathParts(".env")).toMatchObject({ stem: ".env", extension: "", directories: [] });
   });
   it("ranks generic command candidates with the same subsequence positions", () => {
     const matches = rankFuzzyMatches("nsp", [
@@ -73,7 +91,7 @@ describe("file navigation", () => {
         input.dispatchEvent(new Event("input", { bubbles: true }));
       });
       expect([...host.querySelectorAll("mark")].map((mark) => mark.textContent).join("")).toBe("ff2");
-      expect(host.querySelector("[aria-selected='true'] code")?.textContent).toBe("focus-file-02.md");
+      expect(host.querySelector("[aria-selected='true']")?.getAttribute("title")).toBe("focus-file-02.md");
       expect(document.activeElement).toBe(input);
     } finally {
       await act(async () => mounted.unmount());

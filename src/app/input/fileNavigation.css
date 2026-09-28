@@ -2,10 +2,17 @@
 .file-picker input { min-height: 32px; margin: 8px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--terminal-bg); color: var(--text-primary); font: inherit; }
 .file-picker-status, .file-picker-help { margin: 0; padding: 4px 8px; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .file-picker-results { min-height: 0; overflow: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.file-picker-results button { display: flex; width: 100%; min-height: 28px; align-items: center; gap: 8px; padding: 4px 8px; border: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.file-picker-results button { display: flex; width: 100%; min-height: 28px; align-items: center; gap: 8px; padding: 5px 8px; border: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .file-picker-results button.is-active { background: var(--surface-selected); }
-.file-picker-results code { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; }
-.file-picker-results span { color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.file-picker-label { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.file-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-picker-extension { color: var(--text-secondary); }
+/* Segments shrink root-first (inline flex-shrink weights), keeping the nearest parents readable. */
+.file-picker-path { display: flex; min-width: 0; color: var(--text-secondary); font-size: var(--font-size-2xs); white-space: nowrap; }
+.file-picker-segment { min-width: 1.5ch; overflow: hidden; text-overflow: ellipsis; flex-grow: 0; flex-basis: auto; }
+.file-picker-segment + .file-picker-segment::before { content: "›"; padding-inline: 5px; opacity: .6; }
+.file-picker-segment:last-child { min-width: min(12ch, 50%); }
+.file-picker-detail { flex: 0 0 auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .file-picker-results p { padding: 8px; margin: 0; color: var(--text-secondary); }
 
 .file-picker-results mark { background: transparent; color: var(--focus-strong); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }

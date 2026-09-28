@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { rankFileMatches, type FileNavigationCandidate } from "./fileNavigation";
+import { filePathParts, rankFileMatches, type FileNavigationCandidate, type FileNavigationMatch } from "./fileNavigation";
 import "./fileNavigation.css";
 
 export function FilePicker({ candidates, loading = false, incomplete = false, onChoose, onDismiss }: {
@@ -59,9 +59,26 @@ export function FilePicker({ candidates, loading = false, incomplete = false, on
     <input ref={inputRef} type="search" aria-label="Find file" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a file" autoComplete="off" />
     <p className="file-picker-status">{loading ? "Indexing files…" : `${candidates.length} files`}{incomplete ? " · index incomplete" : ""}</p>
     <div role="listbox" aria-label="Matching files" className="file-picker-results">
-      {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => onChoose(candidate)}><code>{Array.from(candidate.path, (character, characterIndex) => candidate.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</code>{candidate.detail ? <span>{candidate.detail}</span> : null}</button>)}
+      {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} title={candidate.path} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => onChoose(candidate)}><FileLabel candidate={candidate} />{candidate.detail ? <span className="file-picker-detail">{candidate.detail}</span> : null}</button>)}
       {!loading && matches.length === 0 ? <p>No matching files.</p> : null}
     </div>
     <p className="file-picker-help">↑↓ or Ctrl+N/P to choose · Enter to open · Esc to close</p>
   </section>;
+}
+
+function highlighted(text: string, start: number, matched: ReadonlySet<number>) {
+  return Array.from(text, (character, offset) => matched.has(start + offset) ? <mark key={offset}>{character}</mark> : character);
+}
+
+/** File name first; its directories below, trimmed from the root side so the
+ * nearest parents stay readable. */
+function FileLabel({ candidate }: { candidate: FileNavigationMatch }) {
+  const parts = filePathParts(candidate.path);
+  const matched = new Set(candidate.matchedIndices);
+  const stemLength = Array.from(parts.stem).length;
+  const depth = parts.directories.length;
+  return <span className="file-picker-label">
+    <span className="file-picker-name">{highlighted(parts.stem, parts.nameStart, matched)}<span className="file-picker-extension">{highlighted(parts.extension, parts.nameStart + stemLength, matched)}</span></span>
+    {depth > 0 ? <span className="file-picker-path">{parts.directories.map((directory, index) => <span key={directory.start} className="file-picker-segment" style={{ flexShrink: 2 ** (depth - 1 - index) }}>{highlighted(directory.text, directory.start, matched)}</span>)}</span> : null}
+  </span>;
 }

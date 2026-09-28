@@ -1558,6 +1558,12 @@ fn search_continuations_validate_endpoint_and_preserve_only_typed_cursors() {
         provider.search_continuation(&next, "SD", 100, "version,ancestors,space").unwrap(),
         Some(SearchPage::Cursor("opaque".into()))
     );
+    // Shape returned by nnexai.atlassian.net: relative link, `next=true`, cursor plus start.
+    let real = json!({"_links":{"base":CLOUD,"next":"/rest/api/content/search?next=true&cursor=_t_WyJcdDE5MzMzMTMiXQ%3D%3D_h_W10%3D&expand=version,ancestors,space&limit=25&start=25&cql=space%3D%22SD%22+and+type%3Dpage"}});
+    assert_eq!(
+        provider.search_continuation(&real, "SD", 25, "version,ancestors,space").unwrap(),
+        Some(SearchPage::Cursor("_t_WyJcdDE5MzMzMTMiXQ==_h_W10=".into()))
+    );
     for bad in [
         "https://evil.test/wiki/rest/api/content/search?cql=space%3D%22SD%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&cursor=opaque",
         "https://nnexai.atlassian.net/wiki/rest/api/other?cql=space%3D%22SD%22+and+type%3Dpage&limit=100&expand=version%2Cancestors%2Cspace&cursor=opaque",

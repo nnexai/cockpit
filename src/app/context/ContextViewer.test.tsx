@@ -167,7 +167,7 @@ it("indexes unopened nested files for the picker and opens the selected result",
     expect(directory.mock.calls.map((call) => call[2].path)).toContain("nested");
     expect(directory.mock.calls.map((call) => call[2].path)).not.toContain(".cockpit");
     expect(host.querySelector(".file-picker-results")?.textContent).not.toContain(".cockpit");
-    const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.textContent?.includes("nested/target.md"));
+    const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.title.includes("nested/target.md"));
     expect(result).toBeDefined();
     await act(async () => result?.click());
     await settle();
@@ -501,7 +501,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     row.focus();
     await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
     await flush();
-    const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.textContent?.includes("docs/guide.md"));
+    const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.title.includes("docs/guide.md"));
     await act(async () => result!.click());
     await flush();
     expect(client.libraryDocument).toHaveBeenCalledWith(expect.objectContaining({ path: "folders/Design notes/docs/guide.md" }), expect.any(AbortSignal));

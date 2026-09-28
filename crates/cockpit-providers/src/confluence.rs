@@ -1021,22 +1021,26 @@ impl ConfluenceSourceProvider {
         let mut cql = None;
         let mut found_limit = None;
         let mut found_expand = None;
-        let mut continuation = None;
+        let mut cursor = None;
+        let mut start = None;
+        let mut next_flag = false;
         for (name, value) in pairs {
             match name.as_str() {
                 "cql" if cql.is_none() => cql = Some(value),
                 "limit" if found_limit.is_none() => found_limit = Some(value),
                 "expand" if found_expand.is_none() => found_expand = Some(value),
-                "cursor" if continuation.is_none() => continuation = Some(SearchPage::Cursor(value)),
-                "start" if continuation.is_none() => {
-                    let start = value.parse::<u64>().ok()
+                "cursor" if cursor.is_none() => cursor = Some(value),
+                // Cloud cursor links also carry `next=true` and a `start` offset.
+                "next" if !next_flag && value == "true" => next_flag = true,
+                "start" if start.is_none() => {
+                    start = Some(value.parse::<u64>().ok()
                         .filter(|start| start.to_string() == value)
-                        .ok_or_else(|| contract("Confluence search offset is malformed"))?;
-                    continuation = Some(SearchPage::Start(start));
+                        .ok_or_else(|| contract("Confluence search offset is malformed"))?);
                 }
                 _ => return Err(contract("Confluence search continuation has altered query parameters")),
             }
         }
+        let continuation = cursor.map(SearchPage::Cursor).or(start.map(SearchPage::Start));
         if cql.as_deref() != Some(expected_cql.as_str())
             || found_limit.as_deref() != Some(limit.to_string().as_str())
             || found_expand.as_deref() != Some(expand)
