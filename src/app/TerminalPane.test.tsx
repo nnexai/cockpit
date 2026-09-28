@@ -599,7 +599,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
   it("uses the final DOM renderer metrics and visible scrollbar options", () => {
     const terminal = createCockpitTerminal(16);
     expect(terminal.options).toMatchObject({
-      fontFamily: 'ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
+      fontFamily: '"IosevkaTerm Nerd Font Mono", ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
       fontSize: 16,
       lineHeight: 1,
       scrollbar: { showScrollbar: false, width: 8 },

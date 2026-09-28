@@ -149,5 +149,5 @@
 
 .review-file-stats { display: flex; justify-content: flex-end; gap: 5px; grid-column: 4; }
 .review-file-stats em { font-style: normal; }
-.review-file-stats .is-added { color: #98c88b; }
-.review-file-stats .is-deleted { color: #e68b97; }
+.review-file-stats .is-added { color: #a6e3a1; }
+.review-file-stats .is-deleted { color: #f38ba8; }

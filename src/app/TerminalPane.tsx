@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
@@ -54,37 +55,47 @@ function applicationFontSize(): number {
   return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16;
 }
 
-// Cockpit's default 16-color terminal preset. Applications' true-color ANSI
-// sequences remain untouched; only terminal palette indices use these colors.
+// 16-color palette from Solarized Dark Patched (the Ghostty theme this terminal
+// is matched against) on Cockpit's neutral background. Applications' true-color
+// ANSI sequences remain untouched; only terminal palette indices use these colors.
 const terminalTheme = {
   background: "#0c1016",
-  foreground: "#d8dee8",
-  cursor: "#d8dee8",
+  foreground: "#708284",
+  cursor: "#708284",
   cursorAccent: "#0c1016",
   selectionBackground: "#315a8f99",
-  black: "#1a1f29",
-  red: "#e86872",
-  green: "#63bd83",
-  yellow: "#d8a657",
-  blue: "#6e9fdf",
-  magenta: "#b08ad4",
-  cyan: "#5fb8bc",
-  white: "#c9d1dc",
-  brightBlack: "#596273",
-  brightRed: "#ff7b86",
-  brightGreen: "#75d395",
-  brightYellow: "#edbc6a",
-  brightBlue: "#82b3f4",
-  brightMagenta: "#c29be7",
-  brightCyan: "#72cdd0",
-  brightWhite: "#f1f4f8",
+  black: "#002831",
+  red: "#d11c24",
+  green: "#738a05",
+  yellow: "#a57706",
+  blue: "#2176c7",
+  magenta: "#c61c6f",
+  cyan: "#259286",
+  white: "#eae3cb",
+  brightBlack: "#475b62",
+  brightRed: "#bd3613",
+  brightGreen: "#475b62",
+  brightYellow: "#536870",
+  brightBlue: "#708284",
+  brightMagenta: "#5956ba",
+  brightCyan: "#819090",
+  brightWhite: "#fcf4dc",
 } as const;
 
-export function createCockpitTerminal(fontSize = applicationFontSize()): Terminal {
+// 12.5pt: 12pt (16px) rendered too dense and 13pt (17.33px) too large next to Ghostty/kitty.
+const TERMINAL_FONT_SIZE = (12.5 * 96) / 72;
+
+// Iosevka's advance is 0.5em, so an even device-pixel font size gives whole-pixel
+// cells. Fractional cells make the WebGL glyph atlas resample and look soft.
+export function snapTerminalFontSize(dpr = globalThis.devicePixelRatio || 1): number {
+  return Math.max(2, Math.round((TERMINAL_FONT_SIZE * dpr) / 2) * 2) / dpr;
+}
+
+export function createCockpitTerminal(fontSize = snapTerminalFontSize()): Terminal {
   return new Terminal({
     convertEol: false,
     cursorBlink: false,
-    fontFamily: 'ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
+    fontFamily: '"IosevkaTerm Nerd Font Mono", ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace',
     fontSize,
     lineHeight: 1,
     // Herdr owns terminal scroll position. A local full-height scrollbar has
@@ -94,6 +105,20 @@ export function createCockpitTerminal(fontSize = applicationFontSize()): Termina
     scrollback: 5000,
     vtExtensions: { kittyKeyboard: true },
   });
+}
+
+// The DOM renderer draws box/block glyphs from the font, so their edges land on
+// fractional device pixels and leave seams between rows at most display scales.
+// The WebGL renderer draws them procedurally on the pixel grid. Falls back to
+// the DOM renderer when WebGL is unavailable or the context is lost.
+function loadGpuRenderer(terminal: Terminal): void {
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    terminal.loadAddon(webgl);
+  } catch {
+    // DOM renderer stays active.
+  }
 }
 
 export async function copyTerminalSelection(terminal: Pick<Terminal, "getSelection">, clipboard: ClipboardAccess = createClipboardAccess()): Promise<boolean> {
@@ -476,6 +501,7 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
     let disposed = false;
     terminal.open(host);
     terminal.loadAddon(fit);
+    loadGpuRenderer(terminal);
     fitRef.current = fit;
     terminalRef.current = terminal;
     fit.fit();
@@ -491,8 +517,24 @@ export function TerminalPane({ client, request, selected, controlAllowed, contro
       });
     });
     observer?.observe(host);
+    // Moving between displays changes the pixel ratio; re-snap and refit.
+    let dprQuery: MediaQueryList | null = null;
+    const onDprChange = () => {
+      if (disposed) return;
+      terminal.options.fontSize = snapTerminalFontSize();
+      fit.fit();
+      requestViewportSizing();
+      watchDpr();
+    };
+    const watchDpr = () => {
+      dprQuery?.removeEventListener("change", onDprChange);
+      dprQuery = typeof matchMedia === "function" ? matchMedia(`(resolution: ${globalThis.devicePixelRatio}dppx)`) : null;
+      dprQuery?.addEventListener("change", onDprChange, { once: true });
+    };
+    watchDpr();
     return () => {
       disposed = true;
+      dprQuery?.removeEventListener("change", onDprChange);
       observer?.disconnect();
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       if (resizeInFlightRef.current) window.clearTimeout(resizeInFlightRef.current.timer);
