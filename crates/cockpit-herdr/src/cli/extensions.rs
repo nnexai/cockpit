@@ -1257,9 +1257,8 @@ mod tests {
             )
             .await;
         server.abort();
-        if let Err(error) = server.await {
-            assert!(error.is_cancelled(), "fixture failed: {error}");
-        }
+        let Err(error) = server.await;
+        assert!(error.is_cancelled(), "fixture failed: {error}");
         std::fs::remove_dir_all(root).unwrap();
         result
     }

@@ -567,30 +567,6 @@ fn check_deadline(deadline: Instant) -> Result<(), InspectionError> {
     Ok(())
 }
 
-fn append_matches(
-    results: &mut Vec<ContextSearchResult>,
-    path: &str,
-    revision: &str,
-    text: &str,
-    query: &str,
-) {
-    for (index, raw_line) in text.split_inclusive('\n').enumerate() {
-        if results.len() >= MAX_RESULTS || !raw_line.contains(query) {
-            continue;
-        }
-        let line = raw_line
-            .strip_suffix('\n')
-            .and_then(|line| line.strip_suffix('\r').or(Some(line)))
-            .unwrap_or(raw_line);
-        results.push(ContextSearchResult {
-            path: path.to_owned(),
-            line: (index + 1) as u32,
-            excerpt: truncate_utf8(line, MAX_EXCERPT_BYTES),
-            revision: revision.to_owned(),
-        });
-    }
-}
-
 fn append_matches_page(
     results: &mut Vec<ContextSearchResult>,
     path: &str,
@@ -637,7 +613,7 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_matches, append_matches_page, finish_corpus_revision, truncate_utf8,
+        append_matches_page, finish_corpus_revision, truncate_utf8,
         update_corpus_revision, validate_invalidation_request, validate_search_request,
     };
     use cockpit_protocol::context_search::{
@@ -648,12 +624,13 @@ mod tests {
     #[test]
     fn search_preserves_lf_line_numbers_and_lone_carriage_returns() {
         let mut results = Vec::new();
-        append_matches(
+        append_matches_page(
             &mut results,
             "notes.md",
             "revision",
             "first\rneedle\r\nsecond needle\nlast",
             "needle",
+            &mut 0,
         );
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].line, 1);

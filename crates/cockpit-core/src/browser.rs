@@ -39,7 +39,6 @@ const CLI_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUIRED_PLAYWRIGHT_CLI_VERSION: &str = "0.1.5";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_OPENED_TAB_BYTES: usize = 20;
 
 /// A snapshot pinned to the exact Herdr endpoint that served it.
 #[derive(Clone, Debug)]
@@ -278,7 +277,7 @@ impl BrowserService {
             &target.session_id,
             &target.space_id,
         );
-        let mut receipt = self.load(&key)?.ok_or_else(|| {
+        let receipt = self.load(&key)?.ok_or_else(|| {
             InspectionError::new(
                 "browser_view_association_absent",
                 "Open the browser association before attaching an inline browser view",
@@ -2080,23 +2079,6 @@ fn tab_index(output: &str) -> Option<String> {
         (!index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
             .then(|| index.to_owned())
     })
-}
-
-fn validated_opened_tab(value: Option<&str>) -> Result<Option<String>, InspectionError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_empty()
-        || value.len() > MAX_OPENED_TAB_BYTES
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-        || value.parse::<u64>().is_err()
-    {
-        return Err(InspectionError::new(
-            "browser_receipt_corrupt",
-            "Browser receipt opened tab index is invalid or exceeds its bound",
-        ));
-    }
-    Ok(Some(value.to_owned()))
 }
 
 fn shell_quote(value: &str) -> String {

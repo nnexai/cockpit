@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -19,12 +18,6 @@ use url::Url;
 const COMMENTS_PER_PAGE: usize = 100;
 const MAX_COMMENT_PAGES: usize = 5;
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
-
-pub(crate) fn executable(value: &str) -> bool {
-    Path::new(value)
-        .file_name()
-        .is_some_and(|name| name == "glab")
-}
 
 /// Read-only GitLab issue access through the owner's authenticated `glab` CLI.
 /// The CLI remains responsible for credentials; Cockpit only supplies explicit
@@ -251,7 +244,7 @@ impl GitlabSourceProvider {
         let web_url = value_string(&value, "web_url")
             .ok_or_else(|| contract_error("GitLab project has no web URL"))?;
         verify_project_url(&self.base_url, &web_url, &identity.project_path)?;
-        Ok(ProjectFacts { id, path, web_url })
+        Ok(ProjectFacts { id, web_url })
     }
 
     async fn fetch_issue(
@@ -308,7 +301,7 @@ impl GitlabSourceProvider {
             .ok_or_else(|| contract_error("GitLab issue has no author username"))?
             .to_owned();
         let state = required_string(&value, "state", "GitLab issue")?;
-        let labels = required_string_array(&value, "labels", "GitLab issue")?;
+        required_string_array(&value, "labels", "GitLab issue")?;
         let mut assignees = value
             .get("assignees")
             .and_then(Value::as_array)
@@ -324,17 +317,16 @@ impl GitlabSourceProvider {
             .collect::<Result<Vec<_>, _>>()?;
         assignees.sort();
         assignees.dedup();
-        let milestone = match value.get("milestone") {
-            Some(Value::Null) => None,
-            Some(milestone) => Some(
+        match value.get("milestone") {
+            Some(Value::Null) => {}
+            Some(milestone) => {
                 milestone
                     .get("title")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| contract_error("GitLab issue milestone has no title"))?
-                    .to_owned(),
-            ),
+                    .ok_or_else(|| contract_error("GitLab issue milestone has no title"))?;
+            }
             None => return Err(contract_error("GitLab issue has no milestone field")),
-        };
+        }
         let created_at = required_string(&value, "created_at", "GitLab issue")?;
         let updated_at = required_string(&value, "updated_at", "GitLab issue")?;
         let description = match value.get("description") {
@@ -352,9 +344,7 @@ impl GitlabSourceProvider {
             description,
             author,
             state,
-            labels,
             assignees,
-            milestone,
             created_at,
             updated_at,
             web_url,
@@ -482,7 +472,6 @@ impl GitlabSourceProvider {
             ));
         }
         let target_project = ProjectIdentity {
-            id: project.id,
             path: identity.project_path.clone(),
             web_url: project.web_url.clone(),
         };
@@ -490,7 +479,6 @@ impl GitlabSourceProvider {
         let source_project = match source_project_id {
             None => None,
             Some(id) if id == project.id => Some(ProjectIdentity {
-                id: project.id,
                 path: identity.project_path.clone(),
                 web_url: project.web_url.clone(),
             }),
@@ -1014,7 +1002,6 @@ struct ResolvedIdentity {
 #[derive(Debug)]
 struct ProjectFacts {
     id: u64,
-    path: String,
     web_url: String,
 }
 
@@ -1024,9 +1011,7 @@ struct IssueFacts {
     description: String,
     author: String,
     state: String,
-    labels: Vec<String>,
     assignees: Vec<String>,
-    milestone: Option<String>,
     created_at: String,
     updated_at: String,
     web_url: String,
@@ -1034,7 +1019,6 @@ struct IssueFacts {
 
 #[derive(Debug)]
 struct ProjectIdentity {
-    id: u64,
     path: String,
     web_url: String,
 }
@@ -1129,9 +1113,6 @@ impl ByteBudget {
         true
     }
 
-    fn exhausted(&self) -> bool {
-        self.used >= self.limit
-    }
 }
 fn optional_string(
     value: &Value,
@@ -1177,19 +1158,8 @@ fn valid_branch(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
 }
 
-fn project_identity(
-    value: &Value,
-    field: &str,
-    base: &Url,
-) -> Result<ProjectIdentity, InspectionError> {
-    let project = value
-        .get(field)
-        .ok_or_else(|| contract_error(&format!("GitLab merge request has no {field}")))?;
-    parse_project_identity(project, base)
-}
-
 fn parse_project_identity(value: &Value, base: &Url) -> Result<ProjectIdentity, InspectionError> {
-    let id = value_u64(value, "id")
+    value_u64(value, "id")
         .ok_or_else(|| contract_error("GitLab project identity has no numeric ID"))?;
     let path = value_string(value, "path_with_namespace")
         .ok_or_else(|| contract_error("GitLab project identity has no full path"))?;
@@ -1203,7 +1173,7 @@ fn parse_project_identity(value: &Value, base: &Url) -> Result<ProjectIdentity, 
             "GitLab project identity web path mismatches its full path",
         ));
     }
-    Ok(ProjectIdentity { id, path, web_url })
+    Ok(ProjectIdentity { path, web_url })
 }
 
 fn position_text(value: &Value) -> Result<String, InspectionError> {
@@ -1576,44 +1546,6 @@ fn review_revision(
             "\napproved={:?}|left={:?}|by={:?}",
             approvals.approved, approvals.approvals_left, approvals.approved_by
         ));
-    }
-    format!("sha256:{}", hex_digest(input.as_bytes()))
-}
-
-fn revision(issue: &IssueFacts, comments: &[CommentFacts], complete: bool) -> String {
-    let mut input = String::new();
-    for value in [
-        issue.title.as_str(),
-        issue.description.as_str(),
-        issue.author.as_str(),
-        issue.state.as_str(),
-        issue.created_at.as_str(),
-        issue.updated_at.as_str(),
-        issue.web_url.as_str(),
-    ] {
-        input.push_str(value);
-        input.push('\n');
-    }
-    input.push_str(&issue.labels.join("\u{1f}"));
-    input.push('\n');
-    input.push_str(&issue.assignees.join("\u{1f}"));
-    input.push('\n');
-    input.push_str(issue.milestone.as_deref().unwrap_or_default());
-    input.push('\n');
-    input.push_str(if complete { "complete" } else { "incomplete" });
-    for comment in comments {
-        input.push('\n');
-        input.push_str(&comment.id.to_string());
-        input.push('|');
-        input.push_str(&comment.author);
-        input.push('|');
-        input.push_str(&comment.created_at);
-        input.push('|');
-        input.push_str(&comment.updated_at);
-        input.push('|');
-        input.push_str(&comment.url);
-        input.push('|');
-        input.push_str(&comment.body);
     }
     format!("sha256:{}", hex_digest(input.as_bytes()))
 }
@@ -2030,9 +1962,7 @@ mod tests {
         let mut body = String::new();
         assert!(!budget.append(&mut body, "five!"));
         assert!(body.is_empty());
-        assert!(!budget.exhausted());
         assert!(budget.append(&mut body, "four"));
-        assert!(budget.exhausted());
     }
 
     #[test]
@@ -2052,7 +1982,6 @@ mod tests {
     #[test]
     fn review_revision_changes_for_same_sha_content_updates() {
         let project = ProjectIdentity {
-            id: 1,
             path: "group/project".into(),
             web_url: "https://gitlab.test/group/project".into(),
         };

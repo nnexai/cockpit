@@ -477,12 +477,6 @@ fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError>
     Ok(())
 }
 
-/// Convert Atlassian Document Format to Markdown. Legacy wiki markup is retained
-/// verbatim and reported separately; unknown ADF nodes keep their text.
-pub(crate) fn document_markdown(value: &Value) -> String {
-    document_markdown_at(value, 0)
-}
-
 fn document_markdown_at(value: &Value, heading_offset: usize) -> String {
     match value {
         Value::String(text) => text.clone(),
@@ -691,7 +685,7 @@ fn marked_text(node: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_failure, document_markdown, issue_fields, issue_markdown};
+    use super::{classify_failure, document_markdown_at, issue_fields, issue_markdown};
     use serde_json::json;
 
     #[test]
@@ -719,7 +713,7 @@ mod tests {
             {"type": "mediaSingle", "content": [{"type": "media", "attrs": {"id": "x"}}]}
         ]});
         assert_eq!(
-            document_markdown(&document),
+            document_markdown_at(&document, 0),
             "## Acceptance\n\nUse `retry` and see [docs](https://example.test/d)\n@Ann\n\n- One\n- Two\n  1. Nested\n\n```rust\nfn main() {}\n```\n\n[attachment]"
         );
     }

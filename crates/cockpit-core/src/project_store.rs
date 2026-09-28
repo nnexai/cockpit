@@ -176,18 +176,6 @@ impl ProjectStore {
             .map(|file| LockGuard { _file: file })
     }
 
-    pub(crate) fn try_acquire_named_lock(
-        &self,
-        name: &str,
-        code: &'static str,
-    ) -> Result<Option<LockGuard>, InspectionError> {
-        if name.is_empty() || name.contains(['/', '\\', '\0']) {
-            return Err(InspectionError::new("unsafe_path", "invalid lock name"));
-        }
-        self.try_acquire_file_lock(name, code)
-            .map(|file| file.map(|file| LockGuard { _file: file }))
-    }
-
     pub(crate) fn acquire_record_lock(&self, id: &str) -> Result<LockGuard, InspectionError> {
         validate_operation_id(id)?;
         self.acquire_named_lock(&format!(".{id}.lock"), "state_lock")

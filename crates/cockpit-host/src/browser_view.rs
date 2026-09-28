@@ -300,12 +300,11 @@ async fn run_frame(
             return;
         }
     };
-    let mut target_id = String::new();
-    let mut metadata_events = match runtime.browser_view_events(&view_id).await {
-        Ok(events) => {
-            target_id = events.snapshot.displayed_target_id.unwrap_or_default();
-            events.events
-        }
+    let (mut metadata_events, mut target_id) = match runtime.browser_view_events(&view_id).await {
+        Ok(events) => (
+            events.events,
+            events.snapshot.displayed_target_id.unwrap_or_default(),
+        ),
         Err(_) => {
             close_ws(&mut socket, 1011, "browser metadata unavailable").await;
             release_view_connection(&runtime, &view_id).await;

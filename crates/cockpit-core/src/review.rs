@@ -1761,10 +1761,6 @@ impl FrozenSource {
         Self::from_bytes(bytes)
     }
 
-    fn truncated(path: &str) -> Self {
-        Self::truncated_with_bytes(path, None)
-    }
-
     fn truncated_with_bytes(path: &str, total_bytes: Option<u32>) -> Self {
         Self {
             text: None,

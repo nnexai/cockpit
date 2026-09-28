@@ -101,9 +101,6 @@ enum HelperInput {
         viewport: HelperViewport,
         frame_grant: BrowserViewFrameGrant,
     },
-    Grant {
-        grant: BrowserViewFrameGrant,
-    },
     AttachView {
         view_id: String,
         stream_epoch: u64,
@@ -1593,30 +1590,5 @@ fn replace_event_metadata(
             message,
         },
         BrowserViewEvent::Closed { reason, .. } => BrowserViewEvent::Closed { metadata, reason },
-    }
-}
-fn command_name(command: &cockpit_protocol::browser_view::BrowserViewCommand) -> &'static str {
-    match command {
-        cockpit_protocol::browser_view::BrowserViewCommand::TakeControl { .. } => "take_control",
-        cockpit_protocol::browser_view::BrowserViewCommand::ReleaseControl { .. } => {
-            "release_control"
-        }
-        cockpit_protocol::browser_view::BrowserViewCommand::Detach => "detach",
-        cockpit_protocol::browser_view::BrowserViewCommand::Resize { .. } => "resize",
-        cockpit_protocol::browser_view::BrowserViewCommand::Wheel { .. } => "wheel",
-        cockpit_protocol::browser_view::BrowserViewCommand::Keyboard { .. } => "keyboard",
-        cockpit_protocol::browser_view::BrowserViewCommand::Text { .. } => "text",
-        cockpit_protocol::browser_view::BrowserViewCommand::Composition { .. } => "composition",
-        cockpit_protocol::browser_view::BrowserViewCommand::Clipboard { .. } => "clipboard",
-        cockpit_protocol::browser_view::BrowserViewCommand::Tab { .. } => "tab",
-        cockpit_protocol::browser_view::BrowserViewCommand::Dialog { .. } => "dialog",
-        cockpit_protocol::browser_view::BrowserViewCommand::File { .. } => "file",
-        cockpit_protocol::browser_view::BrowserViewCommand::Download { .. } => "download",
-        cockpit_protocol::browser_view::BrowserViewCommand::Permission { .. } => "permission",
-        cockpit_protocol::browser_view::BrowserViewCommand::Inspect { .. } => "inspect",
-        cockpit_protocol::browser_view::BrowserViewCommand::Capture { .. } => "capture",
-        cockpit_protocol::browser_view::BrowserViewCommand::Draft { .. } => "draft",
-        cockpit_protocol::browser_view::BrowserViewCommand::Navigation { .. }
-        | cockpit_protocol::browser_view::BrowserViewCommand::Pointer { .. } => "implemented",
     }
 }

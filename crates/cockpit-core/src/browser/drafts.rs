@@ -2034,7 +2034,7 @@ mod tests {
         let (store, root) = test_store();
         let key = "0123456789abcdef01234567";
         let incarnation = Uuid::new_v4().to_string();
-        let mut marked = |target: &str, generation: u64| {
+        let marked = |target: &str, generation: u64| {
             let mut stored = draft(
                 &identity(key, &incarnation, target, generation),
                 Uuid::new_v4().to_string(),
@@ -2260,7 +2260,7 @@ mod tests {
         store
             .discard_draft(key, &initial.draft_id, removed.revision)
             .unwrap();
-        let discarded = store
+        store
             .upsert_annotation_recovery(key, &initial.draft_id, removed.revision, loser)
             .expect_err("a discarded draft cannot accept delayed edits");
         let context = BrowserCaptureContext {

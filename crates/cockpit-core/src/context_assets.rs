@@ -783,6 +783,11 @@ pub(crate) fn remove_follow_copy(
 /// Materialize one immutable provider payload through the companion lock,
 /// manifest, and no-follow descriptor policy.
 #[cfg(test)]
+fn short_hash(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))[..8].to_owned()
+}
+
+#[cfg(test)]
 pub(crate) fn materialize_source_markdown(
     root: &Dir,
     companion_id: &str,
@@ -1904,11 +1909,6 @@ pub(crate) fn readable_name(value: &str) -> String {
         name.to_owned()
     }
 }
-
-fn short_hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))[..8].to_owned()
-}
-
 
 fn hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
