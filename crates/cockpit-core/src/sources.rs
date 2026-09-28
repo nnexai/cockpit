@@ -46,6 +46,7 @@ pub struct SourceContainer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FrontmatterValue {
+    Null,
     String(String),
     Number(i64),
     Boolean(bool),
@@ -1203,6 +1204,7 @@ const RESERVED_FIELDS: &[&str] = &[
 fn valid_frontmatter_value(value: &FrontmatterValue) -> bool {
     let valid_text = |text: &str| text.len() <= MAX_METADATA_BYTES && !text.contains('\0');
     let valid = match value {
+        FrontmatterValue::Null => true,
         FrontmatterValue::String(text) => valid_text(text),
         FrontmatterValue::Strings(values) => {
             values.len() <= 256 && values.iter().all(|text| valid_text(text))

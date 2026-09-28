@@ -1,5 +1,6 @@
 import { Fragment, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, LibraryOperation, ProjectProvider, SpaceAddAttempt, SpaceCopyRow } from "../../protocol/generated/v1";
+import type { ProviderFacts } from "../context/providerDocument";
 import { UiIcon } from "../UiIcon";
 import { instanceHost, isConfluencePage, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, relativeTime } from "./libraryState";
 import { ATTACHMENT_STATE, LibraryMenu, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "./LibraryTree";
@@ -35,16 +36,38 @@ export type ItemSpaceState = {
 export type PageUpdate = { at: string | null; by: string | null };
 
 /**
+ * An issue's or review's own facts from its generated document's frontmatter:
+ * kind and status as chips, then priority, assignee, author and last update.
+ * Nothing renders when the document reports none of them.
+ */
+export function ProviderFactsLine({ facts, now, className }: { facts: ProviderFacts; now: number; className: string }) {
+  const updated = relativeTime(facts.updated, now);
+  const meta = [
+    facts.priority ? `Priority ${facts.priority}` : null,
+    facts.assignee === undefined ? null : facts.assignee ? `Assignee ${facts.assignee}` : "Unassigned",
+    facts.author ? `Author ${facts.author}` : null,
+  ].filter((entry): entry is string => entry !== null);
+  if (!facts.itemType && !facts.status && meta.length === 0 && !updated) return null;
+  return <div className={className}>
+    {facts.itemType ? <span className="context-source-chip library-fact-kind">{facts.itemType}</span> : null}
+    {facts.status ? <span className="context-source-chip library-fact-status">{facts.status}</span> : null}
+    {meta.length > 0 || updated ? <span className="library-item-phrase">{meta.join(" · ")}{updated ? <>{meta.length > 0 ? " · " : ""}<span title={facts.updated ?? undefined}>{`Updated ${updated}`}</span></> : null}</span> : null}
+  </div>;
+}
+
+/**
  * Library item header (design §4.4): kind chip and container path, title,
  * state chip with its freshness phrase and actions, then `Metadata`. The Space
  * actions come from `headerSpaceAction`: `Add to <Space>`, or the copy's
  * `Update in <Space>`, a confirmed replace or removal, and the Library version.
- * A Confluence page adds its page metadata and an attachments table: metadata
- * only until the user explicitly downloads (`Download all`, `Download selected`
- * or a row's `Download`); `Remove downloaded` drops the bytes and keeps the rows.
+ * A Confluence page adds its page metadata and a one-line attachments summary
+ * beside `Metadata` whose table opens on demand: metadata only until the user
+ * explicitly downloads (`Download all`, `Download selected` or a row's
+ * `Download`); `Remove downloaded` drops the bytes and keeps the rows. An issue
+ * or review adds its provider facts under the title.
  * At pane width ≤ 520 px `Refresh`, the Space actions and the attachment bulk actions move into `⋯`.
  */
-export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null }: {
+export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null, facts = null }: {
   item: LibraryItemSummary;
   providers: readonly ProjectProvider[];
   narrow: boolean;
@@ -57,6 +80,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
   details: ReactNode;
   space?: ItemSpaceState | null;
   pageUpdate?: PageUpdate | null;
+  facts?: ProviderFacts | null;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const now = Date.now();
@@ -83,6 +107,10 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
     if (on) ids.add(id); else ids.delete(id);
     return { itemId: item.item_id, ids };
   });
+  // The attachment table stays folded until asked for, per item, so a page's body starts near the top.
+  const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(null);
+  const attachmentsOpen = attachmentsOpenFor === item.item_id;
+  const attachmentListId = `library-attachments-${item.item_id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const download = (ids: string[]) => {
     if (!attachments || ids.length === 0) return;
     attachments.start(item, "download", ids);
@@ -121,6 +149,7 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
       {details}
     </div>
     <h2 className="library-item-title" title={item.title}>{item.title}</h2>
+    {facts ? <ProviderFactsLine facts={facts} now={now} className="library-item-line library-item-facts" /> : null}
     <div className="library-item-line library-item-state">
       {pending
         ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />{progress ?? (folder ? "Re-copying…" : "Refreshing…")}</span>
@@ -150,48 +179,52 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
     {space && space.copyError && !spaceUpdating ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
       <span>{space.copyError}</span>
     </div> : null}
-    <details className="library-metadata">
-      <summary>Metadata</summary>
-      <dl>
-        {folder ? <>
-          <dt>Copied from</dt><dd><code>{folder.origin_path}</code></dd>
-          <dt>Inventory</dt><dd>{folder.git_working_tree ? "Git tracked and untracked, non-ignored files" : "Regular files with default exclusions"}</dd>
-          <dt>Copied</dt><dd>{folder.files} files · {folder.bytes} bytes</dd>
-          <dt>Skipped symlinks</dt><dd>{folder.skipped_symlinks}</dd>
-          <dt>Skipped special files</dt><dd>{folder.skipped_special}</dd>
-          <dt>Skipped ignored files</dt><dd>{folder.skipped_ignored}</dd>
-          <dt>Skipped other files</dt><dd>{folder.skipped_other}</dd>
-          <dt>Updates</dt><dd>Source edits do not change this copy until an explicit re-copy. Space copies update separately.</dd>
-        </> : null}
-        {page ? <>
-          {item.container ? <><dt>Space</dt><dd>{item.container.label}</dd></> : null}
-          {item.canonical_id ? <><dt>Page id</dt><dd><code>{item.canonical_id}</code></dd></> : null}
-          {item.ancestors.length ? <><dt>Parent</dt><dd>{item.ancestors.at(-1)!.title}</dd></> : null}
-          <dt>Ancestors</dt><dd>{item.ancestors.length ? item.ancestors.map((ancestor) => ancestor.title).join(" / ") : "None (top-level page)"}</dd>
-          {version ? <><dt>Version</dt><dd>{version}</dd></> : null}
-          {pageUpdate?.at || updatedBy ? <><dt>Last updated</dt><dd>{[pageUpdate?.at, updatedBy ? `by ${updatedBy}` : null].filter(Boolean).join(" ")}</dd></> : null}
-        </> : item.canonical_id ? <><dt>Source identity</dt><dd><code>{item.canonical_id}</code></dd></> : null}
-        {item.provider_instance ? <><dt>Provider</dt><dd>{item.provider_id} · {item.provider_instance}</dd></> : null}
-        {item.source_url ? <><dt>Source link</dt><dd><code>{item.source_url}</code></dd></> : null}
-        {item.original_url && item.original_url !== item.source_url ? <><dt>Added from</dt><dd><code>{item.original_url}</code></dd></> : null}
-        {item.source_revision && !page ? <><dt>Source revision</dt><dd><code>{item.source_revision}</code></dd></> : null}
-        {item.fetched_at ? <><dt>Fetched</dt><dd>{item.fetched_at}</dd></> : null}
-        {item.checked_at ? <><dt>Checked</dt><dd>{item.checked_at}</dd></> : null}
-        <dt>Library path</dt><dd><code>{item.item_path}</code></dd>
-        <dt>Library revision</dt><dd><code>{item.revision}</code></dd>
-        {item.conflict.map((file) => <Fragment key={file.path}><dt>Edited file</dt><dd><code>{file.path}</code></dd></Fragment>)}
-        {item.diagnostics.map((diagnostic, index) => <Fragment key={`${diagnostic.code}:${index}`}><dt>Diagnostic</dt><dd><code>{diagnostic.code}</code> · {diagnostic.message}</dd></Fragment>)}
-      </dl>
-    </details>
-    {page && item.attachments.length > 0 ? <div className="library-attachments">
-      <div className="library-attachments-heading">
-        <span className="library-attachments-title">Attachments <span>{item.attachments.length} · {downloaded.length} downloaded</span></span>
+    <div className="library-item-line library-item-disclosures">
+      <details className="library-metadata">
+        <summary>Metadata</summary>
+        <dl>
+          {folder ? <>
+            <dt>Copied from</dt><dd><code>{folder.origin_path}</code></dd>
+            <dt>Inventory</dt><dd>{folder.git_working_tree ? "Git tracked and untracked, non-ignored files" : "Regular files with default exclusions"}</dd>
+            <dt>Copied</dt><dd>{folder.files} files · {folder.bytes} bytes</dd>
+            <dt>Skipped symlinks</dt><dd>{folder.skipped_symlinks}</dd>
+            <dt>Skipped special files</dt><dd>{folder.skipped_special}</dd>
+            <dt>Skipped ignored files</dt><dd>{folder.skipped_ignored}</dd>
+            <dt>Skipped other files</dt><dd>{folder.skipped_other}</dd>
+            <dt>Updates</dt><dd>Source edits do not change this copy until an explicit re-copy. Space copies update separately.</dd>
+          </> : null}
+          {page ? <>
+            {item.container ? <><dt>Space</dt><dd>{item.container.label}</dd></> : null}
+            {item.canonical_id ? <><dt>Page id</dt><dd><code>{item.canonical_id}</code></dd></> : null}
+            {item.ancestors.length ? <><dt>Parent</dt><dd>{item.ancestors.at(-1)!.title}</dd></> : null}
+            <dt>Ancestors</dt><dd>{item.ancestors.length ? item.ancestors.map((ancestor) => ancestor.title).join(" / ") : "None (top-level page)"}</dd>
+            {version ? <><dt>Version</dt><dd>{version}</dd></> : null}
+            {pageUpdate?.at || updatedBy ? <><dt>Last updated</dt><dd>{[pageUpdate?.at, updatedBy ? `by ${updatedBy}` : null].filter(Boolean).join(" ")}</dd></> : null}
+          </> : item.canonical_id ? <><dt>Source identity</dt><dd><code>{item.canonical_id}</code></dd></> : null}
+          {item.provider_instance ? <><dt>Provider</dt><dd>{item.provider_id} · {item.provider_instance}</dd></> : null}
+          {item.source_url ? <><dt>Source link</dt><dd><code>{item.source_url}</code></dd></> : null}
+          {item.original_url && item.original_url !== item.source_url ? <><dt>Added from</dt><dd><code>{item.original_url}</code></dd></> : null}
+          {item.source_revision && !page ? <><dt>Source revision</dt><dd><code>{item.source_revision}</code></dd></> : null}
+          {item.fetched_at ? <><dt>Fetched</dt><dd>{item.fetched_at}</dd></> : null}
+          {item.checked_at ? <><dt>Checked</dt><dd>{item.checked_at}</dd></> : null}
+          <dt>Library path</dt><dd><code>{item.item_path}</code></dd>
+          <dt>Library revision</dt><dd><code>{item.revision}</code></dd>
+          {item.conflict.map((file) => <Fragment key={file.path}><dt>Edited file</dt><dd><code>{file.path}</code></dd></Fragment>)}
+          {item.diagnostics.map((diagnostic, index) => <Fragment key={`${diagnostic.code}:${index}`}><dt>Diagnostic</dt><dd><code>{diagnostic.code}</code> · {diagnostic.message}</dd></Fragment>)}
+        </dl>
+      </details>
+      {page && item.attachments.length > 0 ? <div className="library-attachments-heading">
+        <button type="button" className="library-attachments-toggle" aria-expanded={attachmentsOpen} aria-controls={attachmentsOpen ? attachmentListId : undefined} onClick={() => setAttachmentsOpenFor(attachmentsOpen ? null : item.item_id)}>
+          <UiIcon name={attachmentsOpen ? "down" : "right"} />Attachments <span>{item.attachments.length} · {downloaded.length} downloaded</span>
+        </button>
         {attachments && !narrow ? <>
-          {selectedIds.length > 0 ? <button type="button" onClick={() => download(selectedIds)} disabled={attachments.busy}>{`Download selected (${selectedIds.length})`}</button> : null}
+          {attachmentsOpen && selectedIds.length > 0 ? <button type="button" onClick={() => download(selectedIds)} disabled={attachments.busy}>{`Download selected (${selectedIds.length})`}</button> : null}
           {downloadable.length > 0 ? <button type="button" onClick={() => download(downloadable.map((attachment) => attachment.attachment_id))} disabled={attachments.busy}>Download all</button> : null}
           {downloaded.length > 0 ? <button type="button" onClick={() => attachments.start(item, "remove_downloaded", downloaded.map((attachment) => attachment.attachment_id))} disabled={attachments.busy}>Remove downloaded</button> : null}
         </> : null}
-      </div>
+      </div> : null}
+    </div>
+    {page && item.attachments.length > 0 && attachmentsOpen ? <div className="library-attachments" id={attachmentListId}>
       {narrow ? <ul aria-label="Attachments">
         {shownAttachments.map(({ attachment, state }) => <li key={attachment.attachment_id}>
           <span title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</span>

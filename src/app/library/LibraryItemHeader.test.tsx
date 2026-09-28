@@ -78,8 +78,14 @@ it("shows a Confluence page's path, version, ancestors and last editor, and list
     });
     expect(values).not.toHaveProperty("Source identity");
 
+    // One summary line; the table stays folded, off the document, until asked for.
+    const toggle = host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!;
+    expect(toggle.textContent).toBe("Attachments 2 · 0 downloaded");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector(".library-attachments")).toBeNull();
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     const attachments = host.querySelector(".library-attachments")!;
-    expect(attachments.querySelector(".library-attachments-heading")?.textContent).toBe("Attachments 2 · 0 downloaded");
     expect([...attachments.querySelectorAll("tbody tr")].map((row) => [...row.querySelectorAll("td")].map((cell) => cell.textContent)))
       .toEqual([["release-flow.png", "84 KB", "image/png", "not downloaded"], ["Q3_plan_.pdf", "1.2 MB", "application/pdf", "not downloaded"]]);
     // The stored name is shown; the original only in the tooltip.

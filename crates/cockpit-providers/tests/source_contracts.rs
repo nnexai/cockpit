@@ -171,9 +171,8 @@ async fn github_prs_preserve_head_and_paginate_both_comment_kinds_without_invent
             "Conversation second page",
             "Review first page",
             "Review second page",
-            "## Review comment 201",
-            "Path: src/main.rs",
-            "Line: 12",
+            "## Comments (",
+            " · review on src/main.rs:12\n[#201](",
         ] {
             assert!(asset.body.contains(text), "missing {text}");
         }

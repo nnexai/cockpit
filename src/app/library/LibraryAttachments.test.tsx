@@ -30,6 +30,11 @@ it("downloads only chosen rows, keeps over-limit rows inert, and removes only do
   const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
   try {
     await act(async () => render(page));
+    // `Download all` works from the folded summary line.
+    await act(async () => button("Download all").click());
+    expect(attachments.start).toHaveBeenLastCalledWith(page, "download", ["png", "pdf"]);
+    attachments.start.mockClear();
+    await act(async () => host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!.click());
     expect(attachments.start).not.toHaveBeenCalled();
     expect(host.textContent).toContain("not downloaded: over limit");
     expect(host.querySelector('[aria-label="Select large.bin"]')).toBeNull();

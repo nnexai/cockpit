@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::sources::{
-    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
+    SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::process::Command;
 use url::Url;
@@ -106,7 +107,7 @@ impl TeaSourceProvider {
                     "--output".into(),
                     "json".into(),
                     "--fields".into(),
-                    "index,title,body,url,base,base-commit,head,updated".into(),
+                    "index,title,body,url,base,base-commit,head,updated,state,priority,assignee,assignees,user,created,draft,merged".into(),
                     "--repo".into(),
                     repo.into(),
                     "--login".into(),
@@ -128,7 +129,7 @@ impl TeaSourceProvider {
                 "Tea returned a different pull request index",
             ));
         }
-        let source_url = verified_url(
+        let source_url = optional_verified_url(
             request,
             &self.base_url,
             value_string(&review, &["html_url", "url"]).as_deref(),
@@ -172,13 +173,78 @@ impl TeaSourceProvider {
                 ));
             }
         }
+        let review_comments: Vec<Value> = serde_json::from_slice(
+            &self
+                .command(&vec![
+                    "pulls".into(),
+                    "review-comments".into(),
+                    index.to_string(),
+                    "--output".into(),
+                    "json".into(),
+                    "--fields".into(),
+                    "id,body,reviewer,path,line,resolver,created,updated,url".into(),
+                    "--repo".into(),
+                    repo.into(),
+                    "--login".into(),
+                    self.login.clone(),
+                ])
+                .await?,
+        )
+        .map_err(|_| {
+            InspectionError::new(
+                "source_provider_contract",
+                "Tea review-comment JSON did not match the verified contract",
+            )
+        })?;
+        comments.extend(review_comments.iter().cloned());
+        comments.sort_by(|left, right| {
+            comment_timestamp(left)
+                .cmp(&comment_timestamp(right))
+                .then_with(|| value_string(left, &["id"]).cmp(&value_string(right, &["id"])))
+        });
         let title = value_string(&review, &["title"]).ok_or_else(|| {
             InspectionError::new("source_provider_contract", "Tea pull request has no title")
         })?;
-        let mut body = String::new();
+        let item_type = "Pull request";
+        let status = if review.get("draft").and_then(Value::as_bool) == Some(true) {
+            "draft".into()
+        } else if review.get("merged").and_then(Value::as_bool) == Some(true) {
+            "merged".into()
+        } else {
+            status_value(&value_string(&review, &["state"]).unwrap_or_else(|| "open".into()))
+        };
+        let author = review
+            .get("user")
+            .or_else(|| review.get("author"))
+            .and_then(|value| person_name(Some(value)));
+        let assignee = review
+            .get("assignees")
+            .or_else(|| review.get("assignee"))
+            .and_then(|value| person_name(Some(value)));
+        let created = value_string(&review, &["created", "created_at"]);
+        let updated = value_string(&review, &["updated", "updated_at"]);
+        let comment_count = comments.len();
+        let status_line = capitalize_status(&status);
+        let mut summary = vec![format!("**{item_type}**"), format!("**{status_line}**")];
+        if let Some(author) = &author {
+            summary.push(format!("Author {author}"));
+        }
+        if let Some(priority) = value_string(&review, &["priority"]) {
+            summary.push(format!("Priority {priority}"));
+        }
+        summary.push(assignee.as_deref().map_or_else(
+            || "Unassigned".into(),
+            |assignee| format!("Assignee {assignee}"),
+        ));
+        let mut body = format!("{}\n", summary.join(" · "));
+        let description = demote_headings(&value_string(&review, &["body"]).unwrap_or_default(), 3);
+        if !description.trim().is_empty() {
+            append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
+            append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
+        }
         append_bounded(
             &mut body,
-            "## Review metadata\n\nProvider positions below are unverified reference metadata. Cockpit does not use them as local anchors.\n",
+            "\n\n### Review metadata\n\nProvider positions below are unverified reference metadata. Cockpit does not use them as local anchors.\n",
             MAX_COMMENT_BYTES,
         )?;
         for (label, value) in [
@@ -206,88 +272,18 @@ impl TeaSourceProvider {
             "- Diff and structured changed-file metadata: unavailable in Tea 0.15.1's verified read-only JSON path.\n- Review summaries and reply threads: unavailable in Tea 0.15.1's documented read-only JSON commands.\n",
             MAX_COMMENT_BYTES,
         )?;
-        if let Some(description) = value_string(&review, &["body"]) {
-            append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
-            append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
-        }
-        for comment in comments {
-            let id = value_string(&comment, &["id"]).ok_or_else(|| {
-                InspectionError::new("source_provider_contract", "Tea review comment has no ID")
-            })?;
+        if !comments.is_empty() {
             append_bounded(
                 &mut body,
-                &format!("\n\n## Discussion comment {id}\n"),
+                &format!("\n## Comments ({comment_count})\n\n"),
                 MAX_COMMENT_BYTES,
             )?;
-            for (label, value) in [
-                ("Path", value_string(&comment, &["path"])),
-                ("Line", value_string(&comment, &["line"])),
-                ("Created", value_string(&comment, &["created"])),
-                ("Updated", value_string(&comment, &["updated"])),
-            ] {
-                if let Some(value) = value {
-                    append_bounded(&mut body, &format!("{label}: {value}\n"), MAX_COMMENT_BYTES)?;
-                }
-            }
-            if let Some(comment_body) = value_string(&comment, &["body"]) {
-                append_bounded(&mut body, "\n", MAX_COMMENT_BYTES)?;
-                append_bounded(&mut body, &comment_body, MAX_COMMENT_BYTES)?;
-            }
-        }
-        let review_comments: Vec<Value> = serde_json::from_slice(
-            &self
-                .command(&vec![
-                    "pulls".into(),
-                    "review-comments".into(),
-                    index.to_string(),
-                    "--output".into(),
-                    "json".into(),
-                    "--fields".into(),
-                    "id,body,reviewer,path,line,resolver,created,updated,url".into(),
-                    "--repo".into(),
-                    repo.into(),
-                    "--login".into(),
-                    self.login.clone(),
-                ])
-                .await?,
-        )
-        .map_err(|_| {
-            InspectionError::new(
-                "source_provider_contract",
-                "Tea review-comment JSON did not match the verified contract",
-            )
-        })?;
-        for comment in review_comments {
-            let id = value_string(&comment, &["id"]).ok_or_else(|| {
-                InspectionError::new("source_provider_contract", "Tea review comment has no ID")
-            })?;
-            append_bounded(
-                &mut body,
-                &format!("\n\n## Review comment {id}\n"),
-                MAX_COMMENT_BYTES,
-            )?;
-            for (label, value) in [
-                ("Path", value_string(&comment, &["path"])),
-                ("Line", value_string(&comment, &["line"])),
-                ("Reviewer", value_string(&comment, &["reviewer"])),
-                ("Resolver", value_string(&comment, &["resolver"])),
-                (
-                    "Created",
-                    value_string(&comment, &["created", "created_at"]),
-                ),
-                (
-                    "Updated",
-                    value_string(&comment, &["updated", "updated_at"]),
-                ),
-                ("URL", value_string(&comment, &["url", "html_url"])),
-            ] {
-                if let Some(value) = value {
-                    append_bounded(&mut body, &format!("{label}: {value}\n"), MAX_COMMENT_BYTES)?;
-                }
-            }
-            if let Some(comment_body) = value_string(&comment, &["body"]) {
-                append_bounded(&mut body, "\n", MAX_COMMENT_BYTES)?;
-                append_bounded(&mut body, &comment_body, MAX_COMMENT_BYTES)?;
+            for comment in comments {
+                let is_review = review_comments.iter().any(|review_comment| {
+                    value_string(review_comment, &["id"]) == value_string(&comment, &["id"])
+                        && value_string(review_comment, &["path"]).is_some()
+                });
+                append_comment_card(&mut body, &comment, is_review)?;
             }
         }
         Ok(vec![SourceAsset {
@@ -298,7 +294,7 @@ impl TeaSourceProvider {
                 canonical_id: format!("{repo}!{index}"),
             },
             title,
-            source_url: Some(source_url),
+            source_url,
             original_url: None,
             source_revision: value_string(
                 &review,
@@ -311,7 +307,16 @@ impl TeaSourceProvider {
                 id: repo.into(),
                 label: repo.into(),
             }),
-            fields: Vec::new(),
+            fields: issue_fields(
+                item_type,
+                Some(status),
+                value_string(&review, &["priority"]),
+                assignee,
+                author,
+                created,
+                updated,
+                comment_count,
+            ),
             attachments: Vec::new(),
         }])
     }
@@ -481,13 +486,238 @@ struct Issue {
     title: String,
     body: Option<String>,
     updated: Option<String>,
-    #[serde(alias = "url")]
-    html_url: String,
+    #[serde(default, alias = "url")]
+    html_url: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    assignee: Option<Value>,
+    #[serde(default)]
+    assignees: Option<Value>,
+    #[serde(default)]
+    user: Option<Value>,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    comments: Option<Value>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Comment {
+    #[serde(deserialize_with = "string_or_number")]
     id: String,
     body: Option<String>,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    user: Option<Value>,
+    #[serde(default)]
+    author: Option<Value>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<Value>,
+}
+
+fn demote_headings(markdown: &str, minimum: usize) -> String {
+    let mut result = String::with_capacity(markdown.len());
+    let mut fence: Option<(u8, usize)> = None;
+    for line in markdown.split_inclusive('\n') {
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = line_without_newline.trim_start();
+        let indent = line_without_newline.len() - trimmed.len();
+        let fence_marker = trimmed.as_bytes().first().copied().filter(|byte| *byte == b'`' || *byte == b'~');
+        let fence_len = fence_marker.map(|marker| trimmed.bytes().take_while(|byte| *byte == marker).count()).unwrap_or(0);
+        if let Some((marker, length)) = fence {
+            if fence_marker == Some(marker) && fence_len >= length {
+                fence = None;
+            }
+        } else if let Some(marker) = fence_marker.filter(|_| fence_len >= 3) {
+            fence = Some((marker, fence_len));
+        } else if indent <= 3 && trimmed.starts_with('#') {
+            let hashes = trimmed.bytes().take_while(|byte| *byte == b'#').count();
+            if (1..=6).contains(&hashes)
+                && trimmed.as_bytes().get(hashes).is_some_and(|byte| byte.is_ascii_whitespace())
+                && hashes < minimum
+            {
+                result.push_str(&line_without_newline[..indent]);
+                result.push_str(&"#".repeat(minimum));
+                result.push_str(&line_without_newline[indent + hashes..]);
+                if line.ends_with('\n') {
+                    result.push('\n');
+                }
+                continue;
+            }
+        }
+        result.push_str(line);
+    }
+    result
+}
+
+fn person_name(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| {
+        value
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                value.as_array().map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| person_name(Some(value)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+            })
+            .or_else(|| value_string(value, &["full_name", "name", "login", "username"]))
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn text_field(key: &str, value: impl Into<String>) -> FrontmatterField {
+    FrontmatterField {
+        key: key.into(),
+        value: FrontmatterValue::String(value.into()),
+    }
+}
+
+fn issue_fields(
+    item_type: &str,
+    status: Option<String>,
+    priority: Option<String>,
+    assignee: Option<String>,
+    author: Option<String>,
+    created: Option<String>,
+    updated: Option<String>,
+    comment_count: usize,
+) -> Vec<FrontmatterField> {
+    let mut fields = vec![text_field("item_type", item_type)];
+    for (key, value) in [
+        ("status", status.map(|value| status_value(&value))),
+        ("priority", priority),
+        ("author", author),
+        ("created", created.map(|value| frontmatter_timestamp(&value))),
+        ("updated", updated.map(|value| frontmatter_timestamp(&value))),
+    ] {
+        if let Some(value) = value {
+            fields.push(text_field(key, value));
+        }
+    }
+    fields.push(FrontmatterField {
+        key: "assignee".into(),
+        value: assignee.map_or(FrontmatterValue::Null, FrontmatterValue::String),
+    });
+    fields.push(FrontmatterField {
+        key: "comment_count".into(),
+        value: FrontmatterValue::Number(comment_count as i64),
+    });
+    fields
+}
+
+fn status_value(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "open" | "opened" => "open".into(),
+        "closed" => "closed".into(),
+        "merged" => "merged".into(),
+        "draft" => "draft".into(),
+        other => other.into(),
+    }
+}
+
+fn capitalize_status(value: &str) -> String {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .map(|first| first.to_ascii_uppercase().to_string() + characters.as_str())
+        .unwrap_or_default()
+}
+
+fn frontmatter_timestamp(value: &str) -> String {
+    let mut value = value.to_owned();
+    if let Some(dot) = value.find('.') {
+        let suffix = value[dot..]
+            .find(|character| matches!(character, '+' | '-' | 'Z'))
+            .map(|offset| dot + offset)
+            .unwrap_or(value.len());
+        value.replace_range(dot..suffix, "");
+    }
+    let zone = value
+        .get(19..)
+        .and_then(|suffix| suffix.find(['+', '-']).map(|offset| offset + 19))
+        .unwrap_or(value.len());
+    if value[zone..].len() == 5
+        && value[zone..].as_bytes()[1..]
+            .iter()
+            .all(u8::is_ascii_digit)
+    {
+        value.insert(zone + 3, ':');
+    }
+    value
+}
+
+fn comment_timestamp(comment: &Value) -> Option<String> {
+    value_string(comment, &["created", "created_at", "submitted_at"])
+}
+
+fn append_comment_card(
+    body: &mut String,
+    comment: &Value,
+    review: bool,
+) -> Result<(), InspectionError> {
+    let id = value_string(comment, &["id"])
+        .ok_or_else(|| InspectionError::new("source_provider_contract", "Tea comment has no ID"))?;
+    let author = comment
+        .get("poster")
+        .or_else(|| comment.get("user"))
+        .or_else(|| comment.get("author"))
+        .or_else(|| comment.get("reviewer"))
+        .and_then(|value| person_name(Some(value)))
+        .unwrap_or_else(|| "Unknown".into());
+    let created_raw = comment_timestamp(comment).unwrap_or_default();
+    let created = card_timestamp(&created_raw);
+    let updated = value_string(comment, &["updated", "updated_at"]);
+    let edited = updated.filter(|updated| {
+        !updated.is_empty()
+            && !created_raw.is_empty()
+            && updated.as_str() != created_raw.as_str()
+    });
+    let path = value_string(comment, &["path"]);
+    let line = value_string(comment, &["line"]).filter(|line| !line.is_empty());
+    let review_path = if review {
+        path.map(|path| format!(" · review on {path}{}", line.map(|line| format!(":{line}")).unwrap_or_default()))
+    } else {
+        None
+    };
+    let mut heading = format!("### {author} · {created}");
+    if let Some(edited) = edited {
+        heading.push_str(&format!(" · edited {}", card_timestamp(&edited)));
+    }
+    if let Some(path) = review_path {
+        heading.push_str(&path);
+    }
+    append_bounded(body, &format!("{heading}\n\n"), MAX_COMMENT_BYTES)?;
+    let permalink = value_string(comment, &["html_url", "url"]);
+    if let Some(url) = permalink {
+        append_bounded(body, &format!("[#{id}]({url})\n\n"), MAX_COMMENT_BYTES)?;
+    } else {
+        append_bounded(body, &format!("#{id}\n\n"), MAX_COMMENT_BYTES)?;
+    }
+    if let Some(text) = value_string(comment, &["body"]) {
+        append_bounded(body, &demote_headings(&text, 4), MAX_COMMENT_BYTES)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -592,6 +822,15 @@ fn verified_url(
     }
     Ok(value.into())
 }
+fn card_timestamp(value: &str) -> String {
+    let value = value.replace('T', " ");
+    if value.len() >= 16 {
+        value[..16].to_owned()
+    } else {
+        value
+    }
+}
+
 
 fn value_string(value: &Value, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
@@ -608,6 +847,18 @@ fn value_string(value: &Value, names: &[&str]) -> Option<String> {
     })
 }
 
+fn string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value.as_u64().map(|number| number.to_string()))
+        .ok_or_else(|| serde::de::Error::custom("expected string or integer"))
+}
+
 fn value_reference(value: &Value, name: &str) -> Option<String> {
     value_string(value, &[name]).or_else(|| {
         value
@@ -622,6 +873,16 @@ fn review_source_branch(value: &Value) -> Option<String> {
         .and_then(|head| value_string(head, &["ref", "label"]))
         .or_else(|| value_string(value, &["head_ref", "headRef"]))
         .filter(|branch| !branch.is_empty())
+}
+
+fn optional_verified_url(
+    request: &SourceFetchRequest,
+    base: &Url,
+    value: Option<&str>,
+) -> Result<Option<String>, InspectionError> {
+    value
+        .map(|value| verified_url(request, base, Some(value)))
+        .transpose()
 }
 
 fn append_bounded(body: &mut String, value: &str, limit: usize) -> Result<(), InspectionError> {
@@ -673,6 +934,8 @@ impl SourceProvider for TeaSourceProvider {
                             index.to_string(),
                             "--output".into(),
                             "json".into(),
+                            "--fields".into(),
+                            "index,title,body,url,updated,state,priority,assignee,assignees,user,created,comments".into(),
                             "--repo".into(),
                             repo,
                             "--login".into(),
@@ -692,13 +955,14 @@ impl SourceProvider for TeaSourceProvider {
                         "Tea returned a different issue index",
                     ));
                 }
-                let source_url = verified_url(request, &self.base_url, Some(&issue.html_url))?;
+                let source_url =
+                    optional_verified_url(request, &self.base_url, issue.html_url.as_deref())?;
                 Ok(SourceMetadata {
                     title: issue.title,
                     source_branch: None,
-                    source_url: Some(source_url),
+                    source_url,
                     source_commit: None,
-                    description: None,
+                    description: issue.body,
                 })
             }
             ArtifactKind::Review(index) => {
@@ -710,7 +974,7 @@ impl SourceProvider for TeaSourceProvider {
                             "--output".into(),
                             "json".into(),
                             "--fields".into(),
-                            "index,title,head,url".into(),
+                            "index,title,body,head,url,state,priority,assignee,assignees,user,created,updated,draft,merged".into(),
                             "--repo".into(),
                             repo,
                             "--login".into(),
@@ -739,7 +1003,7 @@ impl SourceProvider for TeaSourceProvider {
                     )
                 })?;
                 let source_branch = review_source_branch(&review);
-                let source_url = verified_url(
+                let source_url = optional_verified_url(
                     request,
                     &self.base_url,
                     value_string(&review, &["html_url", "url"]).as_deref(),
@@ -747,9 +1011,9 @@ impl SourceProvider for TeaSourceProvider {
                 Ok(SourceMetadata {
                     title,
                     source_branch,
-                    source_url: Some(source_url),
+                    source_url,
                     source_commit: None,
-                    description: None,
+                    description: value_string(&review, &["body"]),
                 })
             }
             ArtifactKind::Wiki(_) => Err(InspectionError::new(
@@ -777,6 +1041,8 @@ impl SourceProvider for TeaSourceProvider {
                     index.to_string(),
                     "--output".into(),
                     "json".into(),
+                    "--fields".into(),
+                    "index,title,body,url,updated,state,priority,assignee,assignees,user,created,comments".into(),
                     "--repo".into(),
                     repo.clone(),
                     "--login".into(),
@@ -796,7 +1062,8 @@ impl SourceProvider for TeaSourceProvider {
                 "Tea returned a different issue index",
             ));
         }
-        let source_url = verified_url(request, &self.base_url, Some(&issue.html_url))?;
+        let source_url =
+            optional_verified_url(request, &self.base_url, issue.html_url.as_deref())?;
         let mut comments = Vec::new();
         for page in 1..=MAX_COMMENT_PAGES {
             let page_comments = parse_comments(
@@ -836,24 +1103,64 @@ impl SourceProvider for TeaSourceProvider {
             resource_type: "issue".into(),
             canonical_id: format!("{repo}#{}", issue.index),
         };
-        let mut body = issue.body.unwrap_or_default();
-        for c in comments {
-            body.push_str(&format!(
-                "\n\n## Comment {}\n\n{}",
-                c.id,
-                c.body.unwrap_or_default()
-            ));
-            if body.len() > MAX_COMMENT_BYTES {
-                return Err(InspectionError::new(
-                    "source_truncated",
-                    "Tea comments exceed Cockpit's explicit byte limit",
-                ));
+        let status = issue.state.clone().map(|state| status_value(&state));
+        let author = person_name(issue.user.as_ref());
+        let created = issue.created.clone().or(issue.created_at.clone());
+        let updated = issue.updated.clone();
+        let assignee = issue
+            .assignees
+            .as_ref()
+            .or(issue.assignee.as_ref())
+            .and_then(|value| person_name(Some(value)));
+        let comment_count = issue
+            .comments
+            .as_ref()
+            .and_then(Value::as_u64)
+            .or_else(|| issue.comments.as_ref().and_then(Value::as_array).map(|values| values.len() as u64))
+            .unwrap_or(comments.len() as u64)
+            .max(comments.len() as u64) as usize;
+        let item_type = "Issue";
+        let status_text = status.as_deref().unwrap_or("open");
+        let author_text = author.as_deref().unwrap_or("Unknown");
+        let assignee_text = assignee.as_deref().unwrap_or("Unassigned");
+        let mut summary = vec![
+            format!("**{item_type}**"),
+            format!("**{}**", capitalize_status(status_text)),
+        ];
+        if let Some(priority) = &issue.priority {
+            summary.push(format!("Priority {priority}"));
+        }
+        summary.push(format!("Author {author_text}"));
+        summary.push(format!("Assignee {assignee_text}"));
+        let mut body = format!("{}\n", summary.join(" · "));
+        let description = demote_headings(issue.body.as_deref().unwrap_or_default(), 3);
+        if !description.trim().is_empty() {
+            append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
+            append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
+        }
+        if !comments.is_empty() {
+            let mut serialized = comments
+                .iter()
+                .map(|comment| serde_json::to_value(comment).unwrap_or(Value::Null))
+                .collect::<Vec<_>>();
+            serialized.sort_by(|left, right| {
+                comment_timestamp(left)
+                    .cmp(&comment_timestamp(right))
+                    .then_with(|| value_string(left, &["id"]).cmp(&value_string(right, &["id"])))
+            });
+            append_bounded(
+                &mut body,
+                &format!("\n\n## Comments ({}{})\n\n", comments.len(), if comment_count > comments.len() { format!(" of {comment_count}") } else { String::new() }),
+                MAX_COMMENT_BYTES,
+            )?;
+            for comment in serialized {
+                append_comment_card(&mut body, &comment, false)?;
             }
         }
         Ok(vec![SourceAsset {
             source,
             title: issue.title,
-            source_url: Some(source_url),
+            source_url,
             original_url: None,
             source_revision: issue.updated,
             complete: true,
@@ -863,7 +1170,16 @@ impl SourceProvider for TeaSourceProvider {
                 id: repo.clone(),
                 label: repo,
             }),
-            fields: Vec::new(),
+            fields: issue_fields(
+                item_type,
+                Some(status.unwrap_or_else(|| "open".into())),
+                issue.priority,
+                assignee,
+                Some(author.unwrap_or_else(|| "Unknown".into())),
+                created,
+                updated,
+                comment_count,
+            ),
             attachments: Vec::new(),
         }])
     }
@@ -872,8 +1188,9 @@ impl SourceProvider for TeaSourceProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        Duration, SourceFetchRequest, SourceProvider, TeaSourceProvider, Url, base_path,
-        parse_comments, provider_instance, review_source_branch, verified_url,
+        Duration, SourceFetchRequest, SourceProvider, TeaSourceProvider, Url, append_comment_card,
+        base_path, demote_headings, parse_comments, provider_instance, review_source_branch,
+        verified_url,
     };
     use cockpit_core::sources::SourceAuthority;
     use std::io::{Read, Write};
@@ -886,6 +1203,30 @@ mod tests {
     use std::thread::{self, JoinHandle};
 
     static FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn tea_comment_cards_fallback_to_id_and_mark_only_real_edits() {
+        let comment = serde_json::json!({
+            "id": 7,
+            "body": "### Details\n```md\n# preserved\n```",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T01:02:00Z",
+            "path": "src/lib.rs",
+            "line": 12,
+            "user": { "login": "reviewer" }
+        });
+        let mut body = String::new();
+        append_comment_card(&mut body, &comment, true).unwrap();
+        assert!(body.starts_with(
+            "### reviewer · 2026-01-01 00:00 · edited 2026-01-01 01:02 · review on src/lib.rs:12"
+        ));
+        assert!(body.contains("\n#7\n\n"));
+        assert!(body.contains("#### Details\n```md\n# preserved\n```"));
+        assert_eq!(
+            demote_headings("# top\n## nested\n```\n# code\n```\n", 3),
+            "### top\n### nested\n```\n# code\n```\n"
+        );
+    }
 
     #[test]
     fn canonical_api_urls_match_instance_repository_and_artifact() {
@@ -1114,6 +1455,9 @@ mod tests {
         if path.contains("pulls/1.diff") {
             return "diff --git a/src/lib.rs b/src/lib.rs\nindex 0000000..1111111 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n".into();
         }
+        if path.contains("/pulls/1/reviews/7/comments") {
+            return r###"[{"id":9,"body":"## review comment","path":"src/lib.rs","line":7,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","html_url":"http://x/comments/9","user":{"id":1,"login":"fixture"}}]"###.into();
+        }
         if path.contains("comments") {
             let page = path
                 .split("page=")
@@ -1133,15 +1477,12 @@ mod tests {
                 FixtureMode::Review | FixtureMode::Wiki => comments_json(1, "review comment"),
             };
         }
-        if path.contains("/pulls/1/reviews/7/comments") {
-            return r#"[{"id":9,"body":"review comment","path":"src/lib.rs","line":7,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","html_url":"http://x/comments/9","user":{"id":1,"login":"fixture"}}]"#.into();
-        }
         if path.contains("/pulls/1/reviews") {
             return r#"[{"id":7,"body":"review","state":"COMMENT","submitted_at":"2026-01-01T00:00:00Z","user":{"id":1,"login":"fixture"}}]"#.into();
         }
         if path.contains("/pulls/1") {
             return format!(
-                r#"{{"id":1,"number":1,"title":"review","body":"review body","html_url":"{base_url}/acme/repo/pulls/1","diff_url":"{base_url}/api/v1/repos/acme/repo/pulls/1.diff","updated_at":"2026-01-01T00:00:00Z","base":{{"ref":"main","sha":"base-sha"}},"head":{{"ref":"feature","sha":"head-sha"}},"user":{{"id":1,"login":"fixture"}}}}"#
+                r#"{{"id":1,"number":1,"title":"review","body":"review body","html_url":"{base_url}/acme/repo/pulls/1","diff_url":"{base_url}/api/v1/repos/acme/repo/pulls/1.diff","updated_at":"2026-01-01T00:00:00Z","created_at":"2025-12-31T23:00:00Z","state":"open","base":{{"ref":"main","sha":"base-sha"}},"head":{{"ref":"feature","sha":"head-sha"}},"user":{{"id":1,"login":"fixture"}}}}"#
             );
         }
         if path.contains("/wiki/") {
@@ -1155,7 +1496,7 @@ mod tests {
                 _ => 1,
             };
             return format!(
-                r#"{{"id":1,"number":{number},"title":"issue","body":"body","html_url":"{base_url}/acme/repo/issues/{number}","updated_at":"2026-01-01T00:00:00Z","user":{{"id":1,"login":"fixture"}}}}"#
+                r###"{{"id":1,"index":{number},"number":{number},"title":"issue","body":"## Details\n# Top\n```md\n# fenced\n```\n","html_url":"{base_url}/acme/repo/issues/{number}","created_at":"2025-12-31T23:00:00Z","updated_at":"2026-01-01T00:00:00Z","state":"open","comments":1,"user":{{"id":1,"login":"fixture"}}}}"###
             );
         }
         r#"{"id":1,"login":"fixture","full_name":"Fixture","email":"x","avatar_url":"","language":"en-US","is_admin":false,"active":true,"restricted":false}"#.into()
@@ -1163,7 +1504,7 @@ mod tests {
 
     fn comments_json(count: usize, body: &str) -> String {
         let comments = (1..=count)
-            .map(|id| format!(r#"{{"id":{id},"body":"{body}","updated_at":"2026-01-01T00:00:00Z","user":{{"id":1,"login":"fixture"}}}}"#))
+            .map(|id| format!(r#"{{"id":{id},"body":"{body}","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","html_url":"http://x/comments/{id}","user":{{"id":1,"login":"fixture"}}}}"#))
             .collect::<Vec<_>>();
         format!("[{}]", comments.join(","))
     }
@@ -1194,12 +1535,12 @@ mod tests {
                 let path = line.lines().next().unwrap().to_string();
                 s.lock().unwrap().push(path.clone());
                 let issue_json = format!(
-                    r#"{{"id":1,"number":1,"title":"issue","body":"body","html_url":"http://{addr}/acme/repo/issues/1","updated_at":"2026-01-01T00:00:00Z","user":{{"id":1,"login":"fixture"}}}}"#
+                    r#"{{"id":1,"index":1,"number":1,"title":"issue","body":"body","html_url":"http://{addr}/acme/repo/issues/1","created_at":"2025-12-31T23:00:00Z","updated_at":"2026-01-01T00:00:00Z","state":"open","comments":1,"user":{{"id":1,"login":"fixture"}}}}"#
                 );
                 let body = if path.contains("/user/keys") || path.contains("reactions") {
                     "[]"
                 } else if path.contains("comments") {
-                    r#"[{"id":2,"body":"comment","updated_at":"2026-01-01T00:00:00Z","user":{"id":1,"login":"fixture"}}]"#
+                    r#"[{"id":1,"body":"comment","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","html_url":"http://x/comments/1","user":{"id":1,"login":"fixture"}}]"#
                 } else if path.contains("issues/1") {
                     &issue_json
                 } else {
@@ -1281,8 +1622,18 @@ mod tests {
         assert_eq!(assets[0].title, "issue");
         assert_eq!(assets[0].source.provider_id, "fixture-provider");
         assert_eq!(assets[0].source.canonical_id, "acme/repo#1");
-        assert!(assets[0].body.contains("Comment 2"));
-        assert!(assets[0].body.contains("comment"));
+        assert!(assets[0].body.starts_with("**Issue** · **Open** · Author fixture · Assignee Unassigned"));
+        assert!(assets[0].body.contains("## Description\n\nbody"));
+        assert!(assets[0].body.contains("## Comments (1)\n\n### "));
+        assert!(assets[0].body.contains("\n\n#1\n\n"));
+        assert_eq!(
+            assets[0].fields.iter().find(|field| field.key == "item_type").unwrap().value,
+            cockpit_core::sources::FrontmatterValue::String("Issue".into())
+        );
+        assert_eq!(
+            assets[0].fields.iter().find(|field| field.key == "comment_count").unwrap().value,
+            cockpit_core::sources::FrontmatterValue::Number(1)
+        );
         done.store(true, Ordering::Relaxed);
         let seen = seen.lock().unwrap();
         assert!(seen.iter().all(|line| line.starts_with("GET ")));
@@ -1299,7 +1650,9 @@ mod tests {
             .block_on(fixture.provider().fetch(&fixture.request(1)))
             .unwrap();
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].body, "body");
+        assert!(assets[0].body.starts_with("**Issue**"));
+        assert!(assets[0].body.contains("## Description\n\n"));
+        assert!(!assets[0].body.contains("## Comments ("));
     }
     #[test]
     fn tea_no_comments_message_is_treated_as_empty() {
@@ -1412,8 +1765,13 @@ mod tests {
         assert_eq!(assets[0].source.resource_type, "review");
         assert_eq!(assets[0].source.canonical_id, "acme/repo!1");
         assert_eq!(assets[0].source_revision.as_deref(), Some("head-sha"));
-        assert!(assets[0].body.contains("Base: main"));
-        assert!(assets[0].body.contains("review comment"));
+        assert!(assets[0].body.starts_with("**Pull request** · **Open**"));
+        assert!(assets[0].body.contains("## Description\n\nreview body"));
+        assert!(assets[0].body.contains("## Comments (2)"));
+        assert!(assets[0].body.contains("### fixture · 2026-01-01 00:00 · review on src/lib.rs"));
+        assert!(assets[0].body.contains("[#9](http://x/comments/9)"));
+        assert!(assets[0].body.contains("#### review comment"));
+        assert!(!assets[0].body.contains("edited"));
         assert!(
             assets[0]
                 .body

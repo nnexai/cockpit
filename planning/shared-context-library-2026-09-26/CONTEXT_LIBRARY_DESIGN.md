@@ -209,11 +209,12 @@ This extends `context-document-header` (`ContextViewer.tsx:1120-1141`). The exis
 [Confluence page] SD / Release process                                   (i)
 Release checklist
 ↑ Updated 2 h ago · v7 by M. Rossi   [Refresh] [Add to api-review] [⋯]
-▸ Metadata
+▸ Metadata    › Attachments 3 · 1 downloaded [Download all] [Remove downloaded]
 ```
 
 - **Line 1.** A kind chip (`Confluence page`, `GitLab MR`, `GitLab issue`, `Jira issue`, `GitHub PR`, `Folder`) and the container path.
-- **Line 2.** Title. It wraps to at most two lines, then ellipsis with a full-title tooltip.
+- **Line 2.** Title. It wraps to at most two lines, then ellipsis with a full-title tooltip. The preview doesn't repeat it: a leading `# ` heading equal to the title is not rendered (Source view is unchanged).
+- **Facts line** (generated issue/review documents only). `[Task] [To Do] Priority Medium · Unassigned · Author K. Hartmann · Updated 2 h ago` from the document's `item_type`, `status`, `priority`, `assignee`, `author` and `updated` frontmatter. The document's one-line `**Task** · **To Do** · …` summary after the hidden title is not rendered either. Space copies show the same facts in the plain document header, which keeps the title in the body.
 - **Line 3.** State chip, then the freshness phrase, then actions.
 - **Space action (only one is shown):**
   - `Add to <Space>` when the item has no copy in that Space.
@@ -225,7 +226,8 @@ Release checklist
   - `Missing in Space` and `Not linked` are Resources-only states and never appear as a healthy existing copy here.
 - **`⋯` menu.** The same items as the row context menu.
 - **`Metadata`** stays collapsed, as the design direction specifies (`research/ui-design-direction.md:157`). For Confluence it shows `[dep P10]`: space key and name, page id, parent and ancestors, version, last modified and author, labels.
-- **Attachments block** (Confluence only, below `Metadata`). A table with columns name · size · type · state · action. The header row reads `Attachments 3 · 1 downloaded [Download all]`.
+- **Attachments** (Confluence only, on the `Metadata` line). One summary line: a disclosure `Attachments 3 · 1 downloaded`, then `Download all` / `Remove downloaded`. The table (name · size · type · state · action, with row selection and `Download selected`) opens on demand below that line, scrolls within a bounded height, and never overlays the document.
+- **Comment cards.** In a generated provider document, each `###` under `## Comments (n)` / `## Comments (shown of total)` renders as a card: author, date, `edited …`, an extra kind/location tag, and the `#id` permalink at the right; the body follows. Every block keeps its source lines, so selection and Context comments work as elsewhere.
 - **Width.** At pane width ≤ 520 px, the Space action and `Refresh` move into `⋯`. The state chip stays visible.
 
 **Folder item header.** Line 3 reads `✓ Copied 3 d ago from ~/notes/design · 212 files · 4.1 MB · Git working tree`. `Metadata` then lists the exclusions: `Skipped 3 symlinks, 1 special file, 14 ignored files` `[dep P9]`.

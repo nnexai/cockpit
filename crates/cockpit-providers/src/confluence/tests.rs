@@ -1042,16 +1042,16 @@ async fn cloud_and_dc_confluence_pages_normalize_to_the_same_item_shape() {
         .remove(0);
 
     for (shim, id) in [(&cloud, "123456789"), (&dc, "524301")] {
-        assert_eq!(
-            shim.calls(),
-            [
-                format!("info {id} --json"),
-                format!("api content/{id} -X GET -f {PAGE_EXPAND}"),
-                format!("api content/{id}/label -X GET"),
-                format!("read {id} --format markdown"),
-                format!("attachments {id} --json"),
-            ]
-        );
+        let mut actual = shim.calls();
+        actual.sort();
+        let mut expected = vec![
+            format!("api content/{id} -X GET -f {PAGE_EXPAND}"),
+            format!("api content/{id}/label -X GET"),
+            format!("read {id} --format markdown"),
+            format!("attachments {id} --json"),
+        ];
+        expected.sort();
+        assert_eq!(actual, expected);
     }
     for asset in [&cloud_asset, &dc_asset] {
         assert_eq!(asset.source.resource_type, "page");
@@ -1365,26 +1365,11 @@ async fn page_ids_and_space_keys_resolve_without_spaces_fanout() {
 #[tokio::test]
 async fn info_from_another_instance_or_page_is_an_identity_mismatch() {
     let cases = [
-        (
-            "url",
-            json!("https://evil.atlassian.net/wiki/spaces/SD/pages/123456789/Release+Checklist"),
-        ),
-        (
-            "url",
-            json!("http://nnexai.atlassian.net/wiki/spaces/SD/pages/123456789"),
-        ),
-        (
-            "url",
-            json!("https://nnexai.atlassian.net:8443/wiki/spaces/SD/pages/123456789"),
-        ),
-        (
-            "url",
-            json!("https://nnexai.atlassian.net/spaces/SD/pages/123456789"),
-        ),
-        (
-            "url",
-            json!("https://nnexai.atlassian.net/wikiX/spaces/SD/pages/123456789"),
-        ),
+        ("url", json!("https://evil.atlassian.net/wiki/spaces/SD/pages/123456789/Release+Checklist")),
+        ("url", json!("http://nnexai.atlassian.net/wiki/spaces/SD/pages/123456789")),
+        ("url", json!("https://nnexai.atlassian.net:8443/wiki/spaces/SD/pages/123456789")),
+        ("url", json!("https://nnexai.atlassian.net/spaces/SD/pages/123456789")),
+        ("url", json!("https://nnexai.atlassian.net/wikiX/spaces/SD/pages/123456789")),
         ("url", Value::Null),
         ("id", json!("123456780")),
     ];
@@ -1393,30 +1378,20 @@ async fn info_from_another_instance_or_page_is_an_identity_mismatch() {
         let mut info: Value = serde_json::from_str(fixture!("cloud/page/info.json")).unwrap();
         info[key] = value.clone();
         shim.answer(&["info", "123456789", "--json"], &info.to_string());
-        let provider = shim.provider();
         assert_eq!(
-            provider.resolve_input("123456789").await.unwrap_err().code,
+            shim.provider().resolve_input("123456789").await.unwrap_err().code,
             "source_identity_mismatch",
             "{key}={value}"
         );
-        assert_eq!(
-            provider
-                .fetch(&shim.request(CLOUD, "123456789"))
-                .await
-                .unwrap_err()
-                .code,
-            "source_identity_mismatch",
-            "{key}={value}"
-        );
-        assert!(
-            shim.calls().iter().all(|call| call.starts_with("info ")),
-            "nothing after a failed proof"
-        );
+        assert_eq!(shim.calls(), ["info 123456789 --json"]);
     }
-    // The content record must be the same page too.
+}
+
+#[tokio::test]
+async fn fetched_content_rejects_a_different_site_origin() {
     let mut shim = page_shim(CLOUD, "123456789", "cloud");
     let mut content: Value = serde_json::from_str(fixture!("cloud/page/content.json")).unwrap();
-    content["id"] = json!("1");
+    content["_links"]["base"] = json!("https://evil.atlassian.net/wiki");
     shim.answer(
         &["api", "content/123456789", "-X", "GET", "-f", PAGE_EXPAND],
         &content.to_string(),
@@ -1424,6 +1399,26 @@ async fn info_from_another_instance_or_page_is_an_identity_mismatch() {
     assert_eq!(
         shim.provider()
             .fetch(&shim.request(CLOUD, "123456789"))
+            .await
+            .unwrap_err()
+            .code,
+        "source_identity_mismatch"
+    );
+    assert_eq!(
+        shim.calls(),
+        [format!("api content/123456789 -X GET -f {PAGE_EXPAND}")]
+    );
+
+    let mut wrong_page = page_shim(CLOUD, "123456789", "cloud");
+    let mut content: Value = serde_json::from_str(fixture!("cloud/page/content.json")).unwrap();
+    content["id"] = json!("1");
+    wrong_page.answer(
+        &["api", "content/123456789", "-X", "GET", "-f", PAGE_EXPAND],
+        &content.to_string(),
+    );
+    assert_eq!(
+        wrong_page.provider()
+            .fetch(&wrong_page.request(CLOUD, "123456789"))
             .await
             .unwrap_err()
             .code,

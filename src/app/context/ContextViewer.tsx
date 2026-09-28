@@ -1,12 +1,13 @@
 import { UiIcon } from "../UiIcon";
 import { useFileOverview } from "../input/useFileOverview";
 import { remarkBoundDiagrams } from "./markdownPolicy";
+import { frontmatterScalar, providerFacts, readFrontmatter, remarkProviderDocument } from "./providerDocument";
 import { SafeImage } from "./SafeImage";
 import { MermaidView } from "./MermaidView";
 import type { CommentReviewRef } from "../../protocol/generated/v1";
 import { HtmlPreview } from "./HtmlPreview";
 import { Component, Fragment, useId, useLayoutEffect, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type Options as MarkdownOptions } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type {
@@ -38,7 +39,7 @@ import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerL
 import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
 import { AddContextDialog } from "../library/AddContextDialog";
 import { LibraryConfirmDialog, SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "../library/LibraryConfirmDialog";
-import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, type ItemSpaceState } from "../library/LibraryItemHeader";
+import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, ProviderFactsLine, type ItemSpaceState } from "../library/LibraryItemHeader";
 import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
@@ -284,22 +285,10 @@ type SourceMetadata = {
   lastModifiedBy: string | null;
 };
 
-const SOURCE_METADATA_KEYS: Record<string, true> = { canonical_id: true, fetched_at: true, provider: true, last_modified: true, last_modified_by: true };
-
 function sourceMetadata(source: string): SourceMetadata {
-  const lines = splitSourceLines(source);
-  const fields: Record<string, string> = {};
-  if (lines[0]?.text.trim() === "---") for (const line of lines.slice(1)) {
-    if (line.text.trim() === "---" || line.text.trim() === "...") break;
-    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.text);
-    if (match && SOURCE_METADATA_KEYS[match[1]]) fields[match[1]] = match[2];
-  }
-  // Page fields are written as JSON-quoted scalars.
-  const scalar = (value: string | undefined): string | null => {
-    if (!value) return null;
-    try { return value.startsWith("\"") ? String(JSON.parse(value)) : value; } catch { return value; }
-  };
-  return { canonicalId: fields.canonical_id ?? null, provider: fields.provider ?? null, fetchedAt: fields.fetched_at ?? null, lastModified: scalar(fields.last_modified), lastModifiedBy: scalar(fields.last_modified_by) };
+  const fields = readFrontmatter(source);
+  // Library documents write these as JSON-quoted scalars.
+  return { canonicalId: frontmatterScalar(fields.get("canonical_id")), provider: frontmatterScalar(fields.get("provider")), fetchedAt: frontmatterScalar(fields.get("fetched_at")), lastModified: frontmatterScalar(fields.get("last_modified")), lastModifiedBy: frontmatterScalar(fields.get("last_modified_by")) };
 }
 
 /** Preview-limit diagnostics are already explained by the bounded-window notice. */
@@ -501,6 +490,7 @@ function MarkdownView({
   onLink,
   libraryItems,
   media,
+  hiddenTitle,
 }: {
   media: ContextReader["media"] | null;
   text: string;
@@ -509,26 +499,52 @@ function MarkdownView({
   onScroll: (scrollTop: number) => void;
   onLink: (href: string) => void;
   libraryItems: readonly LibraryItemSummary[];
+  /** The title the item header already shows; a leading equal `# ` heading isn't rendered again. */
+  hiddenTitle: string | null;
 }) {
   const derived = useMemo(() => sourceLinesForMarkdown(text), [text]);
+  const facts = useMemo(() => providerFacts(text), [text]);
+  const comments = facts.generated;
+  const summaryLead = facts.generated ? facts.itemType : null;
+  const remarkPlugins = useMemo((): NonNullable<MarkdownOptions["remarkPlugins"]> => [remarkGfm, remarkBoundDiagrams, [remarkProviderDocument, { comments, hiddenTitle, summaryLead }]], [comments, hiddenTitle, summaryLead]);
   const externalImages = useMemo(() => countExternalImages(derived.text), [derived.text]);
   const documentKey = `${state.rootId}\u0000${state.path}`;
   const [externalAllowedFor, setExternalAllowedFor] = useState<string | null>(null);
   const externalAllowed = externalAllowedFor === documentKey;
+  // Listing refreshes rebuild the item array; links only change when an item's identity or address does.
+  const linkItemsKey = libraryItems.map((item) => `${item.item_id}\u0000${item.title}\u0000${item.source_url ?? ""}\u0000${item.original_url ?? ""}`).join("\u0001");
+  const linkItemsRef = useRef({ key: linkItemsKey, items: libraryItems });
+  if (linkItemsRef.current.key !== linkItemsKey) linkItemsRef.current = { key: linkItemsKey, items: libraryItems };
+  const linkItems = linkItemsRef.current.items;
+  const onLinkRef = useRef(onLink);
+  const onScrollRef = useRef(onScroll);
+  useLayoutEffect(() => {
+    onLinkRef.current = onLink;
+    onScrollRef.current = onScroll;
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredScrollIdentity = useRef<string | null>(null);
   const scrollIdentity = `${state.rootId}\u0000${state.path}\u0000${state.revision ?? ""}\u0000${text}`;
+  // The position is committed once scrolling settles: committing per scroll event re-renders the whole viewer every frame.
+  const pendingScroll = useRef<number | null>(null);
+  const dropPendingScroll = () => {
+    if (pendingScroll.current !== null) window.clearTimeout(pendingScroll.current);
+    pendingScroll.current = null;
+  };
+  useEffect(() => dropPendingScroll, []);
   useEffect(() => {
     if (restoredScrollIdentity.current === scrollIdentity) return;
     restoredScrollIdentity.current = scrollIdentity;
+    dropPendingScroll();
     if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop;
   }, [scrollIdentity, state.scrollTop]);
-  useEffect(() => {
-    for (const block of scrollRef.current?.querySelectorAll<HTMLElement>("[data-source-start]") ?? []) {
-      const selected = Number(block.dataset.sourceStart) === state.selectionStart && Number(block.dataset.sourceEnd) === state.selectionEnd;
-      block.classList.toggle("is-selected-block", selected);
-    }
-  }, [state.selectionStart, state.selectionEnd]);
+  const scheduleScrollCommit = () => {
+    dropPendingScroll();
+    pendingScroll.current = window.setTimeout(() => {
+      pendingScroll.current = null;
+      if (scrollRef.current) onScrollRef.current(scrollRef.current.scrollTop);
+    }, 120);
+  };
   const components: Components = useMemo(() => ({
     p: ({ node, children, ...props }) => <p {...props} {...blockData(node, derived.sourceLines)}>{children}</p>,
     h1: ({ node, children, ...props }) => <h1 {...props} {...blockData(node, derived.sourceLines)}>{children}</h1>,
@@ -550,9 +566,9 @@ function MarkdownView({
       return <pre {...props} {...blockData(node, derived.sourceLines)}>{children}</pre>;
     },
     a: ({ node, href, children, ...props }) => {
-      const resolution = resolveContextLink(href, state.path, libraryItems);
+      const resolution = resolveContextLink(href, state.path, linkItems);
       if (resolution.kind === "relative" || resolution.kind === "library") {
-        return <a {...props} href={href} title={resolution.kind === "library" ? `Open in Library: ${resolution.item.title}` : "Navigates within this root; unsafe paths and symlink targets are refused"} className="context-link-reference" {...blockData(node, derived.sourceLines)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (href) onLink(href); }}>{children}</a>;
+        return <a {...props} href={href} title={resolution.kind === "library" ? `Open in Library: ${resolution.item.title}` : "Navigates within this root; unsafe paths and symlink targets are refused"} className="context-link-reference" {...blockData(node, derived.sourceLines)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (href) onLinkRef.current(href); }}>{children}</a>;
       }
       if (resolution.kind === "refused") {
         const reason = resolution.reason === "root_escape" ? "target escapes the current root" : resolution.reason === "absolute_path" ? "absolute filesystem paths are not allowed" : resolution.reason === "unsupported_scheme" ? "only relative paths are allowed" : "invalid path";
@@ -565,16 +581,24 @@ function MarkdownView({
       const remote = !path && remoteImageUrl(src);
       return <span {...blockData(node, derived.sourceLines)}>{path && media ? <SafeImage media={media} request={{ root_id: state.rootId, path, expected_revision: null }} alt={alt ?? "Context image"} className="context-safe-image" /> : remote ? <RemoteImage src={remote} alt={alt ?? ""} allowed={externalAllowed} /> : <span className="context-media-refusal">{alt || "image"}</span>}</span>;
     },
-  }), [derived.sourceLines, derived.text, externalAllowed, libraryItems, media, onLink, state.rootId, state.path]);
+  }), [derived.sourceLines, externalAllowed, linkItems, media, state.rootId, state.path]);
+  // Scrolling, selection and sibling state re-render this view; the document tree only changes with its inputs.
+  const rendered = useMemo(() => <ReactMarkdown skipHtml remarkPlugins={remarkPlugins} components={components}>{derived.text}</ReactMarkdown>, [components, derived.text, remarkPlugins]);
+  useEffect(() => {
+    for (const block of scrollRef.current?.querySelectorAll<HTMLElement>("[data-source-start]") ?? []) {
+      const selected = Number(block.dataset.sourceStart) === state.selectionStart && Number(block.dataset.sourceEnd) === state.selectionEnd;
+      block.classList.toggle("is-selected-block", selected);
+    }
+  }, [rendered, state.selectionStart, state.selectionEnd]);
   return (
-    <div className="context-markdown-scroll" ref={scrollRef} onScroll={(event) => onScroll(event.currentTarget.scrollTop)} onClick={(event) => {
+    <div className="context-markdown-scroll" ref={scrollRef} onScroll={scheduleScrollCommit} onClick={(event) => {
       if (event.target instanceof Element && event.target.closest("dialog, button, textarea")) return;
       const span = spanFromClick(event);
       if (span) onSelect(span.start, span.end);
     }}>
       {externalImages > 0 && !externalAllowed ? <div className="context-external-images" role="status"><span>{externalImages === 1 ? "1 external image" : `${externalImages} external images`} not loaded</span><button type="button" onClick={(event) => { event.stopPropagation(); setExternalAllowedFor(documentKey); }}>Load external images</button></div> : null}
       <article className="context-markdown-body">
-        <ReactMarkdown skipHtml remarkPlugins={[remarkGfm, remarkBoundDiagrams]} components={components}>{derived.text}</ReactMarkdown>
+        {rendered}
       </article>
     </div>
   );
@@ -1505,6 +1529,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       }
       if (!document) return null;
       const metadata = sourceMetadata(document.text ?? "");
+      const facts = providerFacts(document.text ?? "");
       const frontmatter = sourceLinesForMarkdown(document.text ?? "").frontmatter;
       const selectedLines = selectedRange
         ? `Lines ${Math.min(selectedRange.start, selectedRange.end)}–${Math.max(selectedRange.start, selectedRange.end)}`
@@ -1533,8 +1558,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       );
       return (
         <>
-          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} space={itemSpace(selectedLibraryItem)} pageUpdate={{ at: metadata.lastModified, by: metadata.lastModifiedBy }} /> : <div className="context-document-header">
+          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} space={itemSpace(selectedLibraryItem)} pageUpdate={{ at: metadata.lastModified, by: metadata.lastModifiedBy }} facts={facts.generated ? facts : null} /> : <div className="context-document-header">
             {metadata.canonicalId ? <span className="document-source-kind">{metadata.provider ?? "Issue"}</span> : null}<strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
+            {facts.generated ? <ProviderFactsLine facts={facts} now={Date.now()} className="context-document-facts" /> : null}
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
 
             {documentDetails}
@@ -1548,7 +1574,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
               return <>
                 {document.truncated && document.next_offset !== undefined ? <div className="context-notice context-notice-warning" role="status"><span>Showing the start of a large file.</span><button type="button" onClick={() => { updateFile({ mode: "source" }); void loadDocumentPage(); }} disabled={documentPageLoading === pageRequestKey}>{documentPageLoading === pageRequestKey ? "Loading…" : "Load next source page"}</button></div> : null}
                 <RenderErrorBoundary fallback={<div className="context-notice context-notice-error"><strong>Markdown rendering failed</strong><span>Showing the canonical source instead.</span><SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end, mode: "source" })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} /></div>}>
-                  {mode === "markdown" ? <MarkdownView media={reader?.media ?? null} text={document.text!} state={{ ...fileState!, mode: "markdown" }} libraryItems={libraryItems ?? []} onLink={(href) => void openMarkdownLink(href)} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
+                  {mode === "markdown" ? <MarkdownView media={reader?.media ?? null} text={document.text!} hiddenTitle={selectedLibraryItem?.title ?? null} state={{ ...fileState!, mode: "markdown" }} libraryItems={libraryItems ?? []} onLink={(href) => void openMarkdownLink(href)} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} /> : mode === "html" ? <HtmlPreview html={document.text!} title={selectedPath} /> : <SourceLines text={document.text!} state={{ ...fileState!, mode: "source" }} onSelect={(start, end) => updateFile({ selectionStart: start, selectionEnd: end })} onScroll={(scrollTop) => updateFile({ scrollTop })} commentDrafts={drafts} commentActions={actions} inlineEditor={inlineEditor} onCreateLineComment={actions?.createLines} onCreateFileComment={actions?.createWholeFile} />}
                 </RenderErrorBoundary>
               </>;
             })()}

@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::sources::{
-    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
+    SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::ProjectConfiguration;
 use cockpit_protocol::sources::SourceCapability;
@@ -167,6 +168,15 @@ struct Issue {
     #[serde(rename = "isCrossRepository")]
     is_cross_repository: Option<bool>,
     body: Option<String>,
+    state: Option<String>,
+    #[serde(rename = "isDraft")]
+    is_draft: Option<bool>,
+    #[serde(rename = "mergedAt")]
+    merged_at: Option<String>,
+    author: Option<CommentAuthor>,
+    assignees: Option<Vec<CommentAuthor>>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
     #[serde(rename = "updatedAt")]
     updated_at: Option<String>,
 }
@@ -320,26 +330,111 @@ fn append_comment(
     let id = comment_id(&comment.id).ok_or_else(|| {
         InspectionError::new("source_provider_contract", "GitHub comment has no ID")
     })?;
-    let heading = if review {
-        "Review comment"
-    } else {
-        "GitHub comment"
-    };
-    append_bounded(body, &format!("\n\n## {heading} {id}\n"))?;
-    for (label, value) in [
-        ("Author", comment.author.and_then(|author| author.login)),
-        ("Created", comment.created_at),
-        ("Updated", comment.updated_at),
-        ("URL", comment.html_url.or(comment.url)),
-        ("Path", comment.path),
-        ("Line", comment.line.map(|line| line.to_string())),
-    ] {
-        if let Some(value) = value {
-            append_bounded(body, &format!("{label}: {value}\n"))?;
+    let author = comment
+        .author
+        .and_then(|author| author.login)
+        .unwrap_or_else(|| "Unknown author".into());
+    let created = comment.created_at.as_deref().unwrap_or_default();
+    append_bounded(body, &format!("\n\n### {author} · {}", local_timestamp(created)))?;
+    if let Some(updated) = comment
+        .updated_at
+        .as_deref()
+        .filter(|updated| rfc3339_seconds(updated) != rfc3339_seconds(created))
+    {
+        append_bounded(body, &format!(" · edited {}", local_timestamp(updated)))?;
+    }
+    if review {
+        if let Some(path) = comment.path.as_deref() {
+            append_bounded(body, &format!(" · review on {path}"))?;
+            if let Some(line) = comment.line {
+                append_bounded(body, &format!(":{line}"))?;
+            }
         }
     }
-    if let Some(text) = comment.body {
-        append_bounded(body, &format!("\n{text}"))?;
+    append_bounded(body, "\n")?;
+    if let Some(url) = comment.html_url.as_deref().or(comment.url.as_deref()) {
+        append_bounded(body, &format!("[#{id}]({url})"))?;
+    } else {
+        append_bounded(body, &format!("#{id}"))?;
+    }
+    if let Some(text) = comment.body.as_deref() {
+        append_bounded(body, "\n\n")?;
+        append_markdown(body, text, 4)?;
+    }
+    Ok(())
+}
+
+fn local_timestamp(value: &str) -> String {
+    let value = rfc3339_seconds(value);
+    value.get(..16).unwrap_or(&value).replace('T', " ")
+}
+
+fn rfc3339_seconds(value: &str) -> String {
+    if let Some(dot) = value.find('.') {
+        let suffix = value[dot..]
+            .find(|character| matches!(character, '+' | '-' | 'Z'))
+            .map(|offset| dot + offset)
+            .unwrap_or(value.len());
+        format!("{}{}", &value[..dot], &value[suffix..])
+    } else {
+        value.to_owned()
+    }
+}
+
+fn capitalize_status(value: &str) -> String {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .map(|first| first.to_ascii_uppercase().to_string() + characters.as_str())
+        .unwrap_or_default()
+}
+
+fn append_markdown(body: &mut String, markdown: &str, minimum_heading: usize) -> Result<(), InspectionError> {
+    let mut fenced = None;
+    for (index, line) in markdown.lines().enumerate() {
+        if index > 0 {
+            append_bounded(body, "\n")?;
+        }
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        let fence = if indent <= 3 {
+            trimmed
+                .chars()
+                .take_while(|character| matches!(character, '`' | '~'))
+                .collect::<String>()
+        } else {
+            String::new()
+        };
+        if let Some(current) = fenced.as_ref() {
+            append_bounded(body, line)?;
+            if !fence.is_empty()
+                && fence.starts_with(current)
+                && trimmed[fence.len()..].trim().is_empty()
+            {
+                fenced = None;
+            }
+            continue;
+        }
+        if fence.len() >= 3 {
+            fenced = Some(fence);
+            append_bounded(body, line)?;
+            continue;
+        }
+        let hashes = trimmed.chars().take_while(|character| *character == '#').count();
+        if indent <= 3
+            && (1..=6).contains(&hashes)
+            && trimmed[hashes..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+            && hashes < minimum_heading
+        {
+            append_bounded(body, &" ".repeat(indent))?;
+            append_bounded(body, &"#".repeat(minimum_heading))?;
+            append_bounded(body, &trimmed[hashes..])?;
+        } else {
+            append_bounded(body, line)?;
+        }
     }
     Ok(())
 }
@@ -417,6 +512,13 @@ fn comment_id(value: &Value) -> Option<String> {
         .or_else(|| value.as_u64().map(|number| number.to_string()))
 }
 
+fn frontmatter(key: &str, value: FrontmatterValue) -> FrontmatterField {
+    FrontmatterField {
+        key: key.into(),
+        value,
+    }
+}
+
 #[async_trait]
 impl SourceProvider for GithubSourceProvider {
     fn provider_id(&self) -> &str {
@@ -490,9 +592,11 @@ impl SourceProvider for GithubSourceProvider {
                     repository.clone(),
                     "--json".into(),
                     match kind {
-                        GithubKind::Issue => "number,title,body,url,updatedAt",
+                        GithubKind::Issue => {
+                            "number,title,body,url,state,author,assignees,createdAt,updatedAt"
+                        }
                         GithubKind::PullRequest => {
-                            "number,title,body,url,updatedAt,headRefName,headRefOid,baseRefName,state,isDraft"
+                            "number,title,body,url,state,isDraft,mergedAt,author,assignees,createdAt,updatedAt,headRefName,headRefOid,baseRefName"
                         }
                     }
                     .into(),
@@ -500,17 +604,96 @@ impl SourceProvider for GithubSourceProvider {
                 .await?,
         )?;
         verify_identity(&issue, &repository, kind, number)?;
-        let mut body = String::new();
-        if let Some(issue_body) = issue.body.as_deref() {
-            append_bounded(&mut body, issue_body)?;
-        }
-        for comment in self.fetch_comments(&repository, "issues", number).await? {
-            append_comment(&mut body, comment, false)?;
-        }
+
+        let mut comments: Vec<(bool, Comment)> = self
+            .fetch_comments(&repository, "issues", number)
+            .await?
+            .into_iter()
+            .map(|comment| (false, comment))
+            .collect();
         if kind == GithubKind::PullRequest {
-            for comment in self.fetch_comments(&repository, "pulls", number).await? {
-                append_comment(&mut body, comment, true)?;
+            comments.extend(
+                self.fetch_comments(&repository, "pulls", number)
+                    .await?
+                    .into_iter()
+                    .map(|comment| (true, comment)),
+            );
+        }
+        comments.sort_by(|(_, left), (_, right)| {
+            left.created_at.cmp(&right.created_at)
+        });
+
+        let item_type = match kind {
+            GithubKind::Issue => "Issue",
+            GithubKind::PullRequest => "Pull request",
+        };
+        let status = if issue.merged_at.is_some() {
+            Some("merged".to_owned())
+        } else if issue.is_draft == Some(true) {
+            Some("draft".to_owned())
+        } else {
+            issue.state.clone().map(|state| state.to_ascii_lowercase())
+        };
+        let author = issue.author.as_ref().and_then(|author| author.login.clone());
+        let assignees: Vec<String> = issue
+            .assignees
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|assignee| assignee.login.clone())
+            .collect();
+        let comment_count = comments.len();
+        let mut summary = vec![format!("**{item_type}**")];
+        if let Some(status) = &status {
+            summary.push(format!("**{}**", capitalize_status(status)));
+        }
+        if let Some(author) = &author {
+            summary.push(format!("Reporter {author}"));
+        }
+        if issue.assignees.is_some() {
+            summary.push(if assignees.is_empty() {
+                "Unassigned".into()
+            } else {
+                format!("Assignee {}", assignees.join(", "))
+            });
+        }
+        let mut body = format!("{}\n", summary.join(" · "));
+        if let Some(description) = issue.body.as_deref().filter(|body| !body.trim().is_empty()) {
+            append_bounded(&mut body, "\n## Description\n\n")?;
+            append_markdown(&mut body, description, 3)?;
+        }
+        if comment_count > 0 {
+            append_bounded(&mut body, &format!("\n\n## Comments ({comment_count})"))?;
+            for (review, comment) in comments {
+                append_comment(&mut body, comment, review)?;
             }
+        }
+
+        let mut fields = vec![
+            frontmatter("item_type", FrontmatterValue::String(item_type.into())),
+            frontmatter("comment_count", FrontmatterValue::Number(comment_count as i64)),
+        ];
+        if let Some(status) = status {
+            fields.push(frontmatter("status", FrontmatterValue::String(status)));
+        }
+        if let Some(author) = author {
+            fields.push(frontmatter("author", FrontmatterValue::String(author)));
+        }
+        if let Some(created) = issue.created_at {
+            fields.push(frontmatter("created", FrontmatterValue::String(rfc3339_seconds(&created))));
+        }
+        if let Some(updated) = issue.updated_at.clone() {
+            fields.push(frontmatter("updated", FrontmatterValue::String(rfc3339_seconds(&updated))));
+        }
+        if issue.assignees.is_some() {
+            fields.push(frontmatter(
+                "assignee",
+                if assignees.is_empty() {
+                    FrontmatterValue::Null
+                } else {
+                    FrontmatterValue::String(assignees.join(", "))
+                },
+            ));
         }
         Ok(vec![SourceAsset {
             source: SourceRef {
@@ -546,7 +729,7 @@ impl SourceProvider for GithubSourceProvider {
                 id: repository.clone(),
                 label: repository,
             }),
-            fields: Vec::new(),
+            fields,
             attachments: Vec::new(),
         }])
     }
@@ -555,10 +738,11 @@ impl SourceProvider for GithubSourceProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        GithubKind, GithubSourceProvider, MAX_COMMENT_PAGES, ensure_comment_continuation,
-        github_artifact, is_supported_base, parse_comment_page, parse_issue,
+        append_comment, append_markdown, ensure_comment_continuation, github_artifact,
+        is_supported_base, parse_comment_page, parse_issue, Comment, CommentAuthor,
+        GithubKind, GithubSourceProvider, MAX_ISSUE_BYTES, MAX_COMMENT_PAGES,
     };
-    use cockpit_core::sources::{SourceAuthority, SourceFetchRequest};
+    use cockpit_core::sources::{FrontmatterValue, SourceAuthority, SourceFetchRequest};
     use cockpit_protocol::projects::{ProjectConfiguration, ProjectLimits, ProjectProvider};
     use url::Url;
 
@@ -696,6 +880,76 @@ Link: <https://api.github.com/repos/nnexai/cockpit/issues/4/comments?page=2>; re
                 .code,
             "source_truncated"
         );
+    }
+
+    #[test]
+    fn markdown_headings_are_demoted_only_outside_fences() {
+        let mut description = String::new();
+        append_markdown(
+            &mut description,
+            "# Top\n#### Already deep\n```md\n# literal\n```\n~~~\n## also literal\n~~~",
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            description,
+            "### Top\n#### Already deep\n```md\n# literal\n```\n~~~\n## also literal\n~~~"
+        );
+
+        let mut comment = String::new();
+        append_markdown(&mut comment, "## Comment\n##### Deep\n    # indented", 4).unwrap();
+        assert_eq!(comment, "#### Comment\n##### Deep\n    # indented");
+    }
+
+    #[test]
+    fn comment_cards_include_link_edit_review_context_and_safe_markdown() {
+        let comment = Comment {
+            id: serde_json::json!(17),
+            body: Some("# Finding\n\n```md\n# literal\n```".into()),
+            author: Some(CommentAuthor {
+                login: Some("reviewer".into()),
+            }),
+            created_at: Some("2026-09-09T10:00:00Z".into()),
+            updated_at: Some("2026-09-09T11:00:00Z".into()),
+            url: None,
+            html_url: Some("https://github.com/o/r/pull/4#discussion_r17".into()),
+            path: Some("src/lib.rs".into()),
+            line: Some(12),
+        };
+        let mut body = String::new();
+        append_comment(&mut body, comment, true).unwrap();
+        assert!(body.starts_with(
+            "\n\n### reviewer · 2026-09-09 10:00 · edited 2026-09-09 11:00 · review on src/lib.rs:12\n[#17](https://github.com/o/r/pull/4#discussion_r17)\n\n#### Finding"
+        ));
+        assert!(body.contains("```md\n# literal\n```"));
+    }
+
+    #[test]
+    fn comment_markdown_obeys_asset_byte_limit_boundary() {
+        let at_limit = "x".repeat(MAX_ISSUE_BYTES);
+        let mut body = String::new();
+        append_markdown(&mut body, &at_limit, 4).unwrap();
+        assert_eq!(body.len(), MAX_ISSUE_BYTES);
+
+        let mut body = String::new();
+        assert_eq!(
+            append_markdown(&mut body, &format!("{at_limit}x"), 4)
+                .unwrap_err()
+                .code,
+            "source_truncated"
+        );
+    }
+
+    #[test]
+    fn typed_frontmatter_values_preserve_contract_types() {
+        let item_type = super::frontmatter(
+            "item_type",
+            FrontmatterValue::String("Pull request".into()),
+        );
+        let count = super::frontmatter("comment_count", FrontmatterValue::Number(3));
+        assert_eq!(item_type.key, "item_type");
+        assert_eq!(item_type.value, FrontmatterValue::String("Pull request".into()));
+        assert_eq!(count.value, FrontmatterValue::Number(3));
     }
 
     #[test]

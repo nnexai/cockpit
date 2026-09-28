@@ -23,6 +23,8 @@ use std::{
     time::Duration,
 };
 
+const FOLLOW_FETCH_CONCURRENCY: usize = 8;
+
 /// D3: `follow:<sha256(provider_id \0 instance \0 space_key)>`.
 pub(super) fn follow_id(provider_id: &str, provider_instance: &str, space_key: &str) -> String {
     let mut hash = Sha256::new();
@@ -317,25 +319,28 @@ impl LibraryService {
         operations::add_total(store, operation, pages.len() as u32)?;
         let mut cancelled = false;
         let mut unchanged = 0;
+        let mut pending = Vec::new();
+        let initial_index = {
+            let _lock = store.shared()?;
+            store.index()?
+        };
+        let excluded = initial_index
+            .follows
+            .iter()
+            .find(|f| f.follow_id == follow.follow_id)
+            .map(|f| f.excluded_page_ids.iter().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        let mut existing = initial_index
+            .items
+            .into_iter()
+            .map(|entry| (entry.summary.item_id.clone(), entry))
+            .collect::<BTreeMap<_, _>>();
         for page in &pages {
-            if operations::cancelled(store, operation)? {
-                cancelled = true;
-                break;
-            }
-            let id = page_item_id(&follow, &page.page_id);
-            let (excluded, old) = {
-                let _lock = store.shared()?;
-                let index = store.index()?;
-                let excluded = index
-                    .follows
-                    .iter()
-                    .find(|f| f.follow_id == follow.follow_id)
-                    .is_some_and(|f| f.excluded_page_ids.contains(&page.page_id));
-                (excluded, index.items.into_iter().find(|e| e.summary.item_id == id))
-            };
-            if excluded {
+            if excluded.contains(&page.page_id) {
                 continue;
             }
+            let id = page_item_id(&follow, &page.page_id);
+            let old = existing.remove(&id);
             let reason = match &old {
                 None => None,
                 Some(_) if homepage_only(page) => {
@@ -351,8 +356,88 @@ impl LibraryService {
                     }
                 },
             };
-            self.refresh_follow_page(store, operation, &follow, page, old, reason)
-                .await?;
+            pending.push((page.clone(), old, reason));
+        }
+        let site = site_authority(&self.configuration, &follow.provider_id)?;
+        for batch in pending.chunks(FOLLOW_FETCH_CONCURRENCY) {
+            if operations::cancelled(store, operation)? {
+                cancelled = true;
+                break;
+            }
+            let mut leases = Vec::with_capacity(batch.len());
+            let mut jobs = tokio::task::JoinSet::new();
+            let mut ordered = Vec::with_capacity(batch.len());
+            for (page, old, reason) in batch {
+                let id = page_item_id(&follow, &page.page_id);
+                match store.lease(&id) {
+                    Ok(lease) => leases.push(lease),
+                    Err(failure) => {
+                        let title = if page.title.is_empty() { &page.page_id } else { &page.title };
+                        operations::follow_row(
+                            store,
+                            operation,
+                            &follow,
+                            LibraryReportOutcome::Failed,
+                            Some(format!("{title}: {}", failure.message)),
+                        )?;
+                        continue;
+                    }
+                }
+                let sources = self.sources.clone();
+                let request = SourceFetchRequest {
+                    provider_id: follow.provider_id.clone(),
+                    artifact_url: confluence_page_url(&site.provider_instance, &page.page_id),
+                    authority: site.clone(),
+                };
+                let page_id = page.page_id.clone();
+                let space_key = follow.space_key.clone();
+                jobs.spawn(async move {
+                    let result = async {
+                        let fetched = sources.fetch_assets(request, false).await?;
+                        let asset = fetched
+                            .assets
+                            .into_iter()
+                            .find(|asset| asset.source.canonical_id == page_id)
+                            .ok_or_else(|| error(
+                                "source_identity_mismatch",
+                                "Provider refresh omitted the requested page",
+                            ))?;
+                        match asset.container.as_ref().map(|container| container.id.as_str()) {
+                            Some(key) if key == space_key => Ok(asset),
+                            other => Err(error(
+                                "source_not_found",
+                                format!("moved to {}", other.unwrap_or("another space")),
+                            )),
+                        }
+                    }.await;
+                    (page_id, result)
+                });
+                ordered.push((page, old, reason));
+            }
+            let mut results = BTreeMap::new();
+            while let Some(result) = jobs.join_next().await {
+                let (page_id, asset) = result.map_err(|_| error(
+                    "source_provider_failed",
+                    "Confluence page fetch task failed",
+                ))?;
+                results.insert(page_id, asset);
+            }
+            // JoinSet completes in arbitrary order; consume by the ordered page list.
+            for (page, old, reason) in ordered {
+                if operations::cancelled(store, operation)? {
+                    cancelled = true;
+                    break;
+                }
+                let result = results.remove(&page.page_id)
+                    .unwrap_or_else(|| Err(error("source_provider_failed", "Confluence page fetch result is missing")));
+                self.save_follow_page_result(
+                    store, operation, &follow, &page, old.clone(), reason.clone(), result,
+                ).await?;
+            }
+            drop(leases);
+            if cancelled {
+                break;
+            }
         }
         operations::unchanged(store, operation, unchanged)?;
         cancelled = cancelled || operations::cancelled(store, operation)?;
@@ -419,7 +504,7 @@ impl LibraryService {
         listing.map(Some)
     }
 
-    async fn refresh_follow_page(
+    async fn save_follow_page_result(
         &self,
         store: &Arc<Store>,
         operation: &str,
@@ -427,6 +512,7 @@ impl LibraryService {
         page: &SpacePage,
         old: Option<LibraryIndexEntry>,
         reason: Option<String>,
+        result: Result<crate::sources::SourceAsset, InspectionError>,
     ) -> Result<(), InspectionError> {
         let id = page_item_id(follow, &page.page_id);
         let failed = |message: String| -> Result<(), InspectionError> {
@@ -439,39 +525,11 @@ impl LibraryService {
                 Some(format!("{title}: {message}")),
             )
         };
-        let _lease = match store.lease(&id) {
-            Ok(lease) => lease,
-            Err(busy) => return failed(busy.message),
-        };
-        let site = site_authority(&self.configuration, &follow.provider_id)?;
-        let request = SourceFetchRequest {
-            provider_id: follow.provider_id.clone(),
-            artifact_url: confluence_page_url(&site.provider_instance, &page.page_id),
-            authority: site,
-        };
-        let result = async {
-            let fetched = self.sources.fetch_assets(request, false).await?;
-            let asset = fetched
-                .assets
-                .into_iter()
-                .find(|asset| item_id(&asset.source) == id)
-                .ok_or_else(|| {
-                    error("source_identity_mismatch", "Provider refresh omitted the requested page")
-                })?;
-            match asset.container.as_ref().map(|container| container.id.as_str()) {
-                Some(key) if key == follow.space_key => Ok(asset),
-                other => Err(error(
-                    "source_not_found",
-                    format!("moved to {}", other.unwrap_or("another space")),
-                )),
-            }
-        }
-        .await;
         if operations::cancelled(store, operation)? {
             return Ok(());
         }
         let saved = match result {
-            Ok(asset) => self.save_asset_with(
+            Ok(asset) if item_id(&asset.source) == id => self.save_asset_with(
                 store, operation, asset, old.clone(),
                 SaveOptions {
                     follow_id: Some(&follow.follow_id),
@@ -480,6 +538,7 @@ impl LibraryService {
                     ..SaveOptions::default()
                 },
             ).await,
+            Ok(_) => Err(error("source_identity_mismatch", "Provider refresh returned a different page")),
             Err(failure) => Err(failure),
         };
         match (saved, old) {
@@ -488,6 +547,7 @@ impl LibraryService {
             (Err(failure), None) => failed(failure.message),
         }
     }
+
 
     /// D20: only a complete, non-partial run reaches here. A page absent from
     /// the enumeration is removed at source only when `Info` says it no longer

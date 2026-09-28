@@ -6,7 +6,8 @@ use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::repositories::resolve_jira_url;
 use cockpit_core::sources::{
-    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
+    SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic, ProjectProvider};
 use cockpit_protocol::sources::SourceCapability;
@@ -216,7 +217,8 @@ impl SourceProvider for JiraSourceProvider {
         let key = self.key(request)?;
         let issue = self.issue(&key).await?;
         let title = summary(&issue)?;
-        let (body, complete) = issue_markdown(&issue)?;
+        let source_url = self.browse_url(&key);
+        let (body, complete) = issue_markdown(&issue, &source_url)?;
         let mut diagnostics = if complete {
             Vec::new()
         } else {
@@ -245,7 +247,7 @@ impl SourceProvider for JiraSourceProvider {
                 canonical_id: key.clone(),
             },
             title,
-            source_url: Some(self.browse_url(&key)),
+            source_url: Some(source_url),
             original_url: None,
             source_revision: field_str(&issue, "updated").map(str::to_owned),
             complete,
@@ -255,7 +257,7 @@ impl SourceProvider for JiraSourceProvider {
                 id: project_key.into(),
                 label: project_key.into(),
             }),
-            fields: Vec::new(),
+            fields: issue_fields(&issue),
             attachments: Vec::new(),
         }])
     }
@@ -315,66 +317,153 @@ fn has_wiki_markup(issue: &Value) -> bool {
             })
 }
 
-/// Render the work item and its comments as Markdown. Returns whether every
-/// comment Jira reported was included.
-fn issue_markdown(issue: &Value) -> Result<(String, bool), InspectionError> {
-    let mut body = String::new();
-    let facts = [
-        ("Type", field_name(issue, "issuetype", "name")),
-        ("Status", field_name(issue, "status", "name")),
-        ("Priority", field_name(issue, "priority", "name")),
-        ("Assignee", field_name(issue, "assignee", "displayName")),
-        ("Reporter", field_name(issue, "reporter", "displayName")),
-        ("Created", field_str(issue, "created")),
-        ("Updated", field_str(issue, "updated")),
-    ];
-    for (label, value) in facts {
-        if let Some(value) = value {
-            append_bounded(&mut body, &format!("{label}: {value}\n"))?;
-        }
-    }
-    if let Some(description) = issue
-        .get("fields")
-        .and_then(|fields| fields.get("description"))
-    {
-        let text = document_markdown(description);
-        if !text.is_empty() {
-            append_bounded(&mut body, &format!("\n{text}\n"))?;
-        }
-    }
-    let comments = issue.get("fields").and_then(|fields| fields.get("comment"));
+/// Render an issue and comments as the stable provider Markdown contract.
+fn issue_markdown(issue: &Value, source_url: &str) -> Result<(String, bool), InspectionError> {
+    let fields = issue.get("fields");
+    let comments = fields.and_then(|fields| fields.get("comment"));
     let list = comments
         .and_then(|comment| comment.get("comments"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    for comment in list {
-        let id = comment.get("id").and_then(Value::as_str).ok_or_else(|| {
-            InspectionError::new("source_provider_contract", "Jira comment has no ID")
-        })?;
-        append_bounded(&mut body, &format!("\n## Jira comment {id}\n"))?;
-        let author = comment
-            .get("author")
-            .and_then(|author| author.get("displayName"))
-            .and_then(Value::as_str);
-        for (label, value) in [
-            ("Author", author),
-            ("Created", comment.get("created").and_then(Value::as_str)),
-            ("Updated", comment.get("updated").and_then(Value::as_str)),
-        ] {
-            if let Some(value) = value {
-                append_bounded(&mut body, &format!("{label}: {value}\n"))?;
-            }
-        }
-        if let Some(text) = comment.get("body") {
-            append_bounded(&mut body, &format!("\n{}\n", document_markdown(text)))?;
-        }
-    }
+    let mut ordered: Vec<_> = list.iter().collect();
+    ordered.sort_by_key(|comment| {
+        comment
+            .get("created")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    });
     let total = comments
         .and_then(|comment| comment.get("total"))
         .and_then(Value::as_u64)
         .unwrap_or(list.len() as u64);
+    let mut body = format!("{}\n", summary_line(issue));
+    if let Some(description) = fields.and_then(|fields| fields.get("description")) {
+        let text = document_markdown_at(description, 2);
+        if !text.trim().is_empty() {
+            append_bounded(&mut body, &format!("\n## Description\n\n{text}\n"))?;
+        }
+    }
+    if !ordered.is_empty() {
+        let label = if total > ordered.len() as u64 {
+            format!("{} of {total}", ordered.len())
+        } else {
+            total.to_string()
+        };
+        append_bounded(&mut body, &format!("\n## Comments ({label})\n"))?;
+        for comment in ordered {
+            let id = comment.get("id").and_then(Value::as_str).ok_or_else(|| {
+                InspectionError::new("source_provider_contract", "Jira comment has no ID")
+            })?;
+            let author = comment
+                .get("author")
+                .and_then(|author| author.get("displayName"))
+                .unwrap_or(&Value::Null)
+                .as_str()
+                .unwrap_or("Unknown");
+            let created = comment.get("created").and_then(Value::as_str).unwrap_or_default();
+            let updated = comment.get("updated").and_then(Value::as_str);
+            let mut heading = format!("### {author} · {}", local_timestamp(created));
+            if let Some(updated) = updated.filter(|updated| normalize_timestamp(updated) != normalize_timestamp(created)) {
+                heading.push_str(&format!(" · edited {}", local_timestamp(updated)));
+            }
+            append_bounded(&mut body, &format!("\n{heading}\n"))?;
+            let permalink = format!("[#{id}]({source_url}?focusedCommentId={id})");
+            append_bounded(&mut body, &format!("{permalink}\n"))?;
+            if let Some(text) = comment.get("body") {
+                let text = document_markdown_at(text, 3);
+                if !text.trim().is_empty() {
+                    append_bounded(&mut body, &format!("\n{text}\n"))?;
+                }
+            }
+        }
+    }
     Ok((body, total <= list.len() as u64))
+}
+
+fn issue_fields(issue: &Value) -> Vec<FrontmatterField> {
+    let mut fields = Vec::new();
+    let mut push_text = |key: &str, value: Option<String>| {
+        if let Some(value) = value {
+            fields.push(FrontmatterField {
+                key: key.into(),
+                value: FrontmatterValue::String(value),
+            });
+        }
+    };
+    push_text("item_type", field_name(issue, "issuetype", "name").map(str::to_owned));
+    push_text("status", field_name(issue, "status", "name").map(str::to_owned));
+    push_text("priority", field_name(issue, "priority", "name").map(str::to_owned));
+    push_text("assignee", field_name(issue, "assignee", "displayName").map(str::to_owned));
+    push_text("author", field_name(issue, "reporter", "displayName").map(str::to_owned));
+    push_text("created", field_str(issue, "created").map(normalize_timestamp));
+    push_text("updated", field_str(issue, "updated").map(normalize_timestamp));
+    drop(push_text);
+    if issue.pointer("/fields/assignee").is_some() && field_name(issue, "assignee", "displayName").is_none() {
+        fields.push(FrontmatterField {
+            key: "assignee".into(),
+            value: FrontmatterValue::Null,
+        });
+    }
+    let count = issue
+        .pointer("/fields/comment/total")
+        .and_then(Value::as_u64)
+        .or_else(|| issue.pointer("/fields/comment/comments").and_then(Value::as_array).map(|v| v.len() as u64));
+    if let Some(count) = count.and_then(|count| i64::try_from(count).ok()) {
+        fields.push(FrontmatterField {
+            key: "comment_count".into(),
+            value: FrontmatterValue::Number(count),
+        });
+    }
+    fields
+}
+
+fn summary_line(issue: &Value) -> String {
+    let mut segments = Vec::new();
+    for (label, value) in [
+        (None, field_name(issue, "issuetype", "name")),
+        (None, field_name(issue, "status", "name")),
+        (Some("Priority"), field_name(issue, "priority", "name")),
+        (Some("Reporter"), field_name(issue, "reporter", "displayName")),
+        (Some("Assignee"), field_name(issue, "assignee", "displayName")),
+    ] {
+        if let Some(value) = value {
+            segments.push(label.map_or_else(|| format!("**{value}**"), |label| format!("{label} {value}")));
+        } else if label == Some("Assignee") {
+            segments.push("Unassigned".into());
+        }
+    }
+    segments.join(" · ")
+}
+
+fn normalize_timestamp(value: &str) -> String {
+    let mut value = value.to_owned();
+    if let Some(dot) = value.find('.') {
+        let zone = value[dot..]
+            .find(['+', '-'])
+            .map(|offset| dot + offset)
+            .or_else(|| value[dot..].find('Z').map(|offset| dot + offset));
+        if let Some(zone) = zone {
+            value.replace_range(dot..zone, "");
+        }
+    }
+    if value.ends_with('Z') {
+        return value;
+    }
+    let zone_start = value
+        .get(19..)
+        .and_then(|suffix| suffix.find(['+', '-']).map(|offset| offset + 19))
+        .unwrap_or(value.len());
+    let offset = &value[zone_start..];
+    if offset.len() == 5 && offset[1..].bytes().all(|byte| byte.is_ascii_digit()) {
+        value.insert(zone_start + 3, ':');
+    }
+    value
+}
+
+fn local_timestamp(value: &str) -> String {
+    let normalized = normalize_timestamp(value);
+    normalized.get(..16).unwrap_or(&normalized).replace('T', " ")
 }
 
 fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError> {
@@ -391,9 +480,13 @@ fn append_bounded(body: &mut String, value: &str) -> Result<(), InspectionError>
 /// Convert Atlassian Document Format to Markdown. Legacy wiki markup is retained
 /// verbatim and reported separately; unknown ADF nodes keep their text.
 pub(crate) fn document_markdown(value: &Value) -> String {
+    document_markdown_at(value, 0)
+}
+
+fn document_markdown_at(value: &Value, heading_offset: usize) -> String {
     match value {
         Value::String(text) => text.clone(),
-        Value::Object(_) => blocks(children(value), 0),
+        Value::Object(_) => blocks(children(value), 0, heading_offset),
         _ => String::new(),
     }
 }
@@ -405,24 +498,25 @@ fn children(node: &Value) -> &[Value] {
         .unwrap_or_default()
 }
 
+
 fn attr<'a>(node: &'a Value, name: &str) -> Option<&'a Value> {
     node.get("attrs")?.get(name)
 }
 
-fn blocks(nodes: &[Value], depth: usize) -> String {
-    joined_blocks(nodes, depth, "\n\n")
+fn blocks(nodes: &[Value], depth: usize, heading_offset: usize) -> String {
+    joined_blocks(nodes, depth, heading_offset, "\n\n")
 }
 
-fn joined_blocks(nodes: &[Value], depth: usize, separator: &str) -> String {
+fn joined_blocks(nodes: &[Value], depth: usize, heading_offset: usize, separator: &str) -> String {
     nodes
         .iter()
-        .map(|node| block(node, depth))
+        .map(|node| block(node, depth, heading_offset))
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join(separator)
 }
 
-fn block(node: &Value, depth: usize) -> String {
+fn block(node: &Value, depth: usize, heading_offset: usize) -> String {
     if depth > MAX_DOCUMENT_DEPTH {
         return "[…]".into();
     }
@@ -434,62 +528,37 @@ fn block(node: &Value, depth: usize) -> String {
                 .and_then(Value::as_u64)
                 .unwrap_or(1)
                 .clamp(1, 6) as usize;
-            format!("{} {}", "#".repeat(level), inline(children(node), next))
+            format!("{} {}", "#".repeat((level + heading_offset).min(6)), inline(children(node), next))
         }
-        "bulletList" => list(node, next, |_| "- ".into()),
+        "bulletList" => list(node, next, heading_offset, |_| "- ".into()),
         "orderedList" => {
             let start = attr(node, "order").and_then(Value::as_u64).unwrap_or(1);
-            list(node, next, |index| format!("{}. ", start + index as u64))
+            list(node, next, heading_offset, |index| format!("{}. ", start + index as u64))
         }
-        "taskList" | "decisionList" => list(node, next, |_| String::new()),
+        "taskList" | "decisionList" => list(node, next, heading_offset, |_| String::new()),
         "taskItem" | "decisionItem" => {
             let done = attr(node, "state").and_then(Value::as_str) == Some("DONE");
-            format!(
-                "- [{}] {}",
-                if done { "x" } else { " " },
-                inline(children(node), next)
-            )
+            format!("- [{}] {}", if done { "x" } else { " " }, inline(children(node), next))
         }
         "codeBlock" => {
-            let language = attr(node, "language")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let text: String = children(node)
-                .iter()
-                .filter_map(|child| child.get("text").and_then(Value::as_str))
-                .collect();
+            let language = attr(node, "language").and_then(Value::as_str).unwrap_or_default();
+            let text: String = children(node).iter().filter_map(|child| child.get("text").and_then(Value::as_str)).collect();
             format!("```{language}\n{text}\n```")
         }
-        "blockquote" | "panel" => blocks(children(node), next)
-            .lines()
-            .map(|line| format!("> {line}").trim_end().to_owned())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        "blockquote" | "panel" => blocks(children(node), next, heading_offset)
+            .lines().map(|line| format!("> {line}").trim_end().to_owned()).collect::<Vec<_>>().join("\n"),
         "rule" => "---".into(),
         "mediaSingle" | "mediaGroup" | "media" => "[attachment]".into(),
-        "table" => table(node, next),
+        "table" => table(node, next, heading_offset),
         "expand" | "nestedExpand" => {
-            let title = attr(node, "title")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let content = blocks(children(node), next);
-            if title.is_empty() {
-                content
-            } else {
-                format!("**{title}**\n\n{content}")
-            }
+            let title = attr(node, "title").and_then(Value::as_str).unwrap_or_default();
+            let content = blocks(children(node), next, heading_offset);
+            if title.is_empty() { content } else { format!("**{title}**\n\n{content}") }
         }
-        "blockCard" | "embedCard" => attr(node, "url")
-            .and_then(Value::as_str)
-            .map(|url| format!("<{url}>"))
-            .unwrap_or_default(),
+        "blockCard" | "embedCard" => attr(node, "url").and_then(Value::as_str).map(|url| format!("<{url}>")).unwrap_or_default(),
         _ if node.get("content").is_some() => {
             let content = children(node);
-            if content.iter().all(is_inline) {
-                inline(content, next)
-            } else {
-                blocks(content, next)
-            }
+            if content.iter().all(is_inline) { inline(content, next) } else { blocks(content, next, heading_offset) }
         }
         _ => inline(std::slice::from_ref(node), next),
     }
@@ -502,65 +571,46 @@ fn is_inline(node: &Value) -> bool {
     )
 }
 
-fn list(node: &Value, depth: usize, marker: impl Fn(usize) -> String) -> String {
-    children(node)
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            let content = if item.get("type").and_then(Value::as_str) == Some("listItem") {
-                // Tight lists: an item's paragraph and nested list share lines.
-                joined_blocks(children(item), depth, "\n")
-            } else {
-                block(item, depth)
-            };
-            let marker = marker(index);
-            let indent = " ".repeat(marker.len().max(2));
-            let mut lines = content.lines();
-            let first = lines.next().unwrap_or_default();
-            std::iter::once(format!("{marker}{first}"))
-                .chain(lines.map(|line| {
-                    if line.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{indent}{line}")
-                    }
-                }))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn list(node: &Value, depth: usize, heading_offset: usize, marker: impl Fn(usize) -> String) -> String {
+    children(node).iter().enumerate().map(|(index, item)| {
+        let content = if item.get("type").and_then(Value::as_str) == Some("listItem") {
+            joined_blocks(children(item), depth, heading_offset, "\n")
+        } else {
+            block(item, depth, heading_offset)
+        };
+        let marker = marker(index);
+        let indent = " ".repeat(marker.len().max(2));
+        let mut lines = content.lines();
+        let first = lines.next().unwrap_or_default();
+        std::iter::once(format!("{marker}{first}"))
+            .chain(lines.map(|line| if line.is_empty() { String::new() } else { format!("{indent}{line}") }))
+            .collect::<Vec<_>>().join("\n")
+    }).collect::<Vec<_>>().join("\n")
 }
 
-fn table(node: &Value, depth: usize) -> String {
-    let rows: Vec<Vec<String>> = children(node)
-        .iter()
-        .map(|row| {
-            children(row)
-                .iter()
-                .map(|cell| {
-                    blocks(children(cell), depth)
-                        .replace('\n', " ")
-                        .replace('|', "\\|")
-                })
-                .collect()
-        })
-        .collect();
+fn table(node: &Value, depth: usize, heading_offset: usize) -> String {
+    let table_rows = children(node);
+    let has_header = table_rows.first().and_then(|row| children(row).first())
+        .is_some_and(|cell| cell.get("type").and_then(Value::as_str) == Some("tableHeader"));
+    let rows: Vec<Vec<String>> = table_rows.iter().map(|row| children(row).iter().map(|cell| {
+        blocks(children(cell), depth, heading_offset).replace('\n', " ").replace('|', "\\|")
+    }).collect()).collect();
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-    if columns == 0 {
-        return String::new();
-    }
+    if columns == 0 { return String::new(); }
     let render = |row: &Vec<String>| {
         let mut cells = row.clone();
         cells.resize(columns, String::new());
         format!("| {} |", cells.join(" | "))
     };
     let mut lines = Vec::new();
-    for (index, row) in rows.iter().enumerate() {
-        lines.push(render(row));
-        if index == 0 {
-            lines.push(format!("|{}", " --- |".repeat(columns)));
-        }
+    if has_header {
+        lines.push(render(&rows[0]));
+        lines.push(format!("|{}", " --- |".repeat(columns)));
+        lines.extend(rows.iter().skip(1).map(render));
+    } else {
+        lines.push(render(&vec![String::new(); columns]));
+        lines.push(format!("|{}", " --- |".repeat(columns)));
+        lines.extend(rows.iter().map(render));
     }
     lines.join("\n")
 }
@@ -641,7 +691,7 @@ fn marked_text(node: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_failure, document_markdown, issue_markdown};
+    use super::{classify_failure, document_markdown, issue_fields, issue_markdown};
     use serde_json::json;
 
     #[test]
@@ -675,21 +725,52 @@ mod tests {
     }
 
     #[test]
-    fn renders_facts_description_and_comments_and_reports_partial_comments() {
-        let issue = json!({"key": "SCRUM-5", "self": "https://site.test/rest/api/3/issue/1", "fields": {
+    fn renders_contract_sections_and_partial_comments() {
+        let issue = json!({"key": "SCRUM-5", "fields": {
             "summary": "Fix login",
             "issuetype": {"name": "Task"}, "status": {"name": "To Do"},
+            "priority": {"name": "Medium"}, "reporter": {"displayName": "Konni"},
+            "assignee": {"displayName": "Ann"},
+            "created": "2026-09-24T18:40:53.898+0200",
             "updated": "2026-09-24T18:44:53.898+0200",
-            "description": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Body"}]}]},
-            "comment": {"total": 2, "comments": [{"id": "10001", "author": {"displayName": "Ann"}, "created": "c",
-                "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Seen"}]}]}}]}
+            "description": {"type": "doc", "content": [
+                {"type": "heading", "attrs": {"level": 1}, "content": [{"type": "text", "text": "Body"}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "Text"}]}
+            ]},
+            "comment": {"total": 2, "comments": [{"id": "10001", "author": {"displayName": "Ann"},
+                "created": "2026-09-24T18:44:53.898+0200", "updated": "2026-09-24T18:44:53.898+0200",
+                "body": {"type": "doc", "content": [{"type": "heading", "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": "Reply"}]}]}}]}
         }});
-        let (body, complete) = issue_markdown(&issue).unwrap();
-        assert_eq!(
-            body,
-            "Type: Task\nStatus: To Do\nUpdated: 2026-09-24T18:44:53.898+0200\n\nBody\n\n## Jira comment 10001\nAuthor: Ann\nCreated: c\n\nSeen\n"
-        );
+        let (body, complete) = issue_markdown(&issue, "https://site.test/browse/SCRUM-5").unwrap();
+        assert!(body.contains("**Task** · **To Do** · Priority Medium · Reporter Konni · Assignee Ann"));
+        assert!(body.contains("## Description\n\n### Body\n\nText"));
+        assert!(!body.contains("edited"));
+        assert!(body.contains("## Comments (1 of 2)\n\n### Ann · 2026-09-24 18:44\n[#10001](https://site.test/browse/SCRUM-5?focusedCommentId=10001)\n\n##### Reply"));
         assert!(!complete);
+        let fields = issue_fields(&issue);
+        assert!(fields.iter().any(|field| field.key == "comment_count" && field.value == super::FrontmatterValue::Number(2)));
+        assert!(fields.iter().any(|field| field.key == "created" && field.value == super::FrontmatterValue::String("2026-09-24T18:40:53+02:00".into())));
+        let unassigned = json!({"fields": {"assignee": null}});
+        assert_eq!(
+            issue_fields(&unassigned).iter().find(|field| field.key == "assignee").unwrap().value,
+            super::FrontmatterValue::Null
+        );
+        let mut edited_issue = issue.clone();
+        edited_issue["fields"]["comment"]["comments"][0]["updated"] =
+            json!("2026-09-24T18:45:53+0200");
+        let (edited, _) =
+            issue_markdown(&edited_issue, "https://site.test/browse/SCRUM-5").unwrap();
+        assert!(edited.contains("### Ann · 2026-09-24 18:44 · edited 2026-09-24 18:45"));
+    }
+
+    #[test]
+    fn a_non_header_adf_table_keeps_first_data_row_as_data() {
+        let table = json!({"type": "table", "content": [
+            {"type": "tableRow", "content": [{"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "first"}]}]}]},
+            {"type": "tableRow", "content": [{"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "second"}]}]}]}
+        ]});
+        assert_eq!(super::table(&table, 0, 0), "|  |\n| --- |\n| first |\n| second |");
     }
 
     #[test]

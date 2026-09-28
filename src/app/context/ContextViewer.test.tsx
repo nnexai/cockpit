@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
-import { ContextViewer, createContextViewState, SourceLines } from "./ContextViewer";
+import { ContextViewer, createContextViewState, SourceLines, type ContextViewState } from "./ContextViewer";
 
 async function settle(): Promise<void> {
   await act(async () => { await Promise.resolve(); });
@@ -1249,6 +1249,49 @@ it("offers the copy's Update, Replace and Remove for the target Space in the Lib
     await flush();
     expect(client.librarySpaceRemove).toHaveBeenCalledWith({ target, logical_id: "source:jira:ops-311", confirmed: [] });
     expect(headerButton("Add to api-review")).toBeDefined();
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps the rendered Markdown while scrolling and records the position once scrolling settles", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const text = "# Notes\n\nFirst paragraph.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n";
+  const client = {
+    contextDirectory: vi.fn(async (): Promise<ContextDirectory> => ({
+      binding_id: "binding", root_id: "folder", path: "", truncated: false, diagnostics: [],
+      entries: [{ entry_id: "notes", name: "notes.md", path: "notes.md", kind: "file", bytes: text.length, revision: "r1", refusal: null }],
+    })),
+    contextDocument: vi.fn(async () => ({ binding_id: "binding", root_id: "folder", path: "notes.md", revision: "r1", content_hash: null, bytes: text.length, media_type: "text/markdown", text, truncated: false, offset: 0, next_offset: undefined, total_bytes: text.length, line_offset: 0, diagnostics: [] })),
+  } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  const changes: ContextViewState[] = [];
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={(next) => { changes.push(next); setView(next); }} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-context-path="notes.md"]')?.click());
+    await settle();
+    const scroller = host.querySelector<HTMLElement>(".context-markdown-scroll")!;
+    const paragraph = scroller.querySelector("p[data-source-start]");
+    expect(paragraph?.textContent).toBe("First paragraph.");
+    const before = changes.length;
+    for (const top of [40, 80, 120]) {
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, value: top });
+      await act(async () => { scroller.dispatchEvent(new Event("scroll")); });
+    }
+    expect(changes.length).toBe(before);
+    await act(async () => { await new Promise<void>((resolve) => { setTimeout(resolve, 200); }); });
+    expect(changes.length).toBe(before + 1);
+    expect(changes.at(-1)?.files["folder\u0000notes.md"]?.scrollTop).toBe(120);
+    expect(scroller.querySelector("p[data-source-start]")).toBe(paragraph);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

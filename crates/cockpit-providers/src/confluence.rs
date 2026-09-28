@@ -1501,7 +1501,8 @@ impl SourceProvider for ConfluenceSourceProvider {
         request: &SourceFetchRequest,
     ) -> Result<Vec<SourceAsset>, InspectionError> {
         let page_id = self.requested_page(request)?;
-        let info = self.info(&page_id).await?;
+        // The expanded content response carries identity, version, ancestry,
+        // and the site base, so do not spawn a redundant `info` process.
         let content = self
             .json(&ConfluenceCall::Api(ConfluenceApi::Content {
                 page_id: page_id.clone(),
@@ -1519,17 +1520,86 @@ impl SourceProvider for ConfluenceSourceProvider {
                 "Confluence returned a different page",
             ));
         }
-        let (labels, labels_complete) = self.labels(&page_id).await?;
-        let body = self
-            .run(
-                &ConfluenceCall::Read {
-                    page_id: page_id.clone(),
-                },
-                MAX_BODY_BYTES + 1,
-            )
-            .await?;
-        let mut body = String::from_utf8(body)
-            .map_err(|_| contract("Confluence page Markdown is not UTF-8"))?;
+        if content
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind != "page")
+        {
+            return Err(InspectionError::new(
+                "source_capability_unavailable",
+                "only Confluence pages can be added",
+            ));
+        }
+        let title = content.get("title")
+            .and_then(Value::as_str)
+            .filter(|title| title_valid(title))
+            .ok_or_else(|| contract("Confluence page title is missing or malformed"))?;
+        let space_key = content.pointer("/space/key")
+            .and_then(Value::as_str)
+            .filter(|key| space_key_valid(key))
+            .ok_or_else(|| contract("Confluence page has no valid space key"))?;
+        let version = content.get("version").and_then(|version| {
+            version.as_u64().or_else(|| version.get("number").and_then(Value::as_u64))
+        });
+        let base = content.pointer("/_links/base")
+            .and_then(Value::as_str)
+            .and_then(|base| Url::parse(base).ok())
+            .filter(|base| {
+                base.query().is_none()
+                    && base.fragment().is_none()
+                    && within_instance(&self.base_url, base)
+            })
+            .ok_or_else(|| InspectionError::new(
+                "source_identity_mismatch",
+                "Confluence CLI is connected to a different site than the configured provider",
+            ))?;
+        let webui = content.pointer("/_links/webui")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| contract("Confluence page has no web URL"))?;
+        let mut directory = base.clone();
+        directory.set_path(&format!("{}/", base.path().trim_end_matches('/')));
+        directory.set_query(None);
+        directory.set_fragment(None);
+        let url = directory.join(webui.trim_start_matches('/'))
+            .ok()
+            .filter(|url| {
+                url.query().is_none()
+                    && url.fragment().is_none()
+                    && self.url_in_instance(url.as_str())
+            })
+            .ok_or_else(|| InspectionError::new(
+                "source_identity_mismatch",
+                "Confluence CLI is connected to a different site than the configured provider",
+            ))?;
+        let info = PageInfo {
+            page_id: page_id.clone(),
+            title: title.to_owned(),
+            space_key: space_key.to_owned(),
+            version,
+            url: url.to_string(),
+        };
+        let body_future = async {
+            let bytes = self
+                .run(
+                    &ConfluenceCall::Read {
+                        page_id: page_id.clone(),
+                    },
+                    MAX_BODY_BYTES + 1,
+                )
+                .await?;
+            String::from_utf8(bytes)
+                .map_err(|_| contract("Confluence page Markdown is not UTF-8"))
+        };
+        let attachment_call = ConfluenceCall::Attachments {
+            page_id: page_id.clone(),
+        };
+        let attachment_future = self.json(&attachment_call);
+        let ((labels, labels_complete), mut body, attachment_list) = tokio::try_join!(
+            self.labels(&page_id),
+            body_future,
+            attachment_future
+        )?;
         if body.ends_with('\n') {
             body.pop();
         }
@@ -1539,11 +1609,6 @@ impl SourceProvider for ConfluenceSourceProvider {
                 "Confluence page exceeds Cockpit's source body limit",
             ));
         }
-        let attachment_list = self
-            .json(&ConfluenceCall::Attachments {
-                page_id: page_id.clone(),
-            })
-            .await?;
         let (attachments, attachments_complete) = self.attachments(&attachment_list)?;
         let mut diagnostics = Vec::new();
         if !labels_complete {

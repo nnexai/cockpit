@@ -136,6 +136,7 @@
 .library-report button,
 .library-report-rows button,
 .library-attachments button,
+.library-attachments-heading button:not(.library-attachments-toggle),
 .library-attachment-notice button {
   min-height: 26px;
   padding: 2px 8px;
@@ -150,13 +151,20 @@
 .library-report button:hover:not(:disabled),
 .library-report-rows button:hover:not(:disabled),
 .library-attachments button:hover:not(:disabled),
+.library-attachments-heading button:not(.library-attachments-toggle):hover:not(:disabled),
 .library-attachment-notice button:hover:not(:disabled) { background: var(--surface-hover); }
 .library-item-state button:disabled,
 .library-attachments button:disabled,
+.library-attachments-heading button:disabled,
 .library-attachment-notice button:disabled { cursor: default; opacity: .6; }
 .library-more { display: grid; width: 28px; place-items: center; padding: 3px !important; }
 .library-item-notice { margin: 4px -24px 0; padding-inline: 24px; border-top: 1px solid var(--border); }
+/* `Metadata` and the attachments summary share one line; open metadata takes the full width. */
+.library-item-disclosures { flex-wrap: wrap; column-gap: 16px; row-gap: 4px; }
+.library-item-disclosures > .library-metadata[open] { flex-basis: 100%; }
 .library-metadata > summary { width: fit-content; color: var(--text-muted); cursor: pointer; }
+.library-item-facts { flex-wrap: wrap; row-gap: 2px; }
+.library-item-facts .context-source-chip { color: var(--text-primary); }
 .library-metadata dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 6px 0 0; }
 .library-metadata dt { color: var(--text-muted); }
 .library-metadata dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
@@ -250,10 +258,17 @@
 .library-progress-files { width: 100%; max-height: 96px; margin: 0; padding: 0 0 0 16px; overflow: auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .library-progress-files code { overflow-wrap: anywhere; user-select: text; }
 
-/* Confluence page attachments (design §4.4): metadata until an explicit download. */
-.library-attachments { display: flex; flex-direction: column; gap: 4px; }
-.library-attachments-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); }
-.library-attachments-title span { color: var(--text-secondary); }
+/* Confluence page attachments (design §4.4): metadata until an explicit download.
+ * One summary line beside `Metadata`; the table opens on demand, scrolls within
+ * a bounded height, and never overlays the document. */
+.library-attachments { display: flex; max-height: min(240px, 35vh); flex-direction: column; gap: 4px; overflow: auto; }
+.library-attachments-heading { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); }
+.library-attachments-heading button:not(.library-attachments-toggle),
+.library-attachments td button { min-height: 22px; padding: 0 8px; }
+.library-attachments-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.library-attachments-toggle:hover { color: var(--text-secondary); }
+.library-attachments-toggle .ui-icon { width: 12px; height: 12px; }
+.library-attachments-toggle span { color: var(--text-secondary); }
 .library-attachments table { width: 100%; border-collapse: collapse; }
 .library-attachments th { padding: 2px 10px 2px 0; color: var(--text-muted); font-weight: 400; text-align: left; }
 .library-attachments td { padding: 2px 10px 2px 0; overflow-wrap: anywhere; }

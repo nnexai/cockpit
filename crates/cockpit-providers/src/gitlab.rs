@@ -6,7 +6,8 @@ use cockpit_core::InspectionError;
 use cockpit_core::process::run_bounded_command;
 use cockpit_core::repositories::resolve_gitlab_artifact;
 use cockpit_core::sources::{
-    SourceAsset, SourceContainer, SourceFetchRequest, SourceMetadata, SourceProvider, SourceRef,
+    FrontmatterField, FrontmatterValue, SourceAsset, SourceContainer, SourceFetchRequest,
+    SourceMetadata, SourceProvider, SourceRef,
 };
 use cockpit_protocol::projects::{ProjectArtifact, ProjectConfiguration, ProjectDiagnostic};
 use cockpit_protocol::sources::SourceCapability;
@@ -585,15 +586,12 @@ impl GitlabSourceProvider {
                 complete = false;
             }
         }
-        notes.sort_by(|left, right| {
-            left.id
-                .cmp(&right.id)
-                .then_with(|| right.updated_at.cmp(&left.updated_at))
-                .then_with(|| left.discussion_id.cmp(&right.discussion_id))
-                .then_with(|| left.body.cmp(&right.body))
-        });
+        notes.sort_by_key(|note| note.id);
         notes.dedup_by_key(|note| note.id);
-        notes.sort_by(|left, right| left.id.cmp(&right.id));
+        notes.sort_by(|left, right| {
+            timestamp_order(&left.created_at, &right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok((notes, complete))
     }
 
@@ -711,16 +709,12 @@ impl GitlabSourceProvider {
                 complete = false;
             }
         }
-        comments.sort_by(|left, right| {
-            left.id
-                .cmp(&right.id)
-                .then_with(|| right.updated_at.cmp(&left.updated_at))
-                .then_with(|| left.created_at.cmp(&right.created_at))
-                .then_with(|| left.author.cmp(&right.author))
-                .then_with(|| left.url.cmp(&right.url))
-                .then_with(|| left.body.cmp(&right.body))
-        });
+        comments.sort_by_key(|comment| comment.id);
         comments.dedup_by_key(|comment| comment.id);
+        comments.sort_by(|left, right| {
+            timestamp_order(&left.created_at, &right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok((comments, complete))
     }
 
@@ -796,79 +790,59 @@ impl GitlabSourceProvider {
                 &request.artifact_url,
             ));
         }
-        let labels = review.labels.join(", ");
-        let assignees = review.assignees.join(", ");
-        let reviewers = review.reviewers.join(", ");
-        let metadata = format!(
-            "## GitLab merge request metadata\n\nAuthor: {}\nState: {}\nCreated: {}\nUpdated: {}\nLabels: {}\nAssignees: {}\nReviewers: {}\nTarget project: {} ({})\nSource project: {} ({})\nTarget branch: {}\nSource branch: {}\nHead commit: {}\n\n",
-            review.author,
-            review.state,
-            review.created_at,
-            review.updated_at,
-            if review.labels.is_empty() {
-                "(none)"
-            } else {
-                labels.as_str()
-            },
-            if review.assignees.is_empty() {
-                "(none)"
-            } else {
-                assignees.as_str()
-            },
-            if review.reviewers.is_empty() {
-                "(none)"
-            } else {
-                reviewers.as_str()
-            },
-            review.target_project.path,
-            review.target_project.web_url,
-            review
-                .source_project
-                .as_ref()
-                .map(|project| project.path.as_str())
-                .unwrap_or("(unavailable)"),
-            review
-                .source_project
-                .as_ref()
-                .map(|project| project.web_url.as_str())
-                .unwrap_or("(unavailable)"),
-            review.target_branch,
-            review.source_branch.as_deref().unwrap_or("(unavailable)"),
-            review.head_sha.as_deref().unwrap_or("(unavailable)"),
-        );
+        let summary = summary_line("Merge request", &review.state, &review.author, &review.assignees);
         let mut body = String::new();
-        if !budget.append(&mut body, &metadata) || !budget.append(&mut body, &review.description) {
-            diagnostics.push(review_diagnostic(
-                "source_review_truncated",
-                "GitLab merge request metadata exceeded Cockpit's explicit byte budget",
-                &request.artifact_url,
-            ));
+        let header = format!("{}\n", summary);
+        if !budget.append(&mut body, &header) {
+            diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request header exceeded Cockpit's explicit byte budget", &request.artifact_url));
         }
-        for note in &notes {
-            let rendered = format!(
-                "\n\n## GitLab discussion {} note {}\nAuthor: {}\nCreated: {}\nUpdated: {}\nURL: {}\nPosition: {}\n\n{}",
-                note.discussion_id,
-                note.id,
-                note.author,
-                note.created_at,
-                note.updated_at,
-                note.url,
-                note.position,
-                note.body
-            );
-            if !budget.append(&mut body, &rendered) {
-                diagnostics.push(review_diagnostic(
-                    "source_review_truncated",
-                    "GitLab merge request discussions exceeded Cockpit's explicit byte budget",
-                    &request.artifact_url,
-                ));
-                break;
+        if !review.description.trim().is_empty() {
+            let description = format!("\n## Description\n\n{}", demote_headings(&review.description, 3));
+            if !budget.append(&mut body, &description) {
+                diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request description exceeded Cockpit's explicit byte budget", &request.artifact_url));
+            }
+        }
+        let rendered_notes: Vec<String> = notes
+            .iter()
+            .map(|note| {
+                let edited = edited_timestamp(&note.created_at, &note.updated_at);
+                let extra = review_location(&note.position);
+                format!(
+                    "\n\n### {} · {}{}{}\n[#{id}]({url})\n\n{body}",
+                    note.author,
+                    local_timestamp(&note.created_at),
+                    edited.as_deref().unwrap_or(""),
+                    extra.as_deref().unwrap_or(""),
+                    id = note.id,
+                    url = note.url,
+                    body = demote_headings(&note.body, 4)
+                )
+            })
+            .collect();
+        let shown = comments_that_fit(
+            budget.limit.saturating_sub(budget.used),
+            &rendered_notes,
+            discussions_complete,
+        );
+        if !notes.is_empty() {
+            let comment_heading = comments_heading(shown, notes.len(), discussions_complete);
+            if !budget.append(&mut body, &comment_heading) {
+                diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request discussions exceeded Cockpit's explicit byte budget", &request.artifact_url));
+            }
+            if shown < notes.len() {
+                diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request discussions exceeded Cockpit's explicit byte budget", &request.artifact_url));
+            }
+            for rendered in rendered_notes.iter().take(shown) {
+                if !budget.append(&mut body, rendered) {
+                    diagnostics.push(review_diagnostic("source_review_truncated", "GitLab merge request discussions exceeded Cockpit's explicit byte budget", &request.artifact_url));
+                    break;
+                }
             }
         }
         if let Some(approvals) = approvals.as_ref() {
             let approved_by = approvals.approved_by.as_deref().unwrap_or(&[]).join(", ");
             let rendered = format!(
-                "\n\n## GitLab approvals\nApproved: {}\nApprovals left: {}\nApproved by: {}\n",
+                "\n\n## Approvals\nApproved: {}\nApprovals left: {}\nApproved by: {}\n",
                 approvals
                     .approved
                     .map(|value| value.to_string())
@@ -900,6 +874,7 @@ impl GitlabSourceProvider {
             .dedup_by(|left, right| left.code == right.code && left.message == right.message);
         let complete = diagnostics.is_empty();
         let source_revision = review_revision(&review, &notes, approvals.as_ref(), complete);
+        let fields = review_fields(&review, notes.len());
         let title = review.title;
         let web_url = review.web_url;
         Ok(SourceAsset {
@@ -913,6 +888,8 @@ impl GitlabSourceProvider {
             source_url: Some(web_url),
             original_url: Some(request.artifact_url.clone()),
             source_revision: Some(source_revision),
+            fields,
+            attachments: Vec::new(),
             body,
             complete,
             diagnostics,
@@ -920,8 +897,6 @@ impl GitlabSourceProvider {
                 id: identity.project_path.clone(),
                 label: identity.project_path,
             }),
-            fields: Vec::new(),
-            attachments: Vec::new(),
         })
     }
 
@@ -936,42 +911,59 @@ impl GitlabSourceProvider {
         let (comments, comments_complete) = self
             .fetch_comments(&identity, &project, &issue.web_url, &mut budget)
             .await?;
-        let mut body = String::new();
         let mut diagnostics = Vec::new();
-        let labels = issue.labels.join(", ");
-        let assignees = issue.assignees.join(", ");
-        let metadata = format!(
-            "## GitLab issue metadata\n\nAuthor: {}\nState: {}\nCreated: {}\nUpdated: {}\nLabels: {}\nAssignees: {}\nMilestone: {}\n\n",
-            issue.author,
-            issue.state,
-            issue.created_at,
-            issue.updated_at,
-            if issue.labels.is_empty() {
-                "(none)"
-            } else {
-                labels.as_str()
-            },
-            if issue.assignees.is_empty() {
-                "(none)"
-            } else {
-                assignees.as_str()
-            },
-            issue.milestone.as_deref().unwrap_or("(none)"),
-        );
-        if !budget.append(&mut body, &metadata) || !budget.append(&mut body, &issue.description) {
+        let summary = summary_line("Issue", &issue.state, &issue.author, &issue.assignees);
+        let mut body = String::new();
+        let header = format!("{}\n", summary);
+        if !budget.append(&mut body, &header) {
             diagnostics.push(truncation_diagnostic(&request.artifact_url));
         }
-        for comment in &comments {
-            let rendered = format!(
-                "\n\n## GitLab comment {}\nAuthor: {}\nCreated: {}\nUpdated: {}\nURL: {}\n\n{}",
-                comment.id,
-                comment.author,
-                comment.created_at,
-                comment.updated_at,
-                comment.url,
-                comment.body,
-            );
-            if !budget.append(&mut body, &rendered) {
+        if !issue.description.trim().is_empty() {
+            let description = format!("\n## Description\n\n{}", demote_headings(&issue.description, 3));
+            if !budget.append(&mut body, &description) {
+                diagnostics.push(truncation_diagnostic(&request.artifact_url));
+            }
+        }
+        let rendered_comments: Vec<String> = comments
+            .iter()
+            .map(|comment| {
+                let edited = edited_timestamp(&comment.created_at, &comment.updated_at);
+                format!(
+                    "\n\n### {} · {}{}\n[#{id}]({url})\n\n{body}",
+                    comment.author,
+                    local_timestamp(&comment.created_at),
+                    edited.as_deref().unwrap_or(""),
+                    id = comment.id,
+                    url = comment.url,
+                    body = demote_headings(&comment.body, 4)
+                )
+            })
+            .collect();
+        let shown = comments_that_fit(
+            budget.limit.saturating_sub(budget.used),
+            &rendered_comments,
+            comments_complete,
+        );
+        if !comments.is_empty() {
+            let comment_heading = comments_heading(shown, comments.len(), comments_complete);
+            if !budget.append(&mut body, &comment_heading) {
+                diagnostics.push(truncation_diagnostic(&request.artifact_url));
+            }
+            if shown < comments.len() {
+                diagnostics.push(truncation_diagnostic(&request.artifact_url));
+            }
+            for rendered in rendered_comments.iter().take(shown) {
+                if !budget.append(&mut body, rendered) {
+                    diagnostics.push(truncation_diagnostic(&request.artifact_url));
+                    break;
+                }
+            }
+        }
+        if shown < comments.len() {
+            diagnostics.push(truncation_diagnostic(&request.artifact_url));
+        }
+        for rendered in rendered_comments.iter().take(shown) {
+            if !budget.append(&mut body, rendered) {
                 diagnostics.push(truncation_diagnostic(&request.artifact_url));
                 break;
             }
@@ -987,7 +979,7 @@ impl GitlabSourceProvider {
         diagnostics
             .dedup_by(|left, right| left.code == right.code && left.message == right.message);
         let complete = diagnostics.is_empty();
-        let source_revision = revision(&issue, &comments, complete);
+        let fields = issue_fields(&issue, comments.len());
         Ok(SourceAsset {
             source: SourceRef {
                 provider_id: self.provider_id.clone(),
@@ -998,7 +990,7 @@ impl GitlabSourceProvider {
             title: issue.title,
             source_url: Some(issue.web_url),
             original_url: Some(request.artifact_url.clone()),
-            source_revision: Some(source_revision),
+            source_revision: Some(issue.updated_at.clone()),
             body,
             complete,
             diagnostics,
@@ -1006,7 +998,7 @@ impl GitlabSourceProvider {
                 id: identity.project_path.clone(),
                 label: identity.project_path,
             }),
-            fields: Vec::new(),
+            fields,
             attachments: Vec::new(),
         })
     }
@@ -1218,22 +1210,18 @@ fn position_text(value: &Value) -> Result<String, InspectionError> {
     let position = value
         .as_object()
         .ok_or_else(|| contract_error("GitLab discussion position has an invalid type"))?;
-    let position_type = position
-        .get("position_type")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let old_path = position.get("old_path").and_then(Value::as_str);
-    let new_path = position.get("new_path").and_then(Value::as_str);
-    let old_line = position.get("old_line").and_then(Value::as_u64);
-    let new_line = position.get("new_line").and_then(Value::as_u64);
-    if old_path.is_none() && new_path.is_none() && old_line.is_none() && new_line.is_none() {
-        return Ok("unsupported local review anchor".into());
+    let path = position
+        .get("new_path")
+        .or_else(|| position.get("old_path"))
+        .and_then(Value::as_str);
+    let line = position
+        .get("new_line")
+        .or_else(|| position.get("old_line"))
+        .and_then(Value::as_u64);
+    match (path, line) {
+        (Some(path), Some(line)) => Ok(format!("review on {path}:{line}")),
+        _ => Ok("unsupported local review anchor".into()),
     }
-    Ok(format!(
-        "position_type={position_type}; old_path={}; new_path={}; old_line={old_line:?}; new_line={new_line:?}",
-        old_path.unwrap_or(""),
-        new_path.unwrap_or("")
-    ))
 }
 
 fn api_args(endpoint: &Url, method: &str, hostname: &str) -> Result<Vec<String>, InspectionError> {
@@ -1724,12 +1712,265 @@ fn bounded_description(mut description: String) -> String {
     }
     description
 }
+fn comments_heading(shown: usize, total: usize, complete: bool) -> String {
+    if shown == total && complete {
+        format!("\n\n## Comments ({total})")
+    } else {
+        format!("\n\n## Comments ({shown} of {total})")
+    }
+}
+
+fn comments_that_fit(remaining: usize, comments: &[String], complete: bool) -> usize {
+    for shown in (0..=comments.len()).rev() {
+        let heading_len = comments_heading(shown, comments.len(), complete).len();
+        let comments_len = comments[..shown]
+            .iter()
+            .fold(0usize, |total, comment| total.saturating_add(comment.len()));
+        if heading_len.saturating_add(comments_len) <= remaining {
+            return shown;
+        }
+    }
+    0
+}
+
+fn issue_fields(issue: &IssueFacts, comment_count: usize) -> Vec<FrontmatterField> {
+    let fields = vec![
+        string_field("item_type", "Issue"),
+        string_field("status", &status_value(&issue.state)),
+        string_field("author", &issue.author),
+        string_field("created", &rfc3339_seconds(&issue.created_at)),
+        string_field("updated", &rfc3339_seconds(&issue.updated_at)),
+        number_field("comment_count", comment_count),
+        FrontmatterField {
+            key: "assignee".into(),
+            value: if issue.assignees.is_empty() {
+                FrontmatterValue::Null
+            } else {
+                FrontmatterValue::String(issue.assignees.join(", "))
+            },
+        },
+    ];
+    fields
+}
+
+fn review_fields(review: &ReviewFacts, comment_count: usize) -> Vec<FrontmatterField> {
+    vec![
+        string_field("item_type", "Merge request"),
+        string_field("status", &status_value(&review.state)),
+        string_field("author", &review.author),
+        string_field("created", &rfc3339_seconds(&review.created_at)),
+        string_field("updated", &rfc3339_seconds(&review.updated_at)),
+        number_field("comment_count", comment_count),
+        FrontmatterField {
+            key: "assignee".into(),
+            value: if review.assignees.is_empty() {
+                FrontmatterValue::Null
+            } else {
+                FrontmatterValue::String(review.assignees.join(", "))
+            },
+        },
+    ]
+}
+
+fn summary_line(item_type: &str, state: &str, author: &str, assignees: &[String]) -> String {
+    let mut segments = vec![
+        format!("**{item_type}**"),
+        format!("**{}**", status_value(state).chars().enumerate()
+            .map(|(index, character)| if index == 0 { character.to_ascii_uppercase() } else { character })
+            .collect::<String>()),
+        format!("Reporter {author}"),
+    ];
+    segments.push(if assignees.is_empty() {
+        "Unassigned".into()
+    } else {
+        format!("Assignee {}", assignees.join(", "))
+    });
+    segments.join(" · ")
+}
+
+fn status_value(state: &str) -> String {
+    match state.to_ascii_lowercase().as_str() {
+        "opened" | "open" => "open".into(),
+        "closed" => "closed".into(),
+        "merged" => "merged".into(),
+        "draft" => "draft".into(),
+        other => other.into(),
+    }
+}
+
+fn string_field(key: &str, value: &str) -> FrontmatterField {
+    FrontmatterField {
+        key: key.into(),
+        value: FrontmatterValue::String(value.into()),
+    }
+}
+
+fn number_field(key: &str, value: usize) -> FrontmatterField {
+    FrontmatterField {
+        key: key.into(),
+        value: FrontmatterValue::Number(value as i64),
+    }
+}
+
+fn rfc3339_seconds(timestamp: &str) -> String {
+    let mut value = timestamp.to_owned();
+    if let Some(dot) = value.find('.') {
+        let suffix = value[dot..]
+            .find(|character| matches!(character, '+' | '-' | 'Z'))
+            .map(|offset| dot + offset)
+            .unwrap_or(value.len());
+        value.replace_range(dot..suffix, "");
+    }
+    value
+}
+
+fn local_timestamp(timestamp: &str) -> String {
+    let timestamp = rfc3339_seconds(timestamp);
+    timestamp.get(..16).unwrap_or(&timestamp).replace('T', " ")
+}
+
+fn edited_timestamp(created_at: &str, updated_at: &str) -> Option<String> {
+    (rfc3339_seconds(created_at) != rfc3339_seconds(updated_at))
+        .then(|| format!(" · edited {}", local_timestamp(updated_at)))
+}
+
+fn review_location(position: &str) -> Option<String> {
+    position
+        .strip_prefix("review on ")
+        .map(|location| format!(" · review on {location}"))
+}
+
+fn timestamp_order(left: &str, right: &str) -> std::cmp::Ordering {
+    match (timestamp_epoch(left), timestamp_epoch(right)) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        _ => left.cmp(right),
+    }
+}
+
+fn timestamp_epoch(timestamp: &str) -> Option<i64> {
+    fn number(value: &str, range: std::ops::Range<usize>) -> Option<i64> {
+        value.get(range)?.parse().ok()
+    }
+
+    let year = number(timestamp, 0..4)?;
+    let month = number(timestamp, 5..7)?;
+    let day = number(timestamp, 8..10)?;
+    let hour = number(timestamp, 11..13)?;
+    let minute = number(timestamp, 14..16)?;
+    let second = number(timestamp, 17..19)?;
+    let bytes = timestamp.as_bytes();
+    if bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    let (offset_sign, offset_hours, offset_minutes) = if bytes.last() == Some(&b'Z') {
+        (1, 0, 0)
+    } else {
+        let offset_start = timestamp.len().checked_sub(6)?;
+        let sign = match bytes.get(offset_start)? {
+            b'+' => 1,
+            b'-' => -1,
+            _ => return None,
+        };
+        let hours = number(timestamp, offset_start + 1..offset_start + 3)?;
+        let minutes = number(timestamp, offset_start + 4..offset_start + 6)?;
+        if bytes.get(offset_start + 3) != Some(&b':') || hours > 23 || minutes > 59 {
+            return None;
+        }
+        (sign, hours, minutes)
+    };
+    let adjusted_year = year - if month <= 2 { 1 } else { 0 };
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let adjusted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era;
+    let local_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
+    let offset_seconds = offset_sign * (offset_hours * 3_600 + offset_minutes * 60);
+    Some(local_seconds - offset_seconds)
+}
+
+fn demote_headings(markdown: &str, minimum_level: usize) -> String {
+    let mut output = String::with_capacity(markdown.len());
+    let mut fence: Option<(u8, usize)> = None;
+    for line in markdown.split_inclusive('\n') {
+        let text = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = text.trim_start_matches(' ');
+        let indent = text.len() - trimmed.len();
+        if indent <= 3 {
+            let bytes = trimmed.as_bytes();
+            if let Some(marker @ (b'`' | b'~')) = bytes.first().copied() {
+                let run = bytes.iter().take_while(|byte| **byte == marker).count();
+                if run >= 3 {
+                    let suffix = trimmed[run..].trim();
+                    match fence {
+                        Some((open_marker, open_len))
+                            if marker == open_marker && run >= open_len && suffix.is_empty() =>
+                        {
+                            fence = None;
+                        }
+                        None => fence = Some((marker, run)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if fence.is_none() {
+            if let Some((prefix_end, level)) = atx_heading(text) {
+                let leading = text.len() - text.trim_start().len();
+                output.push_str(&text[..leading]);
+                output.push_str(&"#".repeat(level.max(minimum_level)));
+                output.push_str(&text[prefix_end..]);
+            } else {
+                output.push_str(text);
+            }
+        } else {
+            output.push_str(text);
+        }
+        if line.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+    output
+}
+
+fn atx_heading(line: &str) -> Option<(usize, usize)> {
+    let leading = line.len() - line.trim_start().len();
+    if leading > 3 {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let level = bytes[leading..]
+        .iter()
+        .take_while(|byte| **byte == b'#')
+        .count();
+    if !(1..=6).contains(&level)
+        || bytes
+            .get(leading + level)
+            .is_some_and(|byte| *byte != b' ' && *byte != b'\t')
+    {
+        return None;
+    }
+    Some((leading + level, level))
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ApprovalFacts, ProjectIdentity, ReviewFacts, ReviewNote, api_args, comment_url,
-        encode_component, review_revision, verify_issue_url,
+        ApprovalFacts, ProjectIdentity, ReviewFacts, ReviewNote, api_args, atx_heading,
+        comment_url, comments_heading, comments_that_fit, demote_headings, edited_timestamp,
+        encode_component, review_revision, timestamp_order, verify_issue_url,
     };
     use url::Url;
 
@@ -1870,6 +2111,52 @@ mod tests {
         assert_ne!(
             before,
             review_revision(&review, &notes, Some(&approvals), true)
+        );
+    }
+
+    #[test]
+    fn description_and_comment_headings_are_demoted_outside_fences() {
+        let markdown = "# One\n## Two\n```md\n# Kept\n```\n~~~text\n## Also kept\n~~~\n";
+        assert_eq!(
+            demote_headings(markdown, 4),
+            "#### One\n#### Two\n```md\n# Kept\n```\n~~~text\n## Also kept\n~~~\n"
+        );
+    }
+
+    #[test]
+    fn heading_parser_rejects_invalid_atx_levels() {
+        assert_eq!(atx_heading("### valid"), Some((3, 3)));
+        assert_eq!(atx_heading("####### invalid"), None);
+        assert_eq!(atx_heading("#invalid"), None);
+    }
+
+    #[test]
+    fn edited_time_keeps_original_offset_and_only_appears_when_changed() {
+        let timestamp = "2026-02-03T04:05:06+03:00";
+        assert_eq!(edited_timestamp(timestamp, timestamp), None);
+        assert_eq!(
+            edited_timestamp(timestamp, "2026-02-04T04:05:06+03:00").as_deref(),
+            Some(" · edited 2026-02-04 04:05")
+        );
+    }
+
+    #[test]
+    fn comment_heading_reports_only_cards_that_fit_the_byte_budget() {
+        let cards = vec!["card".repeat(20), "second".repeat(20)];
+        let one_card_heading = comments_heading(1, 2, true);
+        let remaining = one_card_heading.len() + cards[0].len();
+        assert_eq!(comments_that_fit(remaining, &cards, true), 1);
+        assert_eq!(comments_heading(1, 2, true), "\n\n## Comments (1 of 2)");
+    }
+
+    #[test]
+    fn timestamp_order_accounts_for_original_offsets() {
+        assert_eq!(
+            timestamp_order(
+                "2026-01-01T10:00:00+02:00",
+                "2026-01-01T08:30:00Z"
+            ),
+            std::cmp::Ordering::Less
         );
     }
 }
