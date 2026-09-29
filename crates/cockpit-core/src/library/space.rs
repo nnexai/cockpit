@@ -1834,7 +1834,7 @@ pub(in crate::library) mod tests {
         std::fs::write(origin.join("nested/b.txt"), b"b").unwrap();
         let added = finished(&service, service.start_add(LibraryAddRequest {
             input: origin.to_string_lossy().into_owned(), provider_id: None,
-            hydrate_references: false, follow: false, follow_mode: None, download_attachments: false,
+            reference_depth: 0, follow: false, follow_mode: None, download_attachments: false,
             refresh_existing: false, label: Some("Folder notes".into()), target: Some(target()),
         }).await.unwrap()).await;
         assert!(added.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done));

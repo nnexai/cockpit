@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { LibraryAttachment, LibraryAttachmentAction, LibraryAttachmentRequest, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
-import { attachmentTreeMeta, errorText, followTitle, hasFollowRef, isConfluencePage, isKeepable, issueCount, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
+import { attachmentTreeMeta, errorText, followCountText, followTitle, hasFollowRef, isConfluencePage, isKeepable, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
 import "./library.css";
@@ -234,7 +234,7 @@ function rowLabel(row: Row): string {
 
 /** Design §4.10: stopping keeps every item and ends refreshes that add or update from the follow. */
 function stoppedFollowing(follow: LibraryFollowSummary): string {
-  if (follow.source.kind === "jira_query") return `Stopped following the query. Its ${issueCount(follow.item_count)} stay in the Library; refresh no longer adds or drops issues for it.`;
+  if (follow.source.kind === "jira_query") return `Stopped following the query. Its ${followCountText(follow)} stay in the Library; refresh no longer adds or drops ${follow.reference_depth ? "items" : "issues"} for it.`;
   return `Stopped following ${follow.source.space_key}. Its ${pageCount(follow.item_count)} stay in the Library; refresh no longer adds new pages.`;
 }
 
@@ -504,7 +504,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
           </span>
           <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? label : label}>{label}</span>
           {follow ? <StatePill className="context-tree-meta" shape="dot-ring" word="Following" tone="idle" /> : null}
-          {follow?.source.kind === "jira_query" ? <span className="context-tree-meta library-state is-muted">{`${issueCount(follow.item_count)} · ${follow.source.mode === "live" ? "Live" : "Accumulate"}`}</span> : null}
+          {follow?.source.kind === "jira_query" ? <span className="context-tree-meta library-state is-muted">{`${followCountText(follow)} · ${follow.source.mode === "live" ? "Live" : "Accumulate"}`}</span> : null}
           {follow?.partial ? <StatePill className="context-tree-meta" shape="half-ring" word={`${follow.partial.have} of ${follow.partial.total ?? "?"}`} tone="working" title={partial ?? undefined} /> : null}
           {instanceNode?.unavailable ? <StatePill className="context-tree-meta" shape="close" word="Unavailable" tone="blocked" /> : null}
           {meta ? <span className="context-tree-meta library-state is-muted">{meta}</span> : null}

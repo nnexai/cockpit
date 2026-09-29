@@ -171,7 +171,7 @@ impl LibraryService {
             title: inventory.path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
             canonical_id: Some(inventory.info.origin_path), container_label: None,
             existing_item_id: existing.map(|e| e.summary.item_id), existing_follow_id: None, item_count: None, item_count_exact: true, follow_mode: None,
-            git_working_tree: Some(inventory.info.git_working_tree), file_count: Some(inventory.paths.len() as u64), diagnostics: inventory.diagnostics })
+            git_working_tree: Some(inventory.info.git_working_tree), file_count: Some(inventory.paths.len() as u64), diagnostics: inventory.diagnostics, reference_depth: None })
     }
     pub(super) async fn start_folder_add(&self, request: LibraryAddRequest) -> Result<LibraryOperation, InspectionError> {
         let handle = operations::runtime()?;
@@ -257,13 +257,13 @@ impl LibraryService {
         let now = timestamp();
         let equal = old.as_ref().is_some_and(|e| e.summary.revision == revision);
         let partial = limited.then(|| LibraryPartial { unit: "files".into(), have: files.len() as u64, total: Some(total), reason: "Folder capture limits reached".into() });
-        let mut entry = LibraryIndexEntry { canonical_url: None, inventory: vec![], summary: LibraryItemSummary {
+        let mut entry = LibraryIndexEntry { canonical_url: None, inventory: vec![], references: None, summary: LibraryItemSummary {
             item_id: id.clone(), logical_id: id, kind: LibraryItemKind::FolderCopy, provider_id: None, provider_instance: None,
             resource_type: None, canonical_id: None, container: None, parent_item_id: None, ancestors: vec![], order: None,
             title, document_path: files.first().map(|file| format!("{path}/{}", file.path)), item_path: path, source_url: None, original_url: None, source_revision: None, revision,
             state: if limited { LibraryItemState::Partial } else if old.is_some() && !equal { LibraryItemState::Changed } else { LibraryItemState::Fresh },
             partial, conflict: vec![], fetched_at: Some(now.clone()), checked_at: Some(now), refs: vec![LibraryItemRef::Manual], purge_after: None, issue: None, attachments: vec![],
-            folder: Some(captured.info), diagnostics: captured.diagnostics,
+            folder: Some(captured.info), diagnostics: captured.diagnostics, reference_depth: None, included_by: None,
         }};
         if equal && confirmed.is_none() {
             let old = old.as_ref().unwrap();

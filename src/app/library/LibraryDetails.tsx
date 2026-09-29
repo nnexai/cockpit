@@ -130,6 +130,8 @@ export function LibraryDetails({ item, providers, now, document, root, pageUpdat
             {item.provider_instance ? row("Provider", <span className="library-detail-human">{family.name} · {family.key === "confluence" ? confluenceSite(item.provider_instance) : instanceHost(item.provider_instance)}</span>) : null}
             {item.source_url ? row("Source link", identifier({ label: "source link", value: item.source_url })) : null}
             {item.original_url && item.original_url !== item.source_url ? row("Added from", identifier({ label: "added-from link", value: item.original_url })) : null}
+            {item.reference_depth ? row("Related depth", <span className="library-detail-human">{item.reference_depth}</span>) : null}
+            {[...new Set(item.included_by?.map((inclusion) => `Included via ${inclusion.from_label} · ${inclusion.relation} · step ${inclusion.depth}`))].map((reason) => <Fragment key={reason}><dt>Related</dt><dd><span className="library-detail-human">{reason}</span></dd></Fragment>)}
           </>}
         </dl>
       </section>

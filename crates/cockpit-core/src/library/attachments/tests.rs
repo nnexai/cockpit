@@ -200,7 +200,7 @@ fn fixture(attachments: Vec<(SourceAttachment, Vec<u8>)>, file_cap: u64, page_ca
     (f, provider)
 }
 fn add(download: bool, follow: bool) -> LibraryAddRequest {
-    LibraryAddRequest { input: if follow { "SD" } else { "42" }.into(), provider_id: Some("confluence".into()), hydrate_references: false, follow, follow_mode: None, download_attachments: download, refresh_existing: false, label: None, target: None }
+    LibraryAddRequest { input: if follow { "SD" } else { "42" }.into(), provider_id: Some("confluence".into()), reference_depth: 0, follow, follow_mode: None, download_attachments: download, refresh_existing: false, label: None, target: None }
 }
 async fn item(service: &LibraryService) -> LibraryItemSummary { service.listing(None).await.unwrap().items.remove(0) }
 async fn save(f: &base::Fixture) -> LibraryItemSummary {

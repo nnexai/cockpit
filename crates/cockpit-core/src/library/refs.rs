@@ -9,8 +9,8 @@ use crate::{
     project_store::timestamp,
 };
 use cockpit_protocol::library::{
-    LibraryFollowSource, LibraryFollowSummary, LibraryItemRef, LibraryItemSummary,
-    LibraryReportOutcome,
+    LibraryFollowSource, LibraryFollowSummary, LibraryInclusion, LibraryInclusionHolder,
+    LibraryItemRef, LibraryItemSummary, LibraryReportOutcome,
 };
 
 /// Grace period between an item losing its last reference and its purge.
@@ -51,14 +51,49 @@ pub(crate) fn insert_ref(summary: &mut LibraryItemSummary, reference: LibraryIte
     summary.purge_after = None;
 }
 
-/// Returns whether the reference was present. Does not tombstone.
+/// Returns whether the reference was present. Does not tombstone. Removing
+/// `Follow{F}` also strips the `Follow{F}` inclusion, so drop, stop following and
+/// remove cannot leave a reason for a membership that no longer exists.
 pub(crate) fn remove_ref(summary: &mut LibraryItemSummary, reference: &LibraryItemRef) -> bool {
     match summary.refs.binary_search(reference) {
         Ok(at) => {
             summary.refs.remove(at);
+            if let LibraryItemRef::Follow { follow_id } = reference {
+                strip_inclusion(
+                    summary,
+                    &LibraryInclusionHolder::Follow { follow_id: follow_id.clone() },
+                );
+            }
             true
         }
         Err(_) => false,
+    }
+}
+
+/// Whether `follow_id` holds this item as a related item (not as a listed seed).
+pub(crate) fn related_of(summary: &LibraryItemSummary, follow_id: &str) -> bool {
+    summary.included_by.iter().flatten().any(|inclusion| {
+        matches!(&inclusion.holder, LibraryInclusionHolder::Follow { follow_id: id } if id == follow_id)
+    })
+}
+
+/// Records why the holder includes this item. There is one entry per holder;
+/// a fresh traversal replaces it so a stale route is never kept.
+pub(crate) fn set_inclusion(summary: &mut LibraryItemSummary, inclusion: LibraryInclusion) {
+    let list = summary.included_by.get_or_insert_with(Vec::new);
+    match list.iter_mut().find(|existing| existing.holder == inclusion.holder) {
+        Some(existing) => *existing = inclusion,
+        None => list.push(inclusion),
+    }
+}
+
+/// Removes the holder's inclusion; an empty list becomes `None`.
+pub(crate) fn strip_inclusion(summary: &mut LibraryItemSummary, holder: &LibraryInclusionHolder) {
+    if let Some(list) = &mut summary.included_by {
+        list.retain(|inclusion| &inclusion.holder != holder);
+        if list.is_empty() {
+            summary.included_by = None;
+        }
     }
 }
 

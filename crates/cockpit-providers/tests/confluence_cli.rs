@@ -208,7 +208,7 @@ async fn cloud_and_dc_pages_fetch_and_refresh_through_the_real_cli() {
             panic!("expected a page");
         };
         let fetched = service
-            .fetch_assets(request(&server, &found.canonical_url), false)
+            .fetch_assets(request(&server, &found.canonical_url))
             .await
             .unwrap();
         let asset = &fetched.assets[0];
@@ -247,7 +247,7 @@ async fn cloud_and_dc_pages_fetch_and_refresh_through_the_real_cli() {
             page.storage = "<p>Ship it after sign-off.</p>".into();
         });
         let refreshed = service
-            .fetch_assets(request(&server, &found.canonical_url), false)
+            .fetch_assets(request(&server, &found.canonical_url))
             .await
             .unwrap();
         assert_eq!(refreshed.assets[0].source_revision.as_deref(), Some("8"));

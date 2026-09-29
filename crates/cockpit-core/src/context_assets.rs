@@ -2368,7 +2368,7 @@ mod library_copy_tests {
             item_path: "item".into(), source_url: None, original_url: None, source_revision: Some("1".into()),
             revision: "revision-one".into(), state: LibraryItemState::Fresh, partial: None,
             conflict: vec![], fetched_at: None, checked_at: None, refs: vec![], purge_after: None, issue: None, attachments: vec![],
-            folder: None, diagnostics: vec![],
+            folder: None, diagnostics: vec![], reference_depth: None, included_by: None,
         }
     }
 

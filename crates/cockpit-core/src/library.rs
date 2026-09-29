@@ -4,6 +4,7 @@ mod folder;
 mod follow;
 mod jira_follow;
 mod operations;
+mod related;
 pub(crate) mod refs;
 mod layout;
 mod reader;
@@ -15,9 +16,11 @@ use crate::{
     project_store::timestamp,
     repositories::{confluence_provider_for_input, resolve_artifact},
     sources::{
-        ConfluencePage, FetchedAssets, FrontmatterValue, IssueRow, ProviderResolution, SourceAsset,
-        SourceFetchRequest, SourceRef, SourceService, content_revision, confluence_page_id,
-        confluence_page_url, confluence_space_key, instance_authority, site_authority,
+        ConfluencePage, FetchedAssets, FrontmatterValue, IssueRow, MAX_REFERENCE_DEPTH,
+        ProviderResolution, ReferenceSeed, SourceAsset, SourceFetchRequest, SourceRef,
+        SourceService, asset_label, asset_references, confluence_instance_authority,
+        confluence_page_id, confluence_page_url, content_revision, instance_authority,
+        site_authority,
     },
 };
 use cockpit_protocol::{
@@ -30,51 +33,6 @@ use std::{
     sync::{Arc, OnceLock},
 };
 use store::{Lease, LibraryIndexEntry, Store, error};
-fn confluence_instance_authority(
-    configuration: &ProjectConfiguration,
-    selected_provider_id: &str,
-    page: &ConfluencePage,
-    canonical_url: &str,
-) -> Result<crate::sources::SourceAuthority, InspectionError> {
-    let provider = configuration.providers.iter().find(|p| p.id == selected_provider_id)
-        .ok_or_else(|| error("source_authority_mismatch", "selected Confluence provider is not configured"))?;
-    if !crate::repositories::is_confluence_executable(&provider.executable)
-        || !confluence_url_belongs_to_instance(&provider.base_url, &page.source_url)
-        || !confluence_page_id(&page.page_id)
-        || !confluence_space_key(&page.space_key)
-        || page.title.trim().is_empty()
-        || page.title.chars().any(char::is_control)
-    {
-        return Err(error("source_identity_mismatch", "Confluence page identity is invalid"));
-    }
-    let authority = site_authority(configuration, selected_provider_id)?;
-    let expected = confluence_page_url(&authority.provider_instance, &page.page_id);
-    if page.canonical_url != expected || canonical_url != expected {
-        return Err(error("source_identity_mismatch", "Confluence page does not belong to the selected provider instance"));
-    }
-    Ok(authority)
-}
-fn confluence_url_belongs_to_instance(base_url: &str, source_url: &str) -> bool {
-    let (Ok(base), Ok(source)) = (
-        url::Url::parse(base_url),
-        url::Url::parse(source_url),
-    ) else {
-        return false;
-    };
-    let base_path = base.path().trim_end_matches('/');
-    let source_path = source.path();
-    base.scheme() == source.scheme()
-        && base.host_str().map(str::to_ascii_lowercase)
-            == source.host_str().map(str::to_ascii_lowercase)
-        && base.port_or_known_default() == source.port_or_known_default()
-        && source.username().is_empty()
-        && source.password().is_none()
-        && source.query().is_none()
-        && source.fragment().is_none()
-        && (base_path.is_empty()
-            || source_path == base_path
-            || source_path.starts_with(&format!("{base_path}/")))
-}
 fn confluence_input_matches_instance(base_url: &str, input: &str) -> bool {
     let (Ok(base), Ok(input)) = (url::Url::parse(base_url), url::Url::parse(input)) else {
         return false;
@@ -174,6 +132,11 @@ impl LibraryService {
         })
         .await
         .map_err(|error| InspectionError::new("library_unavailable", error.to_string()))?
+    }
+    fn is_jira_provider(&self, provider_id: &str) -> bool {
+        self.configuration.providers.iter().any(|provider| {
+            provider.id == provider_id && crate::repositories::is_jira_executable(&provider.executable)
+        })
     }
     fn request(
         &self,
@@ -306,7 +269,7 @@ impl LibraryService {
             None => None,
         };
         if let Some((page, fetch)) = page_request {
-            let fetched = self.sources.fetch_assets(fetch.clone(), false).await?;
+            let fetched = self.sources.fetch_assets(fetch.clone()).await?;
             let asset = fetched
                 .assets
                 .into_iter()
@@ -379,6 +342,7 @@ impl LibraryService {
                 git_working_tree: None,
                 file_count: None,
                 diagnostics: vec![],
+                reference_depth: None,
             });
         }
         let store = self.open()?;
@@ -397,6 +361,7 @@ impl LibraryService {
             .items
             .into_iter()
             .find(|e| e.summary.item_id == item_id(&source));
+        let reference_depth = existing.as_ref().map(|e| e.summary.reference_depth.unwrap_or(0));
         Ok(LibraryResolution {
             kind: LibraryInputKind::Artifact,
             provider_id: Some(source.provider_id),
@@ -414,6 +379,7 @@ impl LibraryService {
             git_working_tree: None,
             file_count: None,
             diagnostics: vec![],
+            reference_depth,
         })
     }
     pub async fn operation(&self, id: &str) -> Result<LibraryOperation, InspectionError> {
@@ -426,6 +392,12 @@ impl LibraryService {
         &self,
         request: LibraryAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
+        if request.reference_depth > MAX_REFERENCE_DEPTH {
+            return Err(error(
+                "library_reference_depth_invalid",
+                format!("Reference depth must be 0 to {MAX_REFERENCE_DEPTH}"),
+            ));
+        }
         if !folder::recognizes(&request.input) {
             if let Some((query, provider_id)) =
                 self.jira_query(&request.input, request.provider_id.as_deref())?
@@ -454,10 +426,10 @@ impl LibraryService {
         if request.download_attachments && page_request.is_none() {
             return Err(error("source_capability_unavailable", "Only Confluence pages support attachment downloads"));
         }
-        if page_request.is_some() && request.hydrate_references {
+        if page_request.is_some() && request.reference_depth > 0 {
             return Err(error(
                 "source_capability_unavailable",
-                "Confluence page imports do not hydrate linked artifacts",
+                "Confluence page imports do not follow related items",
             ));
         }
         let handle = operations::runtime()?;
@@ -495,49 +467,15 @@ impl LibraryService {
             if operations::cancelled(&worker_store, &id)? {
                 return Ok(());
             }
-            let fetched = service
-                .sources
-                .fetch_assets(fetch, request.hydrate_references)
-                .await?;
-            if request.hydrate_references {
-                let incomplete = fetched
-                    .assets
-                    .iter()
-                    .any(|asset| item_id(&asset.source) != primary_id && !asset.complete);
-                let partial = incomplete
-                    || fetched
-                        .hydration
-                        .as_ref()
-                        .is_none_or(|h| h.failed > 0 || h.skipped > 0 || h.truncated);
-                if partial {
-                    let mut reason = fetched.hydration.as_ref().map(|h| format!("Linked hydration: {} completed, {} skipped, {} failed, truncated={}", h.completed, h.skipped, h.failed, h.truncated)).unwrap_or_else(|| "Linked hydration did not complete".into());
-                    if incomplete {
-                        reason.push_str("; linked content incomplete");
-                    }
-                    for diagnostic in fetched
-                        .diagnostics
-                        .iter()
-                        .filter(|d| d.code.starts_with("source_hydration_"))
-                        .take(32)
-                    {
-                        reason.push_str("; ");
-                        reason.extend(diagnostic.code.chars().take(128));
-                        reason.push_str(": ");
-                        reason.extend(diagnostic.message.chars().take(512));
-                        if let Some(path) = &diagnostic.path {
-                            reason.push_str(" [");
-                            reason.extend(path.chars().take(512));
-                            reason.push(']');
-                        }
-                    }
-                    operations::row(
-                        &worker_store,
-                        &id,
-                        None,
-                        LibraryReportOutcome::Partial,
-                        Some(reason),
-                    )?;
-                }
+            let fetched = service.sources.fetch_assets(fetch).await?;
+            // Re-adding an existing item keeps its stored depth unless the add
+            // refreshes it, so `Keep in Library` never resets the policy.
+            let apply_depth = request.refresh_existing
+                || service.entry(&worker_store, &primary_id)?.is_none();
+            let mut seed = None;
+            if request.reference_depth > 0 {
+                // An add starts with an unknown total; the seed is its first unit.
+                operations::add_total(&worker_store, &id, 1)?;
             }
             for mut asset in fetched.assets {
                 if operations::cancelled(&worker_store, &id)? {
@@ -551,6 +489,13 @@ impl LibraryService {
                 };
                 if asset_id == primary_id {
                     asset.original_url = Some(request.input.clone());
+                    if request.reference_depth > 0 {
+                        seed = Some(ReferenceSeed {
+                            source: asset.source.clone(),
+                            label: asset_label(&asset),
+                            references: asset_references(&service.configuration, &asset),
+                        });
+                    }
                 }
                 let old = service.entry(&worker_store, &asset_id)?;
                 if old.is_some() && !request.refresh_existing && !request.download_attachments {
@@ -576,6 +521,18 @@ impl LibraryService {
                     download_all: request.download_attachments,
                     ..SaveOptions::default()
                 }).await?;
+            }
+            if apply_depth && !operations::cancelled(&worker_store, &id)? {
+                service
+                    .apply_reference_depth(
+                        &worker_store,
+                        &id,
+                        &primary_id,
+                        seed,
+                        request.reference_depth,
+                        request.target.as_ref(),
+                    )
+                    .await?;
             }
             if let Some(target) = &request.target {
                 let saved = operations::get(&worker_store, &id)?.item_ids;
@@ -882,10 +839,10 @@ impl LibraryService {
                         "Confluence page identity changed during refresh",
                     ));
                 }
-                self.sources.fetch_assets(request, false).await
+                self.sources.fetch_assets(request).await
             } else {
                 let request = self.request(url, entry.summary.provider_id.as_deref())?;
-                self.sources.fetch_assets(request, false).await
+                self.sources.fetch_assets(request).await
             }
         }
         .await;
@@ -899,8 +856,13 @@ impl LibraryService {
                     .into_iter()
                     .find(|a| item_id(&a.source) == entry.summary.item_id);
                 if let Some(asset) = asset {
+                    let seed = ReferenceSeed {
+                        source: asset.source.clone(),
+                        label: asset_label(&asset),
+                        references: asset_references(&self.configuration, &asset),
+                    };
                     match self.save_asset(store, operation, asset, Some(entry.clone()), confirmed.as_deref(), None).await {
-                        Ok(()) => Ok(()),
+                        Ok(()) => self.refresh_related(store, operation, &entry.summary.item_id, seed).await,
                         Err(e) => self.fetch_failed(store, operation, entry, e, true),
                     }
                 } else {
@@ -1040,6 +1002,9 @@ impl LibraryService {
             canonical.canonical_url
         };
         let mut entry = asset_entry(&asset, old.as_ref());
+        entry.references = self
+            .is_jira_provider(&asset.source.provider_id)
+            .then(|| asset_references(&self.configuration, &asset));
         entry.canonical_url = Some(canonical_url);
         if let Some(row) = issue_row {
             entry.summary.issue = Some(LibraryIssueMeta {
@@ -1284,6 +1249,7 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
     };
     LibraryIndexEntry {
         inventory: old.map(|e| e.inventory.clone()).unwrap_or_default(),
+        references: None,
         canonical_url: asset.source_url.clone(),
         summary: LibraryItemSummary {
             item_id: id,
@@ -1337,6 +1303,8 @@ fn asset_entry(asset: &SourceAsset, old: Option<&LibraryIndexEntry>) -> LibraryI
                 .collect(),
             folder: None,
             diagnostics: asset.diagnostics.clone(),
+            reference_depth: old.and_then(|e| e.summary.reference_depth),
+            included_by: old.and_then(|e| e.summary.included_by.clone()),
         },
     }
 }
@@ -1596,7 +1564,7 @@ mod tests {
         LibraryAddRequest {
             input: format!("https://forge.test/gitea/acme/repo/issues/{n}"),
             provider_id: None,
-            hydrate_references: false,
+            reference_depth: 0,
             follow: false,
             follow_mode: None,
             download_attachments: false,
@@ -1813,28 +1781,31 @@ mod tests {
         f.provider.state.lock().unwrap_or_else(|e| e.into_inner()).body =
             "See https://forge.test/gitea/acme/repo/issues/2".into();
         let mut request = add(1);
-        request.hydrate_references = true;
+        request.reference_depth = 1;
         request
     }
 
     #[tokio::test]
-    async fn later_linked_lease_failure_retains_saved_primary_attempt() {
+    async fn busy_related_item_is_reported_and_keeps_the_saved_seed() {
         let f = fixture();
         let store = f.service.open().unwrap();
         let _linked_lease = store.lease(&item_id(&asset(2, "").source)).unwrap();
-        let target = SpaceTarget { session_id: "session".into(), space_id: "space".into() };
-        let mut request = linked_add(&f);
-        request.target = Some(target.clone());
+        let request = linked_add(&f);
         let operation = finished(&f.service, f.service.start_add(request).await.unwrap()).await;
-        assert_eq!(operation.phases[0].error.as_ref().unwrap().code, "library_item_busy");
-        let reopened = reopen(&f);
-        let saved = reopened.listing(None).await.unwrap().items;
+        assert_eq!(operation.phases[0].state, LibraryPhaseState::Partial, "{operation:?}");
+        let reason = operation
+            .report
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .find(|row| row.outcome == LibraryReportOutcome::Partial)
+            .and_then(|row| row.reason.as_deref())
+            .unwrap();
+        assert!(reason.contains("1 not saved"), "{reason}");
+        let saved = reopen(&f).listing(None).await.unwrap().items;
         assert_eq!(saved.iter().map(|item| item.canonical_id.as_deref()).collect::<Vec<_>>(), vec![Some("acme/repo#1")]);
-        let attempts = reopened.space_listing(target).await.unwrap().attempts;
-        assert_eq!(attempts.len(), 1);
-        assert_eq!(attempts[0].item_id.as_ref(), Some(&saved[0].item_id));
-        assert_eq!(attempts[0].state, SpaceAddAttemptState::Failed);
-        assert_eq!(attempts[0].error.as_ref().unwrap().code, "library_item_busy");
+        assert_eq!(saved[0].reference_depth, Some(1));
     }
 
     #[tokio::test]
@@ -1884,7 +1855,7 @@ mod tests {
             state.fail_linked = true;
         }
         let mut request = add(1);
-        request.hydrate_references = true;
+        request.reference_depth = 1;
         let operation = finished(&f.service, f.service.start_add(request).await.unwrap()).await;
         assert_eq!(operation.phases[0].state, LibraryPhaseState::Partial);
         let report = operation.report.as_ref().unwrap();
@@ -1898,9 +1869,8 @@ mod tests {
             .reason
             .as_deref()
             .unwrap();
-        assert!(reason.contains("source_hydration_fetch_failed"));
-        assert!(reason.contains("linked issue unavailable"));
-        assert!(reason.contains("https://forge.test/gitea/acme/repo/issues/2"));
+        assert!(reason.contains("1 not saved"), "{reason}");
+        assert!(reason.contains("issues/2"), "{reason}");
         let listing = f.service.listing(None).await.unwrap();
         assert_eq!(
             listing
@@ -1917,7 +1887,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn markup_diagnostic_alone_does_not_make_hydration_partial() {
+    async fn markup_diagnostic_alone_does_not_make_related_pass_partial() {
         let f = fixture();
         f.provider
             .state
@@ -1925,7 +1895,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .diagnostic = true;
         let mut request = add(1);
-        request.hydrate_references = true;
+        request.reference_depth = 1;
         let operation = finished(&f.service, f.service.start_add(request).await.unwrap()).await;
         assert_eq!(operation.phases[0].state, LibraryPhaseState::Done);
         assert_eq!(operation.report.unwrap().partial, 0);
@@ -1933,6 +1903,72 @@ mod tests {
             f.service.listing(None).await.unwrap().items[0].diagnostics[0].code,
             "source_markup_unconverted"
         );
+    }
+
+    #[tokio::test]
+    async fn single_reference_depth_is_a_policy_only_a_refreshing_add_changes() {
+        let f = fixture();
+        f.provider.set_body("See https://forge.test/gitea/acme/repo/issues/2");
+        let by_id = |items: Vec<LibraryItemSummary>, n: u32| {
+            items
+                .into_iter()
+                .find(|i| i.canonical_id.as_deref() == Some(&format!("acme/repo#{n}")))
+        };
+        let run = |request: LibraryAddRequest| {
+            let f = &f;
+            async move {
+                finished(&f.service, f.service.start_add(request).await.unwrap()).await;
+                f.service.listing(None).await.unwrap().items
+            }
+        };
+        // Depth 0 imports the seed alone.
+        let items = run(add(1)).await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].reference_depth, None);
+        let resolution = f.service.resolve(LibraryResolveRequest {
+            input: add(1).input,
+            provider_id: None,
+        }).await.unwrap();
+        assert_eq!(resolution.reference_depth, Some(0));
+
+        // Adding again without a refresh (`Keep in Library`) never changes the policy.
+        let mut request = add(1);
+        request.reference_depth = 1;
+        assert_eq!(run(request.clone()).await.len(), 1);
+
+        // A refreshing add applies it even though the source is unchanged.
+        request.refresh_existing = true;
+        let items = run(request.clone()).await;
+        assert_eq!(items.len(), 2);
+        let seed = by_id(items.clone(), 1).unwrap();
+        let related = by_id(items, 2).unwrap();
+        assert_eq!(seed.reference_depth, Some(1));
+        assert_eq!(related.refs, [LibraryItemRef::Manual]);
+        assert_eq!(
+            related.included_by,
+            Some(vec![LibraryInclusion {
+                holder: LibraryInclusionHolder::Item { item_id: seed.item_id.clone() },
+                from_item_id: Some(seed.item_id.clone()),
+                from_label: "Issue 1".into(),
+                relation: "body".into(),
+                depth: 1,
+            }])
+        );
+
+        // Keep in Library at depth 0 keeps the stored depth.
+        assert_eq!(by_id(run(add(1)).await, 1).unwrap().reference_depth, Some(1));
+
+        // When the seed stops linking, a complete refresh strips the reason but the
+        // related item stays Manual, like a hydrated linked item always did.
+        f.provider.set_body("no links");
+        refresh(&f, &seed).await;
+        let items = f.service.listing(None).await.unwrap().items;
+        let related = by_id(items, 2).unwrap();
+        assert_eq!((related.included_by, related.refs), (None, vec![LibraryItemRef::Manual]));
+
+        // A refreshing add at depth 0 clears the policy.
+        request.reference_depth = 0;
+        assert_eq!(by_id(run(request).await, 1).unwrap().reference_depth, None);
     }
 
     #[tokio::test]
@@ -2328,7 +2364,7 @@ mod confluence {
         LibraryAddRequest {
             input: input.into(),
             provider_id: provider_id.map(str::to_owned),
-            hydrate_references: false,
+            reference_depth: 0,
             follow: false,
             follow_mode: None,
             download_attachments: false,

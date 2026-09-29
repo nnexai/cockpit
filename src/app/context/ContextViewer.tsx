@@ -1478,7 +1478,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       setLibraryReportVerb("Keep");
       setLibraryReportDismissed(false);
       setLibraryPendingIds(new Set([item.item_id]));
-      void startLibraryOperation(() => client.libraryAdd({ input, provider_id: item.provider_id, hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false, label: null, target: null }));
+      void startLibraryOperation(() => client.libraryAdd({ input, provider_id: item.provider_id, reference_depth: 0, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false, label: null, target: null }));
     },
   };
   // Palette commands and `Open in Library` wait until the listing can serve them.

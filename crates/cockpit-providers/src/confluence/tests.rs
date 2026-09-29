@@ -1543,7 +1543,7 @@ async fn selected_provider_resolution_and_fetch_pass_the_source_service_page_pro
     };
     let request = shim.request(DC, &page.page_id);
     assert_eq!(request.artifact_url, page.canonical_url);
-    let fetched = service.fetch_assets(request, false).await.unwrap();
+    let fetched = service.fetch_assets(request).await.unwrap();
     assert_eq!(fetched.assets[0].source.canonical_id, "524301");
 }
 #[test]

@@ -89,6 +89,23 @@ pub enum LibraryItemRef {
     Follow { follow_id: String },
     Space { companion_root_id: String },
 }
+/// Who holds an inclusion: a single-import seed item or a follow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum LibraryInclusionHolder {
+    Item { item_id: String },
+    Follow { follow_id: String },
+}
+/// Why a related item is in the Library: the shallowest route from one holder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct LibraryInclusion {
+    pub holder: LibraryInclusionHolder,
+    pub from_item_id: Option<String>,
+    pub from_label: String,
+    pub relation: String,
+    pub depth: u32,
+}
 /// Per-issue metadata of a Jira item, shared by every follow that lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct LibraryIssueMeta {
@@ -129,6 +146,14 @@ pub struct LibraryItemSummary {
     pub attachments: Vec<LibraryAttachment>,
     pub folder: Option<LibraryFolderInfo>,
     pub diagnostics: Vec<ProjectDiagnostic>,
+    /// Reference depth of a single-import seed; `None` means 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reference_depth: Option<u32>,
+    /// Minimal reason a related item is included, one entry per holder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub included_by: Option<Vec<LibraryInclusion>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -161,6 +186,9 @@ pub struct LibraryFollowSummary {
     pub excluded_ids: Vec<String>,
     pub last_refreshed_at: Option<String>,
     pub state: LibraryItemState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reference_depth: Option<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LibraryListing {
@@ -214,6 +242,9 @@ pub struct LibraryResolution {
     #[ts(type = "number | null")]
     pub file_count: Option<u64>,
     pub diagnostics: Vec<ProjectDiagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reference_depth: Option<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -221,7 +252,7 @@ pub struct LibraryAddRequest {
     pub input: String,
     pub provider_id: Option<String>,
     #[serde(default)]
-    pub hydrate_references: bool,
+    pub reference_depth: u32,
     #[serde(default)]
     pub follow: bool,
     #[serde(default)]

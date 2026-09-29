@@ -184,8 +184,10 @@ export function issueCount(count: number, exact = true): string {
 }
 
 /** `38 pages` for a followed space, `12 issues` for a followed query. */
-export function followCountText(follow: Pick<LibraryFollowSummary, "source" | "item_count">): string {
-  return follow.source.kind === "jira_query" ? issueCount(follow.item_count) : pageCount(follow.item_count);
+export function followCountText(follow: Pick<LibraryFollowSummary, "source" | "item_count" | "reference_depth">): string {
+  if (follow.source.kind !== "jira_query") return pageCount(follow.item_count);
+  // Followed references add pages and other trackers' items, so a query that follows them counts items.
+  return follow.reference_depth ? `${follow.item_count} ${follow.item_count === 1 ? "item" : "items"}` : issueCount(follow.item_count);
 }
 
 /** A bare Jira project key, which Add reads as `project = KEY`. */

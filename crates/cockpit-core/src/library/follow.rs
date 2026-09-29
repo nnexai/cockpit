@@ -138,6 +138,7 @@ impl LibraryService {
                     git_working_tree: None,
                     file_count: None,
                     diagnostics: vec![],
+                    reference_depth: None,
                 }
             })
             .collect())
@@ -179,6 +180,7 @@ impl LibraryService {
             git_working_tree: None,
             file_count: None,
             diagnostics: vec![],
+            reference_depth: None,
         })
     }
 
@@ -188,8 +190,8 @@ impl LibraryService {
         &self,
         request: LibraryAddRequest,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.hydrate_references {
-            return Err(error("source_capability_unavailable", "Following a space does not hydrate linked artifacts"));
+        if request.reference_depth > 0 {
+            return Err(error("source_capability_unavailable", "Following a space does not follow related items"));
         }
         let (provider_id, resolution) = self
             .confluence_resolution(&request.input, request.provider_id.as_deref())
@@ -227,6 +229,7 @@ impl LibraryService {
             excluded_ids: vec![],
             last_refreshed_at: None,
             state: LibraryItemState::Unknown,
+            reference_depth: None,
         };
         let handle = operations::runtime()?;
         let store = self.open()?;
@@ -487,7 +490,7 @@ impl LibraryService {
             let container = work.container.clone();
             jobs.spawn(async move {
                 let result = async {
-                    let fetched = sources.fetch_assets(request, false).await?;
+                    let fetched = sources.fetch_assets(request).await?;
                     let asset = fetched
                         .assets
                         .into_iter()
@@ -774,19 +777,33 @@ impl LibraryService {
     /// the removal and are rolled back if the removal fails.
     pub(super) fn remove_item(&self, id: &str, revision: &str) -> Result<(), InspectionError> {
         let store = self.open()?;
+        // Per follow: a related item is excluded by its Library id (another site's
+        // item may share its key), any other member by its key.
         let exclusion = self.entry(&store, id)?.and_then(|entry| {
-            let follows = refs::follow_ids(&entry.summary);
-            (!follows.is_empty())
-                .then_some(())
-                .and(entry.summary.canonical_id.map(|key| (follows, key)))
+            let key = entry.summary.canonical_id.clone()?;
+            let tokens = refs::follow_ids(&entry.summary)
+                .into_iter()
+                .map(|follow_id| {
+                    let token = if refs::related_of(&entry.summary, &follow_id) {
+                        entry.summary.item_id.clone()
+                    } else {
+                        key.clone()
+                    };
+                    (follow_id, token)
+                })
+                .collect::<Vec<_>>();
+            (!tokens.is_empty()).then_some(tokens)
         });
         let added = match &exclusion {
-            Some((follow_ids, key)) => store.mutate_index(|index| {
+            Some(tokens) => store.mutate_index(|index| {
                 let mut added = Vec::new();
-                for follow in index.follows.iter_mut().filter(|f| follow_ids.contains(&f.follow_id)) {
-                    if !follow.excluded_ids.contains(key) {
-                        follow.excluded_ids.push(key.clone());
-                        added.push(follow.follow_id.clone());
+                for follow in index.follows.iter_mut() {
+                    let Some((_, token)) = tokens.iter().find(|(follow_id, _)| follow_id == &follow.follow_id) else {
+                        continue;
+                    };
+                    if !follow.excluded_ids.contains(token) {
+                        follow.excluded_ids.push(token.clone());
+                        added.push((follow.follow_id.clone(), token.clone()));
                     }
                 }
                 Ok(added)
@@ -794,14 +811,16 @@ impl LibraryService {
             None => Vec::new(),
         };
         let removed = store.remove(id, revision);
-        if let Some((follow_ids, key)) = &exclusion {
+        if let Some(tokens) = &exclusion {
             store.mutate_index(|index| {
-                for follow_id in follow_ids {
+                for (follow_id, _) in tokens {
                     recount(index, follow_id);
                 }
                 if removed.is_err() {
-                    for follow in index.follows.iter_mut().filter(|f| added.contains(&f.follow_id)) {
-                        follow.excluded_ids.retain(|excluded| excluded != key);
+                    for (follow_id, token) in &added {
+                        if let Some(follow) = index.follows.iter_mut().find(|f| &f.follow_id == follow_id) {
+                            follow.excluded_ids.retain(|excluded| excluded != token);
+                        }
                     }
                 }
                 Ok(())
@@ -1106,7 +1125,7 @@ mod tests {
         LibraryAddRequest {
             input: key.into(),
             provider_id: Some("confluence".into()),
-            hydrate_references: false,
+            reference_depth: 0,
             follow: true,
             follow_mode: None,
             download_attachments: false,

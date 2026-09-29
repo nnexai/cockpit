@@ -380,6 +380,13 @@ impl SourceProvider for JiraSourceProvider {
         if !attachments_complete {
             diagnostics.push(partial_diagnostic());
         }
+        if reference_fields(&issue).1 {
+            diagnostics.push(ProjectDiagnostic {
+                code: "source_references_truncated".into(),
+                message: "Jira returned more subtasks or links than Cockpit keeps; some related issues are not followed".into(),
+                path: None,
+            });
+        }
         let project_key = key
             .rsplit_once('-')
             .map(|(project, _)| project)
@@ -762,7 +769,89 @@ fn issue_fields(issue: &Value) -> Vec<FrontmatterField> {
             value: FrontmatterValue::Number(count),
         });
     }
+    fields.extend(reference_fields(issue).0);
     fields
+}
+
+const MAX_REFERENCE_FIELD_ENTRIES: usize = 256;
+/// Keeps each reference field well inside the 16 KiB frontmatter value bound.
+const MAX_REFERENCE_FIELD_BYTES: usize = 12 * 1024;
+
+/// Structured Jira relations as frontmatter: `parent` (key), `subtasks`
+/// (keys) and `links` (`"<relation> <KEY>"`). The flag is true when entries
+/// beyond the entry or byte bound were left out.
+fn reference_fields(issue: &Value) -> (Vec<FrontmatterField>, bool) {
+    let key_at = |value: &Value| {
+        value
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| is_jira_key(key))
+            .map(str::to_owned)
+    };
+    let mut fields = Vec::new();
+    let mut truncated = false;
+    if let Some(parent) = issue.pointer("/fields/parent").and_then(key_at) {
+        fields.push(FrontmatterField {
+            key: "parent".into(),
+            value: FrontmatterValue::String(parent),
+        });
+    }
+    let subtasks: Vec<String> = issue
+        .pointer("/fields/subtasks")
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(key_at).collect())
+        .unwrap_or_default();
+    let relation = |link: &Value, direction: &str, side: &str| {
+        let text: String = link
+            .pointer(&format!("/type/{direction}"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(64)
+            .collect();
+        let text = text.trim();
+        let text = if text.is_empty() { "relates to" } else { text };
+        link.get(side).and_then(key_at).map(|key| format!("{text} {key}"))
+    };
+    let links: Vec<String> = issue
+        .pointer("/fields/issuelinks")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|link| {
+                    relation(link, "outward", "outwardIssue")
+                        .or_else(|| relation(link, "inward", "inwardIssue"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (key, values) in [("subtasks", subtasks), ("links", links)] {
+        let mut bytes = 0;
+        let kept: Vec<String> = values
+            .iter()
+            .take(MAX_REFERENCE_FIELD_ENTRIES)
+            .take_while(|value| {
+                bytes += value.len() + 4;
+                bytes <= MAX_REFERENCE_FIELD_BYTES
+            })
+            .cloned()
+            .collect();
+        truncated |= kept.len() < values.len();
+        if !kept.is_empty() {
+            fields.push(FrontmatterField {
+                key: key.into(),
+                value: FrontmatterValue::Strings(kept),
+            });
+        }
+    }
+    if truncated {
+        fields.push(FrontmatterField {
+            key: "references_truncated".into(),
+            value: FrontmatterValue::Boolean(true),
+        });
+    }
+    (fields, truncated)
 }
 
 fn summary_line(issue: &Value) -> String {
@@ -1063,6 +1152,31 @@ mod tests {
             document_markdown_at(&document, 0),
             "## Acceptance\n\nUse `retry` and see [docs](https://example.test/d)\n@Ann\n\n- One\n- Two\n  1. Nested\n\n```rust\nfn main() {}\n```\n\n[attachment]"
         );
+    }
+
+    #[test]
+    fn structured_relations_become_reference_fields_and_overflow_is_reported() {
+        let issue = json!({"fields": {
+            "parent": {"key": "OPS-1"},
+            "subtasks": [{"key": "OPS-2"}, {"key": "not a key"}],
+            "issuelinks": [
+                {"type": {"inward": "is blocked by", "outward": "blocks"}, "outwardIssue": {"key": "OPS-3"}},
+                {"type": {"inward": "is blocked by", "outward": "blocks"}, "inwardIssue": {"key": "OPS-4"}},
+            ],
+        }});
+        let (fields, truncated) = super::reference_fields(&issue);
+        assert!(!truncated);
+        let text = |key: &str| fields.iter().find(|field| field.key == key).map(|field| field.value.clone());
+        assert_eq!(text("parent"), Some(super::FrontmatterValue::String("OPS-1".into())));
+        assert_eq!(text("subtasks"), Some(super::FrontmatterValue::Strings(vec!["OPS-2".into()])));
+        assert_eq!(
+            text("links"),
+            Some(super::FrontmatterValue::Strings(vec!["blocks OPS-3".into(), "is blocked by OPS-4".into()]))
+        );
+        let many: Vec<_> = (1..=300).map(|n| json!({"key": format!("OPS-{n}")})).collect();
+        let (fields, truncated) = super::reference_fields(&json!({"fields": {"subtasks": many}}));
+        assert!(truncated);
+        assert!(matches!(&fields[0].value, super::FrontmatterValue::Strings(keys) if keys.len() == 256));
     }
 
     #[test]

@@ -532,7 +532,7 @@ it("recognizes a typed folder path, defaults its label, and saves the renamed co
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "~/notes", label: "Design notes", provider_id: null, target: null,
-      hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false,
+      reference_depth: 0, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("Saved to Library, partial");
     expect(document.activeElement).toBe(dialogButton("Open in Library"));
@@ -616,7 +616,7 @@ it("recognizes a Cloud page link, asks for the provider only when several config
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "98765", provider_id: "cloud-reader", target, label: null,
-      hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false,
+      reference_depth: 0, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("✓ Saved to Library");
     expect(document.body.textContent).not.toContain("@");
@@ -778,7 +778,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
     await advance(0);
     expect(client.libraryAdd).toHaveBeenCalledWith({
       input: "SD", provider_id: "cloud", target, label: null,
-      hydrate_references: false, follow: true, follow_mode: null, download_attachments: true, refresh_existing: false,
+      reference_depth: 0, follow: true, follow_mode: null, download_attachments: true, refresh_existing: false,
     });
     expect(document.body.textContent).toContain("✓ Saved to Library · 3 pages");
     expect(document.body.textContent).toContain("✓ Added to api-review · reflinked");
@@ -903,14 +903,74 @@ it("follows a Jira query: a relative-date query preselects accumulate, shows the
     // Jira follows can't go into a Space yet, even with a live target Space.
     expect(document.body.textContent).toContain("Jira follows can't be added to a Space yet");
     expect(document.body.textContent).not.toContain("Library and api-review");
+    expect(depthSelect()!.value).toBe("0");
+    await chooseDepth(depthSelect()!, "2");
     await act(async () => dialogButton("Follow query")!.click());
     await advance(0);
-    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: jql, provider_id: "jira", follow: true, follow_mode: "accumulate", target: null, download_attachments: false }));
-    expect(document.body.textContent).toContain("✓ Saved to Library · 2 issues");
+    expect(client.libraryAdd).toHaveBeenCalledWith(expect.objectContaining({ input: jql, provider_id: "jira", follow: true, follow_mode: "accumulate", reference_depth: 2, target: null, download_attachments: false }));
 
     // A preset fills the field; a bare key reads as a query on the Jira provider.
     await act(async () => dialogButton("Add another")!.click());
     await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>(".library-query-presets button")].find((chip) => chip.textContent === "Assigned to me, unresolved")!.click());
     expect(document.body.querySelector<HTMLInputElement>("input[type='text']")!.value).toBe("assignee = currentUser() AND resolution = Unresolved");
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+function depthSelect(): HTMLSelectElement | null {
+  const label = [...document.body.querySelectorAll("label")].find((element) => element.textContent === "Follow references");
+  return label ? document.getElementById(label.htmlFor) as HTMLSelectElement : null;
+}
+
+async function chooseDepth(select: HTMLSelectElement, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+it("offers Follow references with per-source defaults, honors a stored depth, and forgets the choice when the source changes", async () => {
+  vi.useFakeTimers();
+  const saved: LibraryOperation = {
+    operation_id: "op-depth", kind: "add", phases: [{ phase: "library", state: "done", done: 1, total: 1, message: null, error: null }], item_ids: ["source:ops-1"],
+    report: null, space: null, target: null, cancel_requested: false, finished: true, created_at: "", updated_at: "",
+  };
+  const jiraIssue = (key: string, extra: Record<string, unknown> = {}) => ({ kind: "artifact", provider_id: "jira", provider_instance: "https://jira.test/jira", title: key, canonical_id: key, container_label: null, existing_item_id: null, existing_follow_id: null, item_count: null, item_count_exact: true, follow_mode: null, git_working_tree: null, file_count: null, diagnostics: [], ...extra });
+  const client = {
+    projectConfiguration: vi.fn(async () => ({ providers: [{ id: "jira", base_url: "https://jira.test/jira", executable: "jira" }] })),
+    libraryResolve: vi.fn(async ({ input }: { input: string }) => input.endsWith("OPS-2") ? jiraIssue("OPS-2", { reference_depth: 2 }) : input.includes("browse/OPS-3") ? jiraIssue("OPS-3", { existing_item_id: "source:ops-3", reference_depth: 3 }) : jiraIssue("OPS-1")),
+    libraryAdd: vi.fn(async () => saved),
+  } as unknown as CockpitClient;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AddContextDialog client={client} onClose={vi.fn()} />));
+    await advance(0); await typeSource("OPS-1"); await advance(450);
+    // A new Jira ticket follows one step by default.
+    expect(depthSelect()!.value).toBe("1");
+    await chooseDepth(depthSelect()!, "3");
+    await act(async () => dialogButton("Add to Library")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenLastCalledWith(expect.objectContaining({ input: "https://jira.test/jira/browse/OPS-1", reference_depth: 3 }));
+
+    // Add another forgets the pick; a stored depth wins over the default until the user changes it.
+    await act(async () => dialogButton("Add another")!.click());
+    await advance(0); await typeSource("OPS-1"); await advance(450);
+    expect(depthSelect()!.value).toBe("1");
+    await chooseDepth(depthSelect()!, "0");
+    await typeSource("OPS-2"); await advance(450);
+    expect(depthSelect()!.value).toBe("2");
+    await act(async () => dialogButton("Add to Library")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenLastCalledWith(expect.objectContaining({ input: "https://jira.test/jira/browse/OPS-2", reference_depth: 2 }));
+
+    // An item already in the Library applies its depth only when refreshed.
+    await act(async () => dialogButton("Add another")!.click());
+    await advance(0); await typeSource("OPS-3"); await advance(450);
+    expect(depthSelect()).toBeNull();
+    await act(async () => document.body.querySelector<HTMLInputElement>("input[type='checkbox']")!.click());
+    expect(depthSelect()!.value).toBe("3");
+    await act(async () => dialogButton("Refresh from source")!.click());
+    await advance(0);
+    expect(client.libraryAdd).toHaveBeenLastCalledWith(expect.objectContaining({ input: "https://jira.test/jira/browse/OPS-3", refresh_existing: true, reference_depth: 3 }));
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

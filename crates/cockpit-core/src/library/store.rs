@@ -34,6 +34,10 @@ pub(crate) struct LibraryIndexEntry {
     pub canonical_url: Option<String>,
     /// Trusted inventory of this item's owned entries; not reconstructed from disk.
     pub inventory: Vec<MarkerFile>,
+    /// Outgoing references extracted when the content was saved. `None` means a
+    /// legacy save that never extracted them.
+    #[serde(default)]
+    pub references: Option<Vec<crate::sources::SourceReference>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -443,9 +447,9 @@ impl Store {
         index.generation = Uuid::new_v4().to_string();
         bounded_write(&self.meta, "index.json", index, MAX_INDEX)
     }
-    /// Replaces an item's entry at an unchanged revision. The caller's `refs`
-    /// and `purge_after` are ignored: references change only through
-    /// `mutate_index` and `add_ref`.
+    /// Replaces an item's entry at an unchanged revision. The caller's `refs`,
+    /// `purge_after`, `reference_depth` and `included_by` are ignored: they change
+    /// only through `mutate_index` and `add_ref`.
     pub fn update(&self, entry: LibraryIndexEntry) -> Result<(), InspectionError> {
         let _lock = self.exclusive()?;
         let mut index = self.index()?;
@@ -1396,7 +1400,9 @@ fn validate_intent(i: &Intent, name: &str) -> Result<(), InspectionError> {
     Ok(())
 }
 /// Inserts a new entry, or replaces an existing one while keeping the index's
-/// current `refs` and `purge_after` (D3: only `mutate_index`/`add_ref` change them).
+/// current `refs`, `purge_after`, `reference_depth` and `included_by` (D3: only
+/// `mutate_index`/`add_ref` change them, so a stale caller copy or a journal
+/// replay never rewinds them).
 fn upsert(index: &mut Index, mut entry: LibraryIndexEntry) {
     if let Some(old) = index
         .items
@@ -1405,6 +1411,8 @@ fn upsert(index: &mut Index, mut entry: LibraryIndexEntry) {
     {
         entry.summary.refs = std::mem::take(&mut old.summary.refs);
         entry.summary.purge_after = old.summary.purge_after.take();
+        entry.summary.reference_depth = old.summary.reference_depth.take();
+        entry.summary.included_by = old.summary.included_by.take();
         *old = entry;
     } else {
         index.items.push(entry);
@@ -2629,5 +2637,35 @@ mod tests {
         let saved = store.index().unwrap().items.remove(0).summary;
         assert_ne!(saved.revision, first.summary.revision, "the publish happened");
         assert_eq!(saved.refs, [LibraryItemRef::Manual, follow]);
+    }
+
+    #[test]
+    fn depth_and_inclusion_written_between_snapshot_and_publish_survive_the_publish() {
+        use cockpit_protocol::library::{LibraryInclusion, LibraryInclusionHolder};
+        let f = fixture();
+        let store = f.service.open().unwrap();
+        let first = publish_asset(&store, 1, "one", None);
+        let mut updated = asset_entry(&asset(1, "one changed"), Some(&first));
+        let stage = store.stage_asset(&mut updated, &asset(1, "one changed")).unwrap();
+        // A depth change and an inclusion land after the save took its snapshot.
+        let inclusion = LibraryInclusion {
+            holder: LibraryInclusionHolder::Item { item_id: "source:seed".into() },
+            from_item_id: Some("source:seed".into()),
+            from_label: "Seed".into(),
+            relation: "body".into(),
+            depth: 1,
+        };
+        store
+            .mutate_index(|index| {
+                let summary = &mut index.items[0].summary;
+                summary.reference_depth = Some(2);
+                crate::library::refs::set_inclusion(summary, inclusion.clone());
+                Ok(())
+            })
+            .unwrap();
+        store.publish(stage, updated, Some(&first.summary.revision), None).unwrap();
+        let saved = store.index().unwrap().items.remove(0).summary;
+        assert_ne!(saved.revision, first.summary.revision, "the publish happened");
+        assert_eq!((saved.reference_depth, saved.included_by), (Some(2), Some(vec![inclusion])));
     }
 }

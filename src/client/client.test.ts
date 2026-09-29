@@ -237,7 +237,7 @@ const libraryOperation = {
 };
 const libraryRequests = {
   resolve: { input: "https://example.test/item", provider_id: null },
-  add: { input: "https://example.test/item", provider_id: null, hydrate_references: false, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false, label: null, target: null },
+  add: { input: "https://example.test/item", provider_id: null, reference_depth: 0, follow: false, follow_mode: null, download_attachments: false, refresh_existing: false, label: null, target: null },
   refresh: { scope: "all" as const },
   replace: { item_id: "item-1", confirmed: [] },
   remove: { mode: "follow" as const, follow_id: "follow-1" },
@@ -304,6 +304,18 @@ describe("library client validation", () => {
     const native = createNativeClient(vi.fn(async () => ({ ...libraryOperation, operation_id: "other" })));
     await expect(native.libraryDocument({ ...libraryRequests.document, path: "folder/../escape" })).rejects.toMatchObject({ code: "malformed_response" });
     await expect(native.libraryOperationCancel("op/1")).rejects.toMatchObject({ code: "malformed_response" });
+  });
+  it("keeps reference depth and inclusions optional and bounded", async () => {
+    const item = { ...unsafeLibraryItem, item_path: "item" };
+    const inclusion = { holder: { kind: "follow", follow_id: "follow-1" }, from_item_id: null, from_label: "OPS-7", relation: "comment", depth: 1 };
+    const plain = { ...item, item_id: "item-plain", logical_id: "logical-plain" };
+    const parsed = await createBrowserClient(vi.fn(async () => jsonResponse({ ...libraryListing, items: [{ ...item, reference_depth: 2, included_by: [inclusion] }, plain] }))).libraryListing();
+    expect(parsed.items[0]).toMatchObject({ reference_depth: 2, included_by: [inclusion] });
+    expect("reference_depth" in parsed.items[1]! || "included_by" in parsed.items[1]!).toBe(false);
+    for (const bad of [{ reference_depth: 6 }, { included_by: [{ ...inclusion, depth: 6 }] }, { included_by: [{ ...inclusion, holder: { kind: "space" } }] }]) {
+      await expect(createBrowserClient(vi.fn(async () => jsonResponse({ ...libraryListing, items: [{ ...item, ...bad }] }))).libraryListing()).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    await expect(createNativeClient(vi.fn(async () => libraryOperation)).libraryAdd({ ...libraryRequests.add, reference_depth: 6 })).rejects.toMatchObject({ code: "malformed_response" });
   });
   it("accepts nullable optional strings and configured maximum operation and directory arrays", async () => {
     const operation = {

@@ -1,4 +1,4 @@
-//! Provider-neutral fetch, metadata and bounded hydration; Library owns persistence.
+//! Provider-neutral fetch, metadata and reference traversal; Library owns persistence.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -13,7 +13,12 @@ use tokio::time::timeout;
 
 use crate::InspectionError;
 use crate::repositories::is_jira_key;
-mod hydration;
+pub mod references;
+pub use references::{
+    MAX_ASSET_REFERENCES, MAX_REFERENCE_DEPTH, ReferenceSeed, ReferenceTarget, RelatedAsset,
+    RelatedFailure, RelatedResult, SourceReference, TraversalBudget, TraversalStop,
+    asset_label, asset_references, references_truncated,
+};
 
 const MAX_ASSETS_PER_FETCH: usize = 64;
 const MAX_ASSET_BYTES: usize = 1024 * 1024;
@@ -128,16 +133,6 @@ pub struct SourceMetadata {
 pub struct FetchedAssets {
     pub assets: Vec<SourceAsset>,
     pub diagnostics: Vec<ProjectDiagnostic>,
-    pub hydration: Option<SourceHydration>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SourceHydration {
-    pub completed: u32,
-    pub skipped: u32,
-    pub failed: u32,
-    pub truncated: bool,
-    pub total_bytes: u64,
 }
 
 /// A Confluence page identity proved by the selected provider: `Info` answered
@@ -522,6 +517,7 @@ pub trait SourceProvider: Send + Sync {
 #[derive(Clone)]
 pub struct SourceService {
     providers: Arc<Vec<Arc<dyn SourceProvider>>>,
+    configuration: Arc<ProjectConfiguration>,
     operation_timeout: Duration,
     recent: Arc<std::sync::Mutex<RecentReads>>,
 }
@@ -575,6 +571,7 @@ impl SourceService {
     ) -> Result<Self, InspectionError> {
         Ok(Self {
             providers: Arc::new(providers),
+            configuration: Arc::new(configuration.clone()),
             operation_timeout: Duration::from_millis(
                 configuration.limits.operation_timeout_ms.into(),
             ),
@@ -586,7 +583,7 @@ impl SourceService {
     pub async fn validate_artifact_for_setup(
         &self, request: SourceFetchRequest,
     ) -> Result<FetchedAssets, InspectionError> {
-        let fetched = self.fetch_assets_reusing(request, false, true, true).await?;
+        let fetched = self.fetch_assets_reusing(request, true, true).await?;
         if fetched.assets.is_empty() {
             return Err(InspectionError::new("source_provider_contract", "source provider returned no primary artifact"));
         }
@@ -1022,38 +1019,18 @@ impl SourceService {
     pub async fn fetch_assets(
         &self,
         request: SourceFetchRequest,
-        hydrate_references: bool,
     ) -> Result<FetchedAssets, InspectionError> {
-        self.fetch_assets_reusing(request, hydrate_references, false, false)
-            .await
+        self.fetch_assets_reusing(request, false, false).await
     }
 
     async fn fetch_assets_reusing(
         &self,
         request: SourceFetchRequest,
-        hydrate_references: bool,
         reuse_recent: bool,
         remember_recent: bool,
     ) -> Result<FetchedAssets, InspectionError> {
         validate_request(&request)?;
-        let provider = self
-            .providers
-            .iter()
-            .find(|provider| provider.provider_id() == request.provider_id)
-            .ok_or_else(|| {
-                InspectionError::new(
-                    "source_provider_unsupported",
-                    "selected source provider is unavailable",
-                )
-            })?;
-        // A hydration operation has one deadline. Secondary references only
-        // receive the remainder after the primary provider fetch completes.
-        let started = Instant::now();
-        let deadline_budget = if hydrate_references {
-            self.operation_timeout.min(hydration::HYDRATION_TIMEOUT)
-        } else {
-            self.operation_timeout
-        };
+        let provider = self.selected_provider(&request.provider_id)?;
         let key = read_key(&request);
         let gate = reuse_recent.then(|| {
             self.recent
@@ -1077,10 +1054,10 @@ impl SourceService {
                 )
             })
             .flatten();
-        let primary = match reused {
+        let assets = match reused {
             Some(assets) => assets,
             None => {
-                let assets = timeout(deadline_budget, provider.fetch(&request))
+                let assets = timeout(self.operation_timeout, provider.fetch(&request))
                     .await
                     .map_err(|_| {
                         InspectionError::new(
@@ -1102,62 +1079,22 @@ impl SourceService {
                 assets
             }
         };
-        if primary.len() > MAX_ASSETS_PER_FETCH {
+        if assets.len() > MAX_ASSETS_PER_FETCH {
             return Err(InspectionError::new(
                 "source_provider_contract",
                 "provider returned too many source assets",
             ));
         }
-        for asset in &primary {
-            validate_provider_asset(&request, asset)?;
-            validate_asset(asset)?;
-        }
-        validate_confluence_page(&request, &primary)?;
-        if hydrate_references
-            && (primary.len() > hydration::HYDRATION_MAX_ASSETS
-                || primary.iter().map(|asset| asset.body.len()).sum::<usize>()
-                    > hydration::HYDRATION_MAX_TOTAL_BYTES)
-        {
-            return Err(InspectionError::new(
-                "source_hydration_primary_budget",
-                "primary provider result exceeds the configured hydration budget",
-            ));
-        }
-        let hydration = if hydrate_references {
-            hydration::hydrate(provider, &request, primary, started, deadline_budget).await
-        } else {
-            hydration::HydrationResult {
-                assets: primary,
-                diagnostics: Vec::new(),
-                completed: 0,
-                skipped: 0,
-                failed: 0,
-                truncated: false,
-                total_bytes: 0,
-            }
-        };
-        if hydration.assets.len() > MAX_ASSETS_PER_FETCH {
-            return Err(InspectionError::new(
-                "source_provider_contract",
-                "provider returned too many source assets",
-            ));
-        }
-        let mut diagnostics = hydration.diagnostics;
-        for asset in &hydration.assets {
+        let mut diagnostics = Vec::new();
+        for asset in &assets {
             validate_provider_asset(&request, asset)?;
             validate_asset(asset)?;
             diagnostics.extend(asset.diagnostics.iter().cloned());
         }
+        validate_confluence_page(&request, &assets)?;
         Ok(FetchedAssets {
-            assets: hydration.assets,
+            assets,
             diagnostics,
-            hydration: hydrate_references.then_some(SourceHydration {
-                completed: hydration.completed,
-                skipped: hydration.skipped,
-                failed: hydration.failed,
-                truncated: hydration.truncated,
-                total_bytes: hydration.total_bytes,
-            }),
         })
     }
 }
@@ -1235,6 +1172,66 @@ pub(crate) fn confluence_space_key(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'~' | b'_' | b'-'))
+}
+
+/// Authority for a Confluence page the selected provider proved, bound to the
+/// configured instance. `canonical_url` is the URL the page will be fetched by.
+pub(crate) fn confluence_instance_authority(
+    configuration: &ProjectConfiguration,
+    selected_provider_id: &str,
+    page: &ConfluencePage,
+    canonical_url: &str,
+) -> Result<SourceAuthority, InspectionError> {
+    let provider = configuration
+        .providers
+        .iter()
+        .find(|p| p.id == selected_provider_id)
+        .ok_or_else(|| {
+            InspectionError::new(
+                "source_authority_mismatch",
+                "selected Confluence provider is not configured",
+            )
+        })?;
+    if !crate::repositories::is_confluence_executable(&provider.executable)
+        || !confluence_url_belongs_to_instance(&provider.base_url, &page.source_url)
+        || !confluence_page_id(&page.page_id)
+        || !confluence_space_key(&page.space_key)
+        || page.title.trim().is_empty()
+        || page.title.chars().any(char::is_control)
+    {
+        return Err(InspectionError::new(
+            "source_identity_mismatch",
+            "Confluence page identity is invalid",
+        ));
+    }
+    let authority = site_authority(configuration, selected_provider_id)?;
+    let expected = confluence_page_url(&authority.provider_instance, &page.page_id);
+    if page.canonical_url != expected || canonical_url != expected {
+        return Err(InspectionError::new(
+            "source_identity_mismatch",
+            "Confluence page does not belong to the selected provider instance",
+        ));
+    }
+    Ok(authority)
+}
+
+pub(crate) fn confluence_url_belongs_to_instance(base_url: &str, source_url: &str) -> bool {
+    let (Ok(base), Ok(source)) = (url::Url::parse(base_url), url::Url::parse(source_url)) else {
+        return false;
+    };
+    let base_path = base.path().trim_end_matches('/');
+    let source_path = source.path();
+    base.scheme() == source.scheme()
+        && base.host_str().map(str::to_ascii_lowercase)
+            == source.host_str().map(str::to_ascii_lowercase)
+        && base.port_or_known_default() == source.port_or_known_default()
+        && source.username().is_empty()
+        && source.password().is_none()
+        && source.query().is_none()
+        && source.fragment().is_none()
+        && (base_path.is_empty()
+            || source_path == base_path
+            || source_path.starts_with(&format!("{base_path}/")))
 }
 
 fn validate_asset(asset: &SourceAsset) -> Result<(), InspectionError> {
@@ -1524,46 +1521,6 @@ mod tests {
             Ok(vec![self.0.lock().expect("asset").clone()])
         }
     }
-    #[derive(Clone)]
-    struct GraphProvider {
-        assets: Arc<Mutex<BTreeMap<String, SourceAsset>>>,
-        failures: Arc<Mutex<BTreeMap<String, String>>>,
-        requests: Arc<Mutex<Vec<SourceFetchRequest>>>,
-    }
-    #[async_trait]
-    impl SourceProvider for GraphProvider {
-        fn provider_id(&self) -> &str {
-            "tea"
-        }
-        fn capabilities(&self) -> Vec<SourceCapability> {
-            vec![SourceCapability::Issue]
-        }
-        async fn fetch(
-            &self,
-            request: &SourceFetchRequest,
-        ) -> Result<Vec<SourceAsset>, InspectionError> {
-            self.requests
-                .lock()
-                .expect("requests")
-                .push(request.clone());
-            if let Some(message) = self
-                .failures
-                .lock()
-                .expect("failures")
-                .get(&request.artifact_url)
-                .cloned()
-            {
-                return Err(InspectionError::new("fixture_failure", message));
-            }
-            self.assets
-                .lock()
-                .expect("assets")
-                .get(&request.artifact_url)
-                .cloned()
-                .map(|asset| vec![asset])
-                .ok_or_else(|| InspectionError::new("fixture_missing", "fixture source is missing"))
-        }
-    }
     fn authority() -> SourceAuthority {
         SourceAuthority {
             provider_instance: "https://forge.test/gitea".into(),
@@ -1716,9 +1673,8 @@ mod tests {
         let (service, shared, root) = service(asset("body"));
         let cache = root.join("sources");
         assert!(!cache.exists());
-        let fetched = service.fetch_assets(request(), false).await.unwrap();
+        let fetched = service.fetch_assets(request()).await.unwrap();
         assert_eq!(fetched.assets[0].body, "body");
-        assert!(fetched.hydration.is_none());
         assert!(!cache.exists());
         assert!(service.recent.lock().unwrap().fetches.is_empty());
         service.prefetch_for_setup(request()).await;
@@ -1731,9 +1687,8 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
-        let fetched = service.fetch_assets(request(), true).await.unwrap();
+        let fetched = service.fetch_assets(request()).await.unwrap();
         assert_eq!(fetched.assets[0].body, "body");
-        assert!(fetched.hydration.is_some());
         let recent_after = service.recent.lock().unwrap();
         assert_eq!(recent_after.fetches.len(), recent_before.len());
         assert_eq!(recent_after.fetches[0].0, recent_before[0].0);
@@ -1754,7 +1709,7 @@ mod tests {
         shared.lock().unwrap().source.provider_instance = "https://other.test".into();
         assert_eq!(
             service
-                .fetch_assets(request(), false)
+                .fetch_assets(request())
                 .await
                 .unwrap_err()
                 .code,
@@ -1817,84 +1772,6 @@ mod tests {
             authority: authority(),
         }
     }
-    fn graph_asset(index: u64, body: &str) -> SourceAsset {
-        SourceAsset {
-            source: SourceRef {
-                provider_id: "tea".into(),
-                provider_instance: authority().provider_instance,
-                resource_type: "issue".into(),
-                canonical_id: format!("acme/repo#{index}"),
-            },
-            title: format!("issue {index}"),
-            source_url: Some(format!("https://forge.test/gitea/acme/repo/issues/{index}")),
-            original_url: None,
-            source_revision: Some(index.to_string()),
-            complete: true,
-            diagnostics: Vec::new(),
-            body: body.into(),
-            container: None,
-            fields: Vec::new(),
-            attachments: Vec::new(),
-        }
-    }
-    fn graph_service(
-        assets: BTreeMap<String, SourceAsset>,
-        failures: BTreeMap<String, String>,
-    ) -> (
-        SourceService,
-        Arc<Mutex<Vec<SourceFetchRequest>>>,
-        std::path::PathBuf,
-    ) {
-        let root = std::env::temp_dir().join(format!("cockpit-source-graph-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("root");
-        let config = ProjectConfiguration {
-            version: 1,
-            repository_roots: vec![],
-            worktree_root: "worktrees".into(),
-            companion_root: "companions".into(),
-            state_root: root.to_string_lossy().into_owned(),
-            cache_root: root.join("cache").to_string_lossy().into_owned(),
-            library_root: "library".into(),
-            branch_template: "{repo}/{task_id}".into(),
-            checkout_template: "{repo}-{task_id}".into(),
-            providers: vec![ProjectProvider {
-                id: "tea".into(),
-                base_url: "https://forge.test/gitea".into(),
-                executable: "tea".into(),
-                login: None,
-            }],
-            limits: ProjectLimits {
-                catalog_depth: 1,
-                catalog_entries: 1,
-                git_timeout_ms: 1000,
-                git_output_bytes: 65536,
-                operation_timeout_ms: 1000,
-                context_preview_bytes: 1024,
-                context_preview_lines: 100,
-                context_directory_entries: 1,
-                context_tree_depth: 1,
-                library_folder_files: 512,
-                library_folder_bytes: 32 * 1024 * 1024,
-                library_file_bytes: 4 * 1024 * 1024,
-                library_space_pages: 200,
-                library_attachment_bytes: 25 * 1024 * 1024,
-                library_item_attachment_bytes: 100 * 1024 * 1024,
-                library_max_items: 20_000,
-            },
-            origins: BTreeMap::new(),
-        };
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let provider = GraphProvider {
-            assets: Arc::new(Mutex::new(assets)),
-            failures: Arc::new(Mutex::new(failures)),
-            requests: requests.clone(),
-        };
-        (
-            SourceService::new(&config, vec![Arc::new(provider)]).expect("service"),
-            requests,
-            root,
-        )
-    }
     #[tokio::test]
     async fn a_setup_start_reuses_the_background_prefetch() {
         let (service, shared, root) = service(asset("prefetched"));
@@ -1904,7 +1781,7 @@ mod tests {
             .validate_artifact_for_setup(request())
             .await
             .expect("start");
-        let prefetched = service.fetch_assets(request(), false).await.expect("import");
+        let prefetched = service.fetch_assets(request()).await.expect("import");
         // The start used the prefetched body; an import asks the provider.
         assert_ne!(
             started.assets[0].body,
@@ -1929,7 +1806,7 @@ mod tests {
             started.assets[0].body,
             planned.assets[0].body
         );
-        let imported = service.fetch_assets(request(), false).await.expect("import");
+        let imported = service.fetch_assets(request()).await.expect("import");
         assert_ne!(
             imported.assets[0].body,
             planned.assets[0].body
@@ -1937,119 +1814,17 @@ mod tests {
         std::fs::remove_dir_all(root).expect("cleanup");
     }
     #[tokio::test]
-    async fn hydration_is_opt_in_bounded_and_retains_primary_on_secondary_failure() {
-        let one = "https://forge.test/gitea/acme/repo/issues/1".to_owned();
-        let two = "https://forge.test/gitea/acme/repo/issues/2".to_owned();
-        let three = "https://forge.test/gitea/acme/repo/issues/3".to_owned();
-        let four = "https://forge.test/gitea/acme/repo/issues/4".to_owned();
-        let assets = BTreeMap::from([
-            (
-                one.clone(),
-                graph_asset(
-                    1,
-                    &format!(
-                        "[related issue]({two}) {two} {one} {three} https://other.test/acme/repo/issues/9"
-                    ),
-                ),
-            ),
-            (two.clone(), graph_asset(2, &three)),
-            (three.clone(), graph_asset(3, &four)),
-            (four.clone(), graph_asset(4, "terminal")),
-        ]);
-        let (service, requests, root) = graph_service(
-            assets,
-            BTreeMap::from([(three.clone(), "secondary unavailable".into())]),
-        );
-        let primary = service
-            .fetch_assets(request(), false)
-            .await
-            .expect("primary only");
-        assert_eq!(primary.assets.len(), 1);
-        let hydrated = service
-            .fetch_assets(request(), true)
-            .await
-            .expect("hydrated");
-        assert_eq!(
-            hydrated
-                .assets
-                .iter()
-                .map(|entry| entry.source.canonical_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["acme/repo#1", "acme/repo#2"]
-        );
-        assert!(
-            hydrated
-                .diagnostics
-                .iter()
-                .any(|entry| entry.code == "source_hydration_fetch_failed")
-        );
-        let calls = requests.lock().expect("requests");
-        assert!(
-            calls
-                .iter()
-                .all(|call| call.provider_id == "tea" && call.authority == authority())
-        );
-        assert!(calls.iter().any(|call| call.artifact_url == two));
-        assert!(calls.iter().any(|call| call.artifact_url == three));
-        drop(calls);
-        let report = hydrated.hydration.unwrap();
-        assert_eq!(report.completed, 1);
-        assert_eq!(report.failed, 1);
-        assert!(!root.join("sources").exists());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-    #[tokio::test]
-    async fn hydration_deduplicates_cycles_and_stops_at_depth_limit() {
-        let one = "https://forge.test/gitea/acme/repo/issues/1".to_owned();
-        let two = "https://forge.test/gitea/acme/repo/issues/2".to_owned();
-        let three = "https://forge.test/gitea/acme/repo/issues/3".to_owned();
-        let four = "https://forge.test/gitea/acme/repo/issues/4".to_owned();
-        let assets = BTreeMap::from([
-            (one.clone(), graph_asset(1, &format!("{two} {two} {one}"))),
-            (two.clone(), graph_asset(2, &three)),
-            (three.clone(), graph_asset(3, &four)),
-            (four.clone(), graph_asset(4, "terminal")),
-        ]);
-        let (service, requests, root) = graph_service(assets, BTreeMap::new());
-        let hydrated = service
-            .fetch_assets(request(), true)
-            .await
-            .expect("hydrated");
-        assert_eq!(
-            hydrated
-                .assets
-                .iter()
-                .map(|entry| entry.source.canonical_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["acme/repo#1", "acme/repo#2", "acme/repo#3"]
-        );
-        assert!(
-            hydrated
-                .diagnostics
-                .iter()
-                .any(|entry| entry.code == "source_hydration_cycle")
-        );
-        assert!(
-            hydrated
-                .diagnostics
-                .iter()
-                .any(|entry| entry.code == "source_hydration_depth")
-        );
-        assert_eq!(requests.lock().expect("requests").len(), 3);
-        std::fs::remove_dir_all(root).expect("cleanup");
-    }
-    #[tokio::test]
     async fn rejects_bad_provider_output_and_oversized_metadata() {
         let (service, shared, root) = service(asset("body"));
         shared.lock().expect("asset").source.provider_instance = "https://other.test".into();
         assert_eq!(
-            service.fetch_assets(request(), false).await.expect_err("instance").code,
+            service.fetch_assets(request()).await.expect_err("instance").code,
             "source_provider_contract"
         );
         *shared.lock().expect("asset") = asset("body");
         shared.lock().expect("asset").title = "x".repeat(MAX_METADATA_BYTES + 1);
         assert_eq!(
-            service.fetch_assets(request(), false).await.expect_err("metadata").code,
+            service.fetch_assets(request()).await.expect_err("metadata").code,
             "source_asset_invalid"
         );
         std::fs::remove_dir_all(root).expect("cleanup");
@@ -2062,11 +1837,11 @@ mod tests {
         let (service, shared, root) = service(page.clone());
         let mut request = request();
         request.artifact_url = confluence_page_url(&request.authority.provider_instance, "7");
-        service.fetch_assets(request.clone(), false).await.expect("requested page");
+        service.fetch_assets(request.clone()).await.expect("requested page");
         for canonical_id in ["8", "7a"] {
             shared.lock().expect("asset").source.canonical_id = canonical_id.into();
             assert_eq!(
-                service.fetch_assets(request.clone(), false).await.expect_err(canonical_id).code,
+                service.fetch_assets(request.clone()).await.expect_err(canonical_id).code,
                 "source_identity_mismatch"
             );
         }
@@ -2098,7 +1873,7 @@ mod tests {
         let (mut service, _, root) = service(asset("previous"));
         service.providers = Arc::new(vec![Arc::new(PendingProvider)]);
         service.operation_timeout = Duration::from_millis(5);
-        let result = tokio::time::timeout(Duration::from_secs(1), service.fetch_assets(request(), false))
+        let result = tokio::time::timeout(Duration::from_secs(1), service.fetch_assets(request()))
             .await
             .expect("bounded request");
         assert_eq!(result.expect_err("deadline").code, "source_fetch_timeout");

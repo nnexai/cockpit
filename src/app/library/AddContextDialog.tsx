@@ -34,7 +34,7 @@ function libraryPhase(operation: LibraryOperation, unit: "items" | "pages" | "is
   const partialReason = operation.report?.rows.find((row) => row.outcome === "partial")?.reason;
   const unchanged = operation.report?.rows.find((row) => row.outcome === "unchanged");
   const count = operation.item_ids.length;
-  // A followed space counts its pages (`✓ Saved to Library · 38 pages`), a followed query its issues.
+  // A followed space counts its pages (`✓ Saved to Library · 38 pages`), a followed query its issues, or its items once references add other kinds.
   const summary = unit === "pages" ? ` · ${pageCount(count)}` : unit === "issues" ? ` · ${issueCount(count)}` : count > 1 ? ` · ${count} items` : "";
   switch (phase?.state ?? "pending") {
     case "pending":
@@ -97,7 +97,7 @@ function spacePhase(operation: LibraryOperation, space: string): { text: string;
 type SpaceSelection = { item_ids: string[]; follow_ids: string[] };
 
 /** A followed space's or query's source, so a retry can look up the follow the add created. */
-type FollowSource = { input: string; provider_id: string | null; unit: "pages" | "issues" };
+type FollowSource = { input: string; provider_id: string | null; unit: "pages" | "issues" | "items" };
 
 /**
  * The dialog's accepted request outlives the dialog (design §4.7: closing does
@@ -226,7 +226,8 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const [label, setLabel] = useState<string | null>(null);
   // The provider picked where several configured instances could read the input.
   const [chosenProviderId, setChosenProviderId] = useState<string | null>(null);
-  const [linked, setLinked] = useState(false);
+  // The user's `Follow references` pick; null keeps the default for the resolved source.
+  const [depthChoice, setDepthChoice] = useState<number | null>(null);
   const [refreshExisting, setRefreshExisting] = useState(false);
   // A Confluence page: `Only this page` (false, the default) or `Follow the whole space`.
   const [followChoice, setFollowChoice] = useState(false);
@@ -289,7 +290,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   // Typing, or choosing a preset, replaces the source: choices made for the old one no longer apply.
   const editInput = (value: string) => {
     setInput(value);
-    if (value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setModeChoice(null); setDownloadAttachments(false); setPicked(null); }
+    if (value.trim() !== trimmed) { setLabel(null); setLookup({ status: "idle" }); setRefreshExisting(false); setFollowChoice(false); setModeChoice(null); setDepthChoice(null); setDownloadAttachments(false); setPicked(null); }
   };
   const lookupKey = `${requestUrl}\u0000${requestProviderId ?? ""}\u0000${lookupRetry}\u0000${needsProvider && !providersLoaded}`;
   useEffect(() => {
@@ -336,7 +337,11 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
   const attachmentsOffered = (resolution?.kind === "confluence_page" || spaceResolution) && !existing;
   const folder = resolution?.kind === "folder";
   const family = resolution && !folder ? providerFamily(providers, resolution.provider_id) : null;
-  const forge = resolution?.kind === "artifact" && family !== null && family.key !== "jira" && family.key !== "confluence";
+  // One hop per step, from the ticket, page or query results through relations, descriptions and comments. Jira tickets default to 1, everything else to Off,
+  // and an item or follow already in the Library offers the depth it was saved with. An existing item applies a depth only when refreshed.
+  const depthOffered = jiraFollow || (resolution?.kind === "artifact" && (!existing || refreshExisting));
+  const referenceDepth = depthChoice ?? resolution?.reference_depth ?? (resolution?.kind === "artifact" && family?.key === "jira" ? 1 : 0);
+  const depthOptions = [0, 1, 2, 3, ...(referenceDepth > 3 ? [referenceDepth] : [])];
   const destinationSpace = destination === "space" && !jiraFollow ? spaceChoice : null;
   const companion = spaceListing.listing?.companion ?? null;
   // An item or followed space already in the target Space: the header's Space state decides whether adding applies.
@@ -406,14 +411,14 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     begin(() => client.libraryAdd({
       input: requestUrl,
       provider_id: providerId,
-      hydrate_references: forge && linked,
+      reference_depth: depthOffered ? referenceDepth : 0,
       follow,
       follow_mode: followMode,
       download_attachments: attachmentsOffered && downloadAttachments,
       refresh_existing: Boolean(existing) && refreshExisting,
       label: folder ? label?.trim() || resolution.title : null,
       target,
-    }), destinationSpace, null, follow ? { input: requestUrl, provider_id: providerId, unit: jiraFollow ? "issues" : "pages" } : null);
+    }), destinationSpace, null, follow ? { input: requestUrl, provider_id: providerId, unit: jiraFollow ? (referenceDepth > 0 ? "items" : "issues") : "pages" } : null);
   };
   // The same source again, whether the request never started or stopped part way.
   const retryAll = () => { if (lastBeginRef.current) begin(lastBeginRef.current, operationSpace, spaceSelection, followSource); };
@@ -447,6 +452,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setLabel(null);
     setPicked(null);
     setFollowChoice(false);
+    setDepthChoice(null);
     setModeChoice(null);
     setDownloadAttachments(false);
     setLookup({ status: "idle" });
@@ -462,6 +468,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
     setLookup({ status: "ok", resolution: chosenSpace });
     setLabel(null);
     setRefreshExisting(false);
+    setDepthChoice(null);
     setDownloadAttachments(false);
     setBrowseOpen(false);
     setPickedFocus((value) => value + 1);
@@ -497,7 +504,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
         {operation || starting ? <div className="library-progress" aria-live="polite">
           <ol className="library-progress-steps">
             <li className={`library-progress-step is-${progress?.tone ?? "running"}`}>
-              <span>{progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? (followSource.unit === "issues" ? "Following the query…" : "Following the space…") : "Saving to Library…")}</span>
+              <span>{progress?.text ?? (spaceSelection ? `Adding to ${shownSpace}…` : followSource ? (followSource.unit === "pages" ? "Following the space…" : "Following the query…") : "Saving to Library…")}</span>
               {operation && !finished && !operation.cancel_requested && operation.kind !== "space_add" && !progress?.saved ? <button type="button" onClick={add.cancel}>Cancel</button> : null}
             </li>
             {spaceStep ? <li className={`library-progress-step is-${spaceStep.tone}`}>
@@ -558,7 +565,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           </div> : null}
           {choices.length > 1 ? <div className="task-setup-row">
             <label htmlFor={`${fieldId}-provider`}>Provider</label>
-            <div><select id={`${fieldId}-provider`} className="library-select" value={chosen?.id ?? ""} onChange={(event) => setChosenProviderId(event.target.value)}>
+            <div><select id={`${fieldId}-provider`} className="library-select" value={chosen?.id ?? ""} onChange={(event) => { setChosenProviderId(event.target.value); setDepthChoice(null); }}>
               {choices.map((provider) => <option key={provider.id} value={provider.id}>{provider.id} · {provider.base_url}</option>)}
             </select></div>
           </div> : null}
@@ -588,7 +595,15 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
           </div> : null}
           {resolution?.kind === "confluence_page" && resolution.existing_follow_id ? <p className="task-setup-check">{`${resolutionSpaceName(resolution)} is already followed; refreshing it keeps this page current.`}</p> : null}
           {attachmentsOffered ? <label className="task-setup-check"><input type="checkbox" checked={downloadAttachments} onChange={(event) => setDownloadAttachments(event.target.checked)} /> {`Download attachments${attachmentLimit !== null ? ` (up to ${Math.round(attachmentLimit / (1024 * 1024))} MB each)` : ""}`}</label> : null}
-          {resolution && forge && !existing ? <label className="task-setup-check"><input type="checkbox" checked={linked} onChange={(event) => setLinked(event.target.checked)} /> Include linked issues and {family?.review}s within import limits</label> : null}
+          {depthOffered ? <div className="task-setup-row">
+            <label htmlFor={`${fieldId}-depth`}>Follow references</label>
+            <div>
+              <select id={`${fieldId}-depth`} className="library-select" value={referenceDepth} onChange={(event) => setDepthChoice(Number(event.target.value))}>
+                {depthOptions.map((steps) => <option key={steps} value={steps}>{steps === 0 ? "Off" : `${steps} ${steps === 1 ? "step" : "steps"}`}</option>)}
+              </select>
+              <p className="task-setup-note">Also saves items these link to or mention: relations, descriptions and comments. Each step follows one more hop.</p>
+            </div>
+          </div> : null}
           {existing ? <label className="task-setup-check"><input type="checkbox" checked={refreshExisting} onChange={(event) => setRefreshExisting(event.target.checked)} /> Refresh from source first</label> : null}
           <div className="task-setup-row">
             <span id={destinationId} className="library-row-label">Destination</span>

@@ -1,7 +1,7 @@
 import type {
   ContextDirectory, ContextDocument, ContextMedia, ContextFileIndex, LibraryFileIndexRequest,
   LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest,
-  LibraryFollowSource, LibraryFollowSummary, LibraryIssueMeta, LibraryItemRef, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
+  LibraryFollowSource, LibraryFollowSummary, LibraryInclusion, LibraryIssueMeta, LibraryItemRef, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
   LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
   SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest,
 } from "../protocol/generated/v1";
@@ -57,7 +57,20 @@ function item(value: unknown): LibraryItemSummary {
     conflict: array(r.conflict, 5000, conflict), fetched_at: optionalText(r.fetched_at), checked_at: optionalText(r.checked_at),
     refs: array(r.refs, 5000, itemRef), purge_after: optionalText(r.purge_after), issue: nullable(r.issue, issueMeta),
     attachments: array(r.attachments, 5000, attachment), folder, diagnostics: diagnostics(r.diagnostics),
+    ...optionalDepth(r), ...(r.included_by === undefined || r.included_by === null ? {} : { included_by: array(r.included_by, 64, inclusion) }),
   };
+}
+/** `reference_depth` is optional on the wire: an absent (or null) field stays absent. */
+const MAX_REFERENCE_DEPTH = 5;
+function optionalDepth(r: Record<string, unknown>): { reference_depth?: number } {
+  return r.reference_depth === undefined || r.reference_depth === null ? {} : { reference_depth: integer(r.reference_depth, MAX_REFERENCE_DEPTH) };
+}
+function inclusion(value: unknown): LibraryInclusion {
+  const r = record(value); const h = record(r.holder);
+  const holder = h.kind === "item" ? { kind: "item" as const, item_id: id(h.item_id) }
+    : h.kind === "follow" ? { kind: "follow" as const, follow_id: id(h.follow_id) }
+    : fail();
+  return { holder, from_item_id: nullable(r.from_item_id, id), from_label: text(r.from_label, 512), relation: text(r.relation, 128), depth: integer(r.depth, MAX_REFERENCE_DEPTH) };
 }
 const followMode = (value: unknown) => oneOf(value, ["live", "accumulate"] as const);
 function itemRef(value: unknown): LibraryItemRef {
@@ -82,7 +95,7 @@ function followSource(value: unknown): LibraryFollowSource {
   }
 }
 function follow(value: unknown): LibraryFollowSummary {
-  const r = record(value); return { follow_id: id(r.follow_id), provider_id: id(r.provider_id), provider_instance: id(r.provider_instance), source: followSource(r.source), include_attachments: bool(r.include_attachments), item_count: integer(r.item_count, 0xffffffff), partial: partial(r.partial), excluded_ids: array(r.excluded_ids, 5000, id), last_refreshed_at: optionalText(r.last_refreshed_at), state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const) };
+  const r = record(value); return { follow_id: id(r.follow_id), provider_id: id(r.provider_id), provider_instance: id(r.provider_instance), source: followSource(r.source), include_attachments: bool(r.include_attachments), item_count: integer(r.item_count, 0xffffffff), partial: partial(r.partial), excluded_ids: array(r.excluded_ids, 5000, id), last_refreshed_at: optionalText(r.last_refreshed_at), state: oneOf(r.state, ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"] as const), ...optionalDepth(r) };
 }
 function libraryRoot(value: unknown) {
   const r = record(value);
@@ -96,7 +109,7 @@ export function parseLibraryListing(value: unknown): LibraryListing {
 }
 export function parseLibraryResolveRequest(value: unknown): LibraryResolveRequest { const r = record(value); return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id) }; }
 export function parseLibraryResolution(value: unknown): LibraryResolution {
-  const r = record(value); return { kind: oneOf(r.kind, ["artifact", "confluence_page", "confluence_space", "jira_query", "folder"] as const), provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), title: text(r.title), canonical_id: optionalText(r.canonical_id), container_label: optionalText(r.container_label), existing_item_id: optionalText(r.existing_item_id), existing_follow_id: optionalText(r.existing_follow_id), item_count: nullable(r.item_count, v => integer(v, 0xffffffff)), item_count_exact: bool(r.item_count_exact), follow_mode: nullable(r.follow_mode, followMode), git_working_tree: nullable(r.git_working_tree, bool), file_count: nullable(r.file_count, integer), diagnostics: diagnostics(r.diagnostics) };
+  const r = record(value); return { kind: oneOf(r.kind, ["artifact", "confluence_page", "confluence_space", "jira_query", "folder"] as const), provider_id: optionalText(r.provider_id), provider_instance: optionalText(r.provider_instance), title: text(r.title), canonical_id: optionalText(r.canonical_id), container_label: optionalText(r.container_label), existing_item_id: optionalText(r.existing_item_id), existing_follow_id: optionalText(r.existing_follow_id), item_count: nullable(r.item_count, v => integer(v, 0xffffffff)), item_count_exact: bool(r.item_count_exact), follow_mode: nullable(r.follow_mode, followMode), git_working_tree: nullable(r.git_working_tree, bool), file_count: nullable(r.file_count, integer), diagnostics: diagnostics(r.diagnostics), ...optionalDepth(r) };
 }
 export function parseLibraryConfluenceSpacesRequest(value: unknown): LibraryConfluenceSpacesRequest {
   const r = record(value); const provider_id = id(r.provider_id);
@@ -108,7 +121,7 @@ export function parseLibraryConfluenceSpaces(value: unknown, request: LibraryCon
 }
 export function parseLibraryAddRequest(value: unknown): LibraryAddRequest {
   const r = record(value); const target = nullable(r.target, parseSpaceTarget);
-  return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id), hydrate_references: bool(r.hydrate_references), follow: bool(r.follow), follow_mode: r.follow_mode === undefined ? null : nullable(r.follow_mode, followMode), download_attachments: bool(r.download_attachments), refresh_existing: bool(r.refresh_existing), label: optionalText(r.label), target };
+  return { input: text(r.input, 16 * 1024), provider_id: optionalText(r.provider_id), reference_depth: integer(r.reference_depth ?? 0, MAX_REFERENCE_DEPTH), follow: bool(r.follow), follow_mode: r.follow_mode === undefined ? null : nullable(r.follow_mode, followMode), download_attachments: bool(r.download_attachments), refresh_existing: bool(r.refresh_existing), label: optionalText(r.label), target };
 }
 export function parseLibraryRefreshRequest(value: unknown): LibraryRefreshRequest {
   const r = record(value);

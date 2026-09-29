@@ -7,6 +7,7 @@ use super::{
     follow::{FOLLOW_FETCH_CONCURRENCY, FetchWork, FetchedBatch, recount},
     item_id, operations,
     refs::{self, TOMBSTONE_GRACE_MS},
+    related::RelatedPass,
     store::{LibraryIndexEntry, Store, error},
 };
 use crate::{
@@ -14,7 +15,10 @@ use crate::{
     jira_query::{JiraQueryInput, has_relative_dates, instant_seconds, jira_query_input},
     project_store::timestamp,
     repositories::is_jira_executable,
-    sources::{IssueListing, IssueQuery, IssueRow, SourceAuthority, SourceRef, site_authority},
+    sources::{
+        IssueListing, IssueQuery, IssueRow, ReferenceSeed, RelatedAsset, SourceAuthority, SourceRef,
+        TraversalBudget, site_authority,
+    },
 };
 use cockpit_protocol::library::*;
 use sha2::{Digest, Sha256};
@@ -57,8 +61,9 @@ fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSummary) -> bool
 }
 
 /// D4: why a listed issue needs a fetch, or `None` when the stored item
-/// matches the row. Compares listing format with listing format.
-fn change_reason(old: &LibraryIndexEntry, row: &IssueRow) -> Option<&'static str> {
+/// matches the row. Compares listing format with listing format. With a
+/// reference depth, an item saved before references were extracted is fetched once.
+fn change_reason(old: &LibraryIndexEntry, row: &IssueRow, depth: u32) -> Option<&'static str> {
     if matches!(
         old.summary.state,
         LibraryItemState::RemovedAtSource | LibraryItemState::Failed | LibraryItemState::Unknown
@@ -68,6 +73,8 @@ fn change_reason(old: &LibraryIndexEntry, row: &IssueRow) -> Option<&'static str
         != Some(row.updated.as_str())
     {
         Some("changed")
+    } else if depth > 0 && old.references.is_none() {
+        Some("rechecked")
     } else {
         None
     }
@@ -92,6 +99,8 @@ struct Snapshot {
     excluded: BTreeSet<String>,
     /// A previous run did not see the whole query, so it cannot be probed.
     unsettled: bool,
+    /// Reference depth of the follow record (0 when none is stored).
+    depth: u32,
 }
 
 /// One planned fetch of a Jira issue.
@@ -192,6 +201,7 @@ impl LibraryService {
             Some(LibraryFollowSource::JiraQuery { mode, .. }) => *mode,
             _ => Self::suggested_mode(&query.jql),
         };
+        let reference_depth = existing.as_ref().and_then(|follow| follow.reference_depth);
         Ok(LibraryResolution {
             kind: LibraryInputKind::JiraQuery,
             provider_id: Some(provider_id.to_owned()),
@@ -207,6 +217,7 @@ impl LibraryService {
             git_working_tree: None,
             file_count: None,
             diagnostics: vec![],
+            reference_depth,
         })
     }
 
@@ -218,10 +229,10 @@ impl LibraryService {
         query: JiraQueryInput,
         provider_id: String,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.target.is_some() || request.hydrate_references || request.download_attachments {
+        if request.target.is_some() || request.download_attachments {
             return Err(error(
                 "source_capability_unavailable",
-                "A Jira query follow supports neither a Space target, linked artifacts nor attachment downloads (jira-cli cannot download attachments)",
+                "A Jira query follow supports neither a Space target nor attachment downloads (jira-cli cannot download attachments)",
             ));
         }
         let site = self.jira_site(&provider_id)?;
@@ -239,6 +250,7 @@ impl LibraryService {
             excluded_ids: vec![],
             last_refreshed_at: None,
             state: LibraryItemState::Unknown,
+            reference_depth: (request.reference_depth > 0).then_some(request.reference_depth),
         };
         let handle = operations::runtime()?;
         let store = self.open()?;
@@ -269,10 +281,12 @@ impl LibraryService {
             .map(|f| f.excluded_ids.iter().cloned().collect())
             .unwrap_or_default();
         let unsettled = record.is_some_and(|f| f.partial.is_some() || f.state == LibraryItemState::Partial);
+        let depth = record.and_then(|f| f.reference_depth).unwrap_or(0);
         let members = index
             .items
             .iter()
             .filter(|entry| refs::has_follow(&entry.summary, &follow.follow_id))
+            .filter(|entry| !refs::related_of(&entry.summary, &follow.follow_id))
             .filter_map(|entry| entry.summary.canonical_id.clone())
             .collect();
         let items = index
@@ -280,7 +294,7 @@ impl LibraryService {
             .into_iter()
             .map(|entry| (entry.summary.item_id.clone(), entry))
             .collect();
-        Ok(Snapshot { items, members, excluded, unsettled })
+        Ok(Snapshot { items, members, excluded, unsettled, depth })
     }
 
     /// A listing that fails is a failed add, or a Failed follow that keeps every member.
@@ -375,7 +389,9 @@ impl LibraryService {
         let since = (!live && !before.unsettled)
             .then(|| {
                 watermark(before.items.values().filter(|entry| {
-                    is_issue_of(entry, &follow) && refs::has_follow(&entry.summary, &follow.follow_id)
+                    is_issue_of(entry, &follow)
+                        && refs::has_follow(&entry.summary, &follow.follow_id)
+                        && !refs::related_of(&entry.summary, &follow.follow_id)
                 }))
             })
             .flatten();
@@ -392,6 +408,7 @@ impl LibraryService {
                     Some(record) => {
                         record.excluded_ids.clear();
                         record.source = created.source.clone();
+                        record.reference_depth = created.reference_depth;
                     }
                     None => index.follows.push(created),
                 }
@@ -446,7 +463,7 @@ impl LibraryService {
             let old = snapshot.items.get(&issue_item_id(&follow, &row.key)).cloned();
             let reason = match &old {
                 None => None,
-                Some(old) => match change_reason(old, row) {
+                Some(old) => match change_reason(old, row, snapshot.depth) {
                     Some(reason) => Some(reason.to_owned()),
                     None => {
                         unchanged += 1;
@@ -478,6 +495,13 @@ impl LibraryService {
             .find(|provider| provider.id == follow.provider_id)
             .map(|provider| provider.base_url.trim_end_matches('/').to_owned())
             .ok_or_else(|| error("source_authority_mismatch", "selected Jira provider is not configured"))?;
+        // Seeds this run tried to refresh: a failed or conflicted one has no
+        // current reference set, whatever an earlier save stored.
+        let attempted = pending
+            .iter()
+            .filter(|p| p.row.is_some())
+            .map(|p| p.key.clone())
+            .collect::<BTreeSet<String>>();
         let work = pending
             .into_iter()
             .map(|pending| {
@@ -519,6 +543,94 @@ impl LibraryService {
         operations::unchanged(store, operation, unchanged as u32)?;
         cancelled = cancelled || operations::cancelled(store, operation)?;
 
+        // 5b. Reference depth: traverse from the seeds and save what they reach.
+        // Live follows use the listed seeds; accumulate uses every seed member,
+        // whose stored references stand in for the ones the listing did not return.
+        let mut pass = RelatedPass::none();
+        if !cancelled && snapshot.depth > 0 {
+            let keys = if live {
+                listed.keys().cloned().collect::<BTreeSet<_>>()
+            } else {
+                listed
+                    .keys()
+                    .chain(checked.keys())
+                    .chain(snapshot.members.iter().filter(|key| !snapshot.excluded.contains(*key)))
+                    .cloned()
+                    .collect()
+            };
+            let stored = {
+                let _lock = store.shared()?;
+                store
+                    .index()?
+                    .items
+                    .into_iter()
+                    .filter(|entry| is_issue_of(entry, &follow))
+                    .filter_map(|entry| {
+                        Some((entry.summary.canonical_id.clone()?, (entry.references, entry.summary.state)))
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let mut seeds = Vec::new();
+            let mut unknown = 0u32;
+            for key in keys {
+                let (references, state) = match stored.get(&key).cloned() {
+                    Some((references, state)) => (references, Some(state)),
+                    None => (None, None),
+                };
+                let not_current = attempted.contains(&key)
+                    && matches!(
+                        state,
+                        Some(
+                            LibraryItemState::Failed
+                                | LibraryItemState::Conflict
+                                | LibraryItemState::RemovedAtSource
+                        )
+                    );
+                // Stale references still grow the set, but never authorize a drop.
+                if not_current {
+                    unknown += 1;
+                }
+                match references {
+                    Some(references) => seeds.push(ReferenceSeed {
+                        source: SourceRef {
+                            provider_id: follow.provider_id.clone(),
+                            provider_instance: follow.provider_instance.clone(),
+                            resource_type: "issue".into(),
+                            canonical_id: key.clone(),
+                        },
+                        label: key,
+                        references,
+                    }),
+                    None => unknown += 1,
+                }
+            }
+            // A related item is excluded by its Library id; a former seed of this
+            // follow's own site by its key (the scoped compat form).
+            let skip = |related: &RelatedAsset| {
+                let source = &related.asset.source;
+                snapshot.excluded.contains(&item_id(source))
+                    || (source.provider_id == follow.provider_id
+                        && source.provider_instance == follow.provider_instance
+                        && source.resource_type == "issue"
+                        && snapshot.excluded.contains(&source.canonical_id))
+            };
+            pass = self
+                .run_related(
+                    store,
+                    operation,
+                    seeds,
+                    unknown,
+                    snapshot.depth,
+                    TraversalBudget::Query,
+                    &LibraryInclusionHolder::Follow { follow_id: follow.follow_id.clone() },
+                    &LibraryItemRef::Follow { follow_id: follow.follow_id.clone() },
+                    None,
+                    &skip,
+                )
+                .await?;
+            cancelled = cancelled || pass.cancelled;
+        }
+
         // 6. Commit. Only a complete, uncancelled, non-empty live listing drops members.
         let listing_complete = listing.complete;
         let mut have = listed.len() as u64;
@@ -548,10 +660,19 @@ impl LibraryService {
                 total: None,
                 reason: format!("{failures} issues failed to fetch"),
             })
+        } else if !pass.complete {
+            Some(LibraryPartial {
+                unit: "related items".into(),
+                have: pass.reached.len() as u64,
+                total: None,
+                reason: "related items incomplete".into(),
+            })
         } else {
             None
         };
-        let drop_allowed = live && listing_complete && !cancelled;
+        // A related pass that could not finish never lets an unlisted seed or
+        // an unreached related item go: either might still be reachable.
+        let drop_allowed = live && listing_complete && !cancelled && pass.complete;
         let rows = listed
             .iter()
             .chain(checked.iter())
@@ -579,6 +700,11 @@ impl LibraryService {
                         &mut entry.summary,
                         LibraryItemRef::Follow { follow_id: follow.follow_id.clone() },
                     );
+                    // A listed item is a seed, whatever else reaches it.
+                    refs::strip_inclusion(
+                        &mut entry.summary,
+                        &LibraryInclusionHolder::Follow { follow_id: follow.follow_id.clone() },
+                    );
                 }
                 if let Some(row) = rows.get(&key) {
                     let fetched_updated = entry
@@ -594,7 +720,9 @@ impl LibraryService {
                         assignee: row.assignee.clone(),
                     });
                 }
-                if refs::has_follow(&entry.summary, &follow.follow_id) {
+                if refs::has_follow(&entry.summary, &follow.follow_id)
+                    && !refs::related_of(&entry.summary, &follow.follow_id)
+                {
                     members += 1;
                 }
             }
@@ -602,14 +730,21 @@ impl LibraryService {
             let mut dropped = Vec::new();
             if drop_allowed && !empty_with_members {
                 for entry in &mut index.items {
-                    if !is_issue_of(entry, &follow)
-                        || !refs::has_follow(&entry.summary, &follow.follow_id)
-                    {
+                    if !refs::has_follow(&entry.summary, &follow.follow_id) {
                         continue;
                     }
-                    let Some(key) = entry.summary.canonical_id.clone() else { continue };
-                    if listed.contains_key(&key) || excluded.contains(&key) {
-                        continue;
+                    if refs::related_of(&entry.summary, &follow.follow_id) {
+                        if pass.reached.contains(&entry.summary.item_id) {
+                            continue;
+                        }
+                    } else {
+                        if !is_issue_of(entry, &follow) {
+                            continue;
+                        }
+                        let Some(key) = entry.summary.canonical_id.clone() else { continue };
+                        if listed.contains_key(&key) || excluded.contains(&key) {
+                            continue;
+                        }
                     }
                     let before = entry.summary.clone();
                     refs::remove_ref(
@@ -659,6 +794,15 @@ impl LibraryService {
         }
         if cancelled {
             return Ok(());
+        }
+        if let Some(note) = &pass.note {
+            operations::follow_row(
+                store,
+                operation,
+                &follow,
+                LibraryReportOutcome::Partial,
+                Some(note.clone()),
+            )?;
         }
         if let Some(members) = kept {
             operations::follow_row(
@@ -770,6 +914,8 @@ mod tests {
         truncated: bool,
         /// Deleted at source: unlisted by key, and its fetch is not found.
         gone: BTreeSet<String>,
+        /// Listed normally, but its fetch fails.
+        broken: BTreeSet<String>,
         log: Vec<String>,
         fetched: Vec<String>,
     }
@@ -786,6 +932,13 @@ mod tests {
             let issue = site.issues.get_mut(key).unwrap();
             issue.minute = minute;
             issue.body = format!("{key} body at {minute}");
+        }
+        /// The issue's description mentions `text` (keys become references).
+        fn mention(&self, key: &str, minute: u32, text: &str) {
+            let mut site = self.site();
+            let issue = site.issues.get_mut(key).unwrap();
+            issue.minute = minute;
+            issue.body = format!("## Description\n{text}\n");
         }
         fn attach(&self, key: &str, minute: u32, id: &str, name: &str, size: u64) {
             let mut site = self.site();
@@ -870,6 +1023,9 @@ mod tests {
             if site.gone.contains(&key) {
                 return Err(error("source_not_found", "issue does not exist"));
             }
+            if site.broken.contains(&key) {
+                return Err(error("source_provider_failed", "jira is down"));
+            }
             let issue = site.issues.get(&key).cloned().ok_or_else(|| error("source_not_found", "gone"))?;
             let project = key.rsplit_once('-').unwrap().0.to_owned();
             Ok(vec![SourceAsset {
@@ -920,10 +1076,18 @@ mod tests {
         jql: &str,
         mode: LibraryFollowMode,
     ) -> (LibraryOperation, String) {
+        follow_at(service, jql, mode, 0).await
+    }
+    async fn follow_at(
+        service: &LibraryService,
+        jql: &str,
+        mode: LibraryFollowMode,
+        depth: u32,
+    ) -> (LibraryOperation, String) {
         let request = LibraryAddRequest {
             input: jql.into(),
             provider_id: Some("jira".into()),
-            hydrate_references: false,
+            reference_depth: depth,
             follow: true,
             follow_mode: Some(mode),
             download_attachments: false,
@@ -1102,7 +1266,7 @@ mod tests {
         let keep = LibraryAddRequest {
             input: format!("{BASE}/browse/OPS-1"),
             provider_id: Some("jira".into()),
-            hydrate_references: false,
+            reference_depth: 0,
             follow: false,
             follow_mode: None,
             download_attachments: false,
@@ -1208,5 +1372,127 @@ mod tests {
         // jira-cli cannot fetch attachment bytes, so a download request is refused, never faked.
         let request = LibraryAttachmentRequest { item_id: item.item_id.clone(), attachment_ids: vec!["10100".into()], action: LibraryAttachmentAction::Download };
         assert_eq!(service.start_attachments(request).await.unwrap_err().code, "source_capability_unavailable");
+    }
+
+    fn reason_of(item: &LibraryItemSummary, follow_id: &str) -> Option<(String, String, u32)> {
+        item.included_by.iter().flatten().find_map(|inclusion| match &inclusion.holder {
+            LibraryInclusionHolder::Follow { follow_id: id } if id == follow_id => {
+                Some((inclusion.from_label.clone(), inclusion.relation.clone(), inclusion.depth))
+            }
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn reference_depth_follows_related_items_and_never_drops_on_an_incomplete_pass() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.mention("OPS-1", 5, "See OPS-2");
+        let (_, id) = follow_at(service, OPS, LibraryFollowMode::Live, 1).await;
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-1", "OPS-2"]));
+        let items = issues(service).await;
+        assert!(held(&items["OPS-1"], &id) && refs::related_of(&items["OPS-2"], &id));
+        assert!(items["OPS-1"].included_by.is_none());
+        assert_eq!(reason_of(&items["OPS-2"], &id), Some(("OPS-1".into(), "description".into(), 1)));
+        assert!(held(&items["OPS-2"], &id));
+        assert_eq!(record(service, &id).await.reference_depth, Some(1));
+        assert_eq!(record(service, &id).await.item_count, 2);
+
+        // Nothing changed: the seed is traversed from its stored references (it is
+        // not fetched again), the related item is fetched and is not a dropped member.
+        let report = refresh(service, &id).await;
+        assert_eq!((report.dropped, report.partial), (0, 0), "{report:?}");
+        assert_eq!(f.provider.take_fetched(), keys(&["OPS-2"]));
+
+        // The seed stops mentioning it: a complete pass drops the related item.
+        f.provider.mention("OPS-1", 6, "nothing to see");
+        let report = refresh(service, &id).await;
+        assert_eq!(report.dropped, 1, "{report:?}");
+        let items = issues(service).await;
+        assert!(items["OPS-2"].refs.is_empty() && items["OPS-2"].purge_after.is_some());
+        assert!(items["OPS-2"].included_by.is_none());
+
+        // A listed item is a seed, whatever else mentions it.
+        f.provider.mention("OPS-1", 7, "See OPS-2 and OPS-3");
+        f.provider.set(OPS, &["OPS-1", "OPS-2"]);
+        refresh(service, &id).await;
+        let items = issues(service).await;
+        assert!(held(&items["OPS-2"], &id) && items["OPS-2"].included_by.is_none());
+        assert!(refs::related_of(&items["OPS-3"], &id));
+
+        // OPS-2 leaves the query but OPS-1 still mentions it, and OPS-3 cannot be
+        // fetched: the pass is incomplete, so nothing is dropped and the follow says so.
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.site().gone.insert("OPS-3".into());
+        let report = refresh(service, &id).await;
+        assert_eq!((report.dropped, report.partial), (0, 1), "{report:?}");
+        let items = issues(service).await;
+        assert!(refs::related_of(&items["OPS-2"], &id) && held(&items["OPS-2"], &id));
+        assert!(held(&items["OPS-3"], &id), "an unreachable related item is kept");
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Partial);
+        f.provider.site().gone.clear();
+        let report = refresh(service, &id).await;
+        assert_eq!((report.dropped, report.partial), (0, 0), "{report:?}");
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Fresh);
+
+        // Depth 0 reconciles the related items away on a complete live refresh.
+        let (readded, _) = follow_at(service, OPS, LibraryFollowMode::Live, 0).await;
+        assert_eq!(readded.report.unwrap().dropped, 2);
+        let items = issues(service).await;
+        assert!(items["OPS-2"].refs.is_empty() && items["OPS-3"].refs.is_empty());
+        assert!(held(&items["OPS-1"], &id));
+        assert_eq!(record(service, &id).await.reference_depth, None);
+    }
+
+    #[tokio::test]
+    async fn failed_seed_refresh_never_authorizes_a_related_drop() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1", "OPS-2"]);
+        f.provider.mention("OPS-2", 5, "See OPS-3");
+        let (_, id) = follow_at(service, OPS, LibraryFollowMode::Live, 1).await;
+        assert!(refs::related_of(&issues(service).await["OPS-3"], &id));
+
+        // OPS-2 leaves the query and OPS-1 now mentions OPS-3, but OPS-1 cannot be
+        // fetched: its stored (empty) references are not current, so nothing drops.
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.mention("OPS-1", 6, "See OPS-3");
+        f.provider.site().broken.insert("OPS-1".into());
+        let report = refresh(service, &id).await;
+        assert_eq!(report.dropped, 0, "{report:?}");
+        let items = issues(service).await;
+        assert!(held(&items["OPS-2"], &id) && held(&items["OPS-3"], &id));
+        assert_eq!(record(service, &id).await.state, LibraryItemState::Partial);
+
+        // Once OPS-1 is fetched, the drop is safe: OPS-2 goes, OPS-3 stays reachable.
+        f.provider.site().broken.clear();
+        let report = refresh(service, &id).await;
+        assert_eq!(report.dropped, 1, "{report:?}");
+        let items = issues(service).await;
+        assert!(items["OPS-2"].refs.is_empty());
+        assert_eq!(reason_of(&items["OPS-3"], &id), Some(("OPS-1".into(), "description".into(), 1)));
+    }
+
+    #[tokio::test]
+    async fn removing_a_related_item_excludes_its_library_id_not_its_bare_key() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.mention("OPS-1", 5, "See OPS-2");
+        let (_, id) = follow_at(service, OPS, LibraryFollowMode::Live, 1).await;
+        let related = issues(service).await["OPS-2"].clone();
+        service
+            .remove(LibraryRemoveRequest::Item {
+                item_id: related.item_id.clone(),
+                expected_revision: related.revision.clone(),
+            })
+            .await
+            .unwrap();
+        // Another site's OPS-2 has a different Library id, so it is not excluded.
+        assert_eq!(record(service, &id).await.excluded_ids, vec![related.item_id.clone()]);
+        let report = refresh(service, &id).await;
+        assert_eq!((report.partial, report.dropped), (0, 0), "{report:?}");
+        assert!(!issues(service).await.contains_key("OPS-2"), "the removed related item stays out");
     }
 }
