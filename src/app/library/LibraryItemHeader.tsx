@@ -68,8 +68,8 @@ function breadcrumb(segments: readonly string[]): string {
 /**
  * Library item header (design §4.5): a provider tile beside the kind label,
  * breadcrumb and title, then one state line (pill, freshness phrase, actions)
- * and, for a Confluence page with attachments, one summary control that opens
- * the attachments panel. Item facts live in the Details popover (`details`).
+ * and, for an item with attachments, one summary control that opens the
+ * attachments panel (a Jira issue's list is read-only: names, sizes, types). Item facts live in the Details popover (`details`).
  * The Space actions come from `headerSpaceAction`: `Add to <Space>` (the one
  * primary action), or the copy's `Update in <Space>`, a confirmed replace or
  * removal, and the Library version. Attachments are metadata only until the user
@@ -116,7 +116,8 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
     page && (version || editedDetail || updatedBy) ? [item.source_revision ? `Version ${item.source_revision}` : null, editedDetail ? `edited ${editedDetail.text}` : null, updatedBy ? `by ${updatedBy}` : null].filter(Boolean).join(" ") : null,
   ].filter(Boolean).join(" · ");
   const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded");
-  const attachments = actions.attachments;
+  // Only Confluence pages can download; a Jira issue lists its attachments read-only (jira-cli has no download command).
+  const attachments = page ? actions.attachments : undefined;
   const downloadable = downloadableAttachments(item);
   const progress = attachmentProgress(attachments?.active, item.item_id);
   // Chosen rows, for this item only; a row that stops being downloadable leaves the selection.
@@ -213,14 +214,14 @@ export function LibraryItemHeader({ item, providers, narrow, rootCrumb, pending,
       {space && space.copyError && !spaceUpdating ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
         <span>{space.copyError}</span>
       </div> : null}
-      {page && item.attachments.length > 0 ? <div className="library-attachments-line">
+      {item.attachments.length > 0 ? <div className="library-attachments-line">
         <button type="button" className="library-attachments-toggle" aria-expanded={attachmentsOpen} aria-controls={attachmentsOpen ? attachmentListId : undefined} onClick={() => setAttachmentsOpenFor(attachmentsOpen ? null : item.item_id)}>
           <UiIcon name={attachmentsOpen ? "down" : "right"} />{attachmentSummary(item)}
         </button>
       </div> : null}
-      {page && item.attachments.length > 0 && attachmentsOpen ? <div className="library-attachments" id={attachmentListId}>
+      {item.attachments.length > 0 && attachmentsOpen ? <div className="library-attachments" id={attachmentListId}>
         <div className="library-attachments-head">
-          <span>{downloaded.length} of {item.attachments.length} downloaded</span>
+          <span>{page ? `${downloaded.length} of ${item.attachments.length} downloaded` : "Listed from Jira; attachment files are not downloaded"}</span>
           <span className="context-toolbar-spacer" />
           {attachments && !narrow ? <>
             {selectedIds.length > 0 ? <button type="button" className="library-button is-panel" onClick={() => download(selectedIds)} disabled={attachments.busy}>{`Download selected (${selectedIds.length})`}</button> : null}

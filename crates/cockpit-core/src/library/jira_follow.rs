@@ -221,7 +221,7 @@ impl LibraryService {
         if request.target.is_some() || request.hydrate_references || request.download_attachments {
             return Err(error(
                 "source_capability_unavailable",
-                "A Jira query follow supports neither a Space target, linked artifacts nor attachments",
+                "A Jira query follow supports neither a Space target, linked artifacts nor attachment downloads (jira-cli cannot download attachments)",
             ));
         }
         let site = self.jira_site(&provider_id)?;
@@ -759,6 +759,7 @@ mod tests {
     struct Issue {
         minute: u32,
         body: String,
+        attachments: Vec<crate::sources::SourceAttachment>,
     }
     #[derive(Default)]
     struct Site {
@@ -785,6 +786,15 @@ mod tests {
             let issue = site.issues.get_mut(key).unwrap();
             issue.minute = minute;
             issue.body = format!("{key} body at {minute}");
+        }
+        fn attach(&self, key: &str, minute: u32, id: &str, name: &str, size: u64) {
+            let mut site = self.site();
+            let issue = site.issues.get_mut(key).unwrap();
+            issue.minute = minute;
+            issue.attachments.push(crate::sources::SourceAttachment {
+                id: id.into(), title: name.into(), media_type: Some("text/plain".into()), size: Some(size),
+                source_url: None, source_revision: None, path: None, not_downloaded: Some("not_requested".into()),
+            });
         }
         fn take_fetched(&self) -> BTreeSet<String> {
             std::mem::take(&mut self.site().fetched).into_iter().collect()
@@ -878,7 +888,7 @@ mod tests {
                 body: issue.body,
                 container: Some(SourceContainer { id: project.clone(), label: project }),
                 fields: vec![],
-                attachments: vec![],
+                attachments: issue.attachments,
             }])
         }
     }
@@ -898,7 +908,7 @@ mod tests {
         }];
         let mut site = Site::default();
         for (key, minute) in [("OPS-1", 1), ("OPS-2", 2), ("OPS-3", 3), ("OPS-4", 4)] {
-            site.issues.insert(key.into(), Issue { minute, body: format!("{key} body") });
+            site.issues.insert(key.into(), Issue { minute, body: format!("{key} body"), attachments: vec![] });
         }
         let provider = Arc::new(FakeIssues(Mutex::new(site)));
         let sources = Arc::new(SourceService::new(&configuration, vec![provider.clone()]).unwrap());
@@ -1166,5 +1176,37 @@ mod tests {
         assert_eq!(items.keys().cloned().collect::<Vec<_>>(), ["OPS-1", "OPS-3"]);
         assert!(!root.join(plain_path).exists());
         assert!(root.join(edited.document_path.unwrap()).exists());
+    }
+
+    #[tokio::test]
+    async fn followed_issue_lists_attachments_read_only_and_a_new_one_refreshes_the_item() {
+        let f = fixture();
+        let service = &f.base.service;
+        f.provider.set(OPS, &["OPS-1"]);
+        f.provider.attach("OPS-1", 1, "10100", "trace.log", 2048);
+        let (_, id) = follow(service, OPS, LibraryFollowMode::Live).await;
+        let item = issues(service).await["OPS-1"].clone();
+        assert_eq!(item.attachments.len(), 1);
+        let attachment = &item.attachments[0];
+        assert_eq!(
+            (attachment.original_name.as_str(), attachment.bytes, attachment.state, attachment.relative_path.as_deref()),
+            ("trace.log", Some(2048), LibraryAttachmentState::NotDownloaded, None)
+        );
+        let root = std::path::Path::new(&service.configuration.library_root);
+        let document = std::fs::read_to_string(root.join(item.document_path.as_deref().unwrap())).unwrap();
+        assert!(document.contains("attachments:\n  - id: \"10100\"\n    title: \"trace.log\""), "{document}");
+        assert!(document.contains("not_downloaded: \"not_requested\""));
+        assert!(!root.join(&item.item_path).join("_files").exists());
+
+        // A later upload changes `updated`, so the refresh fetches the issue and lists both files.
+        f.provider.attach("OPS-1", 5, "10101", "shot.png", 90);
+        let report = refresh(service, &id).await;
+        assert_eq!(report.updated, 1, "{report:?}");
+        let names: Vec<_> = issues(service).await["OPS-1"].attachments.iter().map(|a| a.original_name.clone()).collect();
+        assert_eq!(names, ["trace.log", "shot.png"]);
+
+        // jira-cli cannot fetch attachment bytes, so a download request is refused, never faked.
+        let request = LibraryAttachmentRequest { item_id: item.item_id.clone(), attachment_ids: vec!["10100".into()], action: LibraryAttachmentAction::Download };
+        assert_eq!(service.start_attachments(request).await.unwrap_err().code, "source_capability_unavailable");
     }
 }

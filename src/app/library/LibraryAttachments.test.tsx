@@ -53,6 +53,22 @@ it("downloads only chosen rows, keeps over-limit rows inert, and removes only do
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
+it("lists a Jira issue's attachments read-only, with no download controls", async () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const attachments = { start: vi.fn(), open: vi.fn(), busy: false, active: null };
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, attachments };
+  const issue: LibraryItemSummary = { ...page, item_id: "issue:ops1", provider_id: "jira", provider_instance: "https://jira.test", resource_type: "issue", canonical_id: "OPS-1", container: { container_id: "OPS", label: "OPS" }, title: "Crash", document_path: "jira/jira.test/OPS/OPS-1/Crash.md", item_path: "jira/jira.test/OPS/OPS-1", attachments: [{ attachment_id: "10100", original_name: "trace.log", stored_name: "trace.log", media_type: "text/plain", bytes: 2048, version: null, state: "not_downloaded", relative_path: null }] };
+  try {
+    await act(async () => root.render(<LibraryItemHeader item={issue} providers={[{ id: "jira", base_url: "https://jira.test", executable: "jira" }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    await act(async () => host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!.click());
+    expect(host.querySelector('[aria-label="Attachments"]')?.textContent).toContain("trace.log");
+    expect(host.querySelector(".library-attachments")?.textContent).toContain("2 KB");
+    expect([...host.querySelectorAll(".library-attachments button")]).toHaveLength(0);
+    expect(host.querySelector('[aria-label="Select trace.log"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
 it("keeps metadata-only selection local, polls an explicit download, then opens only saved bytes through SafeImage", async () => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);

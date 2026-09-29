@@ -308,6 +308,31 @@ async fn on_prem_jira_keeps_wiki_markup_and_rejects_wrong_api_authority() {
     }
 }
 
+#[tokio::test]
+async fn jira_lists_attachment_metadata_without_downloading() {
+    let mut fixture = Fixture::new("jira", "https://jira.internal.test/jira");
+    fixture.data["jira"]["fields"]["attachment"] = json!([
+        {"id": "10100", "filename": "trace.log", "size": 2048, "mimeType": "text/plain",
+         "content": "https://jira.internal.test/jira/secure/attachment/10100/trace.log"},
+        {"id": "10101", "filename": "bad\nname"}
+    ]);
+    fixture.save();
+    let provider = JiraSourceProvider::configured(&fixture.config, "fixture").unwrap();
+    let request = fixture.request("https://jira.internal.test/jira/browse/OPS-7");
+    let assets = provider.fetch(&request).await.unwrap();
+    let asset = &assets[0];
+    assert_eq!(asset.attachments.len(), 1);
+    let attachment = &asset.attachments[0];
+    assert_eq!(
+        (attachment.id.as_str(), attachment.title.as_str(), attachment.size),
+        ("10100", "trace.log", Some(2048))
+    );
+    assert_eq!(attachment.media_type.as_deref(), Some("text/plain"));
+    assert!(attachment.path.is_none());
+    assert_eq!(attachment.not_downloaded.as_deref(), Some("not_requested"));
+    assert!(asset.diagnostics.iter().any(|d| d.code == "source_attachments_partial"));
+}
+
 #[test]
 fn instance_authority_uses_artifact_repository_for_nested_wiki_pages() {
     let fixture = Fixture::new("tea", "https://forge.test:9443/gitea");

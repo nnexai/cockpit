@@ -22,6 +22,7 @@ use serde_json::Value;
 use tokio::process::Command;
 use url::Url;
 
+use crate::jira_attachments::{issue_attachments, partial_diagnostic};
 use crate::jira_wiki::wiki_to_markdown;
 
 const MAX_ISSUE_BYTES: usize = 1024 * 1024;
@@ -366,7 +367,8 @@ impl SourceProvider for JiraSourceProvider {
         let title = summary(&issue)?;
         let source_url = self.browse_url(&key);
         let (body, complete) = issue_markdown(&issue, &source_url)?;
-        let diagnostics = if complete {
+        let (attachments, attachments_complete) = issue_attachments(&issue, &self.base_url);
+        let mut diagnostics = if complete {
             Vec::new()
         } else {
             vec![ProjectDiagnostic {
@@ -375,6 +377,9 @@ impl SourceProvider for JiraSourceProvider {
                 path: None,
             }]
         };
+        if !attachments_complete {
+            diagnostics.push(partial_diagnostic());
+        }
         let project_key = key
             .rsplit_once('-')
             .map(|(project, _)| project)
@@ -398,7 +403,7 @@ impl SourceProvider for JiraSourceProvider {
                 label: project_key.into(),
             }),
             fields: issue_fields(&issue),
-            attachments: Vec::new(),
+            attachments,
         }])
     }
 

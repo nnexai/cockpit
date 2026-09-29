@@ -11,6 +11,7 @@ pub mod confluence;
 pub mod github;
 pub mod gitlab;
 pub mod jira;
+mod jira_attachments;
 mod jira_wiki;
 pub mod tea;
 
