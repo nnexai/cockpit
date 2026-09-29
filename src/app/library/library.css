@@ -491,9 +491,9 @@
 .library-credentials-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .library-credentials-row { padding: 8px 0; border-top: 1px solid var(--border); }
 .library-credentials-row:first-child { border-top: 0; }
-.library-credentials-head { display: flex; min-height: 28px; align-items: center; gap: 8px; }
+.library-credentials-head { display: flex; flex-wrap: wrap; min-height: 28px; align-items: center; gap: 4px 8px; }
 .library-credentials-name { min-width: 0; overflow: hidden; color: var(--text-primary); font-size: var(--font-size-control); text-overflow: ellipsis; white-space: nowrap; }
-.library-credentials-actions { display: flex; gap: 6px; }
+.library-credentials-actions { display: flex; flex: none; gap: 6px; margin-left: auto; }
 .library-credentials-form { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px; }
 .library-credentials-form .task-setup-row { margin-bottom: 0; }
 .library-credentials-buttons { display: flex; justify-content: flex-end; gap: 8px; }
