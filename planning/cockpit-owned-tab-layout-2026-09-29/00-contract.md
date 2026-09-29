@@ -1,6 +1,6 @@
 # Cockpit-owned tab layout: agreed contract
 
-Status: full design and implementation planning paused for interactive refinement. Implementation remains a separate second step. The user has approved the demo's drag/drop, resizing, visual direction and pane control icons as implementation references; this does not establish backend integration.
+Status: design and implementation planning resumed after interactive refinement. Implementation remains a separate second step. The user has approved the demo's drag/drop, resizing, visual direction and pane control icons as implementation references; this does not establish backend integration.
 
 ## Approved implementation reference
 
@@ -10,7 +10,7 @@ Status: full design and implementation planning paused for interactive refinemen
 - Preserve header-based dragging, centre-drop swaps, edge-drop placement, destination previews and live divider resizing. Use the demo's pane chrome, selected-state treatment and control icon appearance as the visual reference.
 - Compare the implemented surface against the runnable demo for mouse behavior and appearance. Product integration may adapt existing tokens and accessibility behavior without silently replacing the approved interaction model or icon treatment.
 - Approval is limited to the stated interaction and visual feedback. Mock content, simulation controls, missing focus preservation and absence of backend integration are not approved product behavior.
-- The demo is standalone, with no Herdr or real browser sessions. Full planning remains paused until the user requests it to resume.
+- The demo is standalone, with no Herdr or real browser sessions. Planning resumed at the user's request; product implementation is not authorized by this planning step.
 
 ## User decisions
 
@@ -19,7 +19,7 @@ Status: full design and implementation planning paused for interactive refinemen
 3. Browser, Review and Files all become tab-local Cockpit panes. New viewers do not launch addon TUIs. No terminal/UI renderer toggle for these viewers.
 4. One browser, one Review and one Files viewer per tab. Opening an existing Files/Review viewer focuses it and switches to the requested source; existing durable drafts retain source identity.
 5. Ignore all Herdr positioning hints, including initial geometry. Do not persist layouts yet. Preserve normal in-memory arrangement/viewer state through tab switches during a run; existing durable comments/drafts remain durable.
-6. First-load terminal arrangement is a balanced grid starting with two terminals side by side. Use authoritative terminal member order, not Herdr rectangles.
+6. First-load terminal arrangement is a balanced grid starting with two terminals side by side. Order confirmed terminal members deterministically by stable pane ID; never use Herdr rectangles or layout ordering. Pane ordering is a planning default, not an additional user requirement.
 7. Open a new viewer by splitting the selected leaf; right/down placement supported. Existing viewer reuse does not create another split.
 8. Externally created terminals insert at the full-height right edge. Newcomer width is 1/(current visible layout leaves + 1), preserving the old layout's internal proportions. Clarify visible means unzoomed layout membership, not only currently painted zoom leaf, in the design.
 9. Include draggable dividers, drag-to-centre swap, drag-to-edge repositioning with split-tree restructuring, and zoom/restore. Dragging uses pane headers, not content selections.
@@ -30,18 +30,24 @@ Status: full design and implementation planning paused for interactive refinemen
 14. At least one real Herdr pane is required per tab. Confirmed loss of its last real member, whether through close or move, closes all virtual panes. Disconnect/stale state is not membership loss. Normal pane closure preserves durable drafts/comments.
 15. Independent managed browser session per Herdr tab. Closing browser pane (including last-real-pane closure) stops that tab's managed session. Reopening starts at configured default URL, not last URL. Closing one browser must not stop another tab's browser. No browser cross-tab move.
 16. Existing Reviewr/file-viewer addon panes become ordinary terminal panes. Remove automatic graphical replacement/toggles; do not automatically convert or stop existing addon processes.
+17. If a tab-owned managed browser survives Cockpit reload/restart, opening Browser stops that session and restarts at the configured default URL; do not adopt its current navigation.
+18. During the cutover, explicitly stop legacy Space-scoped managed browser sessions and remove their proven Cockpit-owned profiles, receipts and launch artifacts. Do not leave obsolete running sessions or generated artifacts behind.
+19. Ordinary new Browser-pane closure also stops the managed session and removes its proven pane-owned profile and launch artifacts. Browser cookies/logins/site storage are intentionally disposable. Preserve the Library, credential vault and saved Cockpit drafts/comments/feedback under their existing retention rules; never delete unrelated resources or automatically remove artifacts lacking ownership proof.
 
 ## Design defaults that do not require more user questions
 
 Use existing tokens, pane chrome and shortcut conventions. Keep ordinary creation split ratios 50:50 unless repository conventions justify a different value. Preserve unrelated tree ratios on moves. Maintain in-memory state keyed by verified session/server and stable tab identity. Do not create fake Herdr memberships. Last-terminal closure is destructive only to live viewer lifecycle, not durable comments.
+
+Legacy cleanup safety default: old receipts lack creation-time artifact identities. Stop the proven managed session, then automatically remove only independently proven artifacts. Remaining candidates require explicit operator review/removal authorization for a manifest of exact current no-follow objects, with identity revalidated before deletion. Capturing an inode now is not proof of historical ownership; declined or changed candidates remain visible as incomplete cleanup. Saved legacy browser work must remain discoverable/recoverable under its original source identity, not merely retained as unreachable files.
 
 ## Known evidence and handoff
 
 - `CONTEXT.md:194-238`: terminal attach and current graphical extension replacement/browser ownership.
 - `DECISIONS.md:15-19`: current attach resize and tab transition sequencing; existing decisions are not constraints on proposed ownership change.
 - `CODE_GUIDE.md`: layout/focus paths and core/host/native ownership.
-- `agent://ViewerOwnership/report`: current addon launch/process binding, root authorization and browser Space-sidecar evidence.
-- `local://tab-layout-hints.md`: read-only evidence of layout DTO/mutation contracts, no runtime capability claims. Its old recommendations are superseded where this contract differs (ignore initial hints; always follow external focus; no viewer moves; no saved layout).
+- [`01-design.md`](01-design.md): current-state source evidence, approved demo measurements, production interactions and acceptance traceability.
+- [`02-implementation-plan.md`](02-implementation-plan.md): backend authorization/browser identity findings, fixed interfaces, clean cutover and implementation dependencies.
+- [`03-contract-evidence.md`](03-contract-evidence.md): observed raw Herdr split-result identity and confirming membership, with explicit verification limits.
 
 ## Required outputs
 
