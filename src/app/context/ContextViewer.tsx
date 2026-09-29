@@ -37,6 +37,12 @@ import { FilePicker } from "../input/FilePicker";
 import { ariaKeyShortcuts, formatShortcut, viewerShortcutAction, withShortcut } from "../input/shortcuts";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, prepareFileCandidates, type FileNavigationCandidate } from "../input/fileNavigation";
 import { getFileIndex, putFileIndex } from "../input/fileIndexCache";
+
+const PICKER_REVALIDATE_MS = 8_000;
+const PICKER_REVALIDATE_MAX_COST_MS = 2_000;
+const PICKER_RETRY_LIMIT = 4;
+const PICKER_RETRY_BASE_MS = 1_500;
+const FILE_INDEX_WARM_MS = 30_000;
 import { highlightLines } from "../viewer/highlight";
 import { LIBRARY_TREE, TreeSplitter, VIEWER_TREE, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
 import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
@@ -1022,11 +1028,10 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       && currentRootRef.current === root.root_id;
     const samePaths = (left: readonly ContextIndexedFile[], right: readonly ContextIndexedFile[]) =>
       left.length === right.length && left.every((file, index) => file.path === right[index]?.path);
+    // A slow index only flips the status; the request keeps running and heals the list when it lands.
     pickerTimeout.current = window.setTimeout(() => {
       pickerTimeout.current = null;
       if (!current()) return;
-      freshSettled = true;
-      controller.abort();
       setPickerIndex((previous) => ({
         ...previous,
         loading: false,
@@ -1045,32 +1050,59 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         failed: previous.failed,
       }));
     }).catch(() => undefined);
-    void reader.fileIndex(root.root_id, "fresh", controller.signal).then((result) => {
-      if (!current()) return;
-      if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
-      pickerTimeout.current = null;
-      if (result.state !== "fresh") throw new Error("File index response is not fresh.");
-      freshSettled = true;
-      putFileIndex(cacheKey, result.files, result.truncated);
-      setPickerIndex((previous) => ({
-        loading: false,
-        incomplete: result.truncated,
-        files: samePaths(previous.files, result.files) ? previous.files : result.files,
-        mayBeOutOfDate: false,
-        failed: false,
-      }));
-    }).catch(() => {
-      if (!current()) return;
-      if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
-      pickerTimeout.current = null;
-      setPickerIndex((previous) => ({
-        ...previous,
-        loading: false,
-        mayBeOutOfDate: previous.files.length > 0,
-        failed: true,
-      }));
-    });
+    // Eventually consistent: failures retry with backoff, and an open picker revalidates quietly while
+    // indexing stays cheap, so nobody has to reopen it to see new or removed files.
+    const fetchFresh = (attempt: number) => {
+      const started = performance.now();
+      void reader.fileIndex(root.root_id, "fresh", controller.signal).then((result) => {
+        if (!current()) return;
+        if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+        pickerTimeout.current = null;
+        if (result.state !== "fresh") throw new Error("File index response is not fresh.");
+        freshSettled = true;
+        putFileIndex(cacheKey, result.files, result.truncated);
+        setPickerIndex((previous) => ({
+          loading: false,
+          incomplete: result.truncated,
+          files: samePaths(previous.files, result.files) ? previous.files : result.files,
+          mayBeOutOfDate: false,
+          failed: false,
+        }));
+        if (performance.now() - started < PICKER_REVALIDATE_MAX_COST_MS) {
+          window.setTimeout(() => { if (current()) fetchFresh(0); }, PICKER_REVALIDATE_MS);
+        }
+      }).catch(() => {
+        if (!current()) return;
+        setPickerIndex((previous) => ({
+          ...previous,
+          loading: false,
+          mayBeOutOfDate: previous.files.length > 0,
+          failed: true,
+        }));
+        if (attempt < PICKER_RETRY_LIMIT) {
+          window.setTimeout(() => { if (current()) fetchFresh(attempt + 1); }, PICKER_RETRY_BASE_MS * 2 ** attempt);
+        }
+      });
+    };
+    fetchFresh(0);
   }, [bindingId, identityKey, reader, root]);
+  // Keep the client-side list warm so the first picker open is instant and already current.
+  const warmRootId = root?.root_id;
+  useEffect(() => {
+    if (!warmRootId || !reader) return;
+    const key = `${bindingId}\u0000${warmRootId}`;
+    const controller = new AbortController();
+    const warm = () => {
+      const known = getFileIndex(key);
+      if (known && Date.now() - known.at < FILE_INDEX_WARM_MS) return;
+      void Promise.resolve().then(() => reader.fileIndex(warmRootId, "fresh", controller.signal)).then((result) => {
+        if (!controller.signal.aborted && result.state === "fresh") putFileIndex(key, result.files, result.truncated);
+      }).catch(() => undefined);
+    };
+    warm();
+    window.addEventListener("focus", warm);
+    return () => { controller.abort(); window.removeEventListener("focus", warm); };
+  }, [bindingId, reader, warmRootId]);
   const toggleDirectory = (entry: ContextEntry) => {
     if (!root || !entry.path || entry.kind !== "directory") return;
     const next = new Set(expanded);

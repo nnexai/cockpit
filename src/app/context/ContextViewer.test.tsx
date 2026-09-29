@@ -169,7 +169,8 @@ it("indexes unopened nested files for the picker and opens the selected result",
     await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
     await settle(); await settle(); await settle();
     expect(directory.mock.calls.map((call) => call[2].path)).toEqual([""]);
-    expect(index).toHaveBeenCalledTimes(2);
+    // One background warm-up on mount, then cached + fresh when the picker opens.
+    expect(index).toHaveBeenCalledTimes(3);
     expect(host.querySelector(".file-picker-results")?.textContent).not.toContain(".cockpit");
     const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.title.includes("nested/target.md"));
     expect(result).toBeDefined();
@@ -216,6 +217,49 @@ it("cancels fresh picker indexing when the picker is dismissed", async () => {
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })));
     expect(pickerSignal?.aborted).toBe(true);
     expect(host.querySelector(".file-picker")).toBeNull();
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("recovers a stale or failed picker list on its own, without reopening", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
+    binding_id: "heal-binding", root_id: "heal-folder", path: request.path, truncated: false, diagnostics: [],
+    entries: [{ entry_id: "first", name: "first.ts", path: "first.ts", kind: "file", bytes: 1, revision: "r1", refusal: null }],
+  }));
+  let freshCalls = 0;
+  const fileIndex = vi.fn(async (_session: string, _pane: string, request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => {
+    const base = { binding_id: "heal-binding", root_id: "heal-folder", truncated: false as const, source: "walk" as const, diagnostics: [] };
+    if (request.mode === "cached") return { ...base, files: [{ path: "old.md", bytes: null }], state: "cached" };
+    freshCalls += 1;
+    // Call 1 is the mount warm-up, call 2 the first picker fetch (fails), call 3 the automatic retry.
+    if (freshCalls === 2) throw new Error("transient");
+    return { ...base, files: [{ path: "new.md", bytes: null }], state: "fresh" };
+  });
+  const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "heal-binding", default_root_id: "heal-folder", roots: [{ root_id: "heal-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    const treeFile = host.querySelector<HTMLButtonElement>("[data-context-path='first.ts']")!;
+    treeFile.focus();
+    await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await settle();
+    expect(host.querySelector(".file-picker-status")?.textContent).toBe("May be out of date");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_800)); });
+    await settle();
+    expect(host.querySelector(".file-picker-status")?.textContent).toBe("1 files");
+    const titles = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].map((button) => button.title);
+    expect(titles.some((title) => title.includes("new.md"))).toBe(true);
+    expect(titles.some((title) => title.includes("old.md"))).toBe(false);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
