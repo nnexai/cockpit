@@ -52,25 +52,23 @@ export function useWrapPreference(): [boolean, () => void] {
   return [wrap, useCallback(() => setWrap(!wrap), [setWrap, wrap])];
 }
 
-/** Width of the file list beside a viewer's content, set by its splitter. */
+/** Width of the file list beside a viewer's content, set by its splitter. The number is unitless and viewer.css turns it into pixels: see the `@property` note there. */
 export function useTreeWidth(layout: TreeLayout = VIEWER_TREE) {
   const load = useCallback(() => storedWidth(layout), [layout]);
   const [width, setWidth] = useSharedPreference(layout.key, load);
-  const style = { "--viewer-tree-width": `${width}px` } as CSSProperties;
+  const style = { "--viewer-tree-width": String(width) } as CSSProperties;
   return { width, setWidth, style };
 }
 
-/** Splitter left edge, in step with the grid column in viewer.css. */
-const splitterLeft = (width: number) => `calc(min(${width}px, 60%) - 3px)`;
-
-/** The width the list actually has: the grid column caps a stored width at 60% of a narrow viewer, so the splitter's own centre is the truth. */
+/** The width the list actually has. The grid column caps a stored width at 60% of a narrow viewer, so the column itself is the truth, not the stored number. */
 function shownWidth(layout: TreeLayout, splitter: HTMLElement, stored: number): number {
-  return splitter.offsetWidth > 0 ? clampWidth(layout, splitter.offsetLeft + splitter.offsetWidth / 2) : stored;
+  const list = splitter.previousElementSibling?.getBoundingClientRect().width ?? 0;
+  return list > 0 ? clampWidth(layout, list) : stored;
 }
 
+/** The splitter needs no position of its own: viewer.css anchors it to the list column's right edge. */
 function applyWidth(splitter: HTMLElement, width: number) {
-  splitter.parentElement?.style.setProperty("--viewer-tree-width", `${width}px`);
-  splitter.style.left = splitterLeft(width);
+  splitter.parentElement?.style.setProperty("--viewer-tree-width", String(width));
   splitter.setAttribute("aria-valuenow", String(width));
 }
 
@@ -116,7 +114,7 @@ export function TreeSplitter({ width, onChange, layout = VIEWER_TREE }: { width:
     }
   };
   return <div className="viewer-splitter" role="separator" aria-orientation="vertical" aria-label="Resize file list" title="Drag to resize · double-click to reset"
-    tabIndex={0} aria-valuemin={layout.min} aria-valuemax={MAX_TREE_WIDTH} aria-valuenow={width} style={{ left: splitterLeft(width) }}
+    tabIndex={0} aria-valuemin={layout.min} aria-valuemax={MAX_TREE_WIDTH} aria-valuenow={width}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
     onDoubleClick={() => onChange(layout.fallback)} onKeyDown={onKeyDown} />;
 }

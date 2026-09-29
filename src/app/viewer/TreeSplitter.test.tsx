@@ -17,12 +17,11 @@ function mount(width: number, shown?: number) {
   const body = document.createElement("div");
   document.body.append(body);
   const root = createRoot(body);
-  act(() => root.render(<TreeSplitter width={width} onChange={onChange} layout={LIBRARY_TREE} />));
+  act(() => root.render(<><nav /><TreeSplitter width={width} onChange={onChange} layout={LIBRARY_TREE} /></>));
   const splitter = body.querySelector<HTMLElement>('[role="separator"]')!;
   // jsdom lays nothing out: report the width the grid column really gave the list.
   if (shown !== undefined) {
-    Object.defineProperty(splitter, "offsetWidth", { value: 6 });
-    Object.defineProperty(splitter, "offsetLeft", { value: shown - 3 });
+    vi.spyOn(splitter.previousElementSibling!, "getBoundingClientRect").mockReturnValue({ width: shown } as DOMRect);
   }
   return { body, splitter, onChange, unmount: () => { act(() => root.unmount()); body.remove(); } };
 }
@@ -37,7 +36,7 @@ it("drags the Library tree splitter and reports the final width once", () => {
   pointer(splitter, "pointermove", 340);
   pointer(splitter, "pointermove", 360);
   act(() => { vi.advanceTimersByTime(32); });
-  expect(body.style.getPropertyValue("--viewer-tree-width")).toBe("356px");
+  expect(body.style.getPropertyValue("--viewer-tree-width")).toBe("356");
   expect(onChange).not.toHaveBeenCalled();
   pointer(splitter, "pointerup", 360);
   expect(onChange).toHaveBeenCalledExactlyOnceWith(356);
@@ -53,7 +52,7 @@ it("leaves the layout at the released width even when the pending frame was drop
   pointer(splitter, "pointerup", 300);
   expect(onChange).toHaveBeenCalledExactlyOnceWith(296);
   // React sees no change from 296, so only the direct write can undo the frame that showed 336.
-  expect(splitter.parentElement?.style.getPropertyValue("--viewer-tree-width")).toBe("296px");
+  expect(splitter.parentElement?.style.getPropertyValue("--viewer-tree-width")).toBe("296");
   expect(splitter.getAttribute("aria-valuenow")).toBe("296");
   unmount();
 });

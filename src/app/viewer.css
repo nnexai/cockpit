@@ -479,21 +479,24 @@
 .review-pane .review-toolbar > button { min-height: 26px; padding: 4px 5px; }
 .viewer-wrap-toggle[aria-pressed="true"] { color: var(--text-primary); background: var(--surface-selected); }
 
-/* Not inherited: changing the width while dragging restyles only the viewer body, not every tree row and document node below it. */
-@property --viewer-tree-width { syntax: "<length>"; inherits: false; initial-value: 176px; }
+/* Store a number and convert to pixels at use, avoiding registered-length scaling in WebKitGTK.
+ * Not inherited: dragging restyles the viewer body rather than every tree row and document node. */
+@property --viewer-tree-width { syntax: "<number>"; inherits: false; initial-value: 176; }
 .context-viewer .context-body,
 .review-pane .review-body { position: relative; }
 .context-viewer .context-body.has-file-overview,
-.review-pane .review-body.has-file-overview { grid-template-columns: min(var(--viewer-tree-width, 176px), 60%) minmax(0, 1fr); }
-/* `left` is set inline from the same width. */
-.viewer-splitter { position: absolute; z-index: var(--z-raised); top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
+.review-pane .review-body.has-file-overview { grid-template-columns: min(calc(var(--viewer-tree-width, 176) * 1px), 60%) minmax(0, 1fr); }
+/* An absolute grid child uses column 1 as its containing block, without adding a third layout item. */
+.viewer-splitter { position: absolute; grid-column: 1 / 2; grid-row: 1 / 2; z-index: var(--z-raised); top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; touch-action: none; }
 /* Off-screen rows skip layout and paint, so resizing a tree of thousands of pages only lays out what is visible. */
 .context-viewer .context-tree-node { content-visibility: auto; contain-intrinsic-size: auto 28px; }
 .viewer-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: transparent; transition: background 80ms; }
 .viewer-splitter:hover::after,
-.viewer-splitter:focus-visible::after,
+.viewer-splitter:focus::after,
 .viewer-splitter:active::after { background: var(--accent); }
-.viewer-splitter:focus-visible { outline: none; }
+.viewer-splitter:hover,
+.viewer-splitter:focus { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.viewer-splitter:focus { outline: none; }
 
 .context-viewer .context-tree-row,
 .review-pane .review-file,
