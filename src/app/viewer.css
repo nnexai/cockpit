@@ -498,6 +498,11 @@
 .viewer-splitter:focus { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .viewer-splitter:focus { outline: none; }
 
+/* Keep actual tree focus visible after clicks and script-driven keyboard navigation. */
+.context-viewer .context-tree-row:focus,
+.review-pane .review-file:focus,
+.review-pane .review-file-directory > summary:focus { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+
 .context-viewer .context-tree-row,
 .review-pane .review-file,
 .review-pane .review-file-directory > summary { min-height: 26px; padding-block: 1px; }

@@ -139,7 +139,7 @@
 }
 .library-tree .context-tree-row.library-tree-row:hover { background-color: var(--surface-hover); }
 .library-tree .context-tree-row.library-tree-row.is-selected { border-left-color: var(--accent); background-color: var(--surface-selected); }
-.library-tree .context-tree-row.library-tree-row:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.library-tree .context-tree-row.library-tree-row:focus { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 .library-row-chevron { display: grid; width: 16px; flex: 0 0 16px; place-items: center; color: var(--text-muted); }
 .library-row-chevron .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); color: inherit; }
 .library-row-icon { display: grid; width: 20px; flex: 0 0 20px; place-items: center; color: var(--text-secondary); }
