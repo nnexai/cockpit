@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pane arrangement demo (standalone mock)</title>
+<style>
+:root{color-scheme:dark;--bg:#14161a;--pane:#1b1e24;--head:#232730;--head-sel:#2c3442;--border:#2e333d;--text:#d5d9e0;--muted:#8a91a0;--accent:#4c9aff;--warn:#e7b14a;--ok:#79d5a3;--bad:#ff8d9a;--teal:#94e2d5;--violet:#b9a4ff;
+  --mono:ui-monospace,"DejaVu Sans Mono","IBM Plex Mono",monospace;--sans:"IBM Plex Sans","Noto Sans",system-ui,sans-serif}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 var(--sans);display:flex;flex-direction:column;overflow:hidden}
+button,select,input{font:inherit;color:inherit}
+button{background:var(--head);border:1px solid var(--border);border-radius:4px;padding:4px 9px;cursor:pointer}
+button:hover:not(:disabled){background:var(--head-sel)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,select:focus-visible,input:focus-visible,.divider:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+select,input{background:#101216;border:1px solid var(--border);border-radius:4px;padding:3px 6px}
+[hidden]{display:none!important}
+
+.banner{background:#3a2d12;color:#f3d9a0;border-bottom:1px solid #6b5423;padding:5px 12px;font-size:12px;display:flex;gap:10px;align-items:center}
+.banner strong{letter-spacing:.03em}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:6px 10px;background:var(--head);border-bottom:1px solid var(--border)}
+.bar .sep{width:1px;align-self:stretch;background:var(--border);margin:0 4px}
+.bar label{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}
+.tab{border-radius:4px 4px 0 0}
+.tab[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#08111f;font-weight:600}
+.group{display:inline-flex;gap:4px;align-items:center}
+.seg{display:inline-flex}
+.seg button{border-radius:0}
+.seg button:first-child{border-radius:4px 0 0 4px}.seg button:last-child{border-radius:0 4px 4px 0;border-left:0}
+.seg button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#08111f}
+.main{flex:1;min-height:0;display:flex}
+.center{flex:1;min-width:0;display:flex;flex-direction:column}
+.zoombar{background:#20304a;border-bottom:1px solid var(--accent);padding:4px 10px;font-size:12px;display:flex;gap:10px;align-items:center}
+#ws{flex:1;min-height:0;position:relative;background:var(--bg);overflow:hidden;display:flex;padding:0}
+aside{width:290px;flex:none;border-left:1px solid var(--border);background:#181b20;overflow:auto;padding:10px 12px;font-size:12px}
+aside h2{margin:12px 0 4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+aside h2:first-child{margin-top:0}
+aside ul{margin:0;padding-left:16px}
+aside li{margin:2px 0}
+kbd{font:11px var(--mono);background:#101216;border:1px solid var(--border);border-radius:3px;padding:0 4px}
+.status dl{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;margin:0}
+.status dt{color:var(--muted)}.status dd{margin:0;overflow-wrap:anywhere}
+#log{font:11px var(--mono);color:var(--muted);margin:0;padding:0;list-style:none}
+#log li{margin:2px 0;overflow-wrap:anywhere}
+#log li b{color:var(--text);font-weight:500}
+@media (max-width:900px){.main{flex-direction:column}aside{width:auto;height:190px;border-left:0;border-top:1px solid var(--border)}}
+
+/* layout tree */
+.split{display:flex;min-width:0;min-height:0}
+.split[data-dir=row]{flex-direction:row}
+.split[data-dir=col]{flex-direction:column}
+.divider{flex:0 0 8px;position:relative;z-index:3;outline-offset:-2px;touch-action:none}
+.divider::after{content:"";position:absolute;background:var(--border)}
+.split[data-dir=row]>.divider{cursor:col-resize}
+.split[data-dir=col]>.divider{cursor:row-resize}
+.split[data-dir=row]>.divider::after{left:3.5px;top:0;bottom:0;width:1px}
+.split[data-dir=col]>.divider::after{top:3.5px;left:0;right:0;height:1px}
+.divider:hover::after,.divider[data-active=true]::after{background:var(--accent)}
+.split[data-dir=row]>.divider:hover::after,.split[data-dir=row]>.divider[data-active=true]::after{left:3px;width:2px}
+.split[data-dir=col]>.divider:hover::after,.split[data-dir=col]>.divider[data-active=true]::after{top:3px;height:2px}
+.pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--pane);border:1px solid var(--border);position:relative;overflow:hidden;container-type:inline-size}
+.pane.zoomed{flex:1 1 auto!important}
+.pane[data-selected=true]{box-shadow:inset 0 0 0 2px var(--accent);border-color:var(--accent)}
+.pane.dragging{opacity:.5}
+.pane-head{flex:none;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 6px;background:var(--head);border-bottom:1px solid var(--border);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.pane[data-selected=true] .pane-head{background:var(--head-sel)}
+.pane-head.flash{animation:flash .3s ease-out}
+@keyframes flash{from{background:var(--accent)}to{background:var(--head-sel)}}
+.badge{flex:none;width:18px;height:18px;border-radius:3px;display:grid;place-items:center;font:700 11px var(--mono);color:#0b0e12}
+[data-kind=terminal] .badge{background:var(--ok)}
+[data-kind=files] .badge{background:var(--accent)}
+[data-kind=review] .badge{background:var(--warn)}
+[data-kind=browser] .badge{background:var(--teal)}
+.title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.scope{flex:none;font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:9px;padding:0 6px;white-space:nowrap}
+@container (max-width:330px){.scope{display:none}}
+.pane-head button{cursor:pointer;width:22px;height:22px;padding:0;display:grid;place-items:center;background:transparent;border-color:transparent;color:var(--muted)}
+.pane-head button:hover:not(:disabled){color:var(--text);background:#343b49}
+.pane-head svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.pane-body{flex:1;min-height:0;overflow:auto;padding:8px 10px;font-size:12px}
+.mocktag{color:var(--muted);text-align:center;font:11px var(--mono);letter-spacing:.02em;margin-bottom:8px}
+.term{font:12px/1.5 var(--mono);color:#b7c0cf;white-space:pre-wrap;overflow-wrap:anywhere}
+.term .dim{color:var(--muted)}
+.term .dims{color:var(--ok)}
+.viewer-grid{display:grid;grid-template-columns:minmax(80px,32%) 1fr;gap:8px;min-height:0}
+.viewer-grid>div{background:#14171c;border:1px solid var(--border);border-radius:3px;padding:6px 8px;font:11px/1.5 var(--mono);color:#b7c0cf;overflow:hidden}
+.src{color:var(--muted);margin:0 0 6px}.src b{color:var(--text);font-weight:600}
+.add{color:#8fd6a5}.del{color:#f19aa5}
+.urlbar{display:flex;gap:6px;margin-bottom:8px}
+.urlbar input{flex:1;min-width:0;font:12px var(--mono)}
+.page{border:1px dashed var(--border);border-radius:4px;padding:16px;color:var(--muted);text-align:center;min-height:70px}
+.empty{flex:1;display:grid;place-content:center;justify-items:center;gap:10px;text-align:center;color:var(--muted)}
+.empty h3{margin:0;color:var(--text);font-size:15px}
+
+/* drag chrome */
+body.is-dragging,body.is-dragging *{cursor:grabbing!important;user-select:none!important}
+.ghost{position:fixed;z-index:1000;pointer-events:none;display:flex;gap:6px;align-items:center;background:var(--head-sel);border:1px solid var(--accent);border-radius:4px;padding:2px 8px 2px 4px;font-size:12px;box-shadow:0 4px 14px #0008}
+.ghost .badge{width:16px;height:16px}
+.drop{position:absolute;z-index:20;pointer-events:none;background:rgba(76,154,255,.2);border:2px solid var(--accent);display:grid;place-items:center}
+.drop span{background:var(--accent);color:#08111f;font-weight:700;font-size:11px;padding:1px 8px;border-radius:9px;white-space:nowrap}
+.readout{position:fixed;z-index:1000;pointer-events:none;background:var(--accent);color:#08111f;font:700 11px var(--mono);padding:1px 7px;border-radius:9px}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#22304a;border:1px solid var(--accent);border-radius:6px;padding:6px 12px;font-size:12px;z-index:1200}
+</style>
+</head>
+<body>
+<div class="banner" role="note">
+  <strong>STANDALONE DEMO</strong>
+  <span>Not connected to Herdr, Cockpit or any backend. Every pane is mock content; nothing runs, nothing is saved (reload resets). It only illustrates arrangement and mouse behaviour.</span>
+</div>
+
+<div class="bar" role="toolbar" aria-label="Demo controls">
+  <div class="group" id="tabs" role="tablist" aria-label="Simulated tabs"></div>
+  <span class="sep"></span>
+  <div class="group">
+    <span style="color:var(--muted);font-size:12px">Place new pane</span>
+    <div class="seg" role="group" aria-label="Placement">
+      <button type="button" data-placement="right" aria-pressed="true" title="Split the selected pane and place the new one to its right">Right</button>
+      <button type="button" data-placement="down" aria-pressed="false" title="Split the selected pane and place the new one below it">Down</button>
+    </div>
+  </div>
+  <div class="group">
+    <button type="button" data-tool="terminal" title="New terminal beside the selected pane (also works when a viewer is selected)">New terminal</button>
+    <button type="button" data-tool="files" title="One Files viewer per tab">Open Files</button>
+    <select id="src-files" aria-label="Files source"></select>
+    <button type="button" data-tool="review" title="One Review viewer per tab">Open Review</button>
+    <select id="src-review" aria-label="Review source"></select>
+    <button type="button" data-tool="browser" title="One Browser viewer per tab">Open Browser</button>
+  </div>
+  <span class="sep"></span>
+  <div class="group">
+    <button type="button" data-tool="external" title="Simulates a terminal created outside Cockpit: full-height right edge, width 1/(N+1)">Simulate external terminal</button>
+    <label>in <select id="ext-tab" aria-label="Tab receiving external terminal"></select></label>
+    <label><input type="checkbox" id="ext-focus" checked> takes focus</label>
+  </div>
+  <span class="sep"></span>
+  <div class="group">
+    <button type="button" data-tool="reset-tab">Reset this tab</button>
+    <button type="button" data-tool="reset-all">Reset all</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="center">
+    <div class="zoombar" id="zoombar" hidden>
+      <span id="zoomtext"></span>
+      <button type="button" data-tool="unzoom">Restore layout (Esc)</button>
+    </div>
+    <main id="ws" aria-label="Pane workspace"></main>
+  </div>
+  <aside aria-label="Instructions and state">
+    <h2>How to use</h2>
+    <ul>
+      <li><b>Select</b>: click any pane. New panes open beside the selected one.</li>
+      <li><b>Move</b>: drag a pane <b>header</b>. Drop on the <b>centre</b> to swap; drop near an <b>edge</b> to move it there (half-pane preview); drop on the thin <b>outer rim</b> of the workspace for a full-height/width edge. <kbd>Esc</kbd> cancels.</li>
+      <li><b>Resize</b>: drag a divider (double-click = 50:50, focus + arrow keys nudges).</li>
+      <li><b>Header buttons</b>: split right / split down (new terminal), zoom, close. Double-click a header also zooms.</li>
+      <li><b>Files / Review / Browser</b>: one per tab. Opening again focuses it (Files/Review switch source).</li>
+      <li><b>External terminal</b>: appears at the right edge with width 1/(N+1) of all panes.</li>
+      <li>Closing the <b>last terminal</b> closes every viewer in that tab.</li>
+      <li><b>Tabs</b>: each has its own arrangement. Viewers cannot move between tabs (no such control).</li>
+    </ul>
+    <h2 class="status-h">State (active tab)</h2>
+    <div class="status" id="status" aria-live="polite"></div>
+    <h2>Event log</h2>
+    <ol id="log" reversed></ol>
+  </aside>
+</div>
+
+<script>
+(() => {
+'use strict';
+const MIN_W = 160, MIN_H = 100, DIV = 8, RIM = 14, EDGE = 0.25, DRAG_PX = 4;
+const FILES_SRC = ['~/project (repo root)', '~/project/docs', '~/notes'];
+const REVIEW_SRC = ['Working tree changes', 'Branch feature/x vs main', 'PR #128 (mock)'];
+const DEFAULT_URL = 'https://example.test/start';
+const KIND = { terminal: 'T', files: 'F', review: 'R', browser: 'B' };
+const KIND_NAME = { terminal: 'Terminal', files: 'Files', review: 'Review', browser: 'Browser' };
+const ICON = {
+  right: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10"/></svg>',
+  down: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 8h12"/></svg>',
+  zoom: '<svg viewBox="0 0 16 16"><path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4"/></svg>',
+  restore: '<svg viewBox="0 0 16 16"><path d="M2 6h4V2M14 6h-4V2M2 10h4v4M14 10h-4v4"/></svg>',
+  close: '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+};
+
+const ws = document.getElementById('ws');
+const S = { tabs: [], active: 0, placement: 'right', log: [], tick: 0 };
+const isSplit = n => n.t === 'split';
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const tabOf = () => S.tabs[S.active];
+
+/* ---------- model ---------- */
+function newTerminal(tab, origin) {
+  const n = ++tab.termSeq;
+  return { t: 'leaf', kind: 'terminal', id: tab.id + '-t' + n, title: 'Terminal ' + n, origin, w: 1 };
+}
+function newViewer(tab, kind, source) {
+  return { t: 'leaf', kind, id: tab.id + '-' + kind, title: KIND_NAME[kind], w: 1,
+           source, url: kind === 'browser' ? DEFAULT_URL : undefined };
+}
+function buildGrid(leaves) {
+  const n = leaves.length;
+  if (n === 1) return leaves[0];
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = [];
+  for (let i = 0; i < n; i += cols) rows.push(leaves.slice(i, i + cols));
+  const rowNodes = rows.map(r => r.length === 1 ? r[0] : { t: 'split', dir: 'row', kids: r, w: 1 });
+  const root = rowNodes.length === 1 ? rowNodes[0] : { t: 'split', dir: 'col', kids: rowNodes, w: 1 };
+  return norm(root);
+}
+function makeTab(id, name, count) {
+  const tab = { id, name, termSeq: 0, zoomId: null, root: null, selectedId: null, lastTermId: null };
+  const leaves = [];
+  for (let i = 0; i < count; i++) leaves.push(newTerminal(tab, 'initial terminal'));
+  tab.root = buildGrid(leaves);
+  tab.root.w = 1;
+  tab.selectedId = leaves[0].id;
+  tab.lastTermId = leaves[0].id;
+  return tab;
+}
+function initState() {
+  S.tabs = [makeTab('A', 'Tab A', 2), makeTab('B', 'Tab B', 4)];
+  S.active = 0;
+}
+// flatten same-direction nesting, collapse single-child splits, renormalise weights
+function norm(n) {
+  if (!isSplit(n)) return n;
+  const flat = [];
+  for (const k0 of n.kids) {
+    const k = norm(k0);
+    if (isSplit(k) && k.dir === n.dir) { for (const g of k.kids) { g.w *= k.w; flat.push(g); } }
+    else flat.push(k);
+  }
+  const sum = flat.reduce((a, k) => a + k.w, 0) || 1;
+  flat.forEach(k => { k.w /= sum; });
+  n.kids = flat;
+  if (flat.length === 1) { flat[0].w = n.w; return flat[0]; }
+  return n;
+}
+function leavesOf(n, out = []) { if (!isSplit(n)) out.push(n); else n.kids.forEach(k => leavesOf(k, out)); return out; }
+const allLeaves = tab => tab.root ? leavesOf(tab.root) : [];
+const firstLeaf = n => isSplit(n) ? firstLeaf(n.kids[0]) : n;
+function find(root, id, parent = null, index = -1) {
+  if (!root) return null;
+  if (!isSplit(root)) return root.id === id ? { node: root, parent, index } : null;
+  for (let i = 0; i < root.kids.length; i++) { const r = find(root.kids[i], id, root, i); if (r) return r; }
+  return null;
+}
+const leafById = (tab, id) => { const r = find(tab.root, id); return r && r.node; };
+function runtimeSource(tab) {
+  const terms = allLeaves(tab).filter(l => l.kind === 'terminal');
+  return terms.find(l => l.id === tab.lastTermId) || terms[0] || null;
+}
+function splitLeaf(tab, targetId, dir, before, leaf) {
+  const r = find(tab.root, targetId);
+  const a = r.node, w = a.w;
+  a.w = 0.5; leaf.w = 0.5;
+  const g = { t: 'split', dir, kids: before ? [leaf, a] : [a, leaf], w };
+  if (r.parent) r.parent.kids[r.index] = g; else tab.root = g;
+  tab.root = norm(tab.root); tab.root.w = 1;
+}
+// returns the leaf that should be selected next (the neighbour that absorbs the space)
+function removeLeaf(tab, id) {
+  const r = find(tab.root, id);
+  if (!r.parent) { tab.root = null; return null; }
+  const sib = r.parent.kids[r.index - 1] || r.parent.kids[r.index + 1];
+  const next = firstLeaf(sib).id;
+  r.parent.kids.splice(r.index, 1);
+  tab.root = norm(tab.root); tab.root.w = 1;
+  return next;
+}
+// full-height/width edge insert; N = leaves already in the tree (whole tree, zoomed or not)
+function insertRootEdge(tab, leaf, dir, before) {
+  if (!tab.root) { leaf.w = 1; tab.root = leaf; return; }
+  const n = allLeaves(tab).length, keep = n / (n + 1);
+  const root = tab.root;
+  leaf.w = 1 / (n + 1);
+  if (isSplit(root) && root.dir === dir) {
+    root.kids.forEach(k => { k.w *= keep; });
+    if (before) root.kids.unshift(leaf); else root.kids.push(leaf);
+  } else {
+    root.w = keep;
+    tab.root = { t: 'split', dir, kids: before ? [leaf, root] : [root, leaf], w: 1 };
+  }
+  tab.root = norm(tab.root); tab.root.w = 1;
+}
+function swapLeaves(tab, aId, bId) {
+  const a = find(tab.root, aId), b = find(tab.root, bId);
+  const wa = a.node.w, wb = b.node.w;
+  a.parent.kids[a.index] = b.node; b.parent.kids[b.index] = a.node;
+  a.node.w = wb; b.node.w = wa;
+}
+function minSize(n, axis) { // axis 'x' | 'y'
+  if (!isSplit(n)) return axis === 'x' ? MIN_W : MIN_H;
+  const along = (n.dir === 'row') === (axis === 'x');
+  const ms = n.kids.map(k => minSize(k, axis));
+  return along ? ms.reduce((a, b) => a + b, 0) + DIV * (n.kids.length - 1) : Math.max(...ms);
+}
+
+/* ---------- actions ---------- */
+function log(msg, tab = tabOf()) {
+  S.log.unshift({ n: ++S.tick, tab: tab ? tab.name : '-', msg });
+  S.log.length = Math.min(S.log.length, 40);
+}
+function toast(msg) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 2500);
+}
+function select(id, opts = {}) {
+  const tab = tabOf(); const l = leafById(tab, id); if (!l) return;
+  tab.selectedId = id;
+  if (l.kind === 'terminal') tab.lastTermId = id;
+  ws.querySelectorAll('.pane').forEach(p => {
+    const sel = p.dataset.leafId === id;
+    p.dataset.selected = sel; if (sel) p.setAttribute('aria-current', 'true'); else p.removeAttribute('aria-current');
+  });
+  renderChrome();
+  if (opts.flash) { const h = ws.querySelector(`.pane[data-leaf-id="${id}"] .pane-head`); if (h) { h.classList.remove('flash'); void h.offsetWidth; h.classList.add('flash'); } }
+}
+function unzoom(tab) { if (tab.zoomId) { tab.zoomId = null; return true; } return false; }
+function targetForSplit(tab, id) { return leafById(tab, id || tab.selectedId) || allLeaves(tab)[0]; }
+
+function splitTerminal(dir, before = false, targetId) {
+  const tab = tabOf();
+  if (!tab.root) { const t = newTerminal(tab, 'new terminal'); tab.root = t; tab.selectedId = t.id; tab.lastTermId = t.id; log('New terminal in empty tab: ' + t.title); return render(); }
+  unzoom(tab);
+  const target = targetForSplit(tab, targetId);
+  const src = runtimeSource(tab);
+  const t = newTerminal(tab, src ? 'runtime source: ' + src.title + ' (last-selected real terminal)' : 'runtime source: none available');
+  splitLeaf(tab, target.id, dir, before, t);
+  tab.selectedId = t.id; tab.lastTermId = t.id;
+  log(`${t.title} split ${dir === 'row' ? 'right' : 'down'} of ${target.title}; source ${src ? src.title : 'none'}`);
+  render();
+}
+function openViewer(kind) {
+  const tab = tabOf(); if (!tab.root) return;
+  const source = kind === 'files' ? document.getElementById('src-files').value
+               : kind === 'review' ? document.getElementById('src-review').value : undefined;
+  const existing = leafById(tab, tab.id + '-' + kind);
+  if (existing) {
+    if (source) existing.source = source;
+    const wasHidden = tab.zoomId && tab.zoomId !== existing.id;
+    unzoom(tab);
+    tab.selectedId = existing.id;
+    log(`${existing.title} already open: focused${source ? ', source -> ' + source : ''}${wasHidden ? ' (zoom restored)' : ''}`);
+    render(); select(existing.id, { flash: true });
+    return;
+  }
+  unzoom(tab);
+  const target = targetForSplit(tab);
+  const v = newViewer(tab, kind, source);
+  splitLeaf(tab, target.id, S.placement === 'right' ? 'row' : 'col', false, v);
+  tab.selectedId = v.id;
+  log(`${v.title} opened ${S.placement} of ${target.title}${source ? ' (' + source + ')' : ''}`);
+  render();
+}
+function newTerminalTool() { // beside the selected pane, viewer or terminal
+  splitTerminal(S.placement === 'right' ? 'row' : 'col', false);
+}
+function externalTerminal() {
+  const tab = S.tabs.find(t => t.id === document.getElementById('ext-tab').value) || tabOf();
+  const takesFocus = document.getElementById('ext-focus').checked || !tab.root;
+  const n = allLeaves(tab).length;
+  const t = newTerminal(tab, 'created outside Cockpit (external)');
+  const wasZoomed = !!tab.zoomId;
+  if (takesFocus) unzoom(tab);
+  insertRootEdge(tab, t, 'row', false);
+  if (takesFocus) {
+    tab.selectedId = t.id; tab.lastTermId = t.id;
+    if (tab !== tabOf()) S.active = S.tabs.indexOf(tab);
+  }
+  log(`External ${t.title} at right edge, width 1/${n + 1} (N=${n} panes counted${wasZoomed ? ', incl. hidden by zoom' : ''}); ${takesFocus ? 'focus followed' : 'focus unchanged' + (wasZoomed ? ', stays zoomed' : '')}`, tab);
+  render();
+}
+function closeLeaf(id) {
+  const tab = tabOf(); const l = leafById(tab, id); if (!l) return;
+  const terms = allLeaves(tab).filter(x => x.kind === 'terminal');
+  if (l.kind === 'terminal' && terms.length === 1) {
+    const viewers = allLeaves(tab).filter(x => x.kind !== 'terminal');
+    if (viewers.some(v => v.kind === 'browser')) log('Browser session for ' + tab.name + ' stopped (simulated)');
+    log(`Last terminal closed: ${viewers.length} viewer(s) closed too`);
+    tab.root = null; tab.selectedId = null; tab.lastTermId = null; tab.zoomId = null;
+    return render();
+  }
+  const wasSel = tab.selectedId === id;
+  const next = removeLeaf(tab, id);
+  if (tab.zoomId === id) tab.zoomId = null;
+  if (wasSel) tab.selectedId = next;
+  if (l.kind === 'browser') log('Browser session for ' + tab.name + ' stopped (simulated); reopening starts at default URL');
+  log(`${l.title} closed`);
+  render();
+}
+function toggleZoom(id) {
+  const tab = tabOf();
+  tab.zoomId = tab.zoomId === id ? null : id;
+  tab.selectedId = id;
+  const l = leafById(tab, id); if (l.kind === 'terminal') tab.lastTermId = id;
+  log(tab.zoomId ? `${l.title} zoomed` : 'Zoom restored');
+  render();
+}
+function resetTab(i) {
+  const old = S.tabs[i];
+  S.tabs[i] = makeTab(old.id, old.name, old.id === 'A' ? 2 : 4);
+}
+
+/* ---------- rendering ---------- */
+const ro = new ResizeObserver(entries => {
+  for (const e of entries) {
+    const span = e.target.querySelector('.dims'); if (!span) continue;
+    const cols = Math.max(1, Math.floor(e.contentRect.width / 8)), rows = Math.max(1, Math.floor(e.contentRect.height / 18));
+    span.textContent = `${cols}x${rows}`;
+  }
+});
+function el(tag, cls, attrs) { const e = document.createElement(tag); if (cls) e.className = cls; if (attrs) Object.assign(e.dataset, attrs); return e; }
+
+function bodyFor(l) {
+  const b = el('div', 'pane-body');
+  if (l.kind === 'terminal') {
+    b.innerHTML = '<div class="mocktag">MOCK terminal - no process</div><div class="term"></div>';
+    const t = b.querySelector('.term');
+    t.innerHTML = '<span class="dim">$</span> echo "illustrative text only"\n<span class="dim">' + l.origin + '</span>\n<span class="dim">pane size (cockpit-driven, illustrative): </span><span class="dims">-</span>';
+    ro.observe(b);
+  } else if (l.kind === 'files') {
+    b.innerHTML = '<div class="mocktag">MOCK Files viewer - no filesystem access</div><p class="src">Source: <b></b></p><div class="viewer-grid"><div>▾ src<br>&nbsp; ▸ app<br>&nbsp; main.ts<br>▾ docs<br>&nbsp; README.md</div><div># README.md<br>Placeholder preview text.<br>Nothing here is read from disk.</div></div>';
+    b.querySelector('.src b').textContent = l.source;
+  } else if (l.kind === 'review') {
+    b.innerHTML = '<div class="mocktag">MOCK Review viewer - no repository access</div><p class="src">Source: <b></b></p><div class="viewer-grid" style="grid-template-columns:1fr"><div>@@ mock diff @@<br><span class="del">- const before = 1;</span><br><span class="add">+ const after = 2;</span><br>&nbsp; unchanged line</div></div>';
+    b.querySelector('.src b').textContent = l.source;
+  } else {
+    b.innerHTML = '<div class="mocktag">MOCK Browser viewer - no real browser session</div><div class="urlbar"><input aria-label="URL (mock)"><button type="button" tabindex="-1">Go</button></div><div class="page">Placeholder page area.<br>A closed browser starts again at the default URL when reopened.</div>';
+    const inp = b.querySelector('input'); inp.value = l.url;
+    inp.addEventListener('input', () => { l.url = inp.value; });
+  }
+  return b;
+}
+function iconBtn(action, label, svg, extra) {
+  const b = el('button', null, { action }); b.type = 'button'; b.title = label; b.setAttribute('aria-label', label); b.innerHTML = svg;
+  if (extra) Object.assign(b, extra); return b;
+}
+function buildPane(l, tab, zoomed) {
+  const p = el('section', 'pane' + (zoomed ? ' zoomed' : ''), { leafId: l.id, kind: l.kind, selected: tab.selectedId === l.id, weight: l.w.toFixed(4) });
+  p.setAttribute('role', 'group'); p.setAttribute('aria-label', KIND_NAME[l.kind] + ' pane: ' + l.title);
+  if (tab.selectedId === l.id) p.setAttribute('aria-current', 'true');
+  const h = el('header', 'pane-head', { paneHeader: l.id });
+  h.title = 'Drag to move or swap this pane';
+  const badge = el('span', 'badge'); badge.textContent = KIND[l.kind];
+  const title = el('span', 'title'); title.textContent = l.title;
+  const scope = el('span', 'scope'); scope.textContent = l.kind === 'terminal' ? 'mock Herdr terminal' : 'local to this tab';
+  h.append(badge, title, scope);
+  h.append(iconBtn('split-right', 'Split right: new terminal', ICON.right));
+  h.append(iconBtn('split-down', 'Split down: new terminal', ICON.down));
+  h.append(iconBtn('zoom', zoomed ? 'Restore layout' : 'Zoom this pane', zoomed ? ICON.restore : ICON.zoom));
+  const terms = allLeaves(tab).filter(x => x.kind === 'terminal').length;
+  h.append(iconBtn('close', l.kind === 'terminal' && terms === 1 ? 'Close last terminal (closes all viewers in this tab)' : 'Close ' + l.title, ICON.close));
+  p.append(h, bodyFor(l));
+  return p;
+}
+function buildNode(n, tab) {
+  let e;
+  if (!isSplit(n)) e = buildPane(n, tab, false);
+  else {
+    e = el('div', 'split', { split: '', dir: n.dir, weight: n.w.toFixed(4) });
+    const kidEls = n.kids.map(k => buildNode(k, tab));
+    kidEls.forEach((ke, i) => {
+      e.append(ke);
+      if (i < n.kids.length - 1) e.append(makeDivider(n, i, ke, kidEls[i + 1]));
+    });
+  }
+  e.style.flex = `${n.w} 1 0px`;
+  e.style.minWidth = minSize(n, 'x') + 'px';
+  e.style.minHeight = minSize(n, 'y') + 'px';
+  return e;
+}
+function render() { renderChrome(); renderWorkspace(); }
+function renderWorkspace() {
+  const tab = tabOf();
+  ro.disconnect();
+  ws.replaceChildren();
+  ws.dataset.tab = tab.id; ws.dataset.zoom = tab.zoomId || '';
+  if (!tab.root) {
+    const e = el('div', 'empty', { empty: 'true' });
+    e.innerHTML = '<h3>No terminal in this tab</h3><p>Closing the last terminal closes Files/Review/Browser in this tab.</p>';
+    const b = el('button', null, { tool: 'new-terminal-empty' }); b.type = 'button'; b.textContent = 'New terminal';
+    b.addEventListener('click', () => splitTerminal('row'));
+    e.append(b); ws.append(e); return;
+  }
+  if (tab.zoomId && leafById(tab, tab.zoomId)) {
+    ws.append(buildPane(leafById(tab, tab.zoomId), tab, true));
+  } else {
+    tab.zoomId = null;
+    const root = buildNode(tab.root, tab);
+    root.style.flex = '1 1 auto';
+    ws.append(root);
+  }
+}
+function renderChrome() {
+  const tab = tabOf();
+  const tabsEl = document.getElementById('tabs');
+  tabsEl.replaceChildren(...S.tabs.map((t, i) => {
+    const b = el('button', 'tab', { tab: t.id }); b.type = 'button'; b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', i === S.active);
+    const c = allLeaves(t).length;
+    b.textContent = `${t.name} · ${c} pane${c === 1 ? '' : 's'}`;
+    b.addEventListener('click', () => { if (S.active !== i) { S.active = i; log('Switched to ' + t.name); render(); } });
+    return b;
+  }));
+  const ext = document.getElementById('ext-tab');
+  if (!ext.options.length) S.tabs.forEach(t => ext.add(new Option(t.name, t.id)));
+  const has = !!tab.root;
+  document.querySelectorAll('[data-tool="terminal"],[data-tool="files"],[data-tool="review"],[data-tool="browser"]').forEach(b => { b.disabled = !has; });
+  for (const k of ['files', 'review', 'browser']) {
+    const b = document.querySelector(`[data-tool="${k}"]`);
+    b.textContent = (leafById(tab, tab.id + '-' + k) ? 'Focus ' : 'Open ') + KIND_NAME[k];
+  }
+  document.querySelectorAll('[data-placement]').forEach(b => b.setAttribute('aria-pressed', b.dataset.placement === S.placement));
+  const zb = document.getElementById('zoombar');
+  const zl = tab.zoomId && leafById(tab, tab.zoomId);
+  zb.hidden = !zl;
+  if (zl) document.getElementById('zoomtext').textContent = `Zoomed: ${zl.title}. ${allLeaves(tab).length - 1} other pane(s) are hidden, not closed.`;
+  const leaves = allLeaves(tab), sel = tab.selectedId && leafById(tab, tab.selectedId), rs = runtimeSource(tab);
+  const st = document.getElementById('status');
+  st.dataset.selected = sel ? sel.id : ''; st.dataset.zoom = tab.zoomId || ''; st.dataset.runtimeSource = rs ? rs.id : '';
+  const rows = [
+    ['Tab', tab.name], ['Panes', `${leaves.length} (${leaves.filter(l => l.kind === 'terminal').length} terminal, ${leaves.filter(l => l.kind !== 'terminal').length} viewer)`],
+    ['Selected', sel ? sel.title : 'none'], ['Zoom', zl ? zl.title : 'none'],
+    ['Runtime source for new terminals', rs ? rs.title + ' (last-selected real terminal; falls back to first terminal)' : 'none']
+  ];
+  st.replaceChildren(Object.assign(el('dl'), { innerHTML: rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') }));
+  const lg = document.getElementById('log');
+  lg.replaceChildren(...S.log.slice(0, 10).map(e => { const li = document.createElement('li'); li.innerHTML = `<b>#${e.n}</b> [${e.tab}] `; li.append(e.msg); return li; }));
+}
+
+/* ---------- dividers ---------- */
+function makeDivider(n, i, elA, elB) {
+  const d = el('div', 'divider', { divider: '', dir: n.dir, index: i });
+  d.tabIndex = 0; d.setAttribute('role', 'separator');
+  d.setAttribute('aria-orientation', n.dir === 'row' ? 'vertical' : 'horizontal');
+  d.setAttribute('aria-label', 'Resize panes (arrow keys, double-click resets to 50:50)');
+  const horiz = n.dir === 'row', axis = horiz ? 'x' : 'y';
+  let base = null, readout = null;
+  const begin = () => {
+    const ra = elA.getBoundingClientRect(), rb = elB.getBoundingClientRect();
+    base = { a: horiz ? ra.width : ra.height, b: horiz ? rb.width : rb.height, wa: n.kids[i].w, wb: n.kids[i + 1].w };
+  };
+  const apply = target => { // target = desired size of A in px
+    const tot = base.a + base.b, ws_ = base.wa + base.wb;
+    const minA = minSize(n.kids[i], axis), minB = minSize(n.kids[i + 1], axis);
+    const a = tot < minA + minB ? tot / 2 : clamp(target, minA, tot - minB);
+    n.kids[i].w = ws_ * a / tot; n.kids[i + 1].w = ws_ - n.kids[i].w;
+    elA.style.flexGrow = n.kids[i].w; elB.style.flexGrow = n.kids[i + 1].w;
+    elA.dataset.weight = n.kids[i].w.toFixed(4); elB.dataset.weight = n.kids[i + 1].w.toFixed(4);
+    return [a, tot - a];
+  };
+  let startPos = 0;
+  d.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault(); begin(); startPos = horiz ? e.clientX : e.clientY;
+    d.setPointerCapture(e.pointerId); d.dataset.active = 'true';
+    readout = el('div', 'readout'); document.body.append(readout);
+    document.body.classList.add('is-dragging');
+    readout.textContent = `${Math.round(base.a)} | ${Math.round(base.b)}`;
+    readout.style.left = e.clientX + 14 + 'px'; readout.style.top = e.clientY + 14 + 'px';
+  });
+  d.addEventListener('pointermove', e => {
+    if (!base || d.dataset.active !== 'true') return;
+    const [a, b] = apply(base.a + (horiz ? e.clientX : e.clientY) - startPos);
+    readout.textContent = `${Math.round(a)} | ${Math.round(b)}`;
+    readout.style.left = e.clientX + 14 + 'px'; readout.style.top = e.clientY + 14 + 'px';
+  });
+  const stop = () => {
+    if (d.dataset.active !== 'true') return;
+    d.dataset.active = 'false'; base = null;
+    document.body.classList.remove('is-dragging'); if (readout) readout.remove(); readout = null;
+  };
+  d.addEventListener('pointerup', stop); d.addEventListener('pointercancel', stop); d.addEventListener('lostpointercapture', stop);
+  d.addEventListener('dblclick', () => { begin(); apply((base.a + base.b) / 2); base = null; });
+  d.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -24, ArrowUp: -24, ArrowRight: 24, ArrowDown: 24 }[e.key];
+    if (step === undefined || (horiz && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) || (!horiz && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) return;
+    e.preventDefault(); begin(); apply(base.a + step); base = null;
+  });
+  return d;
+}
+
+/* ---------- header drag: swap / edge reposition ---------- */
+let drag = null;
+function computeDrop(x, y, srcId, tab) {
+  const wr = ws.getBoundingClientRect();
+  if (x < wr.left || x > wr.right || y < wr.top || y > wr.bottom) return null;
+  const n = allLeaves(tab).length - 1; // panes remaining after source is lifted
+  const share = 1 / (n + 1);
+  const rim = [['left', x - wr.left], ['right', wr.right - x], ['top', y - wr.top], ['bottom', wr.bottom - y]].filter(([, d]) => d <= RIM).sort((a, b) => a[1] - b[1])[0];
+  if (rim) {
+    const side = rim[0];
+    const rect = side === 'left' ? { l: wr.left, t: wr.top, w: wr.width * share, h: wr.height }
+      : side === 'right' ? { l: wr.right - wr.width * share, t: wr.top, w: wr.width * share, h: wr.height }
+      : side === 'top' ? { l: wr.left, t: wr.top, w: wr.width, h: wr.height * share }
+      : { l: wr.left, t: wr.bottom - wr.height * share, w: wr.width, h: wr.height * share };
+    return { kind: 'root', side, rect, label: `Outer ${side} edge (${Math.round(share * 100)}%)` };
+  }
+  const pane = document.elementFromPoint(x, y)?.closest('.pane');
+  if (!pane || !ws.contains(pane) || pane.dataset.leafId === srcId) return null;
+  const r = pane.getBoundingClientRect();
+  const fx = (x - r.left) / r.width, fy = (y - r.top) / r.height;
+  const target = pane.dataset.leafId;
+  if (fx >= EDGE && fx <= 1 - EDGE && fy >= EDGE && fy <= 1 - EDGE)
+    return { kind: 'swap', target, rect: { l: r.left, t: r.top, w: r.width, h: r.height }, label: 'Swap', zone: 'center' };
+  const dx = Math.min(fx, 1 - fx), dy = Math.min(fy, 1 - fy);
+  let axisX = dx < dy;
+  // an axis too small to hold two minimum-size panes falls back to the other axis, then to swap
+  const okX = r.width >= 2 * MIN_W + DIV, okY = r.height >= 2 * MIN_H + DIV;
+  if (axisX && !okX) axisX = false; else if (!axisX && !okY) axisX = true;
+  if ((axisX && !okX) || (!axisX && !okY))
+    return { kind: 'swap', target, rect: { l: r.left, t: r.top, w: r.width, h: r.height }, label: 'Swap (pane too small to split)', zone: 'center' };
+  const side = axisX ? (fx < .5 ? 'left' : 'right') : (fy < .5 ? 'top' : 'bottom');
+  const half = side === 'left' ? { l: r.left, t: r.top, w: r.width / 2, h: r.height }
+    : side === 'right' ? { l: r.left + r.width / 2, t: r.top, w: r.width / 2, h: r.height }
+    : side === 'top' ? { l: r.left, t: r.top, w: r.width, h: r.height / 2 }
+    : { l: r.left, t: r.top + r.height / 2, w: r.width, h: r.height / 2 };
+  return { kind: 'edge', target, side, rect: half, zone: side, label: { left: 'Left', right: 'Right', top: 'Above', bottom: 'Below' }[side] };
+}
+function showDrop(d) {
+  let p = ws.querySelector('.drop');
+  if (!d) { if (p) p.remove(); return; }
+  if (!p) { p = el('div', 'drop'); p.append(document.createElement('span')); ws.append(p); }
+  const wr = ws.getBoundingClientRect();
+  Object.assign(p.style, { left: d.rect.l - wr.left + 'px', top: d.rect.t - wr.top + 'px', width: d.rect.w + 'px', height: d.rect.h + 'px' });
+  p.dataset.dropKind = d.kind; p.dataset.dropZone = d.zone || d.side; p.dataset.dropTarget = d.target || 'workspace';
+  p.firstChild.textContent = d.label;
+}
+function endDrag(commit) {
+  if (!drag) return;
+  const dg = drag; drag = null;
+  window.removeEventListener('pointermove', dg.move); window.removeEventListener('pointerup', dg.up);
+  window.removeEventListener('pointercancel', dg.cancel); window.removeEventListener('keydown', dg.key, true);
+  if (!dg.active) return;
+  document.body.classList.remove('is-dragging'); dg.ghost.remove(); showDrop(null);
+  ws.querySelectorAll('.pane.dragging').forEach(p => p.classList.remove('dragging'));
+  if (commit && dg.drop) applyDrop(dg.srcId, dg.drop); 
+}
+function applyDrop(srcId, d) {
+  const tab = tabOf(); const src = leafById(tab, srcId); if (!src) return;
+  if (d.kind === 'swap') {
+    swapLeaves(tab, srcId, d.target);
+    log(`${src.title} swapped with ${leafById(tab, d.target).title}`);
+  } else if (d.kind === 'edge') {
+    const target = leafById(tab, d.target);
+    removeLeaf(tab, srcId);
+    splitLeaf(tab, d.target, d.side === 'left' || d.side === 'right' ? 'row' : 'col', d.side === 'left' || d.side === 'top', src);
+    log(`${src.title} moved to ${d.side} of ${target.title}`);
+  } else {
+    removeLeaf(tab, srcId);
+    insertRootEdge(tab, src, d.side === 'left' || d.side === 'right' ? 'row' : 'col', d.side === 'left' || d.side === 'top');
+    log(`${src.title} moved to outer ${d.side} edge`);
+  }
+  tab.selectedId = srcId; if (src.kind === 'terminal') tab.lastTermId = srcId;
+  render();
+}
+ws.addEventListener('pointerdown', e => {
+  const pane = e.target.closest('.pane'); if (!pane || e.button !== 0) return;
+  const id = pane.dataset.leafId;
+  if (tabOf().selectedId !== id) select(id);
+  const head = e.target.closest('.pane-head');
+  if (!head || e.target.closest('button') || e.target.closest('input')) return;
+  const tab = tabOf();
+  if (tab.zoomId || allLeaves(tab).length < 2) return;
+  const dg = drag = { srcId: id, sx: e.clientX, sy: e.clientY, active: false, drop: null, ghost: null };
+  dg.move = ev => {
+    if (!dg.active) {
+      if (Math.hypot(ev.clientX - dg.sx, ev.clientY - dg.sy) < DRAG_PX) return;
+      dg.active = true; document.body.classList.add('is-dragging');
+      pane.classList.add('dragging');
+      dg.ghost = el('div', 'ghost'); const l = leafById(tab, id);
+      dg.ghost.innerHTML = `<span class="badge"></span><span></span>`;
+      dg.ghost.firstChild.textContent = KIND[l.kind]; dg.ghost.lastChild.textContent = l.title;
+      dg.ghost.dataset.kind = l.kind; document.body.append(dg.ghost);
+    }
+    ev.preventDefault();
+    dg.ghost.style.left = ev.clientX + 12 + 'px'; dg.ghost.style.top = ev.clientY + 12 + 'px';
+    dg.drop = computeDrop(ev.clientX, ev.clientY, id, tab); showDrop(dg.drop);
+  };
+  dg.up = ev => { if (dg.active) dg.drop = computeDrop(ev.clientX, ev.clientY, id, tab); endDrag(true); };
+  dg.cancel = () => endDrag(false);
+  dg.key = ev => { if (ev.key === 'Escape') { ev.stopPropagation(); endDrag(false); } };
+  window.addEventListener('pointermove', dg.move); window.addEventListener('pointerup', dg.up);
+  window.addEventListener('pointercancel', dg.cancel); window.addEventListener('keydown', dg.key, true);
+});
+ws.addEventListener('click', e => {
+  const b = e.target.closest('button[data-action]'); if (!b) return;
+  const id = b.closest('.pane').dataset.leafId;
+  ({ 'split-right': () => splitTerminal('row', false, id), 'split-down': () => splitTerminal('col', false, id),
+     zoom: () => toggleZoom(id), close: () => closeLeaf(id) })[b.dataset.action]();
+});
+ws.addEventListener('dblclick', e => {
+  const h = e.target.closest('.pane-head'); if (!h || e.target.closest('button,input')) return;
+  toggleZoom(h.closest('.pane').dataset.leafId);
+});
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !drag && tabOf().zoomId) { const t = tabOf(); log('Zoom restored (Esc)'); unzoom(t); render(); }
+});
+
+/* ---------- toolbar ---------- */
+document.querySelector('.bar').addEventListener('click', e => {
+  const pl = e.target.closest('[data-placement]');
+  if (pl) { S.placement = pl.dataset.placement; renderChrome(); return; }
+  const b = e.target.closest('[data-tool]'); if (!b || b.disabled) return;
+  const k = b.dataset.tool;
+  if (k === 'terminal') newTerminalTool();
+  else if (k === 'files' || k === 'review' || k === 'browser') openViewer(k);
+  else if (k === 'external') externalTerminal();
+  else if (k === 'reset-tab') { resetTab(S.active); log('Tab reset'); render(); }
+  else if (k === 'reset-all') { const a = S.active; initState(); S.active = a; log('All tabs reset', tabOf()); render(); }
+});
+document.getElementById('zoombar').addEventListener('click', e => {
+  if (e.target.closest('[data-tool="unzoom"]')) { const t = tabOf(); unzoom(t); log('Zoom restored'); render(); }
+});
+const fill = (id, arr) => { const s = document.getElementById(id); arr.forEach(v => s.add(new Option(v, v))); };
+fill('src-files', FILES_SRC); fill('src-review', REVIEW_SRC);
+
+/* ---------- read-only snapshot for smoke assertions (not a drag substitute) ---------- */
+function ser(n) {
+  const base = { w: +n.w.toFixed(4) };
+  return isSplit(n) ? { ...base, type: 'split', dir: n.dir, kids: n.kids.map(ser) }
+                    : { ...base, type: 'leaf', kind: n.kind, id: n.id, title: n.title, source: n.source, url: n.url };
+}
+window.paneDemo = Object.freeze({
+  snapshot() {
+    return JSON.parse(JSON.stringify({
+      activeTab: tabOf().id, placement: S.placement,
+      tabs: S.tabs.map(t => ({ id: t.id, selectedId: t.selectedId, zoomId: t.zoomId, runtimeSourceId: runtimeSource(t)?.id ?? null,
+        leafCount: allLeaves(t).length, tree: t.root ? ser(t.root) : null })),
+      log: S.log.map(l => l.msg)
+    }));
+  }
+});
+
+initState();
+log('Demo loaded: standalone mock, no backend', tabOf());
+render();
+})();
+</script>
+</body>
+</html>
