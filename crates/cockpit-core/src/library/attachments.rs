@@ -228,7 +228,7 @@ impl LibraryService {
                     cancelled?;
                     return Ok(None);
                 }
-                result = self.sources.download_attachment(&asset.source.provider_id, &asset.source.canonical_id, &refs[index], &siblings, &dest, &dest_path, budget) => result,
+                result = self.sources.download_attachment(&asset.source.provider_id, &asset.source.resource_type, &asset.source.canonical_id, &refs[index], &siblings, &dest, &dest_path, budget) => result,
             };
             if operations::cancelled(store, operation)? { return Ok(None); }
             let actual = crate::context_assets::open_absolute_dir_nofollow(&dest_path).map_err(|_| unsafe_download())?;

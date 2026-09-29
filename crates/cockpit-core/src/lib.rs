@@ -8,6 +8,7 @@ pub mod context;
 pub mod context_assets;
 pub mod context_media;
 pub mod context_search;
+pub mod credentials;
 pub mod extension_adapter;
 pub mod library;
 pub mod jira_query;
@@ -134,6 +135,7 @@ pub struct CockpitService {
     comments: Option<Arc<comments::CommentsService>>,
     reviews: Option<Arc<review::ReviewService>>,
     library: Option<Arc<library::LibraryService>>,
+    credentials: Option<Arc<credentials::ProviderCredentials>>,
 }
 
 #[derive(Default)]
@@ -197,6 +199,7 @@ impl CockpitService {
             comments: None,
             reviews: None,
             library: None,
+            credentials: None,
         }
     }
 
@@ -238,6 +241,20 @@ impl CockpitService {
             InspectionError::new(
                 "library_unavailable",
                 "Library is not configured in this host",
+            )
+        })
+    }
+
+    pub fn with_credentials(mut self, credentials: Arc<credentials::ProviderCredentials>) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    pub fn credentials(&self) -> Result<&Arc<credentials::ProviderCredentials>, InspectionError> {
+        self.credentials.as_ref().ok_or_else(|| {
+            InspectionError::new(
+                "credentials_unavailable",
+                "Provider credentials are not configured in this host",
             )
         })
     }

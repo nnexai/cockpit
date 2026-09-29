@@ -741,3 +741,31 @@ export type ContextInvalidation = { path: string, state: ContextInvalidationStat
 export type ContextInvalidationRequest = { binding_id: string, root_id: string, request_generation: number, known: Array<ContextKnownRevision>, };
 
 export type ContextInvalidationResponse = { binding_id: string, root_id: string, request_generation: number, invalidations: Array<ContextInvalidation>, truncated: boolean, };
+
+export type ProviderAuthKind = "bearer" | "basic";
+
+export type ProviderCredentialState = "stored" | "not_stored" | "vault_unavailable" | "unsupported";
+
+export type ProviderCredentialStatus = { provider_id: string, state: ProviderCredentialState,
+/**
+ * `Some` only when `state` is `Stored`.
+ */
+kind: ProviderAuthKind | null,
+/**
+ * Empty means the provider does not support a stored credential.
+ */
+supported_kinds: Array<ProviderAuthKind>, };
+
+export type ProviderCredentialStatusList = { providers: Array<ProviderCredentialStatus>, };
+
+export type ProviderCredentialSetRequest = { provider_id: string, kind: ProviderAuthKind,
+/**
+ * Required for `basic`; 1..=256 bytes, no control characters, no `:`.
+ */
+username?: string,
+/**
+ * 1..=8192 bytes, no control characters, not all whitespace.
+ */
+token: string, };
+
+export type ProviderCredentialClearRequest = { provider_id: string, };

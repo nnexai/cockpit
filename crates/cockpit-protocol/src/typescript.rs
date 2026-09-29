@@ -56,6 +56,10 @@ use crate::review::{
     ReviewFileRequest, ReviewFileStatus, ReviewHunk, ReviewSide, ReviewSnapshot,
     ReviewSnapshotRequest,
 };
+use crate::credentials::{
+    ProviderAuthKind, ProviderCredentialClearRequest, ProviderCredentialSetRequest,
+    ProviderCredentialState, ProviderCredentialStatus, ProviderCredentialStatusList,
+};
 use crate::sources::SourceCapability;
 use crate::library::{
     LibraryAddRequest, LibraryAncestor, LibraryAttachment, LibraryAttachmentAction,
@@ -405,6 +409,12 @@ pub fn render_v1() -> String {
         ContextInvalidation::decl(&config),
         ContextInvalidationRequest::decl(&config),
         ContextInvalidationResponse::decl(&config),
+        ProviderAuthKind::decl(&config),
+        ProviderCredentialState::decl(&config),
+        ProviderCredentialStatus::decl(&config),
+        ProviderCredentialStatusList::decl(&config),
+        ProviderCredentialSetRequest::decl(&config),
+        ProviderCredentialClearRequest::decl(&config),
     ]
     .into_iter()
     .map(|declaration| format!("export {declaration}"))

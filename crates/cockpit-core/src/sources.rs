@@ -502,9 +502,15 @@ pub trait SourceProvider: Send + Sync {
     async fn page_space(&self, _page_id: &str) -> Result<Option<String>, InspectionError> {
         capability_unavailable()
     }
+    /// Whether attachment bytes of `resource_type` can be downloaded now.
+    /// Providers refuse by default; `SourceService::attachment_downloads`
+    /// is the single gate for callers.
+    async fn attachment_downloads(&self, _resource_type: &str) -> Result<(), InspectionError> {
+        capability_unavailable()
+    }
     async fn download_attachment(
         &self,
-        _page_id: &str,
+        _canonical_id: &str,
         _attachment: &AttachmentRef,
         _siblings: &[AttachmentRef],
         _dest: &cap_std::fs::Dir,
@@ -968,30 +974,59 @@ impl SourceService {
         Ok(space)
     }
 
+    /// Whether the selected provider can download attachments of
+    /// `resource_type` now. The provider decides, including credential state.
+    pub async fn attachment_downloads(
+        &self,
+        provider_id: &str,
+        resource_type: &str,
+    ) -> Result<(), InspectionError> {
+        // The provider bounds its own work (the vault has its own deadline), so
+        // a vault timeout keeps its precise code.
+        self.selected_provider(provider_id)?
+            .attachment_downloads(resource_type)
+            .await
+    }
+
     /// D21: one attachment through the selected provider into `dest`, a fresh
     /// private directory at `dest_path`. The result must name the requested
     /// attachment and one path component; the caller verifies the file.
     /// `budget` covers all predicted matches, including discarded siblings.
+    /// `canonical_id` is a Confluence page id for `"page"` and a Jira key for
+    /// `"issue"`; any other resource type is refused.
     pub async fn download_attachment(
         &self,
         provider_id: &str,
-        page_id: &str,
+        resource_type: &str,
+        canonical_id: &str,
         attachment: &AttachmentRef,
         siblings: &[AttachmentRef],
         dest: &cap_std::fs::Dir,
         dest_path: &std::path::Path,
         budget: crate::process::StagingBudget,
     ) -> Result<DownloadedAttachment, InspectionError> {
-        if !confluence_page_id(page_id) {
+        let valid = match resource_type {
+            "page" => confluence_page_id(canonical_id),
+            "issue" => is_jira_key(canonical_id),
+            _ => false,
+        };
+        if !valid {
             return Err(InspectionError::new(
                 "source_provider_contract",
-                "attachment download requires a valid page id",
+                "attachment download requires a valid page id or issue key",
             ));
         }
         let provider = self.selected_provider(provider_id)?;
         let downloaded = timeout(
             self.operation_timeout,
-            provider.download_attachment(page_id, attachment, siblings, dest, dest_path, budget),
+            provider.download_attachment(
+                canonical_id,
+                attachment,
+                siblings,
+                dest,
+                dest_path,
+                budget,
+            ),
         )
         .await
         .map_err(|_| {
@@ -1009,7 +1044,7 @@ impl SourceService {
         {
             return Err(InspectionError::new(
                 "source_capability_unavailable",
-                "this confluence-cli version cannot download attachments safely",
+                "Attachment download returned an unsafe result",
             ));
         }
         Ok(downloaded)
