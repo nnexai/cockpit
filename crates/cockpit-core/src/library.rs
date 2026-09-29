@@ -33,6 +33,71 @@ use std::{
     sync::{Arc, OnceLock},
 };
 use store::{Lease, LibraryIndexEntry, Store, error};
+/// The listing page of `entries` from `offset`, with each Jira issue's
+/// `parent_item_id` set to the Library item of its parent issue.
+///
+/// The parent key is the stored `parent` reference of the issue's document.
+/// It is resolved against the whole index (never only the page) within the
+/// issue's own provider instance. This is a listing projection: the stored
+/// `parent_item_id` of a Jira issue stays empty because it also decides the
+/// on-disk layout, and Jira issues keep the flat `<PROJECT>/<KEY>/<Title>.md`
+/// path. An issue whose parent is not in the Library, or whose stored copy
+/// predates reference capture, has no parent.
+fn jira_parent_projection(
+    entries: &[LibraryIndexEntry],
+    offset: usize,
+    limit: usize,
+) -> Vec<LibraryItemSummary> {
+    let is_issue = |summary: &LibraryItemSummary| {
+        summary.kind == LibraryItemKind::ProviderSnapshot
+            && summary.resource_type.as_deref() == Some("issue")
+    };
+    let mut issues: std::collections::HashMap<(&str, &str, &str), &str> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        let summary = &entry.summary;
+        if let (true, Some(provider), Some(instance), Some(key)) = (
+            is_issue(summary),
+            summary.provider_id.as_deref(),
+            summary.provider_instance.as_deref(),
+            summary.canonical_id.as_deref(),
+        ) {
+            issues.insert((provider, instance, key), summary.item_id.as_str());
+        }
+    }
+    entries
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|entry| {
+            let mut summary = entry.summary.clone();
+            if summary.parent_item_id.is_none()
+                && let (Some(provider), Some(instance), Some(references)) = (
+                    summary.provider_id.as_deref(),
+                    summary.provider_instance.as_deref(),
+                    entry.references.as_deref(),
+                )
+                && let Some(key) = references.iter().find_map(|reference| {
+                    match (&reference.target, reference.relation.as_str()) {
+                        (
+                            crate::sources::ReferenceTarget::JiraKey {
+                                provider_id,
+                                key,
+                            },
+                            "parent",
+                        ) if provider_id == provider => Some(key.as_str()),
+                        _ => None,
+                    }
+                })
+                && let Some(parent) = issues.get(&(provider, instance, key))
+                && *parent != summary.item_id
+            {
+                summary.parent_item_id = Some((*parent).to_owned());
+            }
+            summary
+        })
+        .collect()
+}
 fn confluence_input_matches_instance(base_url: &str, input: &str) -> bool {
     let (Ok(base), Ok(input)) = (url::Url::parse(base_url), url::Url::parse(input)) else {
         return false;
@@ -114,13 +179,7 @@ impl LibraryService {
             let index = store.index_shared()?;
             let offset = offset.unwrap_or(0) as usize;
             let end = offset.saturating_add(256).min(index.items.len());
-            let items = index
-                .items
-                .iter()
-                .skip(offset)
-                .take(256)
-                .map(|entry| entry.summary.clone())
-                .collect();
+            let items = jira_parent_projection(&index.items, offset, 256);
             Ok(LibraryListing {
                 root: service.authorized_root(&store)?.summary(),
                 generation: index.generation.clone(),
@@ -1632,6 +1691,48 @@ mod tests {
                 entry.summary.item_id
             );
         }
+    }
+    fn jira_entry(instance: &str, key: &str, parent: Option<&str>) -> LibraryIndexEntry {
+        let mut asset = asset(1, "body");
+        asset.source.provider_id = "jira".into();
+        asset.source.provider_instance = instance.into();
+        asset.source.canonical_id = key.into();
+        let mut entry = asset_entry(&asset, None);
+        entry.references = Some(
+            parent
+                .map(|parent| crate::sources::SourceReference {
+                    target: crate::sources::ReferenceTarget::JiraKey {
+                        provider_id: "jira".into(),
+                        key: parent.into(),
+                    },
+                    relation: "parent".into(),
+                })
+                .into_iter()
+                .collect(),
+        );
+        entry
+    }
+
+    #[test]
+    fn listing_projects_the_jira_parent_across_pages_and_leaves_storage_alone() {
+        let site = "https://acme.atlassian.net";
+        let mut entries = vec![
+            jira_entry(site, "OPS-2", Some("OPS-1")),
+            jira_entry(site, "OPS-3", Some("OPS-9")),
+            jira_entry(site, "OPS-1", None),
+            jira_entry("https://other.atlassian.net", "OPS-4", Some("OPS-1")),
+        ];
+        let mut legacy = jira_entry(site, "OPS-5", Some("OPS-1"));
+        legacy.references = None;
+        entries.push(legacy);
+        // The child is on the first page, its parent on the second.
+        let first = jira_parent_projection(&entries, 0, 1);
+        assert_eq!(first[0].parent_item_id.as_deref(), Some(entries[2].summary.item_id.as_str()));
+        let rest = jira_parent_projection(&entries, 1, 10);
+        let parents: Vec<_> = rest.iter().map(|item| item.parent_item_id.as_deref()).collect();
+        // A parent outside the Library, another site's issue and a legacy copy have none.
+        assert_eq!(parents, vec![None, None, None, None]);
+        assert!(entries.iter().all(|entry| entry.summary.parent_item_id.is_none()));
     }
 
     #[tokio::test]
