@@ -694,16 +694,29 @@ impl LibraryService {
             context_assets::remove_follow_copy(&authorized.dir, companion,
                 &request.logical_id, &request.confirmed)?;
         } else {
-            context_assets::remove_library_copy(&authorized.dir, companion,
-                &request.logical_id, &request.confirmed)?;
             let store = self.open()?;
             let reference = LibraryItemRef::Space {
                 companion_root_id: authorized.root.root_id.clone(),
             };
+            // Copies of these items take the same leases, so the file removal and
+            // the ref drop cannot interleave with a re-add of the copy.
+            let mut ids = {
+                let _lock = store.shared()?;
+                store.index()?.items.iter()
+                    .filter(|e| e.summary.logical_id == request.logical_id
+                        && e.summary.refs.contains(&reference))
+                    .map(|e| e.summary.item_id.clone())
+                    .collect::<Vec<_>>()
+            };
+            ids.sort();
+            ids.dedup();
+            let _leases = ids.iter().map(|id| store.lease(id)).collect::<Result<Vec<_>, _>>()?;
+            context_assets::remove_library_copy(&authorized.dir, companion,
+                &request.logical_id, &request.confirmed)?;
             let now = crate::project_store::timestamp();
             store.mutate_index(|index| {
                 for entry in &mut index.items {
-                    if entry.summary.logical_id == request.logical_id
+                    if ids.contains(&entry.summary.item_id)
                         && super::refs::remove_ref(&mut entry.summary, &reference)
                         && entry.summary.refs.is_empty()
                     {
