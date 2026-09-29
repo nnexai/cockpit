@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { filePathParts, rankFileMatches, type FileNavigationCandidate, type FileNavigationMatch } from "./fileNavigation";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { filePathParts, prepareFileCandidates, rankPreparedFileMatches, type FileNavigationCandidate, type FileNavigationMatch, type PreparedFileCandidate } from "./fileNavigation";
 import "./fileNavigation.css";
 
-export function FilePicker({ candidates, loading = false, incomplete = false, onChoose, onDismiss }: {
+export function FilePicker({ candidates, preparedCandidates, loading = false, incomplete = false, mayBeOutOfDate = false, failed = false, onChoose, onDismiss }: {
   candidates: readonly FileNavigationCandidate[];
+  preparedCandidates?: readonly PreparedFileCandidate[];
   loading?: boolean;
   incomplete?: boolean;
+  mayBeOutOfDate?: boolean;
+  failed?: boolean;
   onChoose: (candidate: FileNavigationCandidate) => void;
   onDismiss: () => void;
 }) {
@@ -14,22 +17,26 @@ export function FilePicker({ candidates, loading = false, incomplete = false, on
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<{ query: string; id: string | null }>({ query: "", id: null });
-  const matches = useMemo(() => rankFileMatches(query, candidates).slice(0, 100), [candidates, query]);
-  const active = selection.query === query ? Math.max(0, matches.findIndex((candidate) => candidate.id === selection.id)) : 0;
+  const deferredQuery = useDeferredValue(query);
+  const prepared = useMemo(() => preparedCandidates ?? prepareFileCandidates(candidates), [candidates, preparedCandidates]);
+  const matches = useMemo(() => rankPreparedFileMatches(deferredQuery, prepared), [deferredQuery, prepared]);
+  const active = selection.query === deferredQuery ? Math.max(0, matches.findIndex((candidate) => candidate.id === selection.id)) : 0;
+  const rankingPending = deferredQuery !== query;
   const activeId = matches[active]?.id ?? null;
-  const selectIndex = (index: number) => setSelection({ query, id: matches[index]?.id ?? null });
+  const selectIndex = (index: number) => setSelection({ query: deferredQuery, id: matches[index]?.id ?? null });
   useEffect(() => {
     restoreFocusRef.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
     inputRef.current?.focus();
     return () => restoreFocusRef.current?.focus();
   }, []);
   useEffect(() => {
-    setSelection((current) => current.query === query && current.id === activeId ? current : { query, id: activeId });
-  }, [query, activeId]);
+    setSelection((current) => current.query === deferredQuery && current.id === activeId ? current : { query: deferredQuery, id: activeId });
+  }, [deferredQuery, activeId]);
   useEffect(() => {
     pickerRef.current?.querySelector<HTMLElement>(`[data-file-picker-result-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [active, activeId]);
   const choose = () => {
+    if (rankingPending) return;
     const candidate = matches[active];
     if (candidate) onChoose(candidate);
   };
@@ -57,9 +64,9 @@ export function FilePicker({ candidates, loading = false, incomplete = false, on
   };
   return <section className="file-picker" role="dialog" aria-label="Go to file" aria-modal="true" ref={pickerRef} onKeyDown={onKeyDown}>
     <input ref={inputRef} type="search" aria-label="Find file" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a file" autoComplete="off" />
-    <p className="file-picker-status">{loading ? "Indexing files…" : `${candidates.length} files`}{incomplete ? " · index incomplete" : ""}</p>
+    <p className="file-picker-status">{failed ? candidates.length > 0 ? "May be out of date" : "Could not load files" : loading ? candidates.length > 0 ? "Refreshing…" : "Indexing files…" : `${candidates.length} files`}{mayBeOutOfDate && !loading && !failed ? " · may be out of date" : ""}{incomplete ? " · index incomplete" : ""}</p>
     <div role="listbox" aria-label="Matching files" className="file-picker-results">
-      {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} title={candidate.path} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => onChoose(candidate)}><FileLabel candidate={candidate} />{candidate.detail ? <span className="file-picker-detail">{candidate.detail}</span> : null}</button>)}
+      {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} title={candidate.path} disabled={rankingPending} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => onChoose(candidate)}><FileLabel candidate={candidate} />{candidate.detail ? <span className="file-picker-detail">{candidate.detail}</span> : null}</button>)}
       {!loading && matches.length === 0 ? <p>No matching files.</p> : null}
     </div>
     <p className="file-picker-help">↑↓ or Ctrl+N/P to choose · Enter to open · Esc to close</p>

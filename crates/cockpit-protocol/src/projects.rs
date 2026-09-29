@@ -49,6 +49,7 @@ pub struct ProjectConfiguration {
     pub worktree_root: String,
     pub companion_root: String,
     pub state_root: String,
+    pub cache_root: String,
     pub library_root: String,
     pub branch_template: String,
     pub checkout_template: String,

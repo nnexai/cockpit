@@ -228,6 +228,10 @@ The Context browser:
 - previews a batch containing real file paths, comments, and selected original lines with line numbers;
 - pastes that batch into an explicitly selected same-tab agent without submitting it.
 
+Context and Library file pickers request one sorted server-side file index rather than walking directories over many UI requests. Git roots use tracked plus non-ignored untracked paths; ordinary folders use a bounded no-follow walk. The browser keeps a small stale-while-revalidate candidate list; the gateway also persists path-only hints under the configured cache root (`COCKPIT_CACHE_ROOT`, `cache_root`, then `$XDG_CACHE_HOME/cockpit`). Every open re-enumerates the authorized root, and cached paths never grant access or supply file contents.
+
+Repository catalog scans are cached only for read-path authorization, with a mutation generation and stale-while-refill window; setup and teardown continue to perform fresh checks. Review reuses an in-memory snapshot only when its Git revision tokens and comparison identity still match, and revision tokens stream Git output into a digest rather than retaining large diff output.
+
 Cockpit owns durable GUI drafts and a local Git review model for the complete Reviewr replacement. Local review includes staged, unstaged, branch, and untracked scopes with explicit revisions and side-aware anchors. It does not mutate Git or post provider comments.
 
 The inline browser displays a supervised Chromium tab beside the selected Space. Cockpit owns browser interaction, durable drafts, and feedback; hiding the view releases capture resources without closing the browser.

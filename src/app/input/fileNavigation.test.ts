@@ -3,7 +3,7 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { FilePicker } from "./FilePicker";
-import { FILE_NAVIGATION_EVENT, filePathParts, rankFileMatches, rankFuzzyMatches } from "./fileNavigation";
+import { FILE_NAVIGATION_EVENT, filePathParts, prepareFileCandidates, rankFileMatches, rankFuzzyMatches, rankPreparedFileMatches } from "./fileNavigation";
 
 describe("file navigation", () => {
   it("uses case-insensitive subsequence matches and favors basename matches", () => {
@@ -24,6 +24,28 @@ describe("file navigation", () => {
     const [match] = rankFileMatches("soft chk", [pages[2]]);
     const characters = Array.from(pages[2].path);
     expect(match.matchedIndices.filter((index) => index >= characters.lastIndexOf("/")).map((index) => characters[index]).join("")).toBe("chk");
+  });
+  it("keeps prepared ASCII ranking identical while returning only the top result window", () => {
+    const candidates = Array.from({ length: 180 }, (_, index) => ({
+      id: `file-${index}`,
+      path: index % 2 ? `src/folder-${index}/readme-${index}.md` : `docs/readme-${index}.md`,
+    }));
+    for (const query of ["readme", "src 14", "folder-1", ""]) {
+      const expected = rankFileMatches(query, candidates);
+      expect(rankPreparedFileMatches(query, prepareFileCandidates(candidates))).toEqual(expected.slice(0, 100));
+    }
+  });
+  it("keeps mixed Unicode and ASCII candidates in exact score order", () => {
+    const candidates = [
+      { id: "ascii-upper", path: "src/Readme.md" },
+      { id: "unicode-case", path: "docs/İtem/README.md" },
+      { id: "emoji", path: "😀/readme.md" },
+      { id: "basename", path: "target/readme.txt" },
+    ];
+    const prepared = prepareFileCandidates(candidates);
+    for (const query of ["readme", "i", "😀m"]) {
+      expect(rankPreparedFileMatches(query, prepared)).toEqual(rankFileMatches(query, candidates).slice(0, 100));
+    }
   });
   it("splits display paths into title, extension and parents without the duplicated page folder", () => {
     const parts = filePathParts("confluence/site/SD/Parent/Page/Page.md");

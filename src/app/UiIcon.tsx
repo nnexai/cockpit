@@ -7,6 +7,7 @@ const paths = {
   file: "M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6",
   search: "M15 15l6 6M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0",
   sidebar: "M9 4v16M3 4h18v16H3Z",
+  "sidebar-open": "M9 4v16M3 4h18v16H3ZM5.5 8.5h1.5M5.5 12h1.5M5.5 15.5h1.5",
   browser: "M3 5h18v14H3ZM3 9h18M6 7h.01M9 7h.01",
   grid: "M3 3h7v7H3Zm11 0h7v7h-7ZM3 14h7v7H3Zm11 0h7v7h-7Z",
   down: "m6 9 6 6 6-6",
@@ -21,8 +22,26 @@ const paths = {
   close: "m6 6 12 12M6 18 18 6",
   wrap: "M3 6h18M3 12h15a3 3 0 0 1 0 6h-4m2-2-2 2 2 2M3 18h7",
   comment: "M21 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3ZM7 8h10M7 12h7",
+  library: "M12 6c-2-1.5-5-2-8-2v14c3 0 6 .5 8 2 2-1.5 5-2 8-2V4c-3 0-6 .5-8 2ZM12 6v14",
+  folder: "M3 6h6l2 2h10v11H3Z",
+  clip: "M20 11l-8 8a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8",
+  copy: "M9 9h11v11H9ZM5 15V4h11",
+  check: "m4 12 5 5L20 6",
+  up: "M12 19V5m-6 6 6-6 6 6",
+  ring: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+  "half-ring": "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+  "dot-ring": "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+  "slash-ring": "M5.6 5.6l12.8 12.8M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
 } satisfies Record<string, string>;
 
-export function UiIcon({ name }: { name: keyof typeof paths }) {
-  return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]} /></svg>;
+/** Solid parts of a mark, drawn over its outline (the half of `half-ring`, the dot of `dot-ring`). */
+const fills: Partial<Record<keyof typeof paths, string>> = {
+  "half-ring": "M12 3a9 9 0 0 0 0 18Z",
+  "dot-ring": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z",
+};
+
+export type UiIconName = keyof typeof paths;
+
+export function UiIcon({ name }: { name: UiIconName }) {
+  return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]} />{fills[name] ? <path d={fills[name]} fill="currentColor" stroke="none" /> : null}</svg>;
 }

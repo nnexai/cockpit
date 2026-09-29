@@ -1,0 +1,25 @@
+{
+  "fixture": "/tmp/cpol-v13rx86e",
+  "before": {
+    "title": "Cockpit",
+    "native": true,
+    "buttons": [
+      {
+        "title": "Open browser (Ctrl+B Shift+B)",
+        "label": "Browser"
+      },
+      {
+        "title": "Open Library (Ctrl+B i)",
+        "label": "Library"
+      },
+      {
+        "title": "Commands (Ctrl+B ?)",
+        "label": null
+      }
+    ]
+  },
+  "after": {
+    "text": "\n\n1\n\n\n\nCommands\nLibrary\n0 items\n\n\n\nAdd\u2026\nRefresh all\n\nNothing in the Library yet\nAdd\u2026\nThe Library is empty\nAdd an issue, merge request, pull request, Jira issue, Confluence page, or a folder. The Library keeps it without a Space or session.\nAdd\u2026\n\n1 files\n\nREADME.md\n357 B\n\u2191\u2193 or Ctrl+N/P to choose \u00b7 Enter to open \u00b7 Esc to close",
+    "pressed": "true"
+  }
+}

@@ -56,6 +56,7 @@ fn configuration(server: &FakeConfluence, login: &str) -> ProjectConfiguration {
         worktree_root: "/w".into(),
         companion_root: "/c".into(),
         state_root: "/s".into(),
+        cache_root: "/cache".into(),
         library_root: "/l".into(),
         branch_template: "{repo}/{task_id}".into(),
         checkout_template: "{repo}-{task_id}".into(),

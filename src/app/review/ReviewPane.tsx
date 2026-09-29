@@ -11,6 +11,7 @@ import type {
 } from "../../protocol/generated/v1";
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
+import { viewerShortcutAction } from "../input/shortcuts";
 import { retainReviewScrollPosition, type ReviewViewState } from "../context/ContextViewer";
 import { highlightLines } from "../viewer/highlight";
 import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
@@ -36,6 +37,8 @@ export type ReviewPaneProps = {
   onSelectLines?: (file: ReviewChangedFile, side: "old" | "new", start: number, end: number, lines: string[], shift: boolean) => void;
   renderFile?: (snapshot: ReviewSnapshot, diff: ReviewFileDiff, content: (comments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode) => ReactNode, loadSourcePage: (side: "old" | "new", offset: number) => Promise<ReviewFileDiff | null>) => ReactNode;
   presentationControls?: ReactNode;
+  /** Switches the presentation the controls offer (Diff / Full source); bound to the Preview / Source key. */
+  onTogglePresentation?: () => void;
   renderLineComments?: (diff: ReviewFileDiff, oldLine: number | null, newLine: number | null) => ReactNode;
   viewState?: ReviewViewState;
   onViewStateChange?: (state: ReviewViewState) => void;
@@ -98,7 +101,14 @@ function buildFileTree(files: ReviewChangedFile[]): FileTree {
 
 function ReviewFileTree({ files, selected, onSelect }: { files: ReviewChangedFile[]; selected: string | null; onSelect: (fileId: string) => void }) {
   const tree = useMemo(() => buildFileTree(files), [files]);
-  const duplicates = new Set(files.filter((item, index) => files.some((other, otherIndex) => index !== otherIndex && filePath(item) === filePath(other))).map(filePath));
+  const duplicates = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const file of files) {
+      const path = filePath(file);
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+    }
+    return new Set([...counts].filter(([, count]) => count > 1).map(([path]) => path));
+  }, [files]);
   const renderFile = (item: ReviewChangedFile, depth: number, label = fileName(item)) => <button type="button" key={item.file_id} data-file-id={item.file_id} className={`review-file${item.file_id === selected ? " is-selected" : ""}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => onSelect(item.file_id)} title={`${fileLabel(item)} · ${item.comparison}`} aria-label={`${filePath(item)}, ${item.status.replaceAll("_", " ")}, ${item.comparison.replaceAll("_", " ")}`}>
     <UiIcon name="file" /><span className="review-file-name">{label}</span>{duplicates.has(filePath(item)) ? <small>{item.comparison === "staged" ? "index" : "working"}</small> : null}<span className="review-file-stats">{item.additions != null && item.additions > 0 ? <em className="is-added">+{item.additions}</em> : null}{item.deletions != null && item.deletions > 0 ? <em className="is-deleted">−{item.deletions}</em> : null}</span>
   </button>;
@@ -141,7 +151,7 @@ export function reviewScrollIdentity(sessionId: string, paneId: string, bindingI
 }
 
 
-export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, onOpenSource, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, presentationControls, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
+export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryId, snapshot, file, selectedLines = null, onCreateLineComment, onCreateFileComment, onOpenCommentOverview, onOpenSource, commentCount = null, canCreateLineComment = false, canCreateFileComment = false, onSelectLines, renderFile, presentationControls, onTogglePresentation, renderLineComments, viewState, onViewStateChange }: ReviewPaneProps) {
   const baseId = useId();
   const [comparison, setComparison] = useState<ReviewComparison>(viewState?.comparison ?? "all_local");
   const [baseRef, setBaseRef] = useState(viewState?.baseRef ?? "");
@@ -456,8 +466,6 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
       if (!paneRef.current?.contains(document.activeElement)) return;
       const action = fileNavigationAction(event);
       if (action === "open-picker") setPickerOpen(true);
-      else if (action === "focus-tree") focusTree();
-      else if (action === "focus-content") focusContent();
     };
     window.addEventListener(FILE_NAVIGATION_EVENT, onNavigation);
     return () => window.removeEventListener(FILE_NAVIGATION_EVENT, onNavigation);
@@ -498,10 +506,15 @@ export function ReviewPane({ identity, sessionId, paneId, bindingId, repositoryI
 
   return <section className="review-pane" aria-label="Local review" ref={paneRef} onKeyDownCapture={(event) => {
     if (isEditingTarget(event.target)) return;
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") { event.preventDefault(); event.stopPropagation(); setPickerOpen(true); }
-    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "1") { event.preventDefault(); focusTree(); }
-    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "2") { event.preventDefault(); focusContent(); }
-    if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === "KeyZ") { event.preventDefault(); toggleWrap(); }
+    const action = viewerShortcutAction(event);
+    if (action === null) return;
+    event.preventDefault();
+    if (action === "open-file-picker") { event.stopPropagation(); setPickerOpen(true); }
+    else if (action === "focus-file-tree") focusTree();
+    else if (action === "focus-file-content") focusContent();
+    else if (action === "toggle-wrap") toggleWrap();
+    else if (action === "toggle-preview") onTogglePresentation?.();
+    else if (action === "reload-listing" && !pending && !(comparison === "branch" && !draftBaseRef.trim())) submitComparison();
   }}>
     <header className="review-toolbar">
       <label htmlFor={`${baseId}-mode`} className="sr-only">Comparison</label>

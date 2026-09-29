@@ -26,11 +26,9 @@ it("shows folder lineage, partial and exclusion counts, and explicitly re-copies
     expect(host.querySelector(".library-item-path")?.textContent).toContain("Folders");
     expect(host.querySelector(".library-item-phrase")?.textContent).toContain("from /home/user/notes · 512 files · 4.1 MB · Git working tree");
     expect(host.querySelector('[role="status"]')?.textContent).toContain("512 of 600 files");
-    const metadata = host.querySelector<HTMLDetailsElement>("details.library-metadata")!;
-    expect(metadata.open).toBe(false);
-    await act(async () => metadata.querySelector("summary")!.click());
-    const values = Object.fromEntries([...metadata.querySelectorAll("dt")].map((term) => [term.textContent, term.nextElementSibling?.textContent]));
-    expect(values).toMatchObject({ "Copied from": "/home/user/notes", "Skipped symlinks": "3", "Skipped special files": "1", "Skipped ignored files": "14", "Skipped other files": "2" });
+    // Item facts live in the Details popover, never inline: nothing expands the header by default.
+    expect(host.querySelector("details")).toBeNull();
+    expect(host.querySelector(".library-item-tile")?.querySelector(".ui-icon")).not.toBeNull();
     await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Re-copy")!.click());
     expect(actions.refresh).toHaveBeenCalledWith({ scope: "items", item_ids: [item.item_id] }, [item.item_id]);
     actions.refresh.mockClear();
@@ -45,7 +43,10 @@ it("shows folder lineage, partial and exclusion counts, and explicitly re-copies
   }
 });
 
-it("shows a Confluence page's path, version, ancestors and last editor, and lists attachments read-only as not downloaded", async () => {
+it("shows a Confluence page's path, version, last editor and freshness, and lists attachments read-only as not downloaded", async () => {
+  // Relative times are computed from the clock: pin it.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-27T12:00:00Z"));
   const item: LibraryItemSummary = {
     item_id: "source:page-98765", logical_id: "source:confluence:page:98765", kind: "provider_snapshot", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki",
     resource_type: "page", canonical_id: "98765", container: { container_id: "SD", label: "SD · Software Development" }, parent_item_id: null,
@@ -67,20 +68,17 @@ it("shows a Confluence page's path, version, ancestors and last editor, and list
   try {
     await act(async () => root.render(render(false, "M. Rossi")));
     expect(host.querySelector(".library-kind-chip")?.textContent).toBe("Confluence page");
-    expect(host.querySelector(".library-item-path")?.textContent).toBe("SD / Engineering home / Release process");
-    expect(host.querySelector(".library-item-phrase")?.textContent).toMatch(/^updated on last refresh.* · v7 by M\. Rossi$/);
-    const metadata = host.querySelector<HTMLDetailsElement>("details.library-metadata")!;
-    await act(async () => metadata.querySelector("summary")!.click());
-    const values = Object.fromEntries([...metadata.querySelectorAll("dt")].map((term) => [term.textContent, term.nextElementSibling?.textContent]));
-    expect(values).toMatchObject({
-      Space: "SD · Software Development", "Page id": "98765", Parent: "Release process", Ancestors: "Engineering home / Release process",
-      Version: "v7", "Last updated": "2026-09-25T10:00:00Z by M. Rossi",
-    });
-    expect(values).not.toHaveProperty("Source identity");
+    expect(host.querySelector(".library-item-path")?.textContent).toBe("SD › Engineering home › Release process");
+    expect(host.querySelector(".library-item-phrase")?.textContent).toBe("Updated on last refresh, 2 d ago · v7 edited 2 d ago by M. Rossi");
+    // The tile names the provider family, the state is an SVG shape plus its word, and no Unicode state glyph is left.
+    expect(host.querySelector(".library-item-tile")?.textContent).toBe("C");
+    expect(host.querySelector(".library-item-state .library-pill")?.querySelector("svg")).not.toBeNull();
+    expect(host.querySelector(".library-item-state .library-pill")?.textContent).toBe("Updated");
+    expect(host.textContent).not.toMatch(/[✓◉↑✎⊘◐✕]/);
 
     // One summary line; the table stays folded, off the document, until asked for.
     const toggle = host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!;
-    expect(toggle.textContent).toBe("Attachments 2 · 0 downloaded");
+    expect(toggle.textContent).toBe("2 attachments");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector(".library-attachments")).toBeNull();
     await act(async () => toggle.click());
@@ -96,11 +94,12 @@ it("shows a Confluence page's path, version, ancestors and last editor, and list
     // An email in the editor field is never shown.
     await act(async () => root.render(render(true, "m.rossi@example.com")));
     expect(host.textContent).not.toContain("@");
-    expect(host.querySelector(".library-item-phrase")?.textContent).toMatch(/ · v7$/);
+    expect(host.querySelector(".library-item-phrase")?.textContent).toMatch(/ · v7 edited 2 d ago$/);
     expect([...host.querySelectorAll(".library-attachments li")].map((entry) => entry.textContent)).toEqual(["release-flow.png84 KB · not downloaded", "Q3_plan_.pdf1.2 MB · not downloaded"]);
     expect(actions.refresh).not.toHaveBeenCalled();
     expect(actions.remove).not.toHaveBeenCalled();
   } finally {
+    vi.useRealTimers();
     await act(async () => root.unmount());
     host.remove();
   }

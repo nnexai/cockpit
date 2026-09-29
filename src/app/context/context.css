@@ -13,16 +13,10 @@
 
 .context-toolbar {
   display: flex;
-  height: 43px;
-  min-height: 43px;
   align-items: center;
   gap: 6px;
-  padding-block: 4px;
   border-bottom: 1px solid var(--border);
   background: var(--terminal-bg);
-
-  padding: 6px 10px;
-
   flex: 0 0 auto;
 }
 
@@ -223,7 +217,6 @@
 .context-comment-status kbd { color: var(--text-primary); font: inherit; }
 .context-viewer-empty { align-items: center; justify-content: center; gap: 12px; padding: 24px; }
 .context-viewer-empty .context-notice { max-width: 560px; border: 1px solid var(--border); }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 
 .context-search { padding: 8px; border-bottom: 1px solid var(--border); }
 .context-search-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }

@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
@@ -24,6 +24,7 @@ use crate::context::ContextService;
 #[cfg(test)]
 use crate::extension_adapter::ExtensionHerdrAdapter;
 use crate::project_store::{atomic_write_json, read_json_bounded, timestamp, ProjectStore};
+#[cfg(test)]
 use crate::repositories::RepositoryCatalog;
 use crate::{
     process::{run_bounded_command, OwnedChild},
@@ -42,6 +43,7 @@ pub struct ReviewService {
     configuration: ProjectConfiguration,
     context: Arc<ContextService>,
     store: ProjectStore,
+    snapshot_cache: Arc<Mutex<VecDeque<ReviewCacheEntry>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +130,7 @@ impl ReviewService {
             configuration,
             context,
             store,
+            snapshot_cache: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
@@ -184,11 +187,57 @@ impl ReviewService {
             .await?;
         let checkout = PathBuf::from(&repository.checkout_path);
         let binding_id = request.binding_id.clone();
-
+        let source_id = checkout_source_id(&checkout)?;
         for attempt in 0..2 {
             let before = self.revision_tokens(&checkout).await?;
-            let (files, changes, mut diagnostics, truncated, base_revision) =
-                self.collect(&checkout, request, &before).await?;
+            let base_revision = if request.comparison == ReviewComparison::Branch {
+                Some(self.git_text(
+                    &checkout,
+                    &["merge-base", "--", request.base_ref.as_deref().expect("validated"), "HEAD"],
+                ).await?)
+            } else {
+                None
+            };
+            let cache_key = format!(
+                "{}\0{}\0{}\0{}\0{}\0{}\0{:?}\0{}",
+                session_id,
+                pane_id,
+                request.binding_id,
+                request.repository_id,
+                source_id,
+                repository.repository_id,
+                request.comparison,
+                base_revision.as_deref().unwrap_or_default(),
+            );
+            let cached = {
+                let mut entries = self.snapshot_cache.lock().unwrap_or_else(|p| p.into_inner());
+                let index = entries.iter().position(|entry| entry.key == cache_key && entry.revisions == before);
+                index.and_then(|index| entries.remove(index))
+            };
+            if let Some(entry) = cached {
+                let confirmed = self.authorize_review_pane(session_id, pane_id, &request.binding_id).await?;
+                if confirmed.terminal_id != presentation.terminal_id {
+                    return Err(InspectionError::new("review_unavailable", "Reviewr pane identity changed while preparing review"));
+                }
+                if let Ok(Some(stored)) = self.load_snapshot(&entry.snapshot.review_id).await {
+                    let snapshot = stored.snapshot;
+                    // Untracked tokens hold metadata only (path, length, mtime, inode), so a same-size rewrite that keeps its
+                    // mtime is invisible to them. Snapshots that contain untracked files are therefore rebuilt, never reused.
+                    let has_untracked = snapshot.files.iter().any(|file| file.status == ReviewFileStatus::Untracked || file.comparison == ReviewComparison::Untracked);
+                    if snapshot.review_id == entry.snapshot.review_id
+                        && !has_untracked
+                        && snapshot.head_revision == before.head
+                        && snapshot.index_revision == before.index
+                        && snapshot.worktree_revision == before.worktree
+                    {
+                        let mut entries = self.snapshot_cache.lock().unwrap_or_else(|p| p.into_inner());
+                        entries.push_front(entry);
+                        return Ok(snapshot);
+                    }
+                }
+            }
+            let (files, changes, mut diagnostics, truncated, collected_base_revision) =
+                self.collect(&checkout, request, &before, base_revision.clone()).await?;
             let after = self.revision_tokens(&checkout).await?;
             if before == after {
                 let review_id = Uuid::new_v4().to_string();
@@ -201,12 +250,12 @@ impl ReviewService {
                     generation,
                     repository_id: repository.repository_id,
                     checkout_path: repository.checkout_path,
-                    source_id: checkout_source_id(&checkout)?,
+                    source_id,
                     comparison: request.comparison,
-                    base_revision,
-                    head_revision: before.head,
-                    index_revision: before.index,
-                    worktree_revision: before.worktree,
+                    base_revision: collected_base_revision,
+                    head_revision: before.head.clone(),
+                    index_revision: before.index.clone(),
+                    worktree_revision: before.worktree.clone(),
                     files,
                     truncated,
                     diagnostics: std::mem::take(&mut diagnostics),
@@ -218,6 +267,10 @@ impl ReviewService {
                     created_at: timestamp(),
                 })
                 .await?;
+                let mut entries = self.snapshot_cache.lock().unwrap_or_else(|p| p.into_inner());
+                entries.retain(|entry| entry.key != cache_key);
+                entries.push_front(ReviewCacheEntry { key: cache_key, revisions: before, snapshot: snapshot.clone() });
+                entries.truncate(MAX_SNAPSHOTS);
                 return Ok(snapshot);
             }
             if attempt == 1 {
@@ -846,9 +899,7 @@ impl ReviewService {
         foreground_cwd: &Option<String>,
     ) -> Result<RepositoryCandidate, InspectionError> {
         let pane_canonical = verified_checkout_path(cwd, foreground_cwd)?;
-        RepositoryCatalog::new(self.configuration.clone())
-            .discover_checkout(&pane_canonical)
-            .await
+        self.context.cached_discover_checkout(&pane_canonical).await
     }
 
     async fn collect(
@@ -856,6 +907,7 @@ impl ReviewService {
         checkout: &Path,
         request: &ReviewSnapshotRequest,
         revisions: &RevisionTokens,
+        base_revision: Option<String>,
     ) -> Result<
         (
             Vec<ReviewChangedFile>,
@@ -873,22 +925,6 @@ impl ReviewService {
                 ReviewComparison::Untracked,
             ],
             value => vec![value],
-        };
-        let base_revision = if request.comparison == ReviewComparison::Branch {
-            Some(
-                self.git_text(
-                    checkout,
-                    &[
-                        "merge-base",
-                        "--",
-                        request.base_ref.as_deref().expect("validated"),
-                        "HEAD",
-                    ],
-                )
-                .await?,
-            )
-        } else {
-            None
         };
         let mut files = Vec::new();
         let mut changes_by_id = BTreeMap::new();
@@ -1419,28 +1455,25 @@ impl ReviewService {
             .await?;
         // `write-tree` would create an object in .git/objects. A review is
         // read-only, so retain a bounded digest of index entries instead.
-        let index_entries = self.git(checkout, &["ls-files", "--stage", "-z"]).await?;
-        let index = format!("sha256:{:x}", Sha256::digest(&index_entries.stdout));
-        let unstaged = self
-            .git(
+        let index_digest = self.git_hash(checkout, &["ls-files", "--stage", "-z"], Sha256::new()).await?;
+        let index = format!("sha256:{:x}", index_digest.finalize());
+        let mut worktree_digest = Sha256::new();
+        worktree_digest.update(b"cockpit-review-worktree-v3\0");
+        worktree_digest = self
+            .git_hash(
                 checkout,
-                &[
-                    "diff",
-                    "--no-ext-diff",
-                    "--no-textconv",
-                    "--binary",
-                    "--no-color",
-                    "--",
-                ],
+                &["diff", "--no-ext-diff", "--no-textconv", "--binary", "--no-color", "--"],
+                worktree_digest,
             )
             .await?;
         let untracked = self
-            .git(
-                checkout,
-                &["ls-files", "--others", "--exclude-standard", "-z"],
-            )
+            .git_with_limit(checkout, &["ls-files", "--others", "--exclude-standard", "-z"], MAX_FILE_LIST_BYTES)
             .await?;
-        let worktree = worktree_token(checkout, &unstaged.stdout, &untracked.stdout)?;
+        if !untracked.status.success() {
+            return Err(InspectionError::new("review_git", "Git could not enumerate untracked files"));
+        }
+        update_untracked_token(checkout, &untracked.stdout, &mut worktree_digest)?;
+        let worktree = format!("sha256:{:x}", worktree_digest.finalize());
         Ok(RevisionTokens {
             head,
             index,
@@ -1507,6 +1540,10 @@ impl ReviewService {
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
             .args(args);
         run_bounded_command(
             command,
@@ -1514,6 +1551,41 @@ impl ReviewService {
             limit,
             Duration::from_millis(self.configuration.limits.git_timeout_ms as u64),
             "review git",
+        )
+        .await
+    }
+
+    async fn git_hash(
+        &self,
+        checkout: &Path,
+        args: &[&str],
+        digest: Sha256,
+    ) -> Result<Sha256, InspectionError> {
+        let mut command = Command::new("git");
+        command
+            .current_dir(checkout)
+            .arg("-c")
+            .arg("core.hooksPath=/dev/null")
+            .arg("-c")
+            .arg("core.fsmonitor=false")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .args(args);
+        crate::process::run_bounded_hash_command(
+            command,
+            usize::MAX,
+            4096,
+            Duration::from_millis(self.configuration.limits.git_timeout_ms as u64),
+            "review Git digest",
+            digest,
         )
         .await
     }
@@ -1700,11 +1772,18 @@ impl ReviewService {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RevisionTokens {
     head: Option<String>,
     index: String,
     worktree: String,
+}
+
+#[derive(Clone)]
+struct ReviewCacheEntry {
+    key: String,
+    revisions: RevisionTokens,
+    snapshot: ReviewSnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2502,6 +2581,7 @@ fn untracked_hunk(
     ))
 }
 
+#[cfg(test)]
 fn worktree_token(
     checkout: &Path,
     unstaged_diff: &[u8],
@@ -2510,19 +2590,20 @@ fn worktree_token(
     let mut digest = Sha256::new();
     digest.update(b"cockpit-review-worktree-v3\0");
     digest.update(unstaged_diff);
-    // Revision discovery must cover the complete inventory without reading
-    // every untracked body. Per-file source bytes remain bounded and are read
-    // only when the user opens that file; metadata here invalidates the lazy
-    // cache when an untracked path is added, removed, resized, or rewritten.
-    for raw_path in untracked_paths
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-    {
+    update_untracked_token(checkout, untracked_paths, &mut digest)?;
+    Ok(format!("sha256:{:x}", digest.finalize()))
+}
+
+fn update_untracked_token(
+    checkout: &Path,
+    untracked_paths: &[u8],
+    digest: &mut Sha256,
+) -> Result<(), InspectionError> {
+    // File bodies remain lazy. Metadata invalidates the token when an
+    // untracked path is added, removed, resized, or rewritten.
+    for raw_path in untracked_paths.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
         let path = std::str::from_utf8(raw_path).map_err(|_| {
-            InspectionError::new(
-                "review_path_encoding",
-                "non-UTF-8 untracked path cannot form a source anchor",
-            )
+            InspectionError::new("review_path_encoding", "non-UTF-8 untracked path cannot form a source anchor")
         })?;
         digest.update(raw_path);
         digest.update([0]);
@@ -2544,10 +2625,7 @@ fn worktree_token(
             }
         };
         let metadata = file.metadata().map_err(|_| {
-            InspectionError::new(
-                "review_unreadable",
-                "untracked source metadata is unavailable",
-            )
+            InspectionError::new("review_unreadable", "untracked source metadata is unavailable")
         })?;
         if !metadata.is_file() {
             digest.update(b"nonregular");
@@ -2560,7 +2638,7 @@ fn worktree_token(
         digest.update(cap_fs_ext::MetadataExt::ino(&metadata).to_le_bytes());
         digest.update([0]);
     }
-    Ok(format!("sha256:{:x}", digest.finalize()))
+    Ok(())
 }
 
 fn file_id(
@@ -2906,6 +2984,7 @@ mod tests {
             worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
             companion_root: root.join("companions").to_string_lossy().into_owned(),
             state_root: root.join("state").to_string_lossy().into_owned(),
+            cache_root: root.join("cache").to_string_lossy().into_owned(),
             library_root: root.join("library").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".to_owned(),
             checkout_template: "{repo}-{task_id}".to_owned(),
@@ -3017,8 +3096,13 @@ mod tests {
             .revision_tokens(root)
             .await
             .expect("revision tokens");
+        let base_revision = if comparison == ReviewComparison::Branch {
+            Some(service.git_text(root, &["merge-base", "--", base_ref.expect("branch base"), "HEAD"]).await.expect("merge base"))
+        } else {
+            None
+        };
         let (_, changes, _, _, base_revision) = service
-            .collect(root, &request, &revisions)
+            .collect(root, &request, &revisions, base_revision)
             .await
             .expect("real review collection");
         let mut diffs = BTreeMap::new();
@@ -3076,7 +3160,7 @@ mod tests {
         let (files, _, _, _, _) = service.collect(&root, &ReviewSnapshotRequest {
             binding_id: "binding".into(), repository_id: "repository".into(),
             comparison: ReviewComparison::AllLocal, base_ref: None,
-        }, &revisions).await.unwrap();
+        }, &revisions, None).await.unwrap();
         let tracked = files.iter().find(|file| file.new_path.as_deref() == Some("tracked.txt")).unwrap();
         assert_eq!((tracked.additions, tracked.deletions), (Some(2), Some(1)));
         let new = files.iter().find(|file| file.new_path.as_deref() == Some("new.txt")).unwrap();
@@ -3177,6 +3261,205 @@ mod tests {
         assert_eq!(error.code, "review_snapshot_not_found");
         assert_eq!(adapter.extension_inspections.load(Ordering::Relaxed), 1);
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    struct ServiceFixture {
+        workspace: PathBuf,
+        checkout: PathBuf,
+        service: ReviewService,
+        binding_id: String,
+        repository_id: String,
+    }
+
+    const FIXTURE_SESSION: &str = "session";
+    const FIXTURE_PANE: &str = "pane";
+
+    /// A real Git checkout below a workspace directory (so Cockpit state stays
+    /// outside the checkout) with a verified Review pane pointing at it.
+    async fn service_fixture(label: &str) -> ServiceFixture {
+        let workspace =
+            std::env::temp_dir().join(format!("cockpit-review-{label}-{}", Uuid::new_v4()));
+        let checkout = workspace.join("repo");
+        fixture_at(&checkout);
+        std::fs::write(checkout.join("tracked.txt"), "base\n").expect("write tracked base");
+        commit(&checkout, "base");
+        let configured = configuration(&workspace);
+        let checkout_text = checkout.to_string_lossy().into_owned();
+        let repository_id = RepositoryCatalog::new(configured.clone())
+            .list()
+            .await
+            .expect("catalog listing")
+            .repositories
+            .into_iter()
+            .find(|candidate| candidate.checkout_path == checkout_text)
+            .expect("fixture checkout in catalog")
+            .repository_id;
+        let adapter = Arc::new(NoopAdapter {
+            extension_evidence: Some(crate::ExtensionPaneEvidence {
+                endpoint_identity: "endpoint".to_owned(),
+                pane_id: FIXTURE_PANE.to_owned(),
+                terminal_id: "terminal".to_owned(),
+                workspace_id: "workspace".to_owned(),
+                tab_id: "tab".to_owned(),
+                cwd: Some(checkout_text),
+                foreground_cwd: None,
+                viewer_cwd: None,
+                label: None,
+                process_identity: "process".to_owned(),
+                extension: Some(ExtensionKind::Review),
+                confidence: DetectionConfidence::VerifiedProcess,
+                reason: "review".to_owned(),
+                can_open_context: false,
+                can_open_review: true,
+            }),
+            ..Default::default()
+        });
+        let service = service_with_adapter(configured, adapter);
+        let binding_id = service
+            .context
+            .inspect_pane(FIXTURE_SESSION, FIXTURE_PANE)
+            .await
+            .expect("verified review pane")
+            .binding_id;
+        ServiceFixture {
+            workspace,
+            checkout,
+            service,
+            binding_id,
+            repository_id,
+        }
+    }
+
+    impl ServiceFixture {
+        fn request(&self, comparison: ReviewComparison) -> ReviewSnapshotRequest {
+            ReviewSnapshotRequest {
+                binding_id: self.binding_id.clone(),
+                repository_id: self.repository_id.clone(),
+                comparison,
+                base_ref: None,
+            }
+        }
+
+        async fn snapshot(&self, comparison: ReviewComparison) -> ReviewSnapshot {
+            self.service
+                .snapshot(FIXTURE_SESSION, FIXTURE_PANE, &self.request(comparison))
+                .await
+                .expect("review snapshot")
+        }
+
+        async fn file(&self, snapshot: &ReviewSnapshot, file_id: &str) -> ReviewFileDiff {
+            self.service
+                .file(
+                    FIXTURE_SESSION,
+                    FIXTURE_PANE,
+                    &ReviewFileRequest {
+                        binding_id: self.binding_id.clone(),
+                        review_id: snapshot.review_id.clone(),
+                        generation: snapshot.generation,
+                        file_id: file_id.to_owned(),
+                        source_side: None,
+                        source_offset: 0,
+                        source_revision: None,
+                    },
+                )
+                .await
+                .expect("review file diff")
+        }
+    }
+
+    fn untracked_file_id(snapshot: &ReviewSnapshot, path: &str) -> String {
+        snapshot
+            .files
+            .iter()
+            .find(|file| {
+                file.status == ReviewFileStatus::Untracked
+                    && file.new_path.as_deref() == Some(path)
+            })
+            .unwrap_or_else(|| panic!("untracked {path} in snapshot"))
+            .file_id
+            .clone()
+    }
+
+    fn diff_text(diff: &ReviewFileDiff) -> String {
+        let mut text = diff
+            .hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter())
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        text.push('\n');
+        text.push_str(diff.new_source.as_deref().unwrap_or_default());
+        text
+    }
+
+    #[tokio::test]
+    async fn regression_snapshot_rebuilds_an_untracked_file_rewritten_in_place_with_same_size_and_mtime() {
+        let fixture = service_fixture("untracked-same-metadata").await;
+        let path = fixture.checkout.join("draft.txt");
+        std::fs::write(&path, "BEFORE\n").expect("write untracked before");
+
+        let first = fixture.snapshot(ReviewComparison::AllLocal).await;
+        let first_diff = fixture
+            .file(&first, &untracked_file_id(&first, "draft.txt"))
+            .await;
+        let first_text = diff_text(&first_diff);
+        assert!(first_text.contains("BEFORE"), "{first_text}");
+        assert!(!first_text.contains("AFTER!"), "{first_text}");
+
+        let before = std::fs::metadata(&path).expect("metadata before rewrite");
+        let original_mtime = before.modified().expect("mtime before rewrite");
+        std::fs::write(&path, "AFTER!\n").expect("rewrite untracked in place");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open rewritten file")
+            .set_modified(original_mtime)
+            .expect("restore original mtime");
+        let after = std::fs::metadata(&path).expect("metadata after rewrite");
+        assert_eq!(after.len(), before.len(), "same byte length");
+        assert_eq!(after.modified().expect("mtime after"), original_mtime);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(after.ino(), before.ino(), "same inode");
+        }
+
+        let second = fixture.snapshot(ReviewComparison::AllLocal).await;
+        assert_ne!(second.review_id, first.review_id);
+        let second_diff = fixture
+            .file(&second, &untracked_file_id(&second, "draft.txt"))
+            .await;
+        let second_text = diff_text(&second_diff);
+        assert!(second_text.contains("AFTER!"), "{second_text}");
+        assert!(!second_text.contains("BEFORE"), "{second_text}");
+        std::fs::remove_dir_all(&fixture.workspace).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn regression_snapshot_reuses_an_unchanged_tracked_only_review() {
+        let fixture = service_fixture("tracked-cache-reuse").await;
+        std::fs::write(fixture.checkout.join("tracked.txt"), "base\nchanged\n")
+            .expect("modify tracked file");
+
+        let first = fixture.snapshot(ReviewComparison::AllLocal).await;
+        assert!(first
+            .files
+            .iter()
+            .any(|file| file.new_path.as_deref() == Some("tracked.txt")));
+        assert!(first
+            .files
+            .iter()
+            .all(|file| file.status != ReviewFileStatus::Untracked));
+        let second = fixture.snapshot(ReviewComparison::AllLocal).await;
+        assert_eq!(second.review_id, first.review_id);
+        assert_eq!(second.worktree_revision, first.worktree_revision);
+
+        std::fs::write(fixture.checkout.join("tracked.txt"), "base\nchanged again\n")
+            .expect("modify tracked file again");
+        let third = fixture.snapshot(ReviewComparison::AllLocal).await;
+        assert_ne!(third.review_id, first.review_id);
+        std::fs::remove_dir_all(&fixture.workspace).expect("cleanup");
     }
 
     #[tokio::test]
@@ -3365,7 +3648,7 @@ mod tests {
             .await
             .expect("revision tokens");
         let (files, changes, diagnostics, truncated, _) = service
-            .collect(&root, &request, &revisions)
+            .collect(&root, &request, &revisions, None)
             .await
             .expect("review inventory");
         assert_eq!(files.len(), 257);

@@ -1,0 +1,588 @@
+/*
+ * The sidebar: session header, Spaces, Agents, resizer and narrow-viewport drawer.
+ * One definition per selector; design and numbers in planning/ui-polish-2026-09-28/01-sidebar.md.
+ * Grid: header mark, section labels and top-level badges start at --sb-edge; their labels at --sb-label-x.
+ * States (hover, focus, pending, selected) draw with fill, pill and outline only, so no row ever moves.
+ */
+.sidebar {
+  --sb-edge: 14px;
+  --sb-gap: 8px;
+  --sb-label-x: 40px;
+  --sb-row: 32px;
+  --sb-row-2: 48px;
+  --sb-row-gap: 2px;
+  --sb-heading: 32px;
+  --sb-trunk-x: 23px;
+  --sb-conn: 34px;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+.sidebar[hidden] { display: none; }
+
+.workbench > .sidebar { flex: 0 0 var(--sidebar-width, 240px); }
+
+/* ---- session header: the same 41px band as the tab bar ---- */
+.sidebar-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: var(--tab-strip-height);
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-bg);
+}
+
+.session-selector {
+  display: flex;
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  align-items: center;
+  gap: var(--sb-gap);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-selector:hover { background: var(--surface-hover); }
+
+.session-selector:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: -2px;
+}
+
+.session-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-name.is-muted {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.session-chip {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-small);
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  line-height: 16px;
+}
+
+.session-chip.tone-warning { color: var(--warning); }
+.session-chip.tone-blocked { color: var(--blocked); }
+
+.session-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.session-caret .ui-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-close {
+  flex: 0 0 var(--compact-control-size);
+  width: var(--compact-control-size);
+  height: var(--compact-control-size);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.sidebar-close:hover,
+.sidebar-close:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+/* ---- status badge: state-tinted disc plus one distinct shape (StateGlyph.tsx) ---- */
+.sb-glyph {
+  display: block;
+  flex: 0 0 var(--icon-badge);
+  width: var(--icon-badge);
+  height: var(--icon-badge);
+  color: var(--text-muted);
+}
+
+.sb-glyph.is-blocked { color: var(--blocked); }
+.sb-glyph.is-working { color: var(--working); }
+.sb-glyph.is-done { color: var(--done); }
+.sb-glyph.is-idle,
+.sb-glyph.is-live { color: var(--idle); }
+.sb-glyph.tone-warning { color: var(--warning); }
+.sb-glyph.tone-blocked { color: var(--blocked); }
+.sb-glyph.tone-muted { color: var(--text-muted); }
+
+/* ---- sections and headings ---- */
+.sidebar-section {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* Spaces are content-sized; Agents take the rest. Each list scrolls itself. */
+.spaces-section {
+  flex: 0 1 auto;
+  min-height: calc(var(--sb-heading) + 3 * var(--sb-row) + 2 * var(--sb-row-gap));
+}
+
+.agents-section {
+  flex: 1 1 0;
+  min-height: calc(8px + var(--sb-heading) + 2 * var(--sb-row-2) + 1px);
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-section-heading {
+  display: flex;
+  flex: 0 0 var(--sb-heading);
+  height: var(--sb-heading);
+  align-items: center;
+  gap: var(--sb-gap);
+  padding: 0 8px 0 var(--sb-edge);
+}
+
+/* Herdr labels its sections in plain lowercase ("spaces", "agents"). */
+.sidebar-section-heading h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 16px;
+  text-transform: lowercase;
+}
+
+.section-count {
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+.space-setup {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.space-setup:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.space-setup:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: -2px;
+}
+
+.space-setup:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.space-setup .ui-icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.space-list,
+.agent-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0 0 8px;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.empty-row {
+  margin: 0;
+  padding: 2px var(--sb-edge) 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-control);
+  line-height: 16px;
+}
+
+.skeleton-row {
+  display: flex;
+  height: var(--sb-row);
+  align-items: center;
+  gap: var(--sb-gap);
+  margin-bottom: var(--sb-row-gap);
+  padding: 0 8px 0 var(--sb-edge);
+}
+
+.skeleton-row i {
+  flex: 0 0 var(--icon-badge);
+  width: var(--icon-badge);
+  height: var(--icon-badge);
+  border-radius: 50%;
+  background: var(--surface-raised);
+}
+
+.skeleton-row u {
+  height: 8px;
+  border-radius: 2px;
+  background: var(--surface-raised);
+  text-decoration: none;
+}
+
+/* ---- rows: full bleed, square, 2px apart; a 3px pill marks selection ---- */
+.space-tree-row {
+  position: relative;
+  display: flex;
+  min-height: var(--sb-row);
+  align-items: flex-start;
+  margin-bottom: var(--sb-row-gap);
+}
+
+.agent-row {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: var(--sb-row-2);
+  align-items: flex-start;
+  gap: var(--sb-gap);
+  margin: 0 0 var(--sb-row-gap);
+  padding: 7px 8px 7px var(--sb-edge);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.space-tree-row:hover,
+.agent-row:hover { background: var(--surface-hover); }
+
+.space-tree-row:active,
+.agent-row:active { background: var(--surface-selected); }
+
+.space-tree-row.is-selected,
+.agent-row.is-selected { background: var(--surface-selected); }
+
+/* Pending: Herdr has not confirmed yet, so a neutral pill, not the accent. */
+.space-tree-row.is-pending,
+.agent-row.is-pending {
+  background: var(--surface-hover);
+  cursor: progress;
+}
+
+.space-tree-row.is-selected::before,
+.space-tree-row.is-pending::before,
+.agent-row.is-selected::before,
+.agent-row.is-pending::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 3px;
+  border-radius: var(--radius-small);
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+.space-tree-row.is-pending::before,
+.agent-row.is-pending::before { background: var(--text-muted); }
+
+.agent-row:focus-visible,
+.resource-select:focus-visible {
+  outline: 2px solid var(--focus-strong);
+  outline-offset: -2px;
+}
+
+/* Drop target: a 2px accent line on the edge; never a pseudo-element (the pill owns ::before). */
+.space-tree-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.space-tree-row.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+.resource-select {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: flex-start;
+  gap: var(--sb-gap);
+  padding: 7px 8px 7px var(--sb-edge);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.space-tree-row.is-pending .resource-select { cursor: progress; }
+.resource-select[aria-disabled="true"] { cursor: default; }
+.space-tree-child .resource-select { padding-left: 0; }
+
+/* Children hang from the connector: a 16px badge, one pixel lower so it centres on the 18px name line. */
+.space-tree-child .sb-glyph {
+  flex-basis: var(--icon-size);
+  width: var(--icon-size);
+  height: var(--icon-size);
+  margin-top: 1px;
+}
+
+.space-details,
+.agent-details {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.space-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Weight follows hierarchy only, never selection, so a label never changes width. */
+.space-tree-child .space-label {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.space-tree-child.is-selected .space-label { color: var(--text-primary); }
+
+.space-branch,
+.agent-sub {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* The state word and agent are one string, `State · agent`; the separator is text. */
+.agent-sub { gap: 0; }
+
+.space-tree-row.is-selected .space-branch,
+.agent-row.is-selected .agent-sub { color: var(--text-secondary); }
+
+.space-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Herdr shows the upstream position after the branch, e.g. "main ↑14". */
+.space-ahead-behind {
+  flex: none;
+  color: var(--idle);
+}
+
+.space-chevron {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 8px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.space-chevron:hover {
+  background: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.space-chevron[aria-disabled="true"] { cursor: default; }
+
+.space-chevron .ui-icon {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+
+.space-tree-row .inline-rename {
+  min-width: 0;
+  width: auto;
+  height: 26px;
+  flex: 1;
+  margin: 3px 8px 3px var(--sb-edge);
+}
+
+.space-tree-child .inline-rename { margin-left: 0; }
+
+/* Worktree connector: trunk under the parent badge centre, elbow at the child badge, rounded last elbow. */
+.space-connector {
+  position: relative;
+  width: var(--sb-conn);
+  flex: 0 0 var(--sb-conn);
+  align-self: stretch;
+  pointer-events: none;
+}
+
+.space-connector::before {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: var(--sb-trunk-x);
+  border-left: 1px solid var(--border-strong);
+  content: "";
+}
+
+.space-connector::after {
+  position: absolute;
+  top: 16px;
+  left: var(--sb-trunk-x);
+  width: 8px;
+  border-top: 1px solid var(--border-strong);
+  content: "";
+}
+
+.space-connector.is-last::before {
+  bottom: auto;
+  width: 9px;
+  height: 17px;
+  border-bottom: 1px solid var(--border-strong);
+  border-bottom-left-radius: 6px;
+}
+
+.space-connector.is-last::after { display: none; }
+
+/* A rejected mutation, directly under its row. */
+.row-note {
+  margin: 0 0 var(--sb-row-gap);
+  padding: 6px 12px 6px var(--sb-label-x);
+  border-left: 2px solid var(--blocked);
+  color: var(--text-secondary);
+  font-size: var(--font-size-2xs);
+  line-height: 14px;
+}
+
+/* ---- agent rows: `space · tab` over `State · agent` ---- */
+.agent-location {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-space {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.agent-word { flex: none; }
+
+.agent-row.state-blocked .agent-word {
+  color: var(--blocked);
+  font-weight: 600;
+}
+
+.agent-row.state-done .agent-word {
+  color: var(--done);
+  font-weight: 600;
+}
+
+.agent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+/* ---- resizer: one visible pixel with a wider hit area ---- */
+.sidebar-resizer {
+  position: relative;
+  z-index: var(--z-overlay);
+  width: 1px;
+  min-height: 0;
+  flex: 0 0 1px;
+  margin-left: -2px;
+  border-right: 1px solid transparent;
+  border-left: 1px solid transparent;
+  background: var(--border);
+  cursor: col-resize;
+}
+
+.sidebar-resizer::after {
+  position: absolute;
+  inset: 0 -3px;
+  content: "";
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible {
+  border-color: var(--accent);
+  background: var(--border-strong);
+  outline: 0;
+}
+
+/* ---- narrow viewport: the sidebar becomes a drawer ---- */
+@media (max-width: 800px) {
+  .workbench > .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-drawer);
+    width: min(300px, calc(100vw - 48px));
+    max-width: calc(100vw - 48px);
+    border-right-color: var(--border-strong);
+    box-shadow: 12px 0 32px rgb(0 0 0 / 38%);
+    transform: translateX(-105%);
+    transition: transform 120ms ease-out;
+  }
+
+  .workbench.drawer-open > .sidebar { transform: translateX(0); }
+
+  .sidebar-resizer { display: none; }
+}

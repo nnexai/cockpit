@@ -132,7 +132,7 @@ async fn source_changes_are_isolated_until_explicit_refresh_and_library_edits_re
 async fn owned_roots_ancestors_descendants_and_symlink_roots_are_refused() {
     let f = fixture();
     for owned in [&f.service.configuration.library_root, &f.service.configuration.companion_root,
-        &f.service.configuration.state_root, &f.service.configuration.worktree_root] {
+        &f.service.configuration.state_root, &f.service.configuration.worktree_root, &f.service.configuration.cache_root] {
         std::fs::create_dir_all(Path::new(owned).join("child")).unwrap();
         for path in [PathBuf::from(owned), Path::new(owned).join("child"), f.root.clone()] {
             assert_eq!(f.service.resolve(LibraryResolveRequest { input: path.to_string_lossy().into_owned(), provider_id: None }).await.unwrap_err().code, "library_folder_refused");

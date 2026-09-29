@@ -8,6 +8,7 @@ import type {
   ProjectProvider,
   SpaceTarget,
 } from "../../protocol/generated/v1";
+import type { UiIconName } from "../UiIcon";
 
 /**
  * The Space a Library surface can add to: the selected Space in the Library
@@ -215,18 +216,20 @@ export function itemTreeLabel(item: LibraryItemSummary, providers: readonly Proj
 }
 
 export type StateTone = "idle" | "working" | "blocked" | "muted";
-export type StateChip = { glyph: string; word: string; tone: StateTone };
+/** Bare SVG shapes shared by every Library state mark (design §4.1a); the names are `UiIcon` names. */
+export type StateShape = Extract<UiIconName, "check" | "up" | "ring" | "half-ring" | "slash-ring" | "dot-ring" | "close" | "edit">;
+export type StateChip = { shape: StateShape; word: string; tone: StateTone };
 
 /** Library item states (design §4.6). Only `fresh` reads `Up to date`. */
 export function libraryStateChip(state: LibraryItemState): StateChip {
   switch (state) {
-    case "fresh": return { glyph: "✓", word: "Up to date", tone: "idle" };
-    case "changed": return { glyph: "↑", word: "Updated", tone: "working" };
-    case "unknown": return { glyph: "?", word: "Not checked", tone: "muted" };
-    case "removed_at_source": return { glyph: "⊘", word: "Removed at source", tone: "muted" };
-    case "conflict": return { glyph: "✎", word: "Edited in Library", tone: "working" };
-    case "failed": return { glyph: "✕", word: "Refresh failed", tone: "blocked" };
-    case "partial": return { glyph: "◐", word: "Partial", tone: "working" };
+    case "fresh": return { shape: "check", word: "Up to date", tone: "idle" };
+    case "changed": return { shape: "up", word: "Updated", tone: "working" };
+    case "unknown": return { shape: "ring", word: "Not checked", tone: "muted" };
+    case "removed_at_source": return { shape: "slash-ring", word: "Removed at source", tone: "muted" };
+    case "conflict": return { shape: "edit", word: "Edited in Library", tone: "working" };
+    case "failed": return { shape: "close", word: "Refresh failed", tone: "blocked" };
+    case "partial": return { shape: "half-ring", word: "Partial", tone: "working" };
     default: {
       const unreachable: never = state;
       return unreachable;
@@ -234,24 +237,73 @@ export function libraryStateChip(state: LibraryItemState): StateChip {
   }
 }
 
-export function relativeTime(iso: string | null, now: number): string | null {
-  if (!iso) return null;
-  const time = Date.parse(iso);
-  if (!Number.isFinite(time)) return null;
-  const seconds = Math.max(0, Math.round((now - time) / 1000));
-  if (seconds < 60) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 14) return `${days} d ago`;
-  return `on ${shortDate(iso)}`;
+/**
+ * A Library timestamp as epoch milliseconds (design §4.9). The Library index
+ * writes `fetched_at`/`checked_at` as 13-digit decimal epoch milliseconds
+ * (`Date.parse` reads those as NaN); provider frontmatter writes ISO-8601.
+ * Anything else is unknown.
+ */
+export function parseLibraryTime(value: string | null | undefined): number | null {
+  if (!value) return null;
+  if (/^\d{13}$/.test(value)) return Number(value);
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
 }
 
-function shortDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isFinite(date.getTime()) ? date.toLocaleDateString(undefined, { day: "numeric", month: "short" }) : iso;
+const RECENT_DAYS = 14;
+
+/** `27 Sep` this year, `27 Sep 2025` otherwise. */
+export function formatDate(ms: number, now: number = Date.now()): string {
+  const date = new Date(ms);
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(date.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }) });
+}
+
+/** `2026-09-27 16:17` in the viewer's time zone, 24 h, no seconds. */
+export function formatDateTime(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** The relative phrase and whether it is a relative one (under 14 days); older times read as dates. */
+function agePhrase(ms: number, now: number): { text: string; recent: boolean } {
+  const seconds = Math.max(0, Math.round((now - ms) / 1000));
+  if (seconds < 60) return { text: "just now", recent: true };
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return { text: `${minutes} min ago`, recent: true };
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return { text: `${hours} h ago`, recent: true };
+  const days = Math.round(hours / 24);
+  if (days < RECENT_DAYS) return { text: `${days} d ago`, recent: true };
+  return { text: formatDate(ms, now), recent: false };
+}
+
+/** `just now`, `13 min ago`, `3 h ago`, `5 d ago`, then a date from 14 days. A future time reads `just now`. */
+export function formatAgo(ms: number, now: number): string {
+  return agePhrase(ms, now).text;
+}
+
+/** `formatAgo` of a raw Library timestamp; null when it is empty or unknown. */
+export function relativeTime(value: string | null | undefined, now: number): string | null {
+  const time = parseLibraryTime(value);
+  return time === null ? null : formatAgo(time, now);
+}
+
+/** A Library timestamp for the Details popover: local date and time, the age while recent, and the ISO UTC tooltip. */
+export type TimeDetail = { text: string; ago: string | null; iso: string };
+
+export function timeDetail(value: string | null | undefined, now: number): TimeDetail | null {
+  const time = parseLibraryTime(value);
+  if (time === null) return null;
+  const age = agePhrase(time, now);
+  return { text: formatDateTime(time), ago: age.recent ? age.text : null, iso: new Date(time).toISOString() };
+}
+
+/** The source clock of a page: `v3 edited 3 h ago by Konni Hartmann`; unknown parts are left out. */
+export function sourceEditPhrase({ version, editedAt, by }: { version: string | null; editedAt: string | null | undefined; by: string | null }, now: number): string | null {
+  const edited = relativeTime(editedAt, now);
+  const parts = [version, edited ? `edited ${edited}` : null, by ? `by ${by}` : null].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 export function partialText(item: Pick<LibraryItemSummary, "partial">): string | null {
@@ -264,17 +316,38 @@ export function itemFailureReason(item: Pick<LibraryItemSummary, "diagnostics">)
   return item.diagnostics.find((diagnostic) => diagnostic.code !== "source_markup_unconverted")?.message ?? null;
 }
 
-/** Freshness phrase shown after the state chip, and the notice text for states that need one. */
+/** `1 attachment · downloaded`, `3 attachments · 1 downloaded`, `2 attachments`, `2 attachments · all downloaded`. */
+export function attachmentSummary(item: Pick<LibraryItemSummary, "attachments">): string {
+  const total = item.attachments.length;
+  const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded").length;
+  const noun = `${total} ${total === 1 ? "attachment" : "attachments"}`;
+  if (downloaded === 0) return noun;
+  return downloaded === total ? `${noun} · ${total === 1 ? "downloaded" : "all downloaded"}` : `${noun} · ${downloaded} downloaded`;
+}
+
+/** The tree's `Attachments` group meta: `not downloaded`, `1 downloaded`, `1 of 3 downloaded`. */
+export function attachmentTreeMeta(item: Pick<LibraryItemSummary, "attachments">): string {
+  const total = item.attachments.length;
+  const downloaded = item.attachments.filter((attachment) => attachment.state === "downloaded").length;
+  return downloaded === 0 ? "not downloaded" : downloaded === total ? `${downloaded} downloaded` : `${downloaded} of ${total} downloaded`;
+}
+
+/** Freshness phrase shown after the state pill, and the notice text for states that need one. */
 export function libraryFreshness(item: LibraryItemSummary, now: number): { phrase: string; notice: string | null } {
-  const checked = relativeTime(item.checked_at ?? item.fetched_at, now);
+  const checkedTime = parseLibraryTime(item.checked_at ?? item.fetched_at);
+  const checked = checkedTime === null ? null : formatAgo(checkedTime, now);
+  // The Cockpit clock is never printed bare: without a known time the segment is omitted.
   switch (item.state) {
-    case "fresh": return { phrase: checked ? `checked ${checked}` : "checked", notice: null };
-    case "changed": return { phrase: `updated on last refresh${checked ? `, ${checked}` : ""}`, notice: null };
-    case "unknown": return { phrase: "not checked", notice: "The source has not been checked yet." };
-    case "removed_at_source": return { phrase: checked ? `checked ${checked}` : "checked", notice: `Not found at source${item.checked_at ? ` on ${shortDate(item.checked_at)}` : ""}. The Library copy is kept.` };
-    case "conflict": return { phrase: "edited outside Cockpit", notice: "This Library file was changed outside Cockpit. Refresh keeps it and skips updates." };
-    case "failed": return { phrase: checked ? `last checked ${checked}` : "not refreshed", notice: `${itemFailureReason(item) ?? "The source could not be refreshed."} The previous content is kept.` };
-    case "partial": return { phrase: partialText(item) ?? "partial", notice: partialText(item) };
+    case "fresh": return { phrase: checked ? `Checked ${checked}` : "", notice: null };
+    case "changed": return { phrase: `Updated on last refresh${checked ? `, ${checked}` : ""}`, notice: null };
+    case "unknown": return { phrase: "Not checked", notice: "The source has not been checked yet." };
+    case "removed_at_source": {
+      const at = parseLibraryTime(item.checked_at);
+      return { phrase: checked ? `Checked ${checked}` : "", notice: `Not found at source${at === null ? "" : ` on ${formatDate(at, now)}`}. The Library copy is kept.` };
+    }
+    case "conflict": return { phrase: "Edited outside Cockpit", notice: "This Library file was changed outside Cockpit. Refresh keeps it and skips updates." };
+    case "failed": return { phrase: checked ? `Last checked ${checked}` : "Not refreshed", notice: `${itemFailureReason(item) ?? "The source could not be refreshed."} The previous content is kept.` };
+    case "partial": return { phrase: partialText(item) ?? "Partial", notice: partialText(item) };
     default: {
       const unreachable: never = item.state;
       return unreachable;
@@ -295,7 +368,7 @@ export type LibraryContainerNode = {
   instance: string | null;
   containerId: string | null;
   items: LibraryItemSummary[];
-  /** The followed space this container shows (`◉ Following`), or null for pages added one by one. */
+  /** The followed space this container shows (`Following`), or null for pages added one by one. */
   follow: LibraryFollowSummary | null;
 };
 
@@ -304,6 +377,8 @@ export type LibraryInstanceNode = {
   key: string;
   label: string;
   instance: string | null;
+  /** The provider configuration behind this instance, for its monogram tile; null for `Folders`. */
+  providerId: string | null;
   unavailable: boolean;
   containers: LibraryContainerNode[];
 };
@@ -346,6 +421,7 @@ export function libraryTree(items: readonly LibraryItemSummary[], providers: rea
         key: instanceKey,
         label: folder ? "Folders" : `${family.name} · ${family.key === "confluence" ? confluenceSite(providerInstance) : instanceHost(providerInstance)}`,
         instance: folder ? null : providerInstance,
+        providerId: folder ? null : providerId,
         unavailable: false,
         containers: [],
       };

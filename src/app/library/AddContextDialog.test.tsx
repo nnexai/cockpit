@@ -747,7 +747,7 @@ it("browses each Confluence provider's spaces, keeps a provider's sign-in failur
     expect(client.libraryConfluenceSpaces).toHaveBeenCalledWith({ provider_id: "cloud" });
     expect(client.libraryConfluenceSpaces).toHaveBeenCalledWith({ provider_id: "dc" });
     const cloud = document.body.querySelector("[aria-label='Confluence · nnexai.atlassian.net']")!;
-    expect([...cloud.querySelectorAll("li")].map((row) => row.textContent)).toEqual(["SD · Software DevelopmentFollow", "OPS · Operations◉ FollowingSelect"]);
+    expect([...cloud.querySelectorAll("li")].map((row) => row.textContent)).toEqual(["SD · Software DevelopmentFollow", "OPS · OperationsFollowingSelect"]);
     const dc = document.body.querySelector("[aria-label='Confluence · confluence.example.com/confluence']")!;
     expect(dc.querySelector("[role='alert'] strong")?.textContent).toBe("✕ Confluence sign-in failed");
     expect(dc.querySelector("li")).toBeNull();

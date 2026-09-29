@@ -154,6 +154,7 @@ fn make_service(
                 .map_err(|error| error.to_string())?
                 .with_sources(sources.clone());
             let service = service.with_projects(projects);
+            service.projects().map_err(|error| error.to_string())?.prewarm_repositories();
             let library = LibraryService::new(config.clone(), sources.clone())
                 .with_projects(service.projects().map_err(|error| error.to_string())?.clone(), adapter.clone());
             let contexts = cockpit_core::context::ContextService::new(

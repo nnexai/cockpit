@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cockpit shortcut hints — prototype</title>
+<style>
+  /* Tokens copied from src/app/styles.css:14-24,33-38,52-54 */
+  :root {
+    --surface: #161d27; --surface-raised: #1b2431; --surface-hover: #222e3d; --surface-selected: #23354c;
+    --border: #2b3543; --border-strong: #3b4758;
+    --text-primary: #cdd6f4; --text-secondary: #bac2de; --text-muted: #a6adc8;
+    --accent: #89b4fa; --focus-strong: #89b4fa;
+    --font-sans: "IBM Plex Sans", "Noto Sans", sans-serif;
+    --font-size-2xs: 0.6875rem; --font-size-control: 0.75rem;
+    --tab-strip-height: 41px; --radius-small: 3px; --radius-control: 4px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0e131b; color: var(--text-primary); font: 13px var(--font-sans); padding: 24px; display: grid; gap: 28px; max-width: 760px; }
+  h2 { font-size: var(--font-size-2xs); font-weight: 500; color: var(--text-muted); margin: 0 0 8px; letter-spacing: .04em; text-transform: uppercase; }
+  kbd { font: var(--font-size-2xs) ui-monospace, monospace; border: 1px solid var(--border); border-radius: var(--radius-small); padding: 1px 4px; color: var(--text-primary); }
+  .group { display: inline-flex; gap: 3px; }
+
+  /* Top bar with tooltips shown statically */
+  .bar { display: flex; align-items: center; height: var(--tab-strip-height); background: #121923; border: 1px solid var(--border); padding: 0 8px; gap: 6px; position: relative; }
+  .bar .tab { padding: 0 10px; height: 100%; display: grid; place-items: center; color: var(--text-secondary); }
+  .bar .tab.sel { background: var(--accent); color: #0e131b; }
+  .spacer { flex: 1; }
+  .btn { height: 30px; min-width: 30px; padding: 0 8px; border: 0; background: transparent; color: var(--text-secondary); border-radius: var(--radius-control); font: inherit; font-size: var(--font-size-2xs); cursor: pointer; position: relative; }
+  .btn:hover, .btn:focus-visible { background: var(--surface-hover); color: var(--text-primary); outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+  .btn:not(:focus-visible):hover { outline: none; }
+  .tip { position: absolute; top: 34px; right: 0; white-space: nowrap; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 4px 8px; font-size: var(--font-size-2xs); color: var(--text-primary); z-index: 2; }
+  .tip.left { left: 0; right: auto; }
+  .btn .tip { display: none; }
+  .btn:hover .tip, .btn:focus-visible .tip { display: block; }
+
+  /* Commands */
+  .commands { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-control); width: 520px; }
+  .commands input { width: calc(100% - 20px); margin: 10px; padding: 7px 10px; background: var(--surface-raised); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius-control); font: inherit; }
+  .commands h3 { margin: 0; padding: 10px 10px 7px; font-size: var(--font-size-2xs); font-weight: 500; color: var(--text-muted); }
+  .row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 7px 10px; font-size: var(--font-size-control); }
+  .row.active { background: var(--surface-selected); }
+  .row.disabled .label { color: var(--text-muted); }
+  .row .label { flex: 1; }
+  .row small { color: var(--text-muted); font-size: var(--font-size-2xs); margin-left: 8px; }
+  .row .ic { width: 14px; height: 14px; border: 1px solid var(--text-muted); border-radius: 2px; opacity: .6; }
+  .footer { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; font-size: var(--font-size-2xs); color: var(--text-muted); border-top: 1px solid var(--border); }
+  .footer button { background: var(--surface-raised); border: 1px solid var(--border); color: var(--text-secondary); font: inherit; padding: 3px 7px; border-radius: var(--radius-control); }
+
+  /* Prefix chip (styles.css:2169 fixed bottom-right; shown inline here) */
+  .chips { display: grid; gap: 10px; justify-items: start; }
+  .chip { display: inline-flex; gap: 8px; align-items: center; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 5px 9px; font-size: var(--font-size-2xs); color: var(--text-secondary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip strong { color: var(--text-primary); font-weight: 500; }
+  .note { color: var(--text-muted); font-size: var(--font-size-2xs); margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<section>
+  <h2>Top bar — hover/focus tooltips (each shown once)</h2>
+  <div class="bar" role="toolbar" aria-label="Top bar (static mock)">
+    <button class="btn" type="button" aria-label="Hide sidebar">▤<span class="tip left">Hide sidebar (Ctrl+B b)</span></button>
+    <span class="tab sel">1 main</span><span class="tab">2 meta</span><span class="tab">3 design</span>
+    <button class="btn" type="button" aria-label="Create tab">+<span class="tip left">New tab (Ctrl+B c)</span></button>
+    <span class="spacer"></span>
+    <button class="btn" type="button" aria-label="Open Library">Library<span class="tip">Open Library (Ctrl+B i)</span></button>
+    <button class="btn" type="button" aria-label="Open browser">Browser<span class="tip">Open browser (Ctrl+B Shift+B)</span></button>
+    <button class="btn" type="button">Commands<span class="tip">Commands (Ctrl+B ?)</span></button>
+  </div>
+  <p class="note">Button labels are placeholders; the Library launcher is owned by the top-bar/Library slice. Tooltip strings come from the shortcut registry.</p>
+</section>
+
+<section>
+  <h2>Commands — key chips in every row (quick view, 8 rows)</h2>
+  <div class="commands" role="dialog" aria-label="Commands (static mock)">
+    <input aria-label="Find a command" placeholder="Find a command or a key…" value="">
+    <h3>Navigate</h3>
+    <div class="row active"><span class="ic"></span><span class="label">Toggle pane zoom</span><span class="group"><kbd>Ctrl+B</kbd><kbd>z</kbd></span></div>
+    <div class="row"><span class="ic"></span><span class="label">Open Library</span><span class="group"><kbd>Ctrl+B</kbd><kbd>i</kbd></span></div>
+    <div class="row"><span class="ic"></span><span class="label">Open browser for Space</span><span class="group"><kbd>Ctrl+B</kbd><kbd>Shift+B</kbd></span></div>
+    <div class="row"><span class="ic"></span><span class="label">New tab</span><span class="group"><kbd>Ctrl+B</kbd><kbd>c</kbd></span></div>
+    <div class="row"><span class="ic"></span><span class="label">Split pane right</span><span class="group"><kbd>Ctrl+B</kbd><kbd>v</kbd></span></div>
+    <div class="row"><span class="ic"></span><span class="label">Switch session…</span><span class="group"><kbd>Ctrl+B</kbd><kbd>g</kbd></span></div>
+    <div class="row disabled"><span class="ic"></span><span class="label">Open Review right<small>Select a pane with a configured repository</small></span></div>
+    <div class="row"><span class="ic"></span><span class="label">Set up a Space</span><span class="group"><kbd>Ctrl+B</kbd><kbd>Shift+S</kbd></span></div>
+    <div class="footer"><span>↑↓ or Ctrl+N/P navigate · Enter choose · Esc close · type a name or a key</span><button type="button">All commands</button></div>
+  </div>
+  <p class="note">Rows without a key show no chip. Chip size never changes on hover/active.</p>
+</section>
+
+<section>
+  <h2>Armed-prefix chip (fixed bottom-right in the app)</h2>
+  <div class="chips">
+    <div class="chip" role="status"><strong>Ctrl+B</strong> · ? commands · c tab · v - split · w spaces · i library</div>
+    <div class="chip" role="status"><strong>Ctrl+B q</strong> is not bound in Cockpit</div>
+  </div>
+  <p class="note">First: armed (Esc cancels, no timeout). Second: unbound key, shown 2 s then hidden. Literal <kbd>Ctrl+B</kbd> <kbd>Ctrl+B</kbd> hides the chip immediately.</p>
+</section>
+
+</body>
+</html>

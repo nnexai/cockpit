@@ -143,6 +143,7 @@ mod tests {
             worktree_root: "worktrees".into(),
             companion_root: "companions".into(),
             state_root: "state".into(),
+            cache_root: "cache".into(),
             library_root: "library".into(),
             branch_template: "{repo}/{task_id}".into(),
             checkout_template: "{repo}-{task_id}".into(),

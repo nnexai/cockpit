@@ -203,6 +203,97 @@ pub async fn run_bounded_command(
     run_bounded_command_inner(command, stdout_limit, stderr_limit, timeout, label, None).await
 }
 
+/// Drain stdout into an existing digest without retaining the emitted bytes.
+/// Stderr remains capped, and timeout/drop paths retain process-group ownership.
+pub async fn run_bounded_hash_command(
+    mut command: Command,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: Duration,
+    label: &str,
+    mut digest: sha2::Sha256,
+) -> Result<sha2::Sha256, InspectionError> {
+    use sha2::Digest;
+    command.kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| InspectionError::new("execution_failed", format!("{label} could not be started")))?;
+    let mut child = OwnedChild::new(child);
+    let stdout = child.child.as_mut().and_then(|child| child.stdout.take());
+    let stderr = child.child.as_mut().and_then(|child| child.stderr.take());
+    let (Some(mut stdout), Some(stderr)) = (stdout, stderr) else {
+        let cleanup = child.kill_and_reap().await;
+        return Err(InspectionError::new(
+            "execution_failed",
+            cleanup.map_or_else(|| format!("{label} output was not captured"), |cleanup| format!("{label} output was not captured; {cleanup}")),
+        ));
+    };
+    let stderr_reader = read_bounded_output(stderr, stderr_limit, label, "stderr");
+    tokio::pin!(stderr_reader);
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let mut stderr_result = None;
+    let mut stdout_done = false;
+    let mut stdout_bytes = 0usize;
+    let mut status = None;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut deadline => {
+                let cleanup = child.kill_and_reap().await;
+                return Err(InspectionError::new(
+                    "execution_timeout",
+                    cleanup.map_or_else(|| format!("{label} exceeded its deadline"), |cleanup| format!("{label} exceeded its deadline; {cleanup}")),
+                ));
+            }
+            result = &mut stderr_reader, if stderr_result.is_none() => stderr_result = Some(result),
+            result = stdout.read(&mut buffer), if !stdout_done => {
+                match result {
+                    Ok(0) => stdout_done = true,
+                    Ok(read) => {
+                        stdout_bytes = stdout_bytes.saturating_add(read);
+                        if stdout_bytes > stdout_limit {
+                            let cleanup = child.kill_and_reap().await;
+                            return Err(with_cleanup(&InspectionError::new("bounded_output", format!("{label} stdout exceeds configured limit")), cleanup));
+                        }
+                        digest.update(&buffer[..read]);
+                    }
+                    Err(_) => {
+                        let cleanup = child.kill_and_reap().await;
+                        return Err(with_cleanup(&InspectionError::new("bounded_output", format!("{label} stdout could not be read")), cleanup));
+                    }
+                }
+            }
+            result = child.child.as_mut().expect("owned child was lost").wait(), if status.is_none() => {
+                match result {
+                    Ok(exit) => status = Some(exit),
+                    Err(_) => {
+                        let cleanup = child.kill_and_reap().await;
+                        return Err(InspectionError::new("execution_failed", cleanup.unwrap_or_else(|| format!("{label} did not finish"))));
+                    }
+                }
+            }
+        }
+        if let Some(Err(error)) = stderr_result.as_ref() {
+            let cleanup = child.kill_and_reap().await;
+            return Err(with_cleanup(error, cleanup));
+        }
+        if status.is_some() && stdout_done && stderr_result.is_some() { break; }
+    }
+    child.reaped = true;
+    child.child.take();
+    if !status.expect("child exit status missing").success() {
+        return Err(InspectionError::new("execution_failed", format!("{label} exited unsuccessfully")));
+    }
+    Ok(digest)
+}
+
 /// Monitor a private flat download directory throughout execution, including
 /// after stdout/stderr close. A breach kills/reaps the owned process group.
 /// This is interval enforcement, not a filesystem quota: a write between scans
@@ -389,6 +480,25 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[tokio::test]
+    async fn bounded_hash_drains_large_stdout_without_materializing_output() {
+        use sha2::Digest;
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf '%2000000s' ''"]);
+        let digest = run_bounded_hash_command(
+            command,
+            2_000_000,
+            4096,
+            Duration::from_secs(3),
+            "streaming hash test",
+            sha2::Sha256::new(),
+        )
+        .await
+        .unwrap()
+        .finalize();
+        assert_eq!(digest, sha2::Sha256::digest(vec![b' '; 2_000_000]));
     }
 
     #[test]

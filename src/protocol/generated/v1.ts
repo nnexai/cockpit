@@ -287,7 +287,7 @@ export type ProjectLimits = { catalog_depth: number, catalog_entries: number, gi
 
 export type ProjectProvider = { id: string, base_url: string, executable: string, login?: string, };
 
-export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, library_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
+export type ProjectConfiguration = { version: number, repository_roots: Array<string>, worktree_root: string, companion_root: string, state_root: string, cache_root: string, library_root: string, branch_template: string, checkout_template: string, providers: Array<ProjectProvider>, limits: ProjectLimits, origins: { [key in string]: string }, };
 
 export type LibraryItemKind = "provider_snapshot" | "folder_copy";
 
@@ -356,6 +356,10 @@ export type SpacePhaseResult = { space_id: string, copy_mode: SpaceCopyMode | nu
 export type LibraryOperation = { operation_id: string, kind: LibraryOperationKind, phases: Array<LibraryPhase>, item_ids: Array<string>, report: LibraryRefreshReport | null, space: SpacePhaseResult | null, target: SpaceTarget | null, cancel_requested: boolean, finished: boolean, created_at: string, updated_at: string, };
 
 export type LibraryDirectoryRequest = { path: string, offset: number | null, revision: string | null, };
+
+export type LibraryFileIndexMode = "cached" | "fresh";
+
+export type LibraryFileIndexRequest = { mode: LibraryFileIndexMode, };
 
 export type LibraryDocumentRequest = { path: string, expected_revision: string | null, offset: number | null, };
 
@@ -469,6 +473,18 @@ files_root_id: string | null, can_open_context: boolean,
 can_open_review: boolean, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextDirectoryRequest = { binding_id: string, root_id: string, path: string, offset?: number, revision?: string, };
+
+export type ContextFileIndexMode = "cached" | "fresh";
+
+export type ContextFileIndexRequest = { binding_id: string, root_id: string, mode: ContextFileIndexMode, };
+
+export type ContextIndexedFile = { path: string, bytes: number | null, };
+
+export type ContextFileIndexSource = "git" | "walk";
+
+export type ContextFileIndexState = "fresh" | "cached" | "miss";
+
+export type ContextFileIndex = { binding_id: string, root_id: string, files: Array<ContextIndexedFile>, truncated: boolean, source: ContextFileIndexSource, state: ContextFileIndexState, diagnostics: Array<ProjectDiagnostic>, };
 
 export type ContextEntryKind = "directory" | "file" | "symlink" | "other";
 

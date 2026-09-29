@@ -131,6 +131,7 @@ export function ReviewViewer({ client, presentation, value, onChange, onTerminal
       commentCount={commentStatus.count} canCreateLineComment={commentStatus.canCreateLines} canCreateFileComment={commentStatus.canCreateWholeFile}
       onSelectLines={(file, side, start, end, _lines, shift) => setSelection(previous => ({ fileId: file.file_id, side, start: shift && previous?.fileId === file.file_id && previous.side === side ? previous.start : start, end }))}
       presentationControls={<div className="viewer-segmented" role="group" aria-label="Review presentation"><button type="button" aria-pressed={mode === "diff"} onClick={() => setMode("diff")}>Diff</button><button type="button" aria-pressed={mode === "source"} onClick={() => setMode("source")}>Full source</button></div>}
+      onTogglePresentation={() => setMode((current) => current === "diff" ? "source" : "diff")}
       renderFile={(review, diff, content, loadSourcePage) => {
         const side = selection?.fileId === diff.file.file_id ? selection.side : diff.new_source === null && diff.old_source !== null ? "old" : "new";
         const path = (side === "old" ? diff.file.old_path : diff.file.new_path) ?? "";

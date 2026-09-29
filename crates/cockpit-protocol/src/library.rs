@@ -355,6 +355,18 @@ pub struct LibraryMediaRequest {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+pub enum LibraryFileIndexMode {
+    Cached,
+    Fresh,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryFileIndexRequest {
+    pub mode: LibraryFileIndexMode,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum SpaceCopyState {
     UpToDate,
     LibraryNewer,

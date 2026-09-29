@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Library and top bar: before / after</title>
+<style>
+/* Tokens copied from src/app/styles.css:12-56,73-75 */
+:root {
+  --app-bg:#0b0e12; --sidebar-bg:#11161e; --surface:#161d27; --surface-raised:#1b2431; --surface-hover:#222e3d; --surface-selected:#23354c;
+  --border:#2b3543; --border-strong:#3b4758; --text-primary:#cdd6f4; --text-secondary:#bac2de; --text-muted:#a6adc8;
+  --accent:#89b4fa; --focus-strong:#89b4fa; --blocked:#f38ba8; --working:#f9e2af; --idle:#a6e3a1; --terminal-bg:#0c1016;
+  --font-sans:"IBM Plex Sans","Noto Sans",sans-serif; --font-mono:"IosevkaTerm Nerd Font Mono","IBM Plex Mono","Noto Sans Mono",monospace;
+  --font-size-2xs:.6875rem; --font-size-control:.75rem; --font-size-xs:.8125rem; --font-size-sm:.875rem; --font-size-md:.9375rem; --font-size-base:1rem; --font-size-lg:1.1875rem;
+  --radius-control:4px; --radius-pill:999px; --tab-strip-height:41px;
+  /* New tokens proposed by this spec */
+  --library-inset:24px; --library-column:768px;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:24px; background:#05070a; color:var(--text-primary); font:14px/1.4 var(--font-sans); }
+h1 { font-size:18px; margin:0 0 4px; } h2.cap { font-size:13px; margin:32px 0 8px; color:var(--text-secondary); font-weight:600; }
+p.note { margin:0 0 8px; color:var(--text-muted); font-size:12px; max-width:110ch; }
+.ico { width:16px; height:16px; flex:0 0 16px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; vertical-align:middle; }
+.win { width:1180px; height:660px; display:flex; flex-direction:column; background:var(--app-bg); border:1px solid var(--border-strong); overflow:hidden; position:relative; }
+button { font:inherit; color:inherit; }
+
+/* Tab bar (styles.css:746-767, 2344-2351) */
+.tabbar { display:flex; height:var(--tab-strip-height); flex:0 0 auto; background:#121923; border-bottom:1px solid var(--border); align-items:stretch; }
+.tab-icon-button { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; margin:6px 3px; padding:0; border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-secondary); cursor:pointer; }
+.tab-icon-button:hover, .tab-icon-button.is-hover { background:var(--surface-hover); color:var(--text-primary); }
+.tab-icon-button[aria-pressed="true"] { background:var(--surface-selected); color:var(--accent); box-shadow:inset 0 -2px 0 var(--accent); }
+.tab-icon-button.is-focus { outline:2px solid var(--focus-strong); outline-offset:1px; }
+.tab-icon-button:disabled { color:var(--text-muted); opacity:.5; cursor:default; }
+.tabs { display:flex; flex:1; min-width:0; align-items:stretch; font-size:var(--font-size-control); }
+.tab { display:flex; align-items:center; gap:6px; padding:0 12px; color:var(--text-secondary); }
+.tab.sel { background:var(--accent); color:var(--app-bg); }
+.tab b { font-weight:400; opacity:.8; }
+.actions { display:flex; align-items:center; padding:0 8px 0 6px; gap:2px; }
+.cmd { display:inline-flex; align-items:center; height:28px; margin-left:6px; padding:0 10px; border:1px solid var(--border); border-radius:var(--radius-control); background:transparent; color:var(--text-secondary); font-size:var(--font-size-control); font-weight:500; cursor:pointer; }
+.cmd:hover { background:var(--surface-hover); color:var(--text-primary); border-color:var(--border-strong); }
+.sep { width:1px; height:16px; background:var(--border); margin:0 4px; }
+
+/* Library view frame (library.css:2-13) */
+.lib { flex:1; min-height:0; margin:12px; display:flex; flex-direction:column; border:1px solid var(--border); background:var(--terminal-bg); overflow:hidden; position:relative; }
+.lib-head { display:flex; align-items:center; gap:10px; background:var(--sidebar-bg); border-bottom:1px solid var(--border); }
+.tb { display:flex; align-items:center; gap:6px; height:36px; padding:0 10px; border-bottom:1px solid var(--border); font-size:var(--font-size-control); }
+.tb .sp { flex:1; }
+.gbtn { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 8px; border:1px solid transparent; border-radius:var(--radius-control); background:transparent; color:var(--text-secondary); font-size:var(--font-size-control); cursor:pointer; }
+.gbtn:hover { background:var(--surface-hover); color:var(--text-primary); }
+.gbtn.icon { width:28px; padding:0; justify-content:center; }
+.gbtn[aria-pressed="true"] { background:var(--surface-selected); color:var(--text-primary); }
+.seg { display:inline-flex; gap:1px; padding:2px; border:1px solid var(--border); border-radius:var(--radius-control); }
+.seg button { height:22px; padding:0 8px; border:0; border-radius:3px; background:transparent; color:var(--text-muted); font-size:var(--font-size-2xs); }
+.seg button[aria-pressed="true"] { background:var(--surface-selected); color:var(--text-primary); }
+.vsep { width:1px; height:16px; background:var(--border); margin:0 4px; }
+.body { flex:1; min-height:0; display:grid; grid-template-columns:300px 1fr; }
+.tree { background:var(--sidebar-bg); border-right:1px solid var(--border); overflow:hidden; }
+.row { display:flex; align-items:center; gap:4px; height:28px; padding:0 8px 0 0; border-left:2px solid transparent; font-size:var(--font-size-control); color:var(--text-primary); white-space:nowrap; background-color:transparent; background-image:repeating-linear-gradient(90deg,var(--border) 0 1px,transparent 1px 14px); background-position:15px 0; background-size:calc(var(--depth,0)*14px) 100%; background-repeat:no-repeat; }
+.row:hover { background-color:var(--surface-hover); }
+.row.sel { border-left-color:var(--accent); background-color:var(--surface-selected); }
+.row .chev { width:16px; flex:0 0 16px; display:grid; place-items:center; color:var(--text-muted); }
+.row .ti { width:20px; flex:0 0 20px; display:grid; place-items:center; color:var(--text-secondary); }
+.row .ti.doc { color:var(--accent); } .row .ti.dl { color:var(--idle); }
+.row .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.row .meta { display:inline-flex; align-items:center; gap:4px; font-size:var(--font-size-2xs); color:var(--text-muted); }
+.row.cont .nm { font-weight:500; }
+.row.inst { color:var(--text-primary); font-weight:600; }
+.row .meta .ok { color:var(--idle); }
+.doc { display:flex; flex-direction:column; min-width:0; min-height:0; position:relative; }
+.scroll { overflow:hidden; flex:1; min-height:0; }
+.col { max-width:var(--library-column); }
+
+/* ---------- AFTER: item header ---------- */
+.ih { padding:20px var(--library-inset) 12px; border-bottom:1px solid var(--border); background:var(--surface); }
+.ih .in { max-width:var(--library-column); display:flex; flex-direction:column; gap:8px; }
+.eyebrow { display:flex; align-items:center; gap:8px; min-width:0; font-size:var(--font-size-2xs); color:var(--text-secondary); }
+.eyebrow .kind { color:var(--text-secondary); font-weight:600; }
+.eyebrow .path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.eyebrow .sp { flex:1; }
+.title { margin:0; font-size:var(--font-size-lg); font-weight:600; line-height:1.3; color:var(--text-primary); }
+.state { display:flex; align-items:center; gap:8px; min-height:28px; font-size:var(--font-size-2xs); color:var(--text-muted); }
+.state .phrase { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.state .sp { flex:1; }
+.chip { display:inline-flex; align-items:center; gap:4px; padding:1px 6px; border:1px solid color-mix(in srgb, var(--idle) 55%, var(--border)); border-radius:var(--radius-pill); color:var(--idle); font-size:var(--font-size-2xs); white-space:nowrap; }
+.chip.muted { border-color:var(--border); color:var(--text-secondary); }
+.abtn { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-raised); color:var(--text-primary); font-size:var(--font-size-control); white-space:nowrap; cursor:pointer; }
+.abtn.primary { border-color:color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.abtn:hover { background:var(--surface-hover); }
+.abtn.icon { width:28px; padding:0; justify-content:center; }
+.attach-toggle { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 8px 0 2px; border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-secondary); font-size:var(--font-size-2xs); white-space:nowrap; cursor:pointer; }
+.attach-toggle:hover { background:var(--surface-hover); }
+.panel { margin-top:0; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); font-size:var(--font-size-2xs); }
+.panel .ph { display:flex; align-items:center; gap:8px; padding:6px 8px 6px 12px; border-bottom:1px solid var(--border); color:var(--text-secondary); }
+.panel .ph .sp { flex:1; }
+.panel .ph .abtn { height:24px; padding:0 8px; font-size:var(--font-size-2xs); }
+.grid { display:grid; grid-template-columns:minmax(0,1fr) 72px 120px 112px 72px; align-items:center; column-gap:12px; padding:0 12px; min-height:28px; }
+.grid.h { color:var(--text-muted); min-height:24px; }
+.grid + .grid { border-top:1px solid var(--border); }
+.grid .r { text-align:right; font-variant-numeric:tabular-nums; }
+.grid .m { color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.grid .st.ok { color:var(--idle); }
+/* Details popover (.viewer-details pattern, viewer.css:29-36) */
+.pop { position:absolute; z-index:5; right:calc(100% - var(--library-column) - var(--library-inset)); top:0; width:480px; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface-raised); box-shadow:0 8px 24px #0006; padding:4px 0 8px; font-size:var(--font-size-2xs); }
+.pop h4 { margin:8px 12px 2px; font-size:var(--font-size-2xs); font-weight:600; color:var(--text-secondary); }
+.pop dl { display:grid; grid-template-columns:96px minmax(0,1fr); gap:4px 8px; margin:0; padding:0 12px; }
+.pop dt { color:var(--text-muted); } .pop dd { margin:0; min-width:0; display:flex; align-items:center; gap:6px; color:var(--text-primary); }
+.pop dd span.v { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pop dd code { font-family:var(--font-mono); font-size:var(--font-size-2xs); }
+.pop dd .rel { color:var(--text-muted); }
+.cp { width:20px; height:20px; flex:0 0 20px; display:grid; place-items:center; border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-muted); cursor:pointer; }
+.cp:hover { background:var(--surface-hover); color:var(--text-primary); }
+/* Body */
+.md { padding:20px var(--library-inset) 30px; max-width:calc(var(--library-column) + 2 * var(--library-inset)); font-size:var(--font-size-sm); line-height:1.65; color:#c4cfdd; }
+.md p { margin:8px 0; } .md h2 { font-size:var(--font-size-base); font-weight:600; color:var(--text-primary); margin:23px 0 8px; line-height:1.5; }
+.md code { font-family:var(--font-mono); font-size:.93em; }
+.md strong { color:var(--text-primary); }
+
+/* ---------- BEFORE ---------- */
+.b-title { margin:0; color:var(--text-secondary); font-size:var(--font-size-xs); font-weight:500; text-transform:lowercase; }
+.b-path { font-family:var(--font-mono); font-size:var(--font-size-2xs); color:var(--text-muted); }
+.b-close { min-height:28px; padding:3px 10px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-raised); font-size:var(--font-size-sm); }
+.b-ih { padding:18px 24px 10px; font-size:var(--font-size-2xs); color:var(--text-secondary); display:flex; flex-direction:column; gap:4px; }
+.b-kind { color:var(--accent); letter-spacing:.08em; text-transform:uppercase; }
+.b-title2 { margin:0; font-size:var(--font-size-md); font-weight:500; color:var(--text-primary); }
+.b-btn { min-height:26px; padding:2px 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-raised); font-size:var(--font-size-control); }
+.b-dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 10px; margin:6px 0 0; }
+.b-dl dt { color:var(--text-muted); } .b-dl dd { margin:0; } .b-dl code { font-family:var(--font-mono); }
+.b-md { padding:0 16px; font-size:var(--font-size-sm); line-height:1.65; color:#c4cfdd; }
+.flag { position:absolute; z-index:9; font:11px/1.3 var(--font-sans); background:#f38ba8; color:#0b0e12; padding:1px 5px; border-radius:3px; }
+.legend { font-size:12px; color:var(--text-muted); margin:6px 0 0; }
+.states { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+.state-cell { display:flex; flex-direction:column; align-items:center; gap:6px; font-size:11px; color:var(--text-muted); }
+.bar-strip { display:flex; background:#121923; border:1px solid var(--border); padding:0 8px; height:41px; align-items:center; }
+.tip { position:relative; margin-top:6px; padding:4px 8px; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface-raised); font-size:11px; color:var(--text-primary); white-space:nowrap; }
+/* Beautification: tiles, pills, identity block (spec 4.1a, 4.5) */
+.tile { width:20px; height:20px; border-radius:4px; border:1px solid color-mix(in srgb,var(--accent) 40%,var(--border)); background:color-mix(in srgb,var(--accent) 14%,var(--surface)); color:var(--accent); display:grid; place-items:center; font:600 11px/1 var(--font-sans); letter-spacing:-.02em; }
+.tile.lg { width:32px; height:32px; border-radius:6px; font-size:14px; flex:0 0 32px; }
+.pill { display:inline-flex; align-items:center; gap:3px; height:18px; padding:0 6px 0 4px; border-radius:999px; font-size:11px; font-weight:500; white-space:nowrap; color:var(--t); border:1px solid color-mix(in srgb,var(--t) 45%,var(--border)); background:color-mix(in srgb,var(--t) 14%,transparent); }
+.pill.lg { height:22px; padding:0 8px 0 6px; gap:4px; font-size:12px; }
+.pill.idle { --t:var(--idle); } .pill.working { --t:var(--working); } .pill.blocked { --t:var(--blocked); } .pill.muted { --t:var(--text-secondary); }
+.pill .ico, .chev .ico, .attach-toggle .ico { width:14px; height:14px; flex-basis:14px; }
+.ident { display:flex; gap:12px; align-items:center; }
+.idtext { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
+.abtn.primary { border-color:color-mix(in srgb,var(--accent) 60%,var(--border)); background:color-mix(in srgb,var(--accent) 14%,var(--surface-raised)); }
+.abtn.primary:hover { background:color-mix(in srgb,var(--accent) 22%,var(--surface-raised)); }
+.acc { color:var(--accent); display:inline-flex; }
+/* Before frame keeps the old scale */
+.win.before .ico { width:14px; height:14px; flex-basis:14px; stroke-width:1.6; }
+.win.before .cmd { height:30px; margin-left:0; padding:0 8px; border:0; font-size:var(--font-size-2xs); font-weight:400; }
+.win.before .row { background-image:none; }
+.win.before .row .ti { width:16px; flex-basis:16px; color:var(--text-muted); }
+.win.before .row.inst { color:var(--text-secondary); font-weight:500; }
+.win.before .tab-icon-button[aria-pressed="true"] { color:var(--text-primary); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+  <symbol id="i-dotring" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-halfring" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/><path d="M12 3a9 9 0 0 0 0 18Z" fill="currentColor"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+</defs></svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><path d="M9 4v16M3 4h18v16H3Z"/></symbol>
+    <symbol id="i-browser" viewBox="0 0 24 24"><path d="M3 5h18v14H3ZM3 9h18M6 7h.01M9 7h.01"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M12 6c-2-1.5-5-2-8-2v14c3 0 6 .5 8 2 2-1.5 5-2 8-2V4c-3 0-6 .5-8 2ZM12 6v14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><path d="M15 15l6 6M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></symbol>
+    <symbol id="i-wrap" viewBox="0 0 24 24"><path d="M3 6h18M3 12h15a3 3 0 0 1 0 6h-4m2-2-2 2 2 2M3 18h7"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6m0-10v1M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3Z"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8 8a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h11v11H9ZM5 15V4h11"/></symbol>
+  </defs>
+</svg>
+<script>
+  // Expand <i data-i="name"> into the sprite reference so markup below stays short.
+  document.addEventListener("DOMContentLoaded", () => document.querySelectorAll("i[data-i]").forEach(n => {
+    n.outerHTML = `<svg class="ico" viewBox="0 0 24 24"><use href="#i-${n.dataset.i}"/></svg>`;
+  }));
+</script>
+
+<h1>Library and top bar: before / after</h1>
+<p class="note">Companion to <code>03-library-and-top-bar.md</code>. Tokens are copied from <code>src/app/styles.css</code>. <code>--library-inset</code> here is the existing <code>--viewer-document-inset</code> (24px); <code>--library-column</code> (768px) is the one new token. The <code>library</code>, <code>folder</code>, <code>clip</code> and <code>copy</code> icons are new <code>UiIcon</code> paths. Data is the fixture from the screenshot (Confluence page "Library Page Read Smoke f5521c0"). After-frame times follow the spec's timestamp rule with viewer time zone UTC+2 and now = 2026-09-27 16:30: <code>fetched_at "1790517466502"</code> = 14:17:46Z = 16:17 local.</p>
+
+<!-- ============ BEFORE ============ -->
+<h2 class="cap">1. Before (reconstructed from the screenshot; red tags = audit findings)</h2>
+<div class="win before">
+  <div class="tabbar">
+    <button class="tab-icon-button" aria-label="Hide sidebar"><i data-i="sidebar"></i></button>
+    <div class="tabs"><span class="tab sel"><b style="color:inherit">1</b> main</span><span class="tab"><b>2</b> meta</span><span class="tab"><b>3</b> design</span><span class="tab"><b>4</b></span><span class="tab"><b>5</b></span></div>
+    <div class="actions"><button class="tab-icon-button" aria-label="Open browser"><i data-i="browser"></i></button><button class="cmd">Commands</button></div>
+  </div>
+  <div class="lib">
+    <div class="lib-head" style="min-height:36px;padding:4px 10px 4px 14px">
+      <h2 class="b-title">library</h2><code class="b-path">/home/nnex/.local/share/cockpit/library</code><span style="flex:1"></span><button class="b-close">Close</button>
+    </div>
+    <div class="tb" style="height:43px">
+      <button class="gbtn"><i data-i="sidebar"></i> Files</button><button class="gbtn icon"><i data-i="search"></i></button><button class="gbtn">Add…</button><button class="gbtn">Refresh all</button>
+      <span class="sp"></span><div class="seg"><button aria-pressed="true">Preview</button><button>Source</button></div><button class="gbtn"><i data-i="wrap"></i> Wrap</button><button class="gbtn icon"><i data-i="refresh"></i></button>
+    </div>
+    <div class="body" style="grid-template-columns:412px 1fr">
+      <div class="tree">
+        <div class="row" style="padding-left:6px"><span class="chev"><i data-i="down"></i></span><span class="nm">Confluence · nnexai.atlassian.net</span></div>
+        <div class="row" style="padding-left:22px"><span class="chev"><i data-i="down"></i></span><span class="nm">SD · Software Development</span><span class="meta"><span class="ok">◉ Following</span></span></div>
+        <div class="row" style="padding-left:38px"><span class="chev"><i data-i="down"></i></span><span class="ti"><i data-i="file"></i></span><span class="nm">Cockpit Test Fixture f5521c0</span></div>
+        <div class="row sel" style="padding-left:54px"><span class="chev"><i data-i="down"></i></span><span class="ti"><i data-i="file"></i></span><span class="nm">Library Page Read Smoke f5521c0</span></div>
+        <div class="row" style="padding-left:70px"><span class="chev"><i data-i="right"></i></span><span class="nm">Attachments (1)</span><span class="meta">1 downloaded</span></div>
+        <div class="row" style="padding-left:38px"><span class="chev"></span><span class="ti"><i data-i="file"></i></span><span class="nm">Library Space Follow Smoke f5521c0</span></div>
+        <div class="row" style="padding-left:6px"><span class="chev"><i data-i="down"></i></span><span class="nm">GitHub · github.com</span></div>
+      </div>
+      <div class="doc">
+        <div class="b-ih">
+          <div style="display:flex;gap:8px;align-items:center"><span class="b-kind">Confluence page</span><span>SD / Cockpit Test Fixture f5521c0</span><span style="flex:1"></span><i data-i="info"></i></div>
+          <h2 class="b-title2">Library Page Read Smoke f5521c0</h2>
+          <div style="display:flex;gap:8px;align-items:center;min-height:28px"><span class="chip">✓ Up to date</span><span style="color:var(--text-muted)">checked · v3 by Konni Hartmann</span><span style="flex:1"></span><button class="b-btn">Refresh</button><button class="b-btn">Add to cockpit</button><button class="b-btn" style="width:28px">···</button></div>
+          <div style="color:var(--text-muted)">▼ Metadata</div>
+          <dl class="b-dl">
+            <dt>Space</dt><dd>SD · Software Development</dd><dt>Page id</dt><dd>491521</dd><dt>Parent</dt><dd>Cockpit Test Fixture f5521c0</dd><dt>Ancestors</dt><dd>Cockpit Test Fixture f5521c0</dd><dt>Version</dt><dd>v3</dd>
+            <dt>Last updated</dt><dd>2026-09-27T11:34:44.043Z by Konni Hartmann</dd><dt>Provider</dt><dd>confluence · https://nnexai.atlassian.net/wiki</dd>
+            <dt>Source link</dt><dd><code>https://nnexai.atlassian.net/wiki/spaces/SD/pages/491521/Library+Page+Read+Smoke+f5521c0</code></dd>
+            <dt>Fetched</dt><dd>1790517466502</dd><dt>Checked</dt><dd>1790517466502</dd>
+            <dt>Library path</dt><dd><code>confluence/nnexai.atlassian.net/SD - Software Development/Cockpit Test Fixture f5521c0/Library Page Read Smoke f5521c0</code></dd>
+            <dt>Library revision</dt><dd><code>sha256:6190e992521955643b2f717265709b6d8becc850c58cd83b19ff34a40f897c2e</code></dd>
+          </dl>
+          <div style="display:flex;gap:8px;margin-top:4px;align-items:center;width:200px;flex-wrap:wrap"><span>⌄ Attachments <span style="color:var(--text-secondary)">1 · 1 downloaded</span></span></div>
+        </div>
+        <div class="b-md"><p>A synthetic Confluence page for checking body import, ancestry, explicit refresh, and attachment handling in Cockpit's Library.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="legend">Findings shown: lowercase title and raw path (F1, F2); 14px "Close" text button unlike every other control (F3); toolbar mixes icon+text, text-only, icon-only (F4); raw epoch ms for Fetched/Checked against ISO for Last updated (F17); "checked" with no time because the epoch string is not parsed (F14); three disclosure styles: native ▼, chevron icon, tree chevrons (F19); attachments summary wraps (F20); body inset differs from header (F21, cause marked INFERENCE in the spec); Metadata pushes the body about 300px down (F16).</p>
+
+<!-- ============ AFTER 1 ============ -->
+<h2 class="cap">2. After: default state (Details closed, Attachments closed)</h2>
+<div class="win">
+  <div class="tabbar">
+    <button class="tab-icon-button" aria-label="Hide sidebar" aria-expanded="true"><i data-i="sidebar"></i></button>
+    <div class="tabs"><span class="tab sel"><b style="color:inherit">1</b> main</span><span class="tab"><b>2</b> meta</span><span class="tab"><b>3</b> design</span><span class="tab"><b>4</b></span><span class="tab"><b>5</b></span></div>
+    <div class="actions">
+      <span class="sep"></span>
+      <button class="tab-icon-button" aria-label="Open browser" aria-pressed="false" title="Open browser (Ctrl+B Shift+B)"><i data-i="browser"></i></button>
+      <button class="tab-icon-button" aria-label="Library" aria-pressed="true" title="Close Library (Ctrl+B i)"><i data-i="library"></i></button>
+      <button class="cmd">Commands</button>
+    </div>
+  </div>
+  <div class="lib">
+    <div class="lib-head" style="height:36px;padding:0 6px 0 12px">
+      <span class="acc"><i data-i="library"></i></span><h2 style="margin:0;font-size:var(--font-size-sm);font-weight:600">Library</h2>
+      <span style="color:var(--text-muted);font-size:var(--font-size-2xs)">12 items · 1 followed space</span>
+      <span style="flex:1"></span>
+      <button class="gbtn icon" aria-label="Close Library" title="Close Library (Esc)"><i data-i="close"></i></button>
+    </div>
+    <div class="tb">
+      <button class="gbtn icon" aria-pressed="true" aria-label="Hide file tree" title="Hide file tree (Alt+1)"><i data-i="sidebar"></i></button>
+      <button class="gbtn icon" aria-label="Find in Library" title="Find in Library (Ctrl+P)"><i data-i="search"></i></button>
+      <span class="vsep"></span>
+      <button class="gbtn"><i data-i="plus"></i> Add…</button>
+      <button class="gbtn" title="Refresh every item from its source"><i data-i="refresh"></i> Refresh all</button>
+      <span class="sp"></span>
+      <div class="seg" role="group" aria-label="Document presentation"><button aria-pressed="true">Preview</button><button>Source</button></div>
+      <button class="gbtn icon" aria-label="Library actions"><i data-i="more"></i></button>
+    </div>
+    <div class="body">
+      <div class="tree">
+        <div class="row inst" style="--depth:0;padding-left:6px"><span class="chev"><i data-i="down"></i></span><span class="ti"><span class="tile">C</span></span><span class="nm">Confluence · nnexai.atlassian.net</span></div>
+        <div class="row cont" style="--depth:1;padding-left:20px"><span class="chev"><i data-i="down"></i></span><span class="ti"><i data-i="folder"></i></span><span class="nm">SD · Software Development</span><span class="pill idle"><i data-i="dotring"></i> Following</span></div>
+        <div class="row" style="--depth:2;padding-left:34px"><span class="chev"><i data-i="down"></i></span><span class="ti doc"><i data-i="file"></i></span><span class="nm">Cockpit Test Fixture f5521c0</span></div>
+        <div class="row sel" style="--depth:3;padding-left:48px"><span class="chev"><i data-i="down"></i></span><span class="ti doc"><i data-i="file"></i></span><span class="nm">Library Page Read Smoke f5521c0</span></div>
+        <div class="row" style="--depth:4;padding-left:62px"><span class="chev"><i data-i="right"></i></span><span class="ti"><i data-i="clip"></i></span><span class="nm" style="color:var(--text-secondary)">Attachments</span><span class="meta">1 downloaded</span></div>
+        <div class="row" style="--depth:2;padding-left:34px"><span class="chev"></span><span class="ti doc"><i data-i="file"></i></span><span class="nm">Library Space Follow Smoke f5521c0</span></div>
+        <div class="row inst" style="--depth:0;padding-left:6px"><span class="chev"><i data-i="down"></i></span><span class="ti"><span class="tile">GH</span></span><span class="nm">GitHub · github.com</span></div>
+        <div class="row cont" style="--depth:1;padding-left:20px"><span class="chev"><i data-i="down"></i></span><span class="ti"><i data-i="folder"></i></span><span class="nm">nnexai/cockpit</span></div>
+        <div class="row" style="--depth:2;padding-left:34px"><span class="chev"></span><span class="ti doc"><i data-i="file"></i></span><span class="nm">#10 Inline browser pointer clicks not delivered…</span></div>
+        <div class="row inst" style="--depth:0;padding-left:6px"><span class="chev"><i data-i="down"></i></span><span class="ti"><span class="tile">GL</span></span><span class="nm">GitLab · gitlab.com</span></div>
+        <div class="row" style="--depth:1;padding-left:20px"><span class="chev"><i data-i="right"></i></span><span class="ti"><i data-i="folder"></i></span><span class="nm" style="font-weight:500">nnex.ai/integration</span><span class="pill working"><i data-i="halfring"></i> 1 of 3</span></div>
+      </div>
+      <div class="doc">
+        <div class="ih"><div class="in">
+          <div class="ident"><div class="tile lg">C</div><div class="idtext">
+            <div class="eyebrow"><span class="kind">Confluence page</span><span class="path">SD › Cockpit Test Fixture f5521c0</span><span class="sp"></span><button class="gbtn icon" aria-label="Details" title="Details"><i data-i="info"></i></button></div>
+            <h2 class="title">Library Page Read Smoke f5521c0</h2>
+          </div></div>
+          <div class="state">
+            <span class="pill lg idle"><i data-i="check"></i> Up to date</span>
+            <span class="phrase" title="Checked 2026-09-27 16:17 · Version 3 edited 2026-09-27 13:34 by Konni Hartmann">Checked 13 min ago · v3 edited 3 h ago by Konni Hartmann</span>
+            <span class="sp"></span>
+            <button class="abtn"><i data-i="refresh"></i> Refresh</button>
+            <button class="abtn primary" title="Copy this page into Space “cockpit”"><i data-i="plus"></i> Add to cockpit</button>
+            <button class="abtn icon" aria-label="More actions"><i data-i="more"></i></button>
+          </div>
+          <div><button class="attach-toggle" aria-expanded="false"><i data-i="right"></i> 1 attachment · downloaded</button></div>
+        </div></div>
+        <div class="scroll"><div class="md">
+          <p>A synthetic Confluence page for checking body import, ancestry, explicit refresh, and attachment handling in Cockpit's Library.</p>
+          <p><strong>Fixture key:</strong> <code>f5521c0</code></p>
+          <p><strong>Page ID:</strong> 491521</p>
+          <h2>Page body and refresh</h2>
+          <p>Add this page by its Confluence URL. The Library should show this text beneath the page title and place the page under <strong>Cockpit Test Fixture f5521c0</strong> in the page tree.</p>
+          <p>The body is intentionally split into paragraphs and sections so line breaks and heading hierarchy are easy to inspect. After changing the marker below in Confluence, use the Library's <strong>Refresh</strong> action.</p>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="legend">Header is about 145px with the attachments line (about 113px without; was about 300px with Metadata and Attachments open). The 32px tile, the status line, the attachments control and the body all start at the same 24px inset; the title text sits 44px in (tile + 12px gap). Icons are 16px in 28px buttons, chevrons and pill glyphs 14px, stroke 1.5. Page icons are accent, folders secondary, providers a monogram tile, states tinted pills with an SVG glyph and the word, and the tree has 1px indent guides.</p>
+
+<!-- ============ AFTER 2 ============ -->
+<h2 class="cap">3. After: Details popover and Attachments panel open</h2>
+<div class="win">
+  <div class="tabbar">
+    <button class="tab-icon-button"><i data-i="sidebar"></i></button>
+    <div class="tabs"><span class="tab sel"><b style="color:inherit">1</b> main</span><span class="tab"><b>2</b> meta</span><span class="tab"><b>3</b> design</span></div>
+    <div class="actions"><span class="sep"></span><button class="tab-icon-button"><i data-i="browser"></i></button><button class="tab-icon-button" aria-pressed="true"><i data-i="library"></i></button><button class="cmd">Commands</button></div>
+  </div>
+  <div class="lib">
+    <div class="lib-head" style="height:36px;padding:0 6px 0 12px"><span class="acc"><i data-i="library"></i></span><h2 style="margin:0;font-size:var(--font-size-sm);font-weight:600">Library</h2><span style="color:var(--text-muted);font-size:var(--font-size-2xs)">12 items · 1 followed space</span><span style="flex:1"></span><button class="gbtn icon"><i data-i="close"></i></button></div>
+    <div class="tb"><button class="gbtn icon" aria-pressed="true"><i data-i="sidebar"></i></button><button class="gbtn icon"><i data-i="search"></i></button><span class="vsep"></span><button class="gbtn"><i data-i="plus"></i> Add…</button><button class="gbtn"><i data-i="refresh"></i> Refresh all</button><span class="sp"></span><div class="seg"><button aria-pressed="true">Preview</button><button>Source</button></div><button class="gbtn icon"><i data-i="more"></i></button></div>
+    <div class="body">
+      <div class="tree">
+        <div class="row inst" style="--depth:0;padding-left:6px"><span class="chev"><i data-i="down"></i></span><span class="ti"><span class="tile">C</span></span><span class="nm">Confluence · nnexai.atlassian.net</span></div>
+        <div class="row cont" style="--depth:1;padding-left:20px"><span class="chev"><i data-i="down"></i></span><span class="ti"><i data-i="folder"></i></span><span class="nm">SD · Software Development</span><span class="pill idle"><i data-i="dotring"></i> Following</span></div>
+        <div class="row" style="--depth:2;padding-left:34px"><span class="chev"><i data-i="down"></i></span><span class="ti doc"><i data-i="file"></i></span><span class="nm">Cockpit Test Fixture f5521c0</span></div>
+        <div class="row sel" style="--depth:3;padding-left:48px"><span class="chev"><i data-i="down"></i></span><span class="ti doc"><i data-i="file"></i></span><span class="nm">Library Page Read Smoke f5521c0</span></div>
+        <div class="row" style="--depth:4;padding-left:62px"><span class="chev"><i data-i="down"></i></span><span class="ti"><i data-i="clip"></i></span><span class="nm" style="color:var(--text-secondary)">Attachments</span><span class="meta">1 downloaded</span></div>
+        <div class="row" style="--depth:5;padding-left:76px"><span class="chev"></span><span class="ti dl"><i data-i="file"></i></span><span class="nm">cockpit-library-e2e-f5521c0.png</span><span class="meta"><span class="acc" style="color:var(--idle)"><i data-i="check"></i></span> 100 B</span></div>
+      </div>
+      <div class="doc">
+        <div class="ih"><div class="in" style="position:relative">
+          <div class="ident"><div class="tile lg">C</div><div class="idtext">
+            <div class="eyebrow"><span class="kind">Confluence page</span><span class="path">SD › Cockpit Test Fixture f5521c0</span><span class="sp"></span><button class="gbtn icon" aria-expanded="true" aria-pressed="true" aria-label="Details"><i data-i="info"></i></button></div>
+            <h2 class="title">Library Page Read Smoke f5521c0</h2>
+          </div></div>
+          <div class="state"><span class="pill lg idle"><i data-i="check"></i> Up to date</span><span class="phrase">Checked 13 min ago · v3 edited 3 h ago by Konni Hartmann</span><span class="sp"></span><button class="abtn"><i data-i="refresh"></i> Refresh</button><button class="abtn primary"><i data-i="plus"></i> Add to cockpit</button><button class="abtn icon"><i data-i="more"></i></button></div>
+          <div><button class="attach-toggle" aria-expanded="true"><i data-i="down"></i> 1 attachment · downloaded</button></div>
+          <div class="panel">
+            <div class="ph"><span>1 of 1 downloaded</span><span class="sp"></span><button class="abtn" title="Deletes the downloaded files from the Library. The page and its attachment list stay.">Remove downloaded</button></div>
+            <div class="grid h"><span>Name</span><span class="r">Size</span><span>Type</span><span>State</span><span></span></div>
+            <div class="grid"><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">cockpit-library-e2e-f5521c0.png</span><span class="r">100 B</span><span class="m">image/png</span><span><span class="pill idle"><i data-i="check"></i> Downloaded</span></span><span style="text-align:right"><button class="abtn" style="height:22px;padding:0 8px;font-size:var(--font-size-2xs)">Open</button></span></div>
+          </div>
+          <!-- Details popover: anchored to the info button, overlays, never shifts layout -->
+          <div class="pop" style="right:0;top:28px;">
+            <h4>Source</h4>
+            <dl>
+              <dt>Space</dt><dd><span class="v">SD · Software Development</span></dd>
+              <dt>Page ID</dt><dd><code>491521</code><button class="cp" aria-label="Copy Page ID"><i data-i="copy"></i></button></dd>
+              <dt>Version</dt><dd><span class="v">3</span></dd>
+              <dt>Last updated</dt><dd><span class="v">2026-09-27 13:34 · Konni Hartmann</span></dd>
+              <dt>Source link</dt><dd><code class="v" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="https://nnexai.atlassian.net/wiki/spaces/SD/pages/491521/Library+Page+Read+Smoke+f5521c0">nnexai.atlassian.net/wiki/spaces/SD/pages/491521/Library+Pa…</code><button class="cp" aria-label="Copy source link"><i data-i="copy"></i></button></dd>
+            </dl>
+            <h4>Library copy</h4>
+            <dl>
+              <dt>Fetched · checked</dt><dd><span class="v">2026-09-27 16:17 <span class="rel">· 13 min ago</span></span></dd>
+              <dt>Path</dt><dd><code class="v" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="confluence/nnexai.atlassian.net/SD - Software Development/Cockpit Test Fixture f5521c0/Library Page Read Smoke f5521c0">confluence/nnexai.atlassian.net/SD - Soft…/Library Page Read Smoke f5521c0</code><button class="cp" aria-label="Copy Library path"><i data-i="copy"></i></button></dd>
+              <dt>Revision</dt><dd><code>sha256:6190e992…7c2e</code><button class="cp" aria-label="Copy Library revision"><i data-i="copy"></i></button></dd>
+              <dt>Size</dt><dd><span class="v">1.2 KB</span></dd>
+            </dl>
+          </div>
+        </div></div>
+        <div class="scroll"><div class="md"><p>A synthetic Confluence page for checking body import…</p></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="legend">Details is a popover over the header, so the body does not move when it opens. Fetched and Checked are equal to the second in the fixture, so they collapse to one row (spec §4.9 rule 7).</p>
+
+<!-- ============ LAUNCHER STATES ============ -->
+<h2 class="cap">4. Top-bar launcher: states (Library button sits between browser and Commands)</h2>
+<div class="states">
+  <div class="state-cell"><div class="bar-strip"><button class="tab-icon-button"><i data-i="browser"></i></button><button class="tab-icon-button" aria-pressed="false" aria-label="Library"><i data-i="library"></i></button><button class="cmd">Commands</button></div>Rest (Library closed)</div>
+  <div class="state-cell"><div class="bar-strip"><button class="tab-icon-button"><i data-i="browser"></i></button><button class="tab-icon-button is-hover" aria-pressed="false"><i data-i="library"></i></button><button class="cmd">Commands</button></div><div class="tip">Open Library (Ctrl+B i)</div>Hover / keyboard-focus tooltip</div>
+  <div class="state-cell"><div class="bar-strip"><button class="tab-icon-button"><i data-i="browser"></i></button><button class="tab-icon-button is-focus" aria-pressed="false"><i data-i="library"></i></button><button class="cmd">Commands</button></div>Keyboard focus ring</div>
+  <div class="state-cell"><div class="bar-strip"><button class="tab-icon-button"><i data-i="browser"></i></button><button class="tab-icon-button" aria-pressed="true" aria-label="Library"><i data-i="library"></i></button><button class="cmd">Commands</button></div><div class="tip">Close Library (Ctrl+B i)</div>Active (Library open): accent icon, selected fill, accent underline</div>
+  <div class="state-cell"><div class="bar-strip"><button class="tab-icon-button" aria-pressed="true"><i data-i="browser"></i></button><button class="tab-icon-button" aria-pressed="true"><i data-i="library"></i></button><button class="cmd">Commands</button></div>Both surfaces associated (browser stays hidden under Library, see spec §5.6)</div>
+</div>
+
+</body>
+</html>

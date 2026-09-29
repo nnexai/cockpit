@@ -7,7 +7,7 @@ use axum::{
 };
 use cockpit_core::{CockpitService, context_search::ContextSearchService};
 use cockpit_protocol::context::{
-    ContextDirectoryRequest, ContextDocumentRequest, ContextLaunchRequest,
+    ContextDirectoryRequest, ContextDocumentRequest, ContextFileIndexRequest, ContextLaunchRequest,
 };
 use cockpit_protocol::context_search::{ContextInvalidationRequest, ContextSearchRequest};
 use serde::de::DeserializeOwned;
@@ -22,6 +22,10 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/presentation",
             get(presentation),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/panes/{pane_id}/context/files",
+            post(files),
         )
         .route(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/context/directory",
@@ -91,6 +95,28 @@ async fn directory(
         Err(error) => return inspection_error(error),
     };
     match contexts.directory(&session, &pane, &request).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn files(
+    State(service): State<CockpitService>,
+    Path((session, pane)): Path<(String, String)>,
+    body: Result<Json<ContextFileIndexRequest>, JsonRejection>,
+) -> Response {
+    if !valid_pane(&session, &pane) {
+        return bad_request("invalid_context_request", "Session or pane ID is invalid");
+    }
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let contexts = match service.contexts() {
+        Ok(contexts) => contexts,
+        Err(error) => return inspection_error(error),
+    };
+    match contexts.file_index(&session, &pane, &request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => inspection_error(error),
     }

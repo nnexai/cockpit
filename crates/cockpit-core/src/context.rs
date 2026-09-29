@@ -8,8 +8,10 @@ use cap_fs_ext::{DirExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, Metadata, OpenOptions};
 use cockpit_protocol::context::{
     ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-    ContextEntry, ContextEntryKind, ContextLaunchRequest, ContextRoot, ContextRootKind,
-    DetectionConfidence, ExtensionKind, PanePresentation, ReviewLaunchRequest,
+    ContextEntry, ContextEntryKind, ContextFileIndex, ContextFileIndexMode, ContextFileIndexRequest,
+    ContextFileIndexSource, ContextFileIndexState, ContextIndexedFile, ContextLaunchRequest,
+    ContextRoot, ContextRootKind, DetectionConfidence, ExtensionKind, PanePresentation,
+    ReviewLaunchRequest,
 };
 use cockpit_protocol::projects::{ProjectConfiguration, ProjectDiagnostic};
 use sha2::{Digest, Sha256};
@@ -19,6 +21,7 @@ use tokio::sync::Semaphore;
 use crate::InspectionError;
 use crate::extension_adapter::{ExtensionHerdrAdapter, ExtensionLaunch, ExtensionPaneEvidence};
 use crate::projects::ProjectService;
+#[cfg(test)]
 use crate::repositories::RepositoryCatalog;
 const MAX_DIRECTORY_SCAN: usize = 100_000;
 
@@ -259,6 +262,77 @@ impl ContextService {
         let authorized = find_root(&presentation.roots, &request.root_id)?;
         read_document(&authorized, request, &self.configuration.limits)
     }
+
+    pub async fn file_index(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        request: &ContextFileIndexRequest,
+    ) -> Result<ContextFileIndex, InspectionError> {
+        let presentation = self.inspect_pane(session_id, pane_id).await?;
+        require_binding(&presentation, &request.binding_id)?;
+        let authorized = find_root(&presentation.roots, &request.root_id)?;
+        if request.mode == ContextFileIndexMode::Cached {
+            let canonical = authorized.canonical.clone();
+            let kind = authorized.root.kind;
+            let binding_id = request.binding_id.clone();
+            let root_id = request.root_id.clone();
+            let cache_root = PathBuf::from(&self.configuration.cache_root);
+            let diagnostics = presentation.diagnostics;
+            return tokio::task::spawn_blocking(move || {
+                let cached = crate::file_index_cache::load(&canonical, kind, &cache_root);
+                Ok::<_, InspectionError>(match cached {
+                    Some(cached) => ContextFileIndex {
+                        binding_id,
+                        root_id,
+                        files: cached.files,
+                        truncated: cached.truncated,
+                        source: cached.source,
+                        state: ContextFileIndexState::Cached,
+                        diagnostics,
+                    },
+                    None => ContextFileIndex {
+                        binding_id,
+                        root_id,
+                        files: Vec::new(),
+                        truncated: false,
+                        source: ContextFileIndexSource::Walk,
+                        state: ContextFileIndexState::Miss,
+                        diagnostics,
+                    },
+                })
+            })
+            .await
+            .map_err(|error| InspectionError::new("context_file_index", error.to_string()))?;
+        }
+        let git_root = git_root_matches(&self.configuration, &authorized.canonical, authorized.root.kind).await?;
+        let git_output = if git_root {
+            Some(git_file_list(&self.configuration, &authorized.canonical).await?)
+        } else {
+            None
+        };
+        let source = if git_root { ContextFileIndexSource::Git } else { ContextFileIndexSource::Walk };
+        let root_path = authorized.canonical.clone();
+        let kind = authorized.root.kind;
+        let cache_root = PathBuf::from(&self.configuration.cache_root);
+        let files = tokio::task::spawn_blocking(move || {
+            authorized.revalidate()?;
+            let result = enumerate_file_index(&authorized, git_root, git_output)?;
+            crate::file_index_cache::store(&root_path, kind, source, result.1, result.0.clone(), &cache_root);
+            Ok::<_, InspectionError>(result)
+        })
+        .await
+        .map_err(|error| InspectionError::new("context_file_index", error.to_string()))??;
+        Ok(ContextFileIndex {
+            binding_id: request.binding_id.clone(),
+            root_id: request.root_id.clone(),
+            files: files.0,
+            truncated: files.1,
+            source,
+            state: ContextFileIndexState::Fresh,
+            diagnostics: presentation.diagnostics,
+        })
+    }
     pub async fn open(
         &self,
         session_id: &str,
@@ -395,6 +469,12 @@ impl ContextService {
         self.presentation(session_id, &launched).await
     }
 
+    pub(crate) async fn cached_discover_checkout(
+        &self,
+        cwd: &Path,
+    ) -> Result<cockpit_protocol::projects::RepositoryCandidate, InspectionError> {
+        self.projects.cached_discover_checkout(cwd).await
+    }
     async fn review_checkout_for_evidence(
         &self,
         presentation: &PanePresentation,
@@ -446,9 +526,7 @@ impl ContextService {
                 "the source pane cwd is unavailable or unsafe",
             )
         })?;
-        let repository = RepositoryCatalog::new(self.configuration.clone())
-            .discover_checkout(&cwd)
-            .await
+        let repository = self.projects.cached_discover_checkout(&cwd).await
             .map_err(|_| {
                 InspectionError::new(
                     "review_open_unavailable",
@@ -611,18 +689,8 @@ impl ContextService {
         ),
         InspectionError,
     > {
-        let catalog = RepositoryCatalog::new(self.configuration.clone());
-        let listed = catalog.list().await?;
-        let mut diagnostics = listed.diagnostics;
         let actual_cwd = evidence_cwd(evidence);
-        let mut repositories = listed.repositories;
-        let mut current_repository_id = None;
-        if let Some(cwd) = actual_cwd.as_deref() {
-            if let Ok(candidate) = catalog.discover_checkout(cwd).await {
-                current_repository_id = Some(candidate.repository_id.clone());
-                repositories.push(candidate);
-            }
-        }
+        let mut diagnostics = Vec::new();
         let mut companion_roots = Vec::new();
         let mut companion_diagnostic = None;
         if !evidence.workspace_id.is_empty() && !evidence.endpoint_identity.is_empty() {
@@ -692,6 +760,21 @@ impl ContextService {
             resolve_viewer_root(&self.configuration, cwd).await
         } else {
             None
+        };
+        let (repositories, current_repository_id) = if viewer_folder.is_none() {
+            let listed = self.projects.cached_repositories().await?;
+            diagnostics.extend(listed.diagnostics);
+            let mut repositories = listed.repositories;
+            let mut current_repository_id = None;
+            if let Some(cwd) = actual_cwd.as_deref() {
+                if let Ok(candidate) = self.projects.cached_discover_checkout(cwd).await {
+                    current_repository_id = Some(candidate.repository_id.clone());
+                    repositories.push(candidate);
+                }
+            }
+            (repositories, current_repository_id)
+        } else {
+            (Vec::new(), None)
         };
         // Ordinary file browsing does not require task/companion discovery.
         // A non-Git folder is normal, not a failed Context setup.
@@ -822,6 +905,159 @@ impl ContextService {
     }
 }
 
+const MAX_FILE_INDEX_FILES: usize = 50_000;
+const MAX_FILE_INDEX_GIT_BYTES: usize = 16 * 1024 * 1024;
+
+async fn git_root_matches(
+    configuration: &ProjectConfiguration,
+    root: &Path,
+    kind: ContextRootKind,
+) -> Result<bool, InspectionError> {
+    let mut command = tokio::process::Command::new("git");
+    command
+        .current_dir(root)
+        .args(["-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR");
+    let result = crate::process::run_bounded_command(
+        command,
+        4096,
+        4096,
+        Duration::from_millis(configuration.limits.git_timeout_ms as u64),
+        "context git root",
+    )
+    .await;
+    let root_has_git_metadata = std::fs::symlink_metadata(root.join(".git")).is_ok();
+    let Ok(output) = result else {
+        if kind == ContextRootKind::Repository || root_has_git_metadata {
+            return Err(InspectionError::new("context_file_index", "Git checkout could not be verified"));
+        }
+        return Ok(false);
+    };
+    if output.status.success()
+        && Path::new(String::from_utf8_lossy(&output.stdout).trim()).canonicalize().ok().as_deref() == Some(root)
+    {
+        return Ok(true);
+    }
+    if kind == ContextRootKind::Repository || root_has_git_metadata {
+        return Err(InspectionError::new("context_file_index", "Git checkout could not be verified"));
+    }
+    Ok(false)
+}
+async fn git_file_list(configuration: &ProjectConfiguration, root: &Path) -> Result<Vec<u8>, InspectionError> {
+    let mut command = tokio::process::Command::new("git");
+    command.current_dir(root)
+        .args(["-c", "core.fsmonitor=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR");
+    let output = crate::process::run_bounded_command(
+        command, MAX_FILE_INDEX_GIT_BYTES, 4096,
+        Duration::from_millis(configuration.limits.git_timeout_ms as u64), "context git file list",
+    ).await?;
+    if !output.status.success() {
+        return Err(InspectionError::new("context_file_index", "Git could not enumerate checkout files"));
+    }
+    Ok(output.stdout)
+}
+
+pub(crate) fn enumerate_file_index(
+    authorized: &AuthorizedRoot,
+    git_root: bool,
+    git_output: Option<Vec<u8>>,
+) -> Result<(Vec<ContextIndexedFile>, bool), InspectionError> {
+    if git_root {
+        let bytes = git_output.ok_or_else(|| InspectionError::new("context_file_index", "Git file list is unavailable"))?;
+        let mut sorted: Vec<&[u8]> = bytes.split(|byte| *byte == 0).filter(|raw| !raw.is_empty()).collect();
+        sorted.sort_unstable();
+        let mut paths = Vec::new();
+        let mut truncated = false;
+        let mut previous: Option<&[u8]> = None;
+        for raw in sorted {
+            if previous == Some(raw) { continue; }
+            previous = Some(raw);
+            let Ok(path) = std::str::from_utf8(raw) else { continue };
+            let Ok(relative) = relative_path(path) else { continue };
+            if reserved_context_path(authorized.root.kind, &relative).is_some()
+                || path.contains('\\') {
+                continue;
+            }
+            let Some(metadata) = regular_file_metadata(&authorized.dir, &relative) else { continue };
+            if paths.len() == MAX_FILE_INDEX_FILES { truncated = true; break; }
+            paths.push(ContextIndexedFile { path: path.to_owned(), bytes: Some(metadata.len()) });
+        }
+        return Ok((paths, truncated));
+    }
+    let mut stack = vec![PathBuf::new()];
+    let mut files = Vec::new();
+    let mut truncated = false;
+    let mut scanned = 0usize;
+    while let Some(prefix) = stack.pop() {
+        if prefix.components().count() >= 64 {
+            truncated = true;
+            continue;
+        }
+        let directory = authorized.resolve_directory(&prefix)?;
+        let entries = directory.entries().map_err(|error| InspectionError::new("context_file_index", error.to_string()))?;
+        for entry in entries {
+            scanned += 1;
+            if scanned > 200_000 { truncated = true; break; }
+            let entry = entry.map_err(|error| InspectionError::new("context_file_index", error.to_string()))?;
+            let name = entry.file_name();
+            let relative = prefix.join(&name);
+            if crate::context_assets::excluded_source_path(&relative)
+                || reserved_context_path(authorized.root.kind, &relative).is_some()
+                || relative.to_str().is_none()
+                || relative.as_os_str().as_encoded_bytes().contains(&b'\\') {
+                continue;
+            }
+            let metadata = directory.symlink_metadata(Path::new(&name)).map_err(|error| InspectionError::new("context_file_index", error.to_string()))?;
+            if metadata.file_type().is_symlink() { continue; }
+            if metadata.is_dir() {
+                stack.push(relative);
+            } else if metadata.is_file() {
+                files.push(ContextIndexedFile { path: relative.to_string_lossy().into_owned(), bytes: Some(metadata.len()) });
+            }
+        }
+        if scanned > 200_000 { break; }
+    }
+    files.sort_unstable_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+    if files.len() > MAX_FILE_INDEX_FILES {
+        files.truncate(MAX_FILE_INDEX_FILES);
+        truncated = true;
+    }
+    Ok((files, truncated))
+}
+
+fn regular_file_metadata(root: &Dir, relative: &Path) -> Option<Metadata> {
+    let mut components = relative.components().peekable();
+    let mut directory = root.try_clone().ok()?;
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else { return None };
+        if components.peek().is_some() {
+            directory = directory.open_dir_nofollow(name).ok()?;
+        } else {
+            let metadata = directory.symlink_metadata(Path::new(name)).ok()?;
+            return (!metadata.file_type().is_symlink() && metadata.is_file()).then_some(metadata);
+        }
+    }
+    None
+}
 pub(crate) fn read_directory(
     authorized: &AuthorizedRoot,
     request: &ContextDirectoryRequest,
@@ -1242,6 +1478,13 @@ impl AuthorizedRoot {
     pub(crate) fn root_id(&self) -> &str {
         &self.root.root_id
     }
+    pub(crate) fn canonical_path(&self) -> &Path {
+        &self.canonical
+    }
+
+    pub(crate) fn root_kind(&self) -> ContextRootKind {
+        self.root.kind
+    }
 
     pub(crate) fn directory_revision(&self) -> Result<String, InspectionError> {
         self.dir
@@ -1275,7 +1518,7 @@ impl AuthorizedRoot {
     }
 }
 
-fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'static str> {
+pub(crate) fn reserved_context_path(kind: ContextRootKind, relative: &Path) -> Option<&'static str> {
     let components = relative.components().filter_map(|component| {
         let Component::Normal(name) = component else {
             return None;
@@ -1982,6 +2225,7 @@ mod review_checkout_tests {
             worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
             companion_root: root.join("companions").to_string_lossy().into_owned(),
             state_root: root.join("state").to_string_lossy().into_owned(),
+            cache_root: root.join("cache").to_string_lossy().into_owned(),
             library_root: root.join("library").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".to_owned(),
             checkout_template: "{repo}-{task_id}".to_owned(),
@@ -2718,5 +2962,81 @@ mod review_checkout_tests {
             "ambiguous checkout associations must not authorize Context"
         );
         std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+}
+#[cfg(test)]
+mod file_index_tests {
+    use super::*;
+    use std::process::Command;
+    use uuid::Uuid;
+
+    fn git(root: &Path, args: &[&str]) -> Vec<u8> {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .expect("git starts");
+        assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        output.stdout
+    }
+
+    #[test]
+    fn git_index_excludes_ignored_files_and_walk_never_follows_symlinks() {
+        let root = std::env::temp_dir().join(format!("cockpit-context-file-index-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q"]);
+        git(&root, &["config", "user.email", "test@example.invalid"]);
+        git(&root, &["config", "user.name", "Test"]);
+        std::fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+        std::fs::write(root.join("tracked.txt"), "tracked").unwrap();
+        std::fs::create_dir_all(root.join("ignored")).unwrap();
+        std::fs::write(root.join("ignored/secret.txt"), "ignored").unwrap();
+        std::fs::write(root.join("untracked.txt"), "untracked").unwrap();
+        git(&root, &["add", ".gitignore", "tracked.txt"]);
+        git(&root, &["commit", "-qm", "fixture"]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("tracked.txt"), root.join("link.txt")).unwrap();
+
+        let dir = open_dir_nofollow_absolute(&root).unwrap();
+        let repository = AuthorizedRoot {
+            root: ContextRoot {
+                root_id: "repository:test".into(),
+                kind: ContextRootKind::Repository,
+                label: "Test".into(),
+                path: root.to_string_lossy().into_owned(),
+                repository_id: "test".into(),
+                checkout_path: root.to_string_lossy().into_owned(),
+                companion_id: None,
+            },
+            canonical: root.to_path_buf(),
+            dir,
+            max_depth: 64,
+        };
+        let output = git(&root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+        let (files, truncated) = enumerate_file_index(&repository, true, Some(output)).unwrap();
+        assert!(!truncated);
+        assert_eq!(files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), vec![".gitignore", "tracked.txt", "untracked.txt"]);
+
+        let plain = std::env::temp_dir().join(format!("cockpit-context-file-index-plain-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("visible.txt"), "visible").unwrap();
+        std::fs::create_dir_all(plain.join(".cockpit")).unwrap();
+        std::fs::write(plain.join(".cockpit/private"), "private").unwrap();
+        std::fs::create_dir_all(plain.join("node_modules/pkg")).unwrap();
+        std::fs::write(plain.join("node_modules/pkg/private.js"), "private").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("tracked.txt"), plain.join("linked.txt")).unwrap();
+        let plain_dir = cap_std::fs::Dir::open_ambient_dir(&plain, cap_std::ambient_authority()).unwrap();
+        let library = AuthorizedRoot::library(plain.clone(), plain_dir, 64).unwrap();
+        let (files, truncated) = enumerate_file_index(&library, false, None).unwrap();
+        assert!(!truncated);
+        assert_eq!(files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), vec!["visible.txt"]);
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(plain).unwrap();
     }
 }

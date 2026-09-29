@@ -6,6 +6,7 @@ import type {
   WorkspaceTeardownPreviewRequest,
   WorkspaceTeardownResult,
 } from "../../protocol/generated/v1";
+import { ModalSection } from "../input/ModalSection";
 import "./setup.css";
 
 export type TeardownClient = {
@@ -93,7 +94,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
   };
 
   return <div className="setup-overlay" role="presentation">
-    <section className="setup-dialog setup-dialog-compact" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <ModalSection className="setup-dialog setup-dialog-compact" labelledBy={titleId} onDismiss={() => { if (!busy) onClose(); }}>
       <header className="setup-header"><div><span className="setup-eyebrow">Task cleanup</span><h2 id={titleId}>Review teardown</h2><p>Close keeps local files. Removal is available only for a freshly verified clean, Cockpit-owned linked worktree.</p></div><button type="button" className="setup-close" onClick={onClose} disabled={busy}>Close</button></header>
       <main className="setup-body"><section className="setup-step-content">
         {receipt ? <p className="setup-inline-status" role="status">{receipt.message}</p> : null}
@@ -114,6 +115,6 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
           <div className="setup-actions"><button type="button" onClick={onClose} disabled={busy}>Cancel</button><button type="button" className={removeSelected ? "setup-primary" : ""} onClick={() => void execute()} disabled={!canConfirm}>{selectedAction ? actionLabel(selectedAction) : "Choose an action"}</button></div>
         </> : null}
       </section></main>
-    </section>
+    </ModalSection>
   </div>;
 }

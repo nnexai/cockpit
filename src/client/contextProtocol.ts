@@ -1,6 +1,7 @@
 import type {
   ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-  ContextEntry, ContextLaunchRequest, ContextRoot, PanePresentation,
+  ContextEntry, ContextFileIndex, ContextFileIndexRequest, ContextLaunchRequest,
+  ContextRoot, PanePresentation,
 } from "../protocol/generated/v1";
 import { CockpitClientError } from "./CockpitClient";
 
@@ -63,6 +64,21 @@ export function parseContextDirectoryRequest(value: unknown): ContextDirectoryRe
     offset: value.offset === undefined || value.offset === null ? undefined : value.offset,
     revision: value.revision === undefined || value.revision === null ? undefined : value.revision,
   };
+}
+
+export function parseContextFileIndexRequest(value: unknown): ContextFileIndexRequest {
+  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
+    || (value.mode !== "cached" && value.mode !== "fresh")) malformed("Context file-index request");
+  return value as unknown as ContextFileIndexRequest;
+}
+
+export function parseContextFileIndex(value: unknown): ContextFileIndex {
+  if (!record(value) || !identity(value.binding_id) || !identity(value.root_id)
+    || !Array.isArray(value.files) || value.files.length > 50_000
+    || !value.files.every((file) => record(file) && relativePath(file.path, false) && (file.bytes === null || bytes(file.bytes)))
+    || typeof value.truncated !== "boolean" || !["git", "walk"].includes(String(value.source))
+    || !["fresh", "cached", "miss"].includes(String(value.state)) || !diagnostics(value.diagnostics)) malformed("Context file index");
+  return value as unknown as ContextFileIndex;
 }
 
 export function parseContextDocumentRequest(value: unknown): ContextDocumentRequest {

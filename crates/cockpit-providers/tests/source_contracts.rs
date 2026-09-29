@@ -80,6 +80,7 @@ else:
             worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
             companion_root: root.join("companions").to_string_lossy().into_owned(),
             state_root: root.join("state").to_string_lossy().into_owned(),
+            cache_root: root.join("cache").to_string_lossy().into_owned(),
             library_root: root.join("library").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".into(),
             checkout_template: "{repo}-{task_id}".into(),

@@ -4,8 +4,14 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { ContextDirectory, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
+import type { ContextDirectory, ContextFileIndex, LibraryItemSummary, LibraryListing, LibraryOperation, PanePresentation, SpaceAddAttempt, SpaceContextListing, SpaceCopyRow, SpaceUpdateRequest } from "../../protocol/generated/v1";
 import { ContextViewer, createContextViewState, SourceLines, type ContextViewState } from "./ContextViewer";
+
+/** The item header's Space status as `context | pill word`; states that need no context read just the word. */
+function spaceState(root: ParentNode): string {
+  const state = root.querySelector(".library-space-state");
+  return [state?.querySelector(".library-space-context")?.textContent, state?.querySelector(".library-pill")?.textContent].filter(Boolean).join(" | ");
+}
 
 async function settle(): Promise<void> {
   await act(async () => { await Promise.resolve(); });
@@ -142,16 +148,14 @@ it("indexes unopened nested files for the picker and opens the selected result",
   document.body.append(host);
   const mounted = createRoot(host);
   const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
-    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: request.path === ""
-      ? [
-        { entry_id: "internal", name: ".cockpit", path: ".cockpit", kind: "directory", bytes: null, revision: "r1", refusal: null },
-        { entry_id: "internal-file", name: "index.json", path: ".cockpit/index.json", kind: "file", bytes: 12, revision: "r1", refusal: null },
-        { entry_id: "nested", name: "nested", path: "nested", kind: "directory", bytes: null, revision: "r1", refusal: null },
-      ]
-      : [{ entry_id: "target", name: "target.md", path: "nested/target.md", kind: "file", bytes: 12, revision: "r2", refusal: null }],
+    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [],
+    entries: request.path === "" ? [{ entry_id: "nested", name: "nested", path: "nested", kind: "directory", bytes: null, revision: "r1", refusal: null }] : [],
+  }));
+  const index = vi.fn(async (_session: string, _pane: string, request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => ({
+    binding_id: "binding", root_id: "folder", files: [{ path: "nested/target.md", bytes: 12 }], truncated: false, source: "walk", state: request.mode === "cached" ? "miss" : "fresh", diagnostics: [],
   }));
   const documentRead = vi.fn(async (_session: string, _pane: string, request: { path: string }) => ({ binding_id: "binding", root_id: "folder", path: request.path, revision: "r2", content_hash: null, bytes: 12, media_type: "text/markdown", text: "# Target", truncated: false, diagnostics: [] }));
-  const client = { contextDirectory: directory, contextDocument: documentRead } as unknown as CockpitClient;
+  const client = { contextDirectory: directory, contextFileIndex: index, contextDocument: documentRead } as unknown as CockpitClient;
   const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
@@ -164,8 +168,8 @@ it("indexes unopened nested files for the picker and opens the selected result",
     treeFile.focus();
     await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
     await settle(); await settle(); await settle();
-    expect(directory.mock.calls.map((call) => call[2].path)).toContain("nested");
-    expect(directory.mock.calls.map((call) => call[2].path)).not.toContain(".cockpit");
+    expect(directory.mock.calls.map((call) => call[2].path)).toEqual([""]);
+    expect(index).toHaveBeenCalledTimes(2);
     expect(host.querySelector(".file-picker-results")?.textContent).not.toContain(".cockpit");
     const result = [...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].find((button) => button.title.includes("nested/target.md"));
     expect(result).toBeDefined();
@@ -180,19 +184,21 @@ it("indexes unopened nested files for the picker and opens the selected result",
   }
 });
 
-it("cancels recursive picker indexing when the picker is dismissed", async () => {
+it("cancels fresh picker indexing when the picker is dismissed", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const mounted = createRoot(host);
-  let requestCount = 0;
   let pickerSignal: AbortSignal | undefined;
-  const directory = vi.fn((_session: string, _pane: string, request: { path: string }, signal?: AbortSignal): Promise<ContextDirectory> => {
-    requestCount += 1;
-    if (requestCount === 1) return Promise.resolve({ binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: [{ entry_id: "first", name: "first.ts", path: "first.ts", kind: "file", bytes: 1, revision: "r1", refusal: null }] });
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
+    binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [],
+    entries: [{ entry_id: "first", name: "first.ts", path: "first.ts", kind: "file", bytes: 1, revision: "r1", refusal: null }],
+  }));
+  const fileIndex = vi.fn((_session: string, _pane: string, request: { mode: "cached" | "fresh" }, signal?: AbortSignal): Promise<ContextFileIndex> => {
+    if (request.mode === "cached") return Promise.resolve({ binding_id: "binding", root_id: "folder", files: [], truncated: false, source: "walk", state: "miss", diagnostics: [] });
     pickerSignal = signal;
-    return new Promise(() => undefined);
+    return new Promise<ContextFileIndex>(() => undefined);
   });
-  const client = { contextDirectory: directory } as unknown as CockpitClient;
+  const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
   const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
@@ -216,14 +222,56 @@ it("cancels recursive picker indexing when the picker is dismissed", async () =>
   }
 });
 
-it("caps picker results when one directory exceeds the picker file limit", async () => {
+it("keeps a late cached picker list visible after fresh indexing fails", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const mounted = createRoot(host);
-  let requestCount = 0;
-  const entries = Array.from({ length: 10_001 }, (_, index) => ({ entry_id: `entry-${index}`, name: `file-${index}.ts`, path: `file-${index}.ts`, kind: "file" as const, bytes: 1, revision: "r1", refusal: null }));
-  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: requestCount++ === 0 ? [] : entries }));
-  const client = { contextDirectory: directory } as unknown as CockpitClient;
+  let resolveCached: ((result: ContextFileIndex) => void) | undefined;
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({
+    binding_id: "late-cache-binding", root_id: "late-cache-folder", path: request.path, truncated: false, diagnostics: [],
+    entries: [{ entry_id: "first", name: "first.ts", path: "first.ts", kind: "file", bytes: 1, revision: "r1", refusal: null }],
+  }));
+  const fileIndex = vi.fn((_session: string, _pane: string, request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => {
+    if (request.mode === "fresh") return Promise.reject(new Error("fresh index failed"));
+    return new Promise((resolve) => { resolveCached = resolve; });
+  });
+  const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
+  const presentation = { session_id: "session", pane_id: "pane", binding_id: "late-cache-binding", default_root_id: "late-cache-folder", roots: [{ root_id: "late-cache-folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
+  function Harness() {
+    const [view, setView] = useState(createContextViewState());
+    return <ContextViewer client={client} presentation={presentation} value={view} onChange={setView} controlAllowed onRequestControl={vi.fn()} onTerminalView={vi.fn()} />;
+  }
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await settle();
+    const treeFile = host.querySelector<HTMLButtonElement>("[data-context-path='first.ts']")!;
+    treeFile.focus();
+    await act(async () => treeFile.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
+    await settle();
+    expect(host.querySelector(".file-picker-status")?.textContent).toBe("Could not load files");
+    await act(async () => resolveCached?.({
+      binding_id: "late-cache-binding", root_id: "late-cache-folder", files: [{ path: "nested/target.md", bytes: null }],
+      truncated: false, source: "walk", state: "cached", diagnostics: [],
+    }));
+    await settle();
+    expect(host.querySelector(".file-picker-status")?.textContent).toBe("May be out of date");
+    expect([...host.querySelectorAll<HTMLButtonElement>(".file-picker-results button")].some((button) => button.title.includes("nested/target.md"))).toBe(true);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("shows the incomplete file-index status for a capped index", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const files = Array.from({ length: 10_000 }, (_, index) => ({ path: `file-${index}.ts`, bytes: 1 }));
+  const directory = vi.fn(async (_session: string, _pane: string, request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "binding", root_id: "folder", path: request.path, truncated: false, diagnostics: [], entries: [] }));
+  const fileIndex = vi.fn(async (_session: string, _pane: string, request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => ({
+    binding_id: "binding", root_id: "folder", files, truncated: true, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [],
+  }));
+  const client = { contextDirectory: directory, contextFileIndex: fileIndex } as unknown as CockpitClient;
   const presentation = { session_id: "session", pane_id: "pane", binding_id: "binding", default_root_id: "folder", roots: [{ root_id: "folder", kind: "folder", label: "Folder", path: "/folder", repository_id: "folder", checkout_path: "/folder", companion_id: null }], diagnostics: [] } as unknown as PanePresentation;
   function Harness() {
     const [view, setView] = useState(createContextViewState());
@@ -236,6 +284,7 @@ it("caps picker results when one directory exceeds the picker file limit", async
     await act(async () => viewer.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true })));
     await settle(); await settle(); await settle();
     expect(host.querySelector(".file-picker-status")?.textContent).toBe("10000 files · index incomplete");
+    expect(fileIndex).toHaveBeenCalledTimes(2);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
@@ -415,6 +464,11 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
   }
   const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
   const toolbarButton = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".context-toolbar button")].find((candidate) => candidate.textContent === label || candidate.getAttribute("aria-label") === label);
+  // Rereading the Library directory is local; it lives in the `⋯` menu, not a toolbar button.
+  const reloadListing = async () => {
+    await act(async () => toolbarButton("Library actions")!.click());
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((entry) => entry.textContent?.startsWith("Reload listing"))!.click());
+  };
   try {
     await act(async () => mounted.render(<Harness />));
     await flush();
@@ -424,8 +478,10 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     const select = host.querySelector<HTMLSelectElement>(".context-root-select select")!;
     await act(async () => { select.value = "library"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     await flush();
-    expect(toolbarButton("Resources")).toBeUndefined();
+    expect(toolbarButton("Show file tree")).toBeUndefined();
     expect(toolbarButton("Add…")).toBeDefined();
+    expect(toolbarButton("Hide file tree")?.getAttribute("aria-keyshortcuts")).toBe("Alt+1");
+    expect(toolbarButton("Find in Library")?.getAttribute("aria-keyshortcuts")).toBe("Control+p /");
     expect(toolbarButton("Refresh all")?.disabled).toBe(false);
     const row = host.querySelector<HTMLButtonElement>('[data-library-row="source:mr"]')!;
     expect(row.textContent).toContain("!482 Fix token refresh race");
@@ -435,9 +491,18 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     await flush();
     expect(client.libraryDocument).toHaveBeenCalledWith({ path: "gitlab/gitlab.test/platform/api/merge-requests/482/Fix token refresh race.md", expected_revision: null, offset: null }, expect.any(AbortSignal));
     expect(host.querySelector(".library-kind-chip")?.textContent).toBe("GitLab MR");
+    // Wrap only applies to source lines: it appears with Source and is not offered over the rendered preview.
+    expect(toolbarButton("Refresh Context files")).toBeUndefined();
+    expect(toolbarButton("Wrap long lines")).toBeUndefined();
+    const segment = (label: string) => [...host.querySelectorAll<HTMLButtonElement>(".viewer-segmented button")].find((button) => button.textContent === label)!;
+    await act(async () => segment("Source").click());
+    expect(segment("Source").getAttribute("aria-keyshortcuts")).toBe("Alt+M");
+    expect(toolbarButton("Wrap long lines")?.getAttribute("aria-keyshortcuts")).toBe("Alt+Z");
+    await act(async () => segment("Preview").click());
+    expect(toolbarButton("Wrap long lines")).toBeUndefined();
 
     const listingReads = vi.mocked(client.libraryListing).mock.calls.length;
-    await act(async () => toolbarButton("Refresh Context files")!.click());
+    await reloadListing();
     await flush();
     expect(client.libraryRefresh).not.toHaveBeenCalled();
     expect(vi.mocked(client.libraryListing).mock.calls.length).toBeGreaterThan(listingReads);
@@ -453,7 +518,7 @@ it("shows the Library as a pane root with Add… and Refresh all instead of Reso
     expect(host.textContent).toContain("Updated by another source");
 
     vi.mocked(client.libraryListing).mockRejectedValueOnce(new Error("listing offline"));
-    await act(async () => toolbarButton("Refresh Context files")!.click());
+    await reloadListing();
     await flush();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Library unavailable: listing offline. Space context is unaffected.");
     expect(host.querySelector(".context-tree-error button")?.textContent).toBe("Retry");
@@ -487,6 +552,7 @@ it("opens any file a folder copy captured, not only its first file", async () =>
     projectConfiguration: vi.fn(async () => ({ providers: [] })),
     libraryDirectory: vi.fn(async (request: { path: string }): Promise<ContextDirectory> => ({ binding_id: "library", root_id: "library:fs", path: request.path, truncated: false, diagnostics: [],
       entries: request.path === "" ? [entry("folders/Design notes", "directory")] : [entry("folders/Design notes/README.md", "file"), entry("folders/Design notes/docs/guide.md", "file")] })),
+    libraryFileIndex: vi.fn(async (request: { mode: "cached" | "fresh" }): Promise<ContextFileIndex> => ({ binding_id: "library", root_id: "library:fs", files: [{ path: "folders/Design notes/README.md", bytes: 10 }, { path: "folders/Design notes/docs/guide.md", bytes: 10 }], truncated: false, source: "walk", state: request.mode === "cached" ? "cached" : "fresh", diagnostics: [] })),
     libraryDocument: vi.fn(async (request: { path: string }) => ({ binding_id: "library", root_id: "library:fs", path: request.path, revision: "r1", content_hash: null, bytes: 10, media_type: "text/markdown", text: request.path.endsWith("guide.md") ? "# Guide body" : "# Readme body", truncated: false, diagnostics: [] })),
   } as unknown as CockpitClient;
   function Harness() {
@@ -563,10 +629,10 @@ it("lists this Space's Library context in Resources, failed adds first, and retr
     expect(dialog.querySelector(".space-context-summary")?.textContent).toBe("In api-review · 2 items · 1 behind");
     expect([...dialog.querySelectorAll("[role='listitem'] .context-source-title")].map((title) => title.textContent)).toEqual(["Fix token refresh race", "zeta", "alpha"]);
     const attempt = dialog.querySelector<HTMLElement>("[role='listitem']")!;
-    expect(attempt.textContent).toContain("✕ Not added — Retry");
+    expect(attempt.textContent).toContain("Not added — Retry");
     expect(attempt.querySelector("[role='alert']")?.textContent).toBe("Saved to the Library, but api-review's context folder couldn't be verified. Nothing was written to api-review.");
-    expect(dialog.textContent).toContain("↑ Library newer");
-    expect(dialog.textContent).toContain("✓ Up to date");
+    expect(dialog.textContent).toContain("Library newer");
+    expect(dialog.textContent).toContain("Up to date");
 
     const retry = [...attempt.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry adding to api-review")!;
     retry.focus();
@@ -671,7 +737,7 @@ it("updates only the selected copy in this Space, counts Update all from behind 
     await flush();
     expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: ["source:alpha"], follow_ids: [] }, replace_edited: [] });
     // The reread listing, not the click, decides the row: alpha is current, beta is still behind, and the row kept its place.
-    expect(host.querySelector(".context-resources [role='listitem']")?.textContent).toContain("✓ Up to date");
+    expect(host.querySelector(".context-resources [role='listitem']")?.textContent).toContain("Up to date");
     expect(actions("beta").map((button) => button.textContent)).toEqual(["Update"]);
     expect(updateAll().textContent).toBe("Update all (2)");
     expect(document.activeElement).toBe(actions("alpha")[0]);
@@ -694,7 +760,7 @@ it("updates only the selected copy in this Space, counts Update all from behind 
     expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(3);
     expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ target, scope: { scope: "all" }, replace_edited: [] });
     expect(host.querySelector(".space-context [role='status']")?.textContent).toBe("Nothing updated in api-review. Skipped 1 edited copy.");
-    expect(host.querySelector(".context-resources")?.textContent).toContain("✎ Edited in Space · Library newer");
+    expect(host.querySelector(".context-resources")?.textContent).toContain("Edited in Space · Library newer");
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
@@ -746,7 +812,7 @@ it("replaces an edited copy only after confirmation with the listed hashes, keep
     expect(confirmDialog()).toBeNull();
     expect(vi.mocked(client.librarySpaceList).mock.calls.length).toBeGreaterThan(listReads);
     expect(entry("delta")?.querySelector("[role='alert']")?.textContent).toBe("api-review's copy changed since it was checked, so nothing was changed. Review it and try again.");
-    expect(entry("delta")?.textContent).toContain("✎ Edited in Space · Library newer");
+    expect(entry("delta")?.textContent).toContain("Edited in Space · Library newer");
 
     // Retrying confirms the reread hash, never the stale one.
     vi.mocked(client.librarySpaceUpdate).mockImplementationOnce(async () => {
@@ -757,7 +823,7 @@ it("replaces an edited copy only after confirmation with the listed hashes, keep
     await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
     await flush();
     expect(client.librarySpaceUpdate).toHaveBeenLastCalledWith({ ...firstReplace, replace_edited: [{ path, current_hash: "sha256:second" }] });
-    expect(entry("delta")?.textContent).toContain("✓ Up to date");
+    expect(entry("delta")?.textContent).toContain("Up to date");
     expect(entry("delta")?.querySelector("[role='alert']")).toBeNull();
 
     const remove = button(entry("kept"), "Remove from this Space…")!;
@@ -912,7 +978,7 @@ it("keeps an Update all report as it finished after the skipped copy is replaced
     await act(async () => button(entry("delta"), "Replace with Library version…")!.click());
     await act(async () => button(confirmDialog()!, "Replace with Library version")!.click());
     await flush();
-    expect(entry("delta")?.textContent).toContain("✓ Up to date");
+    expect(entry("delta")?.textContent).toContain("Up to date");
     expect(report()).toBe("Updated 1 item in api-review. Skipped 1 edited copy.");
 
     vi.mocked(client.librarySpaceRemove).mockImplementationOnce(async () => {
@@ -994,7 +1060,7 @@ it("adds a Library item to the Space and rereads its standing after provider ref
     // Copying into the Space leaves the Library item alone: the open document and its header stay mounted.
     expect(vi.mocked(client.libraryDocument).mock.calls.length).toBe(documentReads);
     expect(header.isConnected).toBe(true);
-    expect(header.querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
+    expect(spaceState(header)).toBe("In api-review | Up to date");
     expect([...header.querySelectorAll("button")].map((button) => button.textContent)).not.toContain("Add to api-review");
     expect(document.activeElement).toBe(header.querySelector(".library-space-slot"));
 
@@ -1004,7 +1070,7 @@ it("adds a Library item to the Space and rereads its standing after provider ref
     await flush();
     expect(client.libraryRefresh).toHaveBeenCalledWith({ scope: "items", item_ids: [item.item_id] });
     expect(host.textContent).toContain("Refreshed keys");
-    expect(host.querySelector(".library-space-state")?.textContent).toBe("In api-review · ↑ Library newer");
+    expect(spaceState(host)).toBe("In api-review | Library newer");
     expect(client.librarySpaceAdd).toHaveBeenCalledTimes(1);
     expect(client.librarySpaceUpdate).not.toHaveBeenCalled();
   } finally {
@@ -1052,14 +1118,14 @@ it("rereads the Space's copies when Context files are refreshed and when Resourc
     await flush();
     expect(toolbarButton("Resources")?.textContent).toBe("Resources · 1 behind");
     await openResources();
-    expect(host.querySelector(".context-resources")?.textContent).toContain("✎ Edited in Space · Library newer");
+    expect(host.querySelector(".context-resources")?.textContent).toContain("Edited in Space · Library newer");
     await closeResources();
 
     // Deleted on disk while Resources is closed: reopening shows it without another refresh.
     listing = { ...listing, rows: [copy("missing_in_space")], behind: 0 };
     await openResources();
     const resources = host.querySelector(".context-resources")!;
-    expect(resources.textContent).toContain("○ Missing in Space");
+    expect(resources.textContent).toContain("Missing in Space");
     expect(resources.textContent).not.toContain("Edited in Space");
   } finally {
     await act(async () => mounted.unmount());
@@ -1166,7 +1232,7 @@ it("clears a header's failed Add to <Space> once another surface copies the item
     await act(async () => window.dispatchEvent(new CustomEvent("cockpit:library-changed", { detail: addedElsewhere })));
     await flush();
     const header = host.querySelector<HTMLElement>(".library-item-header")!;
-    expect(header.querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
+    expect(spaceState(header)).toBe("In api-review | Up to date");
     expect(header.querySelector("[role='alert']")).toBeNull();
     expect(headerButton("Retry adding to api-review")).toBeUndefined();
     expect(header.textContent).not.toContain("Too many pending Space adds");
@@ -1223,17 +1289,17 @@ it("offers the copy's Update, Replace and Remove for the target Space in the Lib
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-library-row="source:ops-311"]')!.click());
     await flush();
-    expect(header().querySelector(".library-space-state")?.textContent).toBe("In api-review · ↑ Library newer");
+    expect(spaceState(header())).toBe("In api-review | Library newer");
     await act(async () => headerButton("Update in api-review")!.click());
     await flush();
     expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: ["source:ops-311"], follow_ids: [] }, replace_edited: [] });
-    expect(header().querySelector(".library-space-state")?.textContent).toBe("In api-review · ✓ Up to date");
+    expect(spaceState(header())).toBe("In api-review | Up to date");
     expect(headerButton("Update in api-review")).toBeUndefined();
 
     // Edited in the Space: the header replaces only after confirmation.
     rows = [copy("edited_in_space", true, [{ path, current_hash: "sha256:edit" }])];
     await reread();
-    expect(header().querySelector(".library-space-state")?.textContent).toBe("✎ Edited in Space · Library newer");
+    expect(spaceState(header())).toBe("Edited in Space · Library newer");
     await act(async () => headerButton("Replace with Library version…")!.click());
     expect(document.body.querySelector("[role='dialog'] h2")?.textContent).toBe('Replace your edited copy of "Rotate signing keys"?');
     await act(async () => dialogButton("Keep my copy")!.click());

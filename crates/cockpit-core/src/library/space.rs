@@ -188,7 +188,7 @@ pub(super) fn fail_pending_attempts_locked(
 pub(super) fn recover_attempts(store: &Store) -> Result<(), InspectionError> {
     let _lock = store.exclusive()?;
     let dir = attempts_dir(store)?;
-    let index = store.index()?;
+    let mut index = None;
     for mut attempt in read_attempts(&dir)? {
         if attempt.state != SpaceAddAttemptState::Pending {
             continue;
@@ -198,6 +198,10 @@ pub(super) fn recover_attempts(store: &Store) -> Result<(), InspectionError> {
             Err(error) if error.code == "library_item_busy" => continue,
             Err(error) => return Err(error),
         };
+        if index.is_none() {
+            index = Some(store.index()?);
+        }
+        let index = index.as_ref().expect("pending recovery index initialized");
         if let Some(id) = &attempt.item_id {
             if !index.items.iter().any(|entry| &entry.summary.item_id == id) {
                 remove_attempt(&dir, &attempt.target, id)?;
@@ -410,38 +414,38 @@ impl LibraryService {
         &self,
         target: SpaceTarget,
     ) -> Result<SpaceContextListing, InspectionError> {
-        let store = self.open()?;
-        let attempts = {
-            let _lock = store.shared()?;
-            read_attempts(&attempts_dir(&store)?)?
-                .into_iter()
-                .filter(|attempt| same_target(&attempt.target, &target))
-                .collect()
-        };
+        let service = self.clone();
+        let attempts_target = target.clone();
+        let (store, attempts) = tokio::task::spawn_blocking(move || {
+            let store = service.open()?;
+            let attempts = {
+                let _lock = store.shared()?;
+                read_attempts(&attempts_dir(&store)?)?
+                    .into_iter()
+                    .filter(|attempt| same_target(&attempt.target, &attempts_target))
+                    .collect()
+            };
+            Ok::<_, InspectionError>((store, attempts))
+        })
+        .await
+        .map_err(|error| InspectionError::new("library_unavailable", error.to_string()))??;
         let (companion, rows) = match self.authorize_space(&target).await {
             Ok(authorized) => {
-                let _lock = store.shared()?;
-                let index = store.index()?;
-                let items = index
-                    .items
-                    .into_iter()
-                    .map(|entry| entry.summary)
-                    .collect::<Vec<_>>();
-                let rows = context_assets::library_space_rows(
-                    &authorized.dir,
-                    authorized
-                        .root
-                        .companion_id
-                        .as_deref()
-                        .expect("authorized companion"),
-                    &items,
-                    &index.follows,
-                )?;
+                let companion_root_id = authorized.root.root_id.clone();
+                let companion_label = authorized.root.label.clone();
+                let companion_id = authorized.root.companion_id.clone().expect("authorized companion");
+                let dir = authorized.dir;
+                let row_store = Arc::clone(&store);
+                let rows = tokio::task::spawn_blocking(move || {
+                    let _lock = row_store.shared()?;
+                    let index = row_store.index_shared()?;
+                    let items = index.items.iter().map(|entry| entry.summary.clone()).collect::<Vec<_>>();
+                    context_assets::library_space_rows(&dir, &companion_id, &items, &index.follows)
+                })
+                .await
+                .map_err(|error| InspectionError::new("library_unavailable", error.to_string()))??;
                 (
-                    SpaceCompanionStatus::Available {
-                        companion_root_id: authorized.root.root_id,
-                        companion_label: authorized.root.label,
-                    },
+                    SpaceCompanionStatus::Available { companion_root_id, companion_label },
                     rows,
                 )
             }

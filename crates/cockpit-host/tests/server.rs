@@ -293,6 +293,7 @@ fn service_with_library(root: &std::path::Path) -> CockpitService {
         worktree_root: root.join("worktrees").display().to_string(),
         companion_root: root.join("companions").display().to_string(),
         state_root: root.join("state").display().to_string(),
+        cache_root: root.join("cache").display().to_string(),
         library_root: root.join("library").display().to_string(),
         branch_template: "{name}".to_owned(),
         checkout_template: "{name}".to_owned(),

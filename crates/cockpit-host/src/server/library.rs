@@ -10,7 +10,7 @@ use axum::{
 };
 use cockpit_core::CockpitService;
 use cockpit_protocol::library::{
-    LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryMediaRequest,
+    LibraryAddRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryFileIndexRequest, LibraryMediaRequest,
     LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
     LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceContextRequest,
     SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
@@ -37,6 +37,7 @@ pub(super) fn routes() -> Router<CockpitService> {
         .route("/api/v1/library/operations/{id}/cancel", post(cancel))
         .route("/api/v1/library/replace", post(replace))
         .route("/api/v1/library/remove", post(remove))
+        .route("/api/v1/library/files", post(files))
         .route("/api/v1/library/directory", post(directory))
         .route("/api/v1/library/document", post(document))
         .route("/api/v1/library/media", post(media))
@@ -290,6 +291,23 @@ async fn directory(
     }
     match service.library() {
         Ok(library) => match library.directory(request).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => inspection_error(error),
+        },
+        Err(error) => inspection_error(error),
+    }
+}
+
+async fn files(
+    State(service): State<CockpitService>,
+    body: Result<Json<LibraryFileIndexRequest>, JsonRejection>,
+) -> Response {
+    let request = match request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match service.library() {
+        Ok(library) => match library.file_index(request).await {
             Ok(value) => Json(value).into_response(),
             Err(error) => inspection_error(error),
         },

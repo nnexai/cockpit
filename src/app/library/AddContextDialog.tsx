@@ -4,6 +4,7 @@ import type { LibraryOperation, LibraryResolution, ProjectProvider } from "../..
 import { createPortal } from "react-dom";
 import { UiIcon } from "../UiIcon";
 import { trapDialogKeys, useRestoreFocus } from "./LibraryConfirmDialog";
+import { StatePill } from "./StatePill";
 import { JIRA_KEY, confluencePageInput, confluenceProviders, confluenceSite, confluenceSpaceInput, errorText, jiraProviders, libraryInputUrl, lookupFailure, pageCount, providerFamily, resolutionNote, resolutionSpaceName, type LibrarySpace, type LookupFailure } from "./libraryState";
 import { headerSpaceAction } from "./spaceCopyPresentation";
 import { useLibraryOperation, useSpaceContextListing } from "./useLibraryOperation";
@@ -170,7 +171,7 @@ function ConfluenceSpaceList({ client, provider, providers, onPick }: {
         return <li key={space.canonical_id ?? name}>
           <span className="library-browse-name" title={name}>{name}</span>
           {space.page_count !== null ? <span className="library-browse-detail">{pageCount(space.page_count)}</span> : null}
-          {space.existing_follow_id ? <span className="library-state is-idle"><span aria-hidden="true">◉</span> Following</span> : null}
+          {space.existing_follow_id ? <StatePill shape="dot-ring" tone="idle" word="Following" /> : null}
           <button type="button" aria-label={`${verb} ${name}`} onClick={() => onPick(provider, space)}>{verb}</button>
         </li>;
       })}
@@ -509,7 +510,7 @@ export function AddContextDialog({ client, onClose, onOpenItem, space = null, de
               {resolution ? <p className="task-setup-note is-valid">✓ {existingFollow ? `Already following · ${spaceName}` : existingItem ? `Already in Library · ${resolution.title}` : resolutionNote(resolution, providers)}</p> : null}
               {resolution && (resolution.kind === "confluence_page" || resolution.kind === "confluence_space") ? <p className="task-setup-note">{[resolution.kind === "confluence_page" ? resolution.container_label : null, confluenceSite(resolution.provider_instance)].filter(Boolean).join(" · ")}</p> : null}
               {resolution?.diagnostics.map((diagnostic, index) => <p className="task-setup-note" key={`${diagnostic.code}:${index}`}>{diagnostic.message}</p>)}
-              {existingInSpace?.text ? <p className="task-setup-note">{existingInSpace.text}</p> : null}
+              {existingInSpace?.status ? <p className="task-setup-note library-space-state">{existingInSpace.status.context ? <span className="library-space-context">{existingInSpace.status.context}</span> : null}<StatePill shape={existingInSpace.status.shape} word={existingInSpace.status.word} tone={existingInSpace.status.tone} /></p> : null}
               {failure ? <div id={failureId} className="library-refusal" role="alert">
                 <strong>{failure.title}</strong>
                 <span>{failure.detail}</span>

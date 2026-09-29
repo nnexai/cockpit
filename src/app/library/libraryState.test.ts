@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider } from "../../protocol/generated/v1";
-import { confluencePageInput, confluenceSpaceInput, itemKindLabel, itemTreeLabel, libraryInputUrl, libraryStateChip, libraryTree } from "./libraryState";
+import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -49,13 +49,85 @@ describe("Library vocabulary", () => {
   it("reads Up to date only for fresh items", () => {
     const states: LibraryItemState[] = ["fresh", "changed", "unknown", "removed_at_source", "conflict", "failed", "partial"];
     expect(states.filter((state) => libraryStateChip(state).word === "Up to date")).toEqual(["fresh"]);
-    expect(libraryStateChip("conflict")).toMatchObject({ glyph: "✎", word: "Edited in Library" });
+    expect(libraryStateChip("conflict")).toMatchObject({ shape: "edit", word: "Edited in Library" });
   });
 
   it("turns a bare Jira key into that site's browse link and leaves links unchanged", () => {
     expect(libraryInputUrl(" OPS-311 ", providers[2])).toBe("https://jira.test/jira/browse/OPS-311");
     expect(libraryInputUrl("https://gitlab.test/platform/api/-/merge_requests/482", providers[2])).toBe("https://gitlab.test/platform/api/-/merge_requests/482");
     expect(libraryInputUrl("OPS-311", undefined)).toBe("OPS-311");
+  });
+});
+
+// The Library index writes epoch milliseconds; provider frontmatter writes ISO. Both must display.
+describe("Library timestamps", () => {
+  const EPOCH_MS = "1790517466502";
+  const ISO = "2026-09-27T11:34:44.043Z";
+  const now = Date.parse("2026-09-27T14:11:00Z");
+
+  it("parses epoch-millisecond strings and ISO, and nothing else", () => {
+    expect(parseLibraryTime(EPOCH_MS)).toBe(1790517466502);
+    expect(parseLibraryTime(ISO)).toBe(1790508884043);
+    expect(parseLibraryTime("nope")).toBeNull();
+    expect(parseLibraryTime("")).toBeNull();
+    expect(parseLibraryTime(null)).toBeNull();
+    expect(Date.parse(EPOCH_MS)).toBeNaN();
+  });
+
+  it("formats an epoch-ms time like the same instant as ISO, inline and in details", () => {
+    const instant = new Date(1790517466502).toISOString();
+    expect(relativeTime(EPOCH_MS, now)).toBe(relativeTime(instant, now));
+    expect(relativeTime(EPOCH_MS, now)).toBe("13 min ago");
+    const detail = timeDetail(EPOCH_MS, now)!;
+    expect(detail).toEqual({ text: formatDateTime(1790517466502), ago: "13 min ago", iso: instant });
+    expect(detail.text).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(timeDetail(ISO, now)).toMatchObject({ iso: ISO, ago: "3 h ago" });
+    expect(timeDetail("nope", now)).toBeNull();
+  });
+
+  it("reads recent times relatively and older ones as dates, never in the future", () => {
+    const at = (offsetMs: number) => formatAgo(now - offsetMs, now);
+    const minute = 60_000;
+    const day = 24 * 60 * minute;
+    expect(at(-5 * minute)).toBe("just now");
+    expect(at(30_000)).toBe("just now");
+    expect(at(59 * minute)).toBe("59 min ago");
+    expect(at(5 * 60 * minute)).toBe("5 h ago");
+    expect(at(13 * day)).toBe("13 d ago");
+    expect(at(15 * day)).toBe(new Date(now - 15 * day).toLocaleDateString(undefined, { day: "numeric", month: "short" }));
+    const lastYear = Date.parse("2025-03-05T12:00:00Z");
+    expect(formatAgo(lastYear, now)).toBe(new Date(lastYear).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }));
+    expect(formatAgo(lastYear, now)).toContain("2025");
+  });
+
+  it("shows the Cockpit clock as a time, or omits it, but never bare", () => {
+    const base = item({ state: "fresh" });
+    expect(libraryFreshness({ ...base, checked_at: EPOCH_MS }, now).phrase).toBe("Checked 13 min ago");
+    expect(libraryFreshness({ ...base, checked_at: null, fetched_at: EPOCH_MS }, now).phrase).toBe("Checked 13 min ago");
+    expect(libraryFreshness({ ...base, checked_at: "garbage" }, now).phrase).toBe("");
+    expect(libraryFreshness({ ...item({ state: "removed_at_source" }), checked_at: EPOCH_MS }, now).notice).toMatch(/^Not found at source on .+\. The Library copy is kept\.$/);
+  });
+
+  it("keeps the source clock apart from the Cockpit clock", () => {
+    expect(sourceEditPhrase({ version: "v3", editedAt: ISO, by: "Konni Hartmann" }, now)).toBe("v3 edited 3 h ago by Konni Hartmann");
+    expect(sourceEditPhrase({ version: "v3", editedAt: "nope", by: null }, now)).toBe("v3");
+    expect(sourceEditPhrase({ version: null, editedAt: null, by: null }, now)).toBeNull();
+  });
+});
+
+describe("Attachment summaries", () => {
+  const attachments = (...states: LibraryItemSummary["attachments"][number]["state"][]) => ({
+    attachments: states.map((state, index) => ({ attachment_id: `a${index}`, original_name: "f", stored_name: "f", media_type: null, bytes: null, version: "1", state, relative_path: null })),
+  });
+
+  it("reads the header control and the tree meta from the same counts", () => {
+    expect(attachmentSummary(attachments("not_downloaded", "not_downloaded"))).toBe("2 attachments");
+    expect(attachmentSummary(attachments("downloaded"))).toBe("1 attachment · downloaded");
+    expect(attachmentSummary(attachments("downloaded", "downloaded"))).toBe("2 attachments · all downloaded");
+    expect(attachmentSummary(attachments("downloaded", "failed", "over_limit"))).toBe("3 attachments · 1 downloaded");
+    expect(attachmentTreeMeta(attachments("not_downloaded"))).toBe("not downloaded");
+    expect(attachmentTreeMeta(attachments("downloaded"))).toBe("1 downloaded");
+    expect(attachmentTreeMeta(attachments("downloaded", "failed", "over_limit"))).toBe("1 of 3 downloaded");
   });
 });
 

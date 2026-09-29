@@ -1,22 +1,32 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import type { LibraryAttachment, LibraryAttachmentAction, LibraryAttachmentRequest, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
-import { errorText, isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, spaceDisplayName, type LibraryContainerNode, type LibraryInstanceNode } from "./libraryState";
+import { attachmentTreeMeta, errorText, isConfluencePage, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, spaceDisplayName, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
+import { ProviderMark } from "./ProviderMark";
+import { PendingPill, StatePill } from "./StatePill";
 import "./library.css";
 
-export type LibraryMenuEntry = { label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean } | "separator";
+export type LibraryMenuEntry = { label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean; /** Shown right-aligned as a reminder; the shortcut itself is bound elsewhere. */ shortcut?: string } | "separator";
 
 const MENU_WIDTH = 286;
 const MENU_GUTTER = 8;
 
+/** An attachment's state as words (tooltips, accessible names, the panel's State column). */
 export const ATTACHMENT_STATE: Record<LibraryAttachment["state"], string> = {
   not_downloaded: "not downloaded",
   over_limit: "not downloaded: over limit",
-  downloaded: "✓ downloaded",
-  failed: "✕ download failed",
+  downloaded: "downloaded",
+  failed: "download failed",
 };
+
+/** The marked states: a downloaded or failed attachment carries a shape and tone; the others stay quiet text. */
+export function attachmentMark(state: LibraryAttachment["state"]): { shape: StateShape; tone: StateTone } | null {
+  if (state === "downloaded") return { shape: "check", tone: "idle" };
+  if (state === "failed") return { shape: "close", tone: "blocked" };
+  return null;
+}
 
 export function byteSize(bytes: number | null): string {
   if (bytes === null) return "—";
@@ -111,7 +121,7 @@ export function LibraryMenu({ x, y, label, entries, onDismiss }: { x: number; y:
   }}>
     {entries.map((entry, index) => entry === "separator"
       ? <div key={`separator-${index}`} className="context-menu-separator" role="separator" />
-      : <button key={entry.label} type="button" role="menuitem" className={entry.destructive ? "destructive" : undefined} disabled={entry.disabled} onClick={() => { onDismiss(); entry.onSelect(); }}>{entry.label}</button>)}
+      : <button key={entry.label} type="button" role="menuitem" className={entry.destructive ? "destructive" : undefined} disabled={entry.disabled} onClick={() => { onDismiss(); entry.onSelect(); }}>{entry.label}{entry.shortcut ? <kbd className="library-menu-shortcut">{entry.shortcut}</kbd> : null}</button>)}
   </div>, document.body);
 }
 
@@ -212,7 +222,7 @@ type Menu = { x: number; y: number; row: Row };
 function rowLabel(row: Row): string {
   switch (row.kind) {
     case "item": case "page": return row.item.title;
-    case "attachments": return `Attachments (${row.item.attachments.length})`;
+    case "attachments": return "Attachments";
     case "attachment": return row.attachment.stored_name;
     case "ancestor": return row.node.title;
     default: return row.node.label;
@@ -412,77 +422,85 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
       <button type="button" onClick={() => setFollowNotice(null)}>Dismiss</button>
     </div> : null}
     {rows.map((row) => {
-      const indent = { paddingLeft: `${8 + row.depth * 16}px` };
+      const depth = { "--depth": row.depth } as CSSProperties;
       if (row.kind === "item" || row.kind === "page") {
         const item = row.item;
         const chip = libraryStateChip(item.state);
         const pending = pendingItemIds.has(item.item_id);
         const progress = attachmentProgress(attachmentActions?.active, item.item_id);
         const label = itemTreeLabel(item, providers);
-        return <div className={`context-tree-node${row.kind === "page" ? " library-page-node" : ""}`} key={`item:${row.key}`}>
-          {row.kind === "page" ? <button type="button" tabIndex={-1} className="library-page-disclosure" style={{ left: `${2 + row.depth * 16}px` }}
+        return <div className={`context-tree-node${row.kind === "page" ? " library-page-node" : ""}`} style={depth} key={`item:${row.key}`}>
+          {row.kind === "page" ? <button type="button" tabIndex={-1} className="library-page-disclosure"
             aria-label={`Expand ${item.title}`} aria-expanded={row.open}
             onMouseDown={(event) => event.preventDefault()} onClick={() => { toggle(row.key); focusRow(row.key); }}>
             <UiIcon name={row.open ? "down" : "right"} />
           </button> : null}
           <button type="button" data-library-row={row.key} data-context-path={item.document_path ?? undefined}
-            className={`context-tree-row library-tree-row${item.item_id === selectedItemId ? " is-selected" : ""}`} style={indent}
+            className={`context-tree-row library-tree-row is-${row.kind}${item.item_id === selectedItemId ? " is-selected" : ""}`}
             aria-current={item.item_id === selectedItemId ? "true" : undefined}
             aria-label={`${itemAccessibleName(item, providers)}${pending ? ", refreshing" : ""}`}
             onClick={() => actions.open(item)} onContextMenu={onContextMenu(row)}>
-            {/* A page node's chevron is its own hit target, drawn over this space. */}
-            <span className="context-tree-disclosure" aria-hidden="true">{row.kind === "page" ? "\u00a0" : null}</span>
-            <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
+            {/* A page node's chevron is its own hit target, drawn over this slot. */}
+            <span className="library-row-chevron" aria-hidden="true" />
+            <span className="library-row-icon is-document" aria-hidden="true"><UiIcon name="file" /></span>
             <span className="context-tree-name" title={item.item_path}>{label}</span>
-            {pending ? <span className="context-tree-meta library-state is-muted"><span className="library-spinner" aria-hidden="true" />{progress ?? "Refreshing…"}</span>
-              : item.state !== "fresh" ? <span className={`context-tree-meta library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span> : null}
+            {pending ? <PendingPill className="context-tree-meta" word={progress ?? "Refreshing…"} />
+              : item.state !== "fresh" ? <StatePill className="context-tree-meta" shape={chip.shape} word={chip.word} tone={chip.tone} /> : null}
           </button>
         </div>;
       }
       if (row.kind === "attachment") {
         const { item, attachment } = row;
         const progress = attachmentProgress(attachmentActions?.active, item.item_id, attachment.attachment_id);
-        const detail = [attachment.bytes === null ? null : byteSize(attachment.bytes), attachment.media_type, progress ?? ATTACHMENT_STATE[attachment.state]].filter(Boolean).join(" · ");
+        const mark = attachmentMark(attachment.state);
+        const size = attachment.bytes === null ? null : byteSize(attachment.bytes);
+        const detail = [size, attachment.media_type, progress ?? ATTACHMENT_STATE[attachment.state]].filter(Boolean).join(" · ");
         const content = <>
-          <span className="context-tree-disclosure" aria-hidden="true" />
-          <span className="context-tree-icon" aria-hidden="true"><UiIcon name="file" /></span>
+          <span className="library-row-chevron" aria-hidden="true" />
+          <span className={`library-row-icon${attachment.state === "downloaded" ? " is-downloaded" : ""}`} aria-hidden="true"><UiIcon name="file" /></span>
           {/* The safe stored name is shown; the original name only as a tooltip, never as markup (P11). */}
           <span className="context-tree-name" title={attachment.original_name !== attachment.stored_name ? attachment.original_name : undefined}>{attachment.stored_name}</span>
-          <span className={`context-tree-meta library-state is-${progress ? "muted" : attachment.state === "downloaded" ? "idle" : attachment.state === "failed" ? "blocked" : "muted"}`}>
-            {progress ? <span className="library-spinner" aria-hidden="true" /> : null}{detail}
+          <span className={`context-tree-meta library-state is-${progress ? "muted" : mark?.tone ?? "muted"}`} title={attachment.media_type ?? undefined}>
+            {progress ? <span className="library-spinner" aria-hidden="true" /> : mark?.shape === "check" ? <UiIcon name="check" /> : null}
+            {progress ? progress : attachment.state === "downloaded" ? size : [size, ATTACHMENT_STATE[attachment.state]].filter(Boolean).join(" · ")}
           </span>
         </>;
         const selected = attachment.attachment_id === selectedAttachmentId;
-        return <div className="context-tree-node" key={`attachment:${row.key}`}>
+        return <div className="context-tree-node" style={depth} key={`attachment:${row.key}`}>
           {attachmentActions
             ? <button type="button" data-library-row={row.key} data-context-path={attachmentPath(item, attachment) ?? undefined}
-              className={`context-tree-row library-tree-row library-attachment-row${selected ? " is-selected" : ""}`} style={indent}
+              className={`context-tree-row library-tree-row library-attachment-row${selected ? " is-selected" : ""}`}
               aria-current={selected ? "true" : undefined} aria-label={`${attachment.stored_name}, attachment, ${detail}`}
               onClick={() => attachmentActions.open(item, attachment)} onContextMenu={onContextMenu(row)}>{content}</button>
             // Read-only metadata where nothing can download it: arrow keys reach it, with no click, Enter or menu.
-            : <div role="group" tabIndex={-1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ ...indent, cursor: "default" }}
+            : <div role="group" tabIndex={-1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ cursor: "default" }}
               aria-label={`${attachment.stored_name}, attachment, ${detail}`}>{content}</div>}
         </div>;
       }
       const label = rowLabel(row);
       const follow = row.kind === "container" ? row.node.follow : null;
       const folder = row.kind === "ancestor" && row.node.folder;
-      // Pages added one by one read `Pages`; a followed space `◉ Following`, `◐ N of M` while partial.
-      const meta = row.kind === "instance" && row.node.unavailable ? "Unavailable"
-        : row.kind === "container" && !follow && row.node.items.every((item) => isConfluencePage(item) && !item.follow_id) ? "Pages"
-        : row.kind === "attachments" ? `${row.item.attachments.filter((attachment) => attachment.state === "downloaded").length} downloaded`
+      // Pages added one by one read `Pages`; a followed space a `Following` pill, plus `N of M` while partial.
+      const meta = row.kind === "container" && !follow && row.node.items.every((item) => isConfluencePage(item) && !item.follow_id) ? "Pages"
+        : row.kind === "attachments" ? attachmentTreeMeta(row.item)
         : folder ? "Folder" : null;
       const partial = follow?.partial ? partialText(follow) : null;
-      return <div className="context-tree-node" key={`${row.kind}:${row.key}`}>
-        <button type="button" data-library-row={row.key} className={`context-tree-row library-tree-group is-${row.kind}`} style={indent} aria-expanded={row.open}
+      const instanceNode = row.kind === "instance" ? row.node : null;
+      const instanceFamily = instanceNode ? providerFamily(providers, instanceNode.providerId) : null;
+      return <div className="context-tree-node" style={depth} key={`${row.kind}:${row.key}`}>
+        <button type="button" data-library-row={row.key} className={`context-tree-row library-tree-row library-tree-group is-${row.kind}`} aria-expanded={row.open}
           aria-label={follow ? `${label}, following${partial ? `, partial: ${partial}` : ""}` : folder ? `${label}, folder` : undefined}
           onClick={() => toggle(row.key)} onContextMenu={onContextMenu(row)}>
-          <span className="context-tree-disclosure"><UiIcon name={row.open ? "down" : "right"} /></span>
+          <span className="library-row-chevron" aria-hidden="true"><UiIcon name={row.open ? "down" : "right"} /></span>
+          <span className={`library-row-icon${row.kind === "instance" ? " is-tile" : ""}`} aria-hidden="true">
+            {instanceNode && instanceFamily ? <ProviderMark family={instanceFamily} size="tree" folder={instanceNode.providerId === null} />
+              : <UiIcon name={row.kind === "attachments" ? "clip" : "folder"} />}
+          </span>
           <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? label : label}>{label}</span>
-          {follow ? <span className={`context-tree-meta library-state is-${follow.partial ? "working" : "idle"}`} title={partial ?? undefined}>
-            <span aria-hidden="true">◉</span> Following{follow.partial ? <> · <span aria-hidden="true">◐</span> {follow.partial.have} of {follow.partial.total ?? "?"}</> : null}
-          </span> : null}
-          {meta ? <span className={`context-tree-meta library-state ${meta === "Unavailable" ? "is-blocked" : "is-muted"}`}>{meta}</span> : null}
+          {follow ? <StatePill className="context-tree-meta" shape="dot-ring" word="Following" tone="idle" /> : null}
+          {follow?.partial ? <StatePill className="context-tree-meta" shape="half-ring" word={`${follow.partial.have} of ${follow.partial.total ?? "?"}`} tone="working" title={partial ?? undefined} /> : null}
+          {instanceNode?.unavailable ? <StatePill className="context-tree-meta" shape="close" word="Unavailable" tone="blocked" /> : null}
+          {meta ? <span className="context-tree-meta library-state is-muted">{meta}</span> : null}
         </button>
       </div>;
     })}

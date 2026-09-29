@@ -37,10 +37,12 @@ it("places pages under provider, space and ancestors, and gives a page with chil
   const rowLabels = () => [...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")].map((row) => row.querySelector(".context-tree-name")?.textContent);
   const row = (key: string) => host.querySelector<HTMLButtonElement>(`[data-library-row="${key}"]`)!;
   const key = (target: HTMLElement, name: string) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true })); });
+  // One indent formula: every row and its page chevron read `--depth` from their node.
+  const depthOf = (row: HTMLElement) => row.closest<HTMLElement>(".context-tree-node")!.style.getPropertyValue("--depth");
   try {
     await act(async () => root.render(<LibraryTree items={[sibling, child, parent]} providers={providers} selectedItemId="source:checklist" pendingItemIds={new Set()} actions={actions} />));
     expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home", "Release process", "Release checklist", "Architecture overview"]);
-    expect([...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")].map((button) => button.style.paddingLeft)).toEqual(["8px", "24px", "40px", "56px", "72px", "56px"]);
+    expect([...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")].map(depthOf)).toEqual(["0", "1", "2", "3", "4", "3"]);
     const space = [...host.querySelectorAll<HTMLButtonElement>("[data-library-row]")][1]!;
     expect(space.querySelector(".context-tree-meta")?.textContent).toBe("Pages");
     expect(row("source:checklist").getAttribute("aria-current")).toBe("true");
@@ -99,7 +101,7 @@ it("places pages under provider, space and ancestors, and gives a page with chil
   }
 });
 
-it("makes a page with attachments expandable, lists attachment metadata read-only under Attachments (N), and still opens the page from its label", async () => {
+it("makes a page with attachments expandable, lists attachment metadata read-only under Attachments, and still opens the page from its label", async () => {
   const attachment = (id: string, overrides: Partial<LibraryItemSummary["attachments"][number]>): LibraryItemSummary["attachments"][number] => ({
     attachment_id: id, original_name: "file", stored_name: "file", media_type: null, bytes: null, version: "1", state: "not_downloaded", relative_path: null, ...overrides,
   });
@@ -119,31 +121,37 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
   const treeRows = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")];
   const rowLabels = () => treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent);
   const named = (label: string) => treeRows().find((row) => row.querySelector(".context-tree-name")?.textContent === label)!;
+  // The Attachments group of the last page; both pages have one, so it is not findable by name.
+  const depthOf = (row: HTMLElement) => row.closest<HTMLElement>(".context-tree-node")!.style.getPropertyValue("--depth");
+  const lastGroup = () => treeRows().filter((row) => row.classList.contains("is-attachments")).at(-1)!;
   const key = (target: HTMLElement, name: string, init: KeyboardEventInit = {}) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, ...init })); });
   try {
     await act(async () => root.render(<LibraryTree items={[solo, child, mixed]} providers={providers} selectedItemId={null} pendingItemIds={new Set()} actions={actions} />));
     // Child pages come first, then the page's Attachments group, folded until opened; page-tree order is kept.
     expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home",
-      "Release process", "Release checklist", "Attachments (1)", "Architecture overview", "Attachments (2)"]);
-    expect(named("Attachments (1)").getAttribute("aria-expanded")).toBe("false");
-    await act(async () => named("Attachments (1)").click());
-    await act(async () => named("Attachments (2)").click());
+      "Release process", "Release checklist", "Attachments", "Architecture overview", "Attachments"]);
+    const [processGroup, architectureGroup] = treeRows().filter((row) => row.classList.contains("is-attachments"));
+    expect(processGroup!.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => processGroup!.click());
+    await act(async () => architectureGroup!.click());
     expect(rowLabels()).toEqual(["Confluence · nnexai.atlassian.net", "SD · Software Development", "Engineering home",
-      "Release process", "Release checklist", "Attachments (1)", "runbook.pdf",
-      "Architecture overview", "Attachments (2)", "release-flow.png", "Q3_plan_.pdf"]);
-    expect(treeRows().map((row) => row.style.paddingLeft)).toEqual(["8px", "24px", "40px", "56px", "72px", "72px", "88px", "56px", "72px", "88px", "88px"]);
+      "Release process", "Release checklist", "Attachments", "runbook.pdf",
+      "Architecture overview", "Attachments", "release-flow.png", "Q3_plan_.pdf"]);
+    expect(treeRows().map(depthOf)).toEqual(["0", "1", "2", "3", "4", "4", "5", "3", "4", "5", "5"]);
     expect([...host.querySelectorAll(".library-page-disclosure")].map((chevron) => chevron.getAttribute("aria-label"))).toEqual(["Expand Release process", "Expand Architecture overview"]);
 
-    const group = named("Attachments (2)");
+    const group = architectureGroup!;
     expect(group.getAttribute("aria-expanded")).toBe("true");
-    expect(group.querySelector(".context-tree-meta")?.textContent).toBe("0 downloaded");
+    expect(group.querySelector(".context-tree-meta")?.textContent).toBe("not downloaded");
     // Metadata only: stored name shown, original name as tooltip when it differs; size, type and state.
     const png = named("release-flow.png");
     const pdf = named("Q3_plan_.pdf");
     expect(png.querySelector(".context-tree-name")?.getAttribute("title")).toBeNull();
     expect(pdf.querySelector(".context-tree-name")?.getAttribute("title")).toBe("Q3/plan?.pdf");
     expect([png, pdf, named("runbook.pdf")].map((row) => row.querySelector(".context-tree-meta")?.textContent))
-      .toEqual(["84 KB · image/png · not downloaded", "1.2 MB · application/pdf · not downloaded", "not downloaded"]);
+      .toEqual(["84 KB · not downloaded", "1.2 MB · not downloaded", "not downloaded"]);
+    // The media type moved to the tooltip, and stays in the accessible name.
+    expect(png.querySelector(".context-tree-meta")?.getAttribute("title")).toBe("image/png");
     // Read-only metadata, not a control: a named group that arrow keys reach but Tab skips, with no button or link in or around it.
     for (const row of [png, pdf, named("runbook.pdf")]) {
       expect(row.tagName).toBe("DIV");
@@ -165,16 +173,16 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
     await act(async () => chevron.click());
     await nextFrame();
     expect(actions.open).not.toHaveBeenCalled();
-    expect(rowLabels()).not.toContain("Attachments (2)");
+    expect(rowLabels().filter((label) => label === "Attachments")).toHaveLength(1);
     expect(document.activeElement).toBe(named("Architecture overview"));
 
     // Keys: ArrowRight expands then enters the group, then its first attachment.
     await key(named("Architecture overview"), "ArrowRight");
-    expect(rowLabels()).toContain("Attachments (2)");
+    expect(rowLabels().filter((label) => label === "Attachments")).toHaveLength(2);
     await key(named("Architecture overview"), "ArrowRight");
     await nextFrame();
-    expect(document.activeElement).toBe(named("Attachments (2)"));
-    await key(named("Attachments (2)"), "ArrowRight");
+    expect(document.activeElement).toBe(lastGroup());
+    await key(lastGroup(), "ArrowRight");
     await nextFrame();
     expect(document.activeElement).toBe(named("release-flow.png"));
     await key(named("release-flow.png"), "ArrowDown");
@@ -203,14 +211,14 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
     // ArrowLeft goes to the group, collapses it, and Enter reopens it.
     await key(named("Q3_plan_.pdf"), "ArrowLeft");
     await nextFrame();
-    expect(document.activeElement).toBe(named("Attachments (2)"));
-    await key(named("Attachments (2)"), "ArrowLeft");
+    expect(document.activeElement).toBe(lastGroup());
+    await key(lastGroup(), "ArrowLeft");
     expect(rowLabels()).not.toContain("release-flow.png");
-    expect(named("Attachments (2)").getAttribute("aria-expanded")).toBe("false");
-    await key(named("Attachments (2)"), "Enter");
+    expect(lastGroup().getAttribute("aria-expanded")).toBe("false");
+    await key(lastGroup(), "Enter");
     expect(rowLabels()).toContain("release-flow.png");
-    await key(named("Attachments (2)"), "ArrowLeft");
-    await key(named("Attachments (2)"), "ArrowLeft");
+    await key(lastGroup(), "ArrowLeft");
+    await key(lastGroup(), "ArrowLeft");
     await nextFrame();
     expect(document.activeElement).toBe(named("Architecture overview"));
     // Enter on the page opens it; its menu is the item menu, with no attachment actions yet.
@@ -261,9 +269,9 @@ it("shows followed spaces with their partial count and folder ancestors, and ref
     expect(treeRows().map((row) => row.querySelector(".context-tree-name")?.textContent))
       .toEqual(["Confluence · nnexai.atlassian.net", "OPS · Operations", "SD · Software Development", "Home", "Architecture", "Release folder", "Team", "Team notes"]);
     const opsRow = named("OPS · Operations");
-    expect(opsRow.querySelector(".context-tree-meta")?.textContent).toBe("◉ Following · ◐ 3 of 5");
+    expect([...opsRow.querySelectorAll(".context-tree-meta")].map((meta) => meta.textContent)).toEqual(["Following", "3 of 5"]);
     expect(opsRow.getAttribute("aria-label")).toBe("OPS · Operations, following, partial: 3 of 5 pages (page limit)");
-    expect(named("SD · Software Development").querySelector(".context-tree-meta")?.textContent).toBe("◉ Following");
+    expect(named("SD · Software Development").querySelector(".context-tree-meta")?.textContent).toBe("Following");
     // The folder is a non-document group: it expands but never opens.
     const folderRow = named("Release folder");
     expect(folderRow.getAttribute("aria-label")).toBe("Release folder, folder");

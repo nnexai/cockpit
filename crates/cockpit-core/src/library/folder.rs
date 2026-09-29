@@ -38,7 +38,7 @@ fn open_source(configuration: &ProjectConfiguration, input: &str) -> Result<(Pat
     let path = std::fs::canonicalize(path).map_err(unavailable)?;
     source_root_revalidate(&root, &path)?;
     for managed in [&configuration.library_root, &configuration.companion_root,
-        &configuration.state_root, &configuration.worktree_root] {
+        &configuration.state_root, &configuration.worktree_root, &configuration.cache_root] {
         let managed = canonical_managed(Path::new(managed))?;
         if path.starts_with(&managed) || managed.starts_with(&path) {
             return Err(error("library_folder_refused", "Folder overlaps a Cockpit-owned root"));

@@ -147,26 +147,31 @@ impl LibraryService {
         Ok(self.store.get().expect("Library store initialized").clone())
     }
     pub async fn listing(&self, offset: Option<u32>) -> Result<LibraryListing, InspectionError> {
-        let store = self.open()?;
-        let _lock = store.shared()?;
-        let index = store.index()?;
-        let offset = offset.unwrap_or(0) as usize;
-        let end = offset.saturating_add(256).min(index.items.len());
-        let items = index
-            .items
-            .iter()
-            .skip(offset)
-            .take(256)
-            .map(|e| e.summary.clone())
-            .collect();
-        Ok(LibraryListing {
-            root: self.authorized_root(&store)?.summary(),
-            generation: index.generation,
-            items,
-            follows: index.follows,
-            next_offset: (end < index.items.len()).then_some(end as u32),
-            diagnostics: vec![],
+        let service = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let store = service.open()?;
+            let _lock = store.shared()?;
+            let index = store.index_shared()?;
+            let offset = offset.unwrap_or(0) as usize;
+            let end = offset.saturating_add(256).min(index.items.len());
+            let items = index
+                .items
+                .iter()
+                .skip(offset)
+                .take(256)
+                .map(|entry| entry.summary.clone())
+                .collect();
+            Ok(LibraryListing {
+                root: service.authorized_root(&store)?.summary(),
+                generation: index.generation.clone(),
+                items,
+                follows: index.follows.clone(),
+                next_offset: (end < index.items.len()).then_some(end as u32),
+                diagnostics: vec![],
+            })
         })
+        .await
+        .map_err(|error| InspectionError::new("library_unavailable", error.to_string()))?
     }
     fn request(
         &self,
@@ -1463,6 +1468,7 @@ mod tests {
             worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
             companion_root: root.join("companions").to_string_lossy().into_owned(),
             state_root: root.join("state").to_string_lossy().into_owned(),
+            cache_root: root.join("cache").to_string_lossy().into_owned(),
             library_root: root.join("library").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".into(),
             checkout_template: "{repo}-{task_id}".into(),

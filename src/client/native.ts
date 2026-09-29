@@ -2,7 +2,7 @@ import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "
 import {
   matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
   parseLibraryAddRequest, parseLibraryAttachmentRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
-  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
+  parseLibraryDocumentRequest, parseLibraryFileIndex, parseLibraryFileIndexRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
   parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
@@ -12,9 +12,9 @@ import {
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
-  matchContextResponse, matchPanePresentation, parseContextDirectory,
+  matchContextResponse, matchPanePresentation, parseContextDirectory, parseContextFileIndex,
   parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
-  parseContextLaunchRequest, parsePanePresentation,
+  parseContextFileIndexRequest, parseContextLaunchRequest, parsePanePresentation,
 } from "./contextProtocol";
 import {
   matchContextInvalidationResponse, matchContextSearchResponse,
@@ -659,6 +659,16 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       signal?.throwIfAborted();
       return matchContextResponse(response, request);
     },
+    async contextFileIndex(sessionId, paneId, value, signal) {
+      signal?.throwIfAborted();
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const request = parseContextFileIndexRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_context_file_index", { sessionId, paneId, request }, "Context file index", parseContextFileIndex);
+      signal?.throwIfAborted();
+      if (response.binding_id !== request.binding_id || response.root_id !== request.root_id) throw new CockpitClientError("malformed_response", "Context file index belongs to another root");
+      return response;
+    },
     async contextDocument(sessionId, paneId, value, signal) {
       signal?.throwIfAborted();
       validateSessionId(sessionId);
@@ -753,6 +763,13 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
       const response = await invokeAndParse(invoke, "cockpit_library_directory", { request }, "Library directory", parseLibraryDirectory);
       signal?.throwIfAborted();
       return matchLibraryDirectory(response, request);
+    },
+    async libraryFileIndex(value, signal) {
+      signal?.throwIfAborted();
+      const request = parseLibraryFileIndexRequest(value);
+      const response = await invokeAndParse(invoke, "cockpit_library_file_index", { request }, "Library file index", parseLibraryFileIndex);
+      signal?.throwIfAborted();
+      return response;
     },
     async libraryDocument(value, signal) {
       signal?.throwIfAborted();

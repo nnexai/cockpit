@@ -49,6 +49,7 @@ struct TomlConfiguration {
     worktree_root: Option<String>,
     companion_root: Option<String>,
     state_root: Option<String>,
+    cache_root: Option<String>,
     branch_template: Option<String>,
     checkout_template: Option<String>,
     library_root: Option<String>,
@@ -173,6 +174,15 @@ pub fn load_project_configuration(
     validate_paths(&roots, "repository_roots")?;
     origins.insert("repository_roots".into(), roots_origin.into());
 
+
+    let default_cache = xdg_directory("XDG_CACHE_HOME", ".cache")?.join("cockpit");
+    let (cache_root, cache_origin) = choose_path(
+        "COCKPIT_CACHE_ROOT",
+        file.cache_root.clone(),
+        &path_text(&default_cache, "cache_root")?,
+    )?;
+    validate_paths(&[cache_root.clone()], "cache_root")?;
+    origins.insert("cache_root".into(), cache_origin.into());
     let default_state = xdg_directory("XDG_STATE_HOME", ".local/state")?.join("cockpit");
 
     let (worktree_root, worktree_origin) = choose_path(
@@ -207,6 +217,7 @@ pub fn load_project_configuration(
         ("state_root", state_root.as_str()),
         ("companion_root", companion_root.as_str()),
         ("worktree_root", worktree_root.as_str()),
+        ("cache_root", cache_root.as_str()),
     ] {
         if paths_overlap_lexically(&library_root, root) {
             return Err(InspectionError::new(
@@ -397,6 +408,7 @@ pub fn load_project_configuration(
         version: file.version.unwrap_or(CONFIG_VERSION),
         repository_roots: roots,
         worktree_root,
+        cache_root,
         companion_root,
         state_root,
         library_root,

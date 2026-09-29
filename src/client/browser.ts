@@ -2,7 +2,7 @@ import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "
 import {
   matchLibraryAttachmentsOperation, matchLibraryDirectory, matchLibraryDocument, matchLibraryMedia, matchLibraryOperation,
   parseLibraryAddRequest, parseLibraryAttachmentRequest, parseLibraryDirectory, parseLibraryDirectoryRequest, parseLibraryDocument,
-  parseLibraryDocumentRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
+  parseLibraryDocumentRequest, parseLibraryFileIndex, parseLibraryFileIndexRequest, parseLibraryListing, parseLibraryMedia, parseLibraryMediaRequest, parseLibraryResolveRequest, parseLibraryResolution,
   parseLibraryOperation, parseLibraryOperationId, parseLibraryRefreshRequest, parseLibraryRemoveRequest, parseLibraryReplaceRequest,
   parseLibraryConfluenceSpacesRequest, parseLibraryConfluenceSpaces,
   parseSpaceContextRequest, parseSpaceContextListing, matchSpaceContextListing,
@@ -12,9 +12,9 @@ import {
 import { parseReviewLaunchRequest, parseReviewSnapshotRequest, parseReviewSnapshot, parseReviewFileRequest, parseReviewFile, matchReviewSnapshot, matchReviewFile } from "./reviewProtocol";
 import { parseCommentPastePrepareRequest, parseCommentPastePrepare, parseCommentPasteSendRequest, parseCommentPasteReceipt, matchPastePrepare, matchPasteReceipt, parseCommentPasteMarkPastedRequest, matchMarkedReceipt } from "./commentPasteProtocol";
 import {
-  matchContextResponse, matchPanePresentation, parseContextDirectory,
+  matchContextResponse, matchPanePresentation, parseContextDirectory, parseContextFileIndex,
   parseContextDirectoryRequest, parseContextDocument, parseContextDocumentRequest,
-  parseContextLaunchRequest, parsePanePresentation,
+  parseContextFileIndexRequest, parseContextLaunchRequest, parsePanePresentation,
 } from "./contextProtocol";
 import {
   matchContextInvalidationResponse, matchContextSearchResponse,
@@ -726,6 +726,17 @@ export function createBrowserClient(
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
       }), body);
     },
+    async contextFileIndex(sessionId, paneId, value, signal) {
+      validateSessionId(sessionId);
+      validateResourceId(paneId);
+      const body = parseContextFileIndexRequest(value);
+      const response = await getJson(request, `/api/v1/sessions/${encodeURIComponent(sessionId)}/panes/${encodeURIComponent(paneId)}/context/files`, "Context file index", parseContextFileIndex, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      });
+      signal?.throwIfAborted();
+      if (response.binding_id !== body.binding_id || response.root_id !== body.root_id) throw new CockpitClientError("malformed_response", "Context file index belongs to another root");
+      return response;
+    },
     async contextDocument(sessionId, paneId, value, signal) {
       validateSessionId(sessionId);
       validateResourceId(paneId);
@@ -819,6 +830,15 @@ export function createBrowserClient(
       const response = await getJson(request, "/api/v1/library/directory", "Library directory", parseLibraryDirectory, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       signal?.throwIfAborted();
       return matchLibraryDirectory(response, body);
+    },
+    async libraryFileIndex(value, signal) {
+      signal?.throwIfAborted();
+      const body = parseLibraryFileIndexRequest(value);
+      const response = await getJson(request, "/api/v1/library/files", "Library file index", parseLibraryFileIndex, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+      });
+      signal?.throwIfAborted();
+      return response;
     },
     async libraryDocument(value, signal) {
       signal?.throwIfAborted();

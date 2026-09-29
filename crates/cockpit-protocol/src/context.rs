@@ -82,6 +82,54 @@ pub struct ContextDirectoryRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+pub enum ContextFileIndexMode {
+    Cached,
+    Fresh,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ContextFileIndexRequest {
+    pub binding_id: String,
+    pub root_id: String,
+    pub mode: ContextFileIndexMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ContextIndexedFile {
+    pub path: String,
+    #[ts(type = "number | null")]
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextFileIndexSource {
+    Git,
+    Walk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextFileIndexState {
+    Fresh,
+    Cached,
+    Miss,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ContextFileIndex {
+    pub binding_id: String,
+    pub root_id: String,
+    pub files: Vec<ContextIndexedFile>,
+    pub truncated: bool,
+    pub source: ContextFileIndexSource,
+    pub state: ContextFileIndexState,
+    pub diagnostics: Vec<ProjectDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextEntryKind {
     Directory,
     File,

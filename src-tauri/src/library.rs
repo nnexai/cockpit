@@ -1,14 +1,14 @@
 use super::{inspection_error_response, requests::{decode_confirmation_request, decode_request}};
 use cockpit_core::CockpitService;
 use cockpit_protocol::{
-    context::{ContextDirectory, ContextDocument},
+    context::{ContextDirectory, ContextDocument, ContextFileIndex},
     context_media::ContextMedia,
     library::{
-        LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest, LibraryDocumentRequest, LibraryListing,
-        LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest,
-        LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, SpaceAddRequest,
-        SpaceAttemptsDismissRequest, SpaceContextListing, SpaceContextRequest,
-        SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
+        LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryDirectoryRequest,
+        LibraryDocumentRequest, LibraryFileIndexRequest, LibraryListing, LibraryMediaRequest,
+        LibraryOperation, LibraryRefreshRequest, LibraryRemoveRequest, LibraryReplaceRequest,
+        LibraryResolution, LibraryResolveRequest, SpaceAddRequest, SpaceAttemptsDismissRequest,
+        SpaceContextListing, SpaceContextRequest, SpaceUpdateRequest, SpaceUpdateScope, SpaceRemoveRequest,
     },
     v1::ErrorResponse,
 };
@@ -218,6 +218,20 @@ pub async fn cockpit_library_directory(
         .library()
         .map_err(inspection_error_response)?
         .directory(request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_library_file_index(
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<ContextFileIndex, ErrorResponse> {
+    let request: LibraryFileIndexRequest = decode_request(request, "library file index")?;
+    service
+        .library()
+        .map_err(inspection_error_response)?
+        .file_index(request)
         .await
         .map_err(inspection_error_response)
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentSummary, ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, SpaceGitSummary, SpaceSummary, TabLayout, TerminalCommand } from "../protocol/generated/v1";
+import type { ResourceMutationRequest, ResourceMutationResponse, SessionSnapshotResponse, SessionSummary, TabLayout, TerminalCommand } from "../protocol/generated/v1";
 import {
   authoritativeMutationSnapshot,
   authoritativeSelection,
@@ -7,22 +7,15 @@ import {
   contextMenuPosition,
   mutationFailureCanRetry,
   moveDestinationLabel,
-  orderAgentsByHerdrPriority,
-  nextModalFocusIndex,
   reconcileSessionChoice,
   rendererReasonFor,
   paneIdInDirection,
-  spaceDropBeforeId,
-  projectSpaceTree,
-  spaceRowStatus,
-  spaceStatus,
   tabLabelIsRedundant,
 } from "./App";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex } from "./layout/layoutProjection";
 import { initialMutationCoordinatorState, mutationCoordinatorReducer } from "./session/mutationCoordinator";
 import { initialSessionState, sessionReducer } from "./session/sessionStore";
 import { scheduleFocusFallback } from "./session/focusCoordinator";
-import { prefixCommandForKey, routeWorkbenchKeydown } from "./input/keymap";
 import { appendPendingControlCommand, createCockpitTerminal, forwardTerminalMouse, MAX_PENDING_CONTROL_COMMANDS, terminalCellPosition, terminalModifiedEnterInput, terminalMouseButton, terminalMouseCommand } from "./TerminalPane";
 
 function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSnapshotResponse {
@@ -39,21 +32,6 @@ function snapshot(sessionId = "session-1", focusedPaneId = "pane-1"): SessionSna
     layouts: [],
     agents: [],
   };
-}
-type RoutingEventOverrides = Partial<{ key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null; isComposing: boolean }>;
-function routingEvent(overrides: RoutingEventOverrides = {}): KeyboardEvent {
-  return {
-    key: "z",
-    shiftKey: false,
-    ctrlKey: false,
-    altKey: false,
-    metaKey: false,
-    target: null,
-    isComposing: false,
-    preventDefault: vi.fn(),
-    stopPropagation: vi.fn(),
-    ...overrides,
-  } as unknown as KeyboardEvent;
 }
 it("renders a Herdr mutation snapshot immediately while stream recovery begins", () => {
   const initial = { ...initialSessionState, epoch: 1, sessionId: "session-1", sync: "live" as const, snapshot: snapshot() };
@@ -129,135 +107,6 @@ it("renders a Herdr mutation snapshot immediately while stream recovery begins",
     expect(send.mock.calls.map(([command]) => command.kind)).toEqual(["down", "moved", "drag", "up"]);
   });
 
-describe("agent ordering", () => {
-  it("matches Herdr's priority sort by status then latest state change", () => {
-    const agent = (pane_id: string, status: string, state_change_seq: number): AgentSummary => ({
-      pane_id,
-      space_id: "space-1",
-      tab_id: "tab-1",
-      name: pane_id,
-      status,
-      title: null,
-      focused: false,
-      state_change_seq,
-    });
-    const agents = [
-      agent("idle", "idle", 100),
-      agent("working-old", "working", 10),
-      agent("done", "done", 1),
-      agent("blocked", "blocked", 1),
-      agent("working-new", "working", 20),
-    ];
-    expect(orderAgentsByHerdrPriority(agents).map(({ pane_id }) => pane_id)).toEqual([
-      "blocked",
-      "done",
-      "working-new",
-      "working-old",
-      "idle",
-    ]);
-    expect(orderAgentsByHerdrPriority([
-      { ...agent("older-wire-shape", "idle", 0), focused: false },
-      { ...agent("focused-wire-shape", "idle", 0), focused: true },
-    ]).map(({ pane_id }) => pane_id)).toEqual(["focused-wire-shape", "older-wire-shape"]);
-  });
-});
-
-function space(id: string, label: string, git: SpaceGitSummary | null = null, agentStatus = "idle"): SpaceSummary {
-  return { id, label, number: 1, tab_count: 0, pane_count: 0, focused: false, agent_status: agentStatus, git };
-}
-
-function git(repositoryKey: string, branch: string, isLinkedWorktree: boolean): SpaceGitSummary {
-  return { repository_key: repositoryKey, repository: "repo", branch, checkout_path: "/checkout", is_linked_worktree: isLinkedWorktree };
-}
-
-describe("Space tree projection", () => {
-  it("leaves non-Git, singleton Git, and all-linked Spaces ungrouped in source order", () => {
-    const spaces = [
-      space("plain", "plain"),
-      space("single", "single", git("single-repo", "main", false)),
-      space("linked-1", "linked one", git("linked-repo", "worktree/one", true)),
-      space("linked-2", "linked two", git("linked-repo", "worktree/two", true)),
-    ];
-    const rows = projectSpaceTree(spaces);
-    expect(rows.map((row) => [row.kind, row.space.id])).toEqual([
-      ["top-level", "plain"],
-      ["top-level", "single"],
-      ["top-level", "linked-1"],
-      ["top-level", "linked-2"],
-    ]);
-  });
-
-  it("emits the first non-linked parent followed by children in authoritative source order", () => {
-    const spaces = [
-      space("w1C", "worktree one", git("lilygo", "worktree/brave-forest-7518", true)),
-      space("w18", "lilygo-t3", git("lilygo", "main", false)),
-      space("w1D", "worktree two", git("lilygo", "worktree/brave-stone-13f0", true)),
-      space("cockpit", "cockpit", git("cockpit", "main", false)),
-    ];
-    const rows = projectSpaceTree(spaces);
-    expect(rows.map((row) => [row.kind, row.space.id, row.label, row.branch])).toEqual([
-      ["parent", "w18", "lilygo-t3", "main"],
-      ["child", "w1C", "brave-forest-7518", "worktree/brave-forest-7518"],
-      ["child", "w1D", "brave-stone-13f0", "worktree/brave-stone-13f0"],
-      ["top-level", "cockpit", "cockpit", "main"],
-    ]);
-  });
-
-  it("strips only an exact worktree prefix from child branch labels", () => {
-    const spaces = [
-      space("parent", "repo", git("repo", "main", false)),
-      space("exact", "exact fallback", git("repo", "worktree/topic", true)),
-      space("embedded", "embedded fallback", git("repo", "feature/worktree/topic", true)),
-    ];
-    expect(projectSpaceTree(spaces).map((row) => row.label)).toEqual(["repo", "topic", "feature/worktree/topic"]);
-  });
-
-  it("retains only the selected child beneath a collapsed parent", () => {
-    const spaces = [
-      space("parent", "repo", git("repo", "main", false)),
-      space("child-1", "one", git("repo", "worktree/one", true)),
-      space("child-2", "two", git("repo", "worktree/two", true)),
-    ];
-    const rows = projectSpaceTree(spaces, new Set(["repo"]), "child-2");
-    expect(rows.map((row) => [row.kind, row.space.id, row.expanded, row.connector])).toEqual([
-      ["parent", "parent", false, null],
-      ["child", "child-2", false, "└─"],
-    ]);
-  });
-
-  it("never duplicates a grouped Space row", () => {
-    const spaces = [
-      space("child-before", "before", git("repo", "worktree/before", true)),
-      space("parent", "repo", git("repo", "main", false)),
-      space("second-parent", "repo clone", git("repo", "release", false)),
-      space("child-after", "after", git("repo", "worktree/after", true)),
-    ];
-    const ids = projectSpaceTree(spaces).map((row) => row.space.id);
-    expect(ids).toEqual(["parent", "child-before", "second-parent", "child-after"]);
-    expect(new Set(ids).size).toBe(spaces.length);
-  });
-
-  it("shows the most urgent worktree state on a collapsed repository row only", () => {
-    const spaces = [
-      space("parent", "repo", git("repo", "main", false), "idle"),
-      space("child-1", "one", git("repo", "worktree/one", true), "blocked"),
-      space("child-2", "two", git("repo", "worktree/two", true), "working"),
-      space("other", "other", git("other", "main", false), "blocked"),
-    ];
-    const status = (collapsed: string[]) => projectSpaceTree(spaces, new Set(collapsed)).filter((row) => row.kind !== "child").map((row) => spaceRowStatus(row, spaces));
-    expect(status([])).toEqual(["idle", "blocked"]);
-    expect(status(["repo"])).toEqual(["blocked", "blocked"]);
-  });
-
-  it("maps Space agent status to its glyph and class", () => {
-    expect(spaceStatus("blocked")).toEqual({ glyph: "×", className: "blocked" });
-    expect(spaceStatus("running")).toEqual({ glyph: "◐", className: "working" });
-    expect(spaceStatus("complete")).toEqual({ glyph: "✓", className: "done" });
-    expect(spaceStatus("idle")).toEqual({ glyph: "○", className: "idle" });
-    expect(spaceStatus("unexpected")).toEqual({ glyph: "·", className: "unknown" });
-  });
-});
-
 const firstOperation = { epoch: 1, token: 1, key: "pane:pane-1", request: { type: "pane_zoom", pane_id: "pane-1", mode: "toggle" } as const, focusFromSnapshot: false };
 
 describe("mutation coordination", () => {
@@ -298,15 +147,6 @@ describe("resource drop boundaries", () => {
     expect(tabDropInsertionIndex(2, 0, true)).toBe(1);
     expect(tabDropInsertionIndex(1, 1, true)).toBeNull();
   });
-
-  it("converts Space target halves to Herdr before anchors", () => {
-    const spaces = ["a", "b", "c"].map((id) => space(id, id));
-    expect(spaceDropBeforeId(spaces, "a", "b", false)).toBeUndefined();
-    expect(spaceDropBeforeId(spaces, "a", "b", true)).toBe("c");
-    expect(spaceDropBeforeId(spaces, "c", "a", false)).toBe("a");
-    expect(spaceDropBeforeId(spaces, "c", "a", true)).toBe("b");
-    expect(spaceDropBeforeId(spaces, "b", "b", true)).toBeUndefined();
-  });
 });
 
 describe("desktop command routing", () => {
@@ -334,57 +174,6 @@ describe("desktop command routing", () => {
     expect(canSwitchSessions(1)).toBe(false);
     expect(canSwitchSessions(2)).toBe(true);
   });
-  it("maps Herdr prefix keys without treating unmodified variants as destructive commands", () => {
-    expect(prefixCommandForKey("N", true)).toBe("new-space");
-    expect(prefixCommandForKey("W", true)).toBe("rename-space");
-    expect(prefixCommandForKey("D", true)).toBe("close-space");
-    expect(prefixCommandForKey("c", false)).toBe("new-tab");
-    expect(prefixCommandForKey("T", true)).toBe("rename-tab");
-    expect(prefixCommandForKey("X", true)).toBe("close-tab");
-    expect(prefixCommandForKey("P", true)).toBe("rename-pane");
-    expect(prefixCommandForKey("v", false)).toBe("split-right");
-    expect(prefixCommandForKey("?", false)).toBe("help");
-    expect(prefixCommandForKey("p", false)).toBe("previous-tab");
-    expect(prefixCommandForKey("n", false)).toBe("next-tab");
-    expect(prefixCommandForKey("z", false)).toBe("zoom-pane");
-    expect(prefixCommandForKey("r", false)).toBe("resize");
-    expect(prefixCommandForKey("-", false)).toBe("split-down");
-    expect(prefixCommandForKey("x", false)).toBe("close-pane");
-    expect(prefixCommandForKey("o", false)).toBe("next-pane");
-    expect(prefixCommandForKey("O", true)).toBe("previous-pane");
-    expect(prefixCommandForKey("h", false)).toBe("focus-left");
-    expect(prefixCommandForKey("j", false)).toBe("focus-down");
-    expect(prefixCommandForKey("k", false)).toBe("focus-up");
-    expect(prefixCommandForKey("l", false)).toBe("focus-right");
-    expect(prefixCommandForKey("f", false)).toBe("open-file-picker");
-    expect(prefixCommandForKey("[", false)).toBe("focus-file-tree");
-    expect(prefixCommandForKey("]", false)).toBe("focus-file-content");
-    expect(prefixCommandForKey("4", false)).toBe("select-tab-4");
-    expect(prefixCommandForKey("D", false)).toBeNull();
-  });
-  it("keeps the prefix armed across modifier-only keydowns until the shifted command arrives", () => {
-    const runCommand = vi.fn();
-    const setCommandsOpen = vi.fn();
-    let prefixActive = false;
-    const setPrefixActive = vi.fn((active: boolean) => { prefixActive = active; });
-    const route = (event: KeyboardEvent) => routeWorkbenchKeydown(event, { modalOpen: false, prefixActive, runCommand, setPrefixActive, setCommandsOpen });
-
-    route(routingEvent({ key: "b", ctrlKey: true }));
-    expect(prefixActive).toBe(true);
-
-    for (const event of [
-      routingEvent({ key: "Shift", shiftKey: true }),
-      routingEvent({ key: "Control", ctrlKey: true }),
-      routingEvent({ key: "Alt", altKey: true }),
-      routingEvent({ key: "Meta", metaKey: true }),
-    ]) route(event);
-    expect(prefixActive).toBe(true);
-    expect(runCommand).not.toHaveBeenCalled();
-
-    route(routingEvent({ key: "N", shiftKey: true }));
-    expect(prefixActive).toBe(false);
-    expect(runCommand).toHaveBeenCalledExactlyOnceWith("new-space");
-  });
   it("uses authoritative layout geometry only to choose the next pane focus target", () => {
     const layout: TabLayout = {
       space_id: "space-1", tab_id: "tab-1", area: { x: 0, y: 0, width: 40, height: 40 }, focused_pane_id: "center", zoomed: false,
@@ -402,82 +191,6 @@ describe("desktop command routing", () => {
     expect(paneIdInDirection(layout, "center", "down")).toBe("down");
     expect(paneIdInDirection(layout, "left", "left")).toBeNull();
   });
-  it("routes prefix input before terminal handlers without changing ordinary typing or unknown-prefix policy", () => {
-    const runCommand = vi.fn();
-    const setPrefixActive = vi.fn();
-    const setCommandsOpen = vi.fn();
-    const routing = { modalOpen: false, prefixActive: false, runCommand, setPrefixActive, setCommandsOpen };
-
-    const prefix = routingEvent({ key: "b", ctrlKey: true });
-    routeWorkbenchKeydown(prefix, routing);
-    expect(prefix.preventDefault).toHaveBeenCalledOnce();
-    expect(prefix.stopPropagation).toHaveBeenCalledOnce();
-    expect(setPrefixActive).toHaveBeenCalledWith(true);
-
-    const command = routingEvent({ key: "z" });
-    routeWorkbenchKeydown(command, { ...routing, prefixActive: true });
-    expect(command.preventDefault).toHaveBeenCalledOnce();
-    expect(command.stopPropagation).toHaveBeenCalledOnce();
-    expect(setPrefixActive).toHaveBeenCalledWith(false);
-    expect(runCommand).toHaveBeenCalledOnce();
-    expect(runCommand).toHaveBeenCalledWith("zoom-pane");
-
-    const ordinary = routingEvent({ key: "z" });
-    routeWorkbenchKeydown(ordinary, routing);
-    expect(ordinary.preventDefault).not.toHaveBeenCalled();
-    expect(ordinary.stopPropagation).not.toHaveBeenCalled();
-    expect(runCommand).toHaveBeenCalledOnce();
-
-    const unknown = routingEvent({ key: "q" });
-    routeWorkbenchKeydown(unknown, { ...routing, prefixActive: true });
-    expect(unknown.preventDefault).toHaveBeenCalledOnce();
-    expect(unknown.stopPropagation).not.toHaveBeenCalled();
-    expect(setPrefixActive).toHaveBeenCalledWith(false);
-    expect(runCommand).toHaveBeenCalledOnce();
-  });
-
-  it("leaves modal, composition, modified terminal keys, and prefix cancellation on their explicit routes", () => {
-    const runCommand = vi.fn();
-    const setPrefixActive = vi.fn();
-    const setCommandsOpen = vi.fn();
-    const base = { modalOpen: false, prefixActive: false, runCommand, setPrefixActive, setCommandsOpen };
-
-    const modal = routingEvent({ key: "b", ctrlKey: true });
-    routeWorkbenchKeydown(modal, { ...base, modalOpen: true });
-    expect(modal.preventDefault).not.toHaveBeenCalled();
-    expect(modal.stopPropagation).not.toHaveBeenCalled();
-    expect(setPrefixActive).not.toHaveBeenCalled();
-
-    const composing = routingEvent({ key: "b", ctrlKey: true, isComposing: true });
-    routeWorkbenchKeydown(composing, base);
-    expect(composing.preventDefault).not.toHaveBeenCalled();
-    expect(composing.stopPropagation).not.toHaveBeenCalled();
-    expect(setPrefixActive).not.toHaveBeenCalled();
-
-    const modified = routingEvent({ key: "ArrowLeft", ctrlKey: true });
-    routeWorkbenchKeydown(modified, base);
-    expect(modified.preventDefault).not.toHaveBeenCalled();
-    expect(modified.stopPropagation).not.toHaveBeenCalled();
-    const modifiedPrefix = routingEvent({ key: "b", ctrlKey: true, altKey: true });
-    routeWorkbenchKeydown(modifiedPrefix, base);
-    expect(modifiedPrefix.preventDefault).not.toHaveBeenCalled();
-    expect(setPrefixActive).not.toHaveBeenCalled();
-    const modifiedCommand = routingEvent({ key: "z", ctrlKey: true });
-    routeWorkbenchKeydown(modifiedCommand, { ...base, prefixActive: true });
-    expect(modifiedCommand.preventDefault).not.toHaveBeenCalled();
-    expect(modifiedCommand.stopPropagation).not.toHaveBeenCalled();
-    expect(runCommand).not.toHaveBeenCalled();
-    expect(setPrefixActive).toHaveBeenCalledWith(false);
-
-    const escape = routingEvent({ key: "Escape" });
-    routeWorkbenchKeydown(escape, { ...base, prefixActive: true });
-    expect(escape.preventDefault).toHaveBeenCalledOnce();
-    expect(escape.stopPropagation).toHaveBeenCalledOnce();
-    expect(setPrefixActive).toHaveBeenCalledWith(false);
-    expect(runCommand).not.toHaveBeenCalled();
-  });
-
-
   it("replays only idempotent absolute mutations", () => {
     const retryable: ResourceMutationRequest[] = [
       { type: "space_rename", space_id: "space-1", label: "Main" },
@@ -515,12 +228,6 @@ describe("desktop command routing", () => {
     source.spaces.push({ id: "space-2", label: "Ops", number: 2, tab_count: 1, pane_count: 1, focused: false, agent_status: "unknown", git: null });
     expect(moveDestinationLabel({ ...source.tabs[0], id: "internal-tab", space_id: "space-2", label: "Logs", number: 4 }, source.spaces)).toBe("Ops / Logs");
     expect(moveDestinationLabel({ ...source.tabs[0], id: "internal-tab", space_id: "space-2", label: "", number: 4 }, source.spaces)).toBe("Ops / Tab 4");
-  });
-
-  it("wraps modal tab focus in both directions", () => {
-    expect(nextModalFocusIndex(2, 3, false)).toBe(0);
-    expect(nextModalFocusIndex(0, 3, true)).toBe(2);
-    expect(nextModalFocusIndex(-1, 3, false)).toBe(0);
   });
 
   it("bounds pending terminal input while retaining the newest commands", () => {

@@ -2,7 +2,7 @@ use cockpit_core::CockpitService;
 use cockpit_protocol::{
     context::{
         ContextDirectory, ContextDirectoryRequest, ContextDocument, ContextDocumentRequest,
-        ContextLaunchRequest, PanePresentation,
+        ContextFileIndex, ContextFileIndexRequest, ContextLaunchRequest, PanePresentation,
     },
     v1::ErrorResponse,
 };
@@ -37,6 +37,22 @@ pub async fn cockpit_context_directory(
         .contexts()
         .map_err(inspection_error_response)?
         .directory(&session_id, &pane_id, &request)
+        .await
+        .map_err(inspection_error_response)
+}
+
+#[tauri::command]
+pub async fn cockpit_context_file_index(
+    session_id: String,
+    pane_id: String,
+    request: Value,
+    service: State<'_, CockpitService>,
+) -> Result<ContextFileIndex, ErrorResponse> {
+    let request: ContextFileIndexRequest = decode_request(request, "context file index")?;
+    service
+        .contexts()
+        .map_err(inspection_error_response)?
+        .file_index(&session_id, &pane_id, &request)
         .await
         .map_err(inspection_error_response)
 }

@@ -2,6 +2,8 @@ import { CockpitClientError, type CockpitClient } from "../../client/CockpitClie
 import type {
   ContextDirectory,
   ContextDocument,
+  ContextFileIndex,
+  ContextFileIndexMode,
   ContextInvalidationRequest,
   ContextInvalidationResponse,
   ContextMedia,
@@ -26,6 +28,7 @@ export type ContextMediaRead = { root_id: string; path: string; expected_revisio
 export interface ContextReader {
   readonly identity: string;
   directory(request: ContextDirectoryRead, signal?: AbortSignal): Promise<ContextDirectory>;
+  fileIndex(rootId: string, mode: ContextFileIndexMode, signal?: AbortSignal): Promise<ContextFileIndex>;
   document(request: ContextDocumentRead, signal?: AbortSignal): Promise<ContextDocument>;
   media(request: ContextMediaRead, signal?: AbortSignal): Promise<ContextMedia>;
   search?(request: ContextSearchRequest, signal: AbortSignal): Promise<ContextSearchResponse>;
@@ -37,6 +40,7 @@ export function paneReader(client: CockpitClient, presentation: PanePresentation
   return {
     identity: `pane\u0000${sessionId}\u0000${paneId}\u0000${bindingId}`,
     directory: (request, signal) => client.contextDirectory(sessionId, paneId, { binding_id: bindingId, ...request }, signal),
+    fileIndex: (rootId, mode, signal) => client.contextFileIndex(sessionId, paneId, { binding_id: bindingId, root_id: rootId, mode }, signal),
     document: (request, signal) => client.contextDocument(sessionId, paneId, { binding_id: bindingId, ...request }, signal),
     media: (request, signal) => client.contextMedia(sessionId, paneId, { binding_id: bindingId, ...request }, signal),
     search: (request, signal) => client.contextSearch(sessionId, paneId, request, signal),
@@ -58,6 +62,7 @@ export function libraryReader(client: CockpitClient, root: ContextRoot): Context
   return {
     identity: `library\u0000${root.root_id}`,
     directory: async ({ path, offset, revision }, signal) => own(await client.libraryDirectory({ path, offset: offset ?? null, revision: revision ?? null }, signal)),
+    fileIndex: async (_rootId, mode, signal) => own(await client.libraryFileIndex({ mode }, signal)),
     document: async ({ path, expected_revision, offset }, signal) => own(await client.libraryDocument({ path, expected_revision, offset: offset ?? null }, signal)),
     media: async ({ path, expected_revision }, signal) => own(await client.libraryMedia({ path, expected_revision }, signal)),
   };

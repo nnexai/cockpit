@@ -5,6 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalCommand, TerminalMouseButton, TerminalMouseKind, TerminalOpenRequest, TerminalOwnershipState, TerminalStreamMessage } from "../protocol/generated/v1";
 import { createClipboardAccess, type ClipboardAccess } from "../client/clipboard";
+import { detectPlatform, shortcutForms } from "./input/shortcuts";
 
 
 export const MAX_PENDING_CONTROL_COMMANDS = 64;
@@ -572,6 +573,18 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     terminal.attachCustomKeyEventHandler((event) => {
       const key = event.key.toLowerCase();
       const shortcutModifier = event.ctrlKey || event.metaKey;
+      const macCommand = detectPlatform() === "mac" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      // macOS: Cmd+C copies only with a selection (otherwise it falls through), Cmd+V pastes.
+      if (event.type === "keydown" && macCommand && key === "c" && terminal.hasSelection()) {
+        void copySelection();
+        event.preventDefault();
+        return false;
+      }
+      if (event.type === "keydown" && macCommand && key === "v") {
+        event.preventDefault();
+        void pasteClipboard();
+        return false;
+      }
       if (event.type === "keydown" && shortcutModifier && event.shiftKey && key === "c" && !event.altKey) {
         if (!terminal.hasSelection()) return true;
         void copySelection();
@@ -1072,8 +1085,8 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       }}
     >
       {terminalContextOpen && terminalContextPosition ? <div ref={contextMenuRef} className="terminal-context-menu" role="menu" aria-label="Terminal clipboard actions" style={{ left: terminalContextPosition.x, top: terminalContextPosition.y }} onContextMenu={(event) => event.preventDefault()}>
-        <button type="button" role="menuitem" disabled={clipboardBusy || !(contextSelectionRef.current || terminalRef.current?.getSelection())} onClick={() => { setTerminalContextOpen(false); void copySelection(); }}>Copy</button>
-        <button type="button" role="menuitem" disabled={clipboardBusy} onClick={() => { setTerminalContextOpen(false); void pasteClipboard(); }}>Paste</button>
+        <button type="button" role="menuitem" disabled={clipboardBusy || !(contextSelectionRef.current || terminalRef.current?.getSelection())} onClick={() => { setTerminalContextOpen(false); void copySelection(); }}>Copy<kbd>{shortcutForms("terminal-copy").at(-1)}</kbd></button>
+        <button type="button" role="menuitem" disabled={clipboardBusy} onClick={() => { setTerminalContextOpen(false); void pasteClipboard(); }}>Paste<kbd>{shortcutForms("terminal-paste").at(-1)}</kbd></button>
       </div> : null}
       {clipboardBusy ? <span className="terminal-status" role="status" aria-label="Clipboard operation in progress" title="Clipboard operation in progress">⟳</span> : clipboardError ? <span className="terminal-status terminal-status-error" role="alert" aria-label={clipboardError.message} title={clipboardError.message}><span aria-hidden="true">!</span><button type="button" className="terminal-status-retry" aria-label={`Retry ${clipboardError.operation}`} onClick={() => { void (clipboardError.operation === "copy" ? copySelection() : pasteClipboard()); }}>↻</button></span> : null}
       {closed ? (

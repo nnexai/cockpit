@@ -178,6 +178,7 @@ class AppFixture {
     workspaceTeardownRecoveries: vi.fn(async () => { throw new Error("Unexpected workspace teardown in terminal fixture"); }),
     inspectPane: this.inspectPane,
     contextDirectory: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
+    contextFileIndex: vi.fn(async () => { throw new Error("Unexpected Context file index in terminal fixture"); }),
     contextDocument: vi.fn(async () => { throw new Error("Unexpected Context read in terminal fixture"); }),
     contextSearch: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
     reviewSnapshot: vi.fn(async () => { throw new Error("Unexpected Context search in terminal fixture"); }),
@@ -206,6 +207,7 @@ class AppFixture {
     libraryReplace: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryRemove: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryDirectory: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
+    libraryFileIndex: vi.fn(async () => { throw new Error("Unexpected Library file index in terminal fixture"); }),
     libraryDocument: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     libraryMedia: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     commentPreview: vi.fn(async () => { throw new Error("Unexpected comment preview in terminal fixture"); }),
@@ -312,7 +314,8 @@ async function mount(fixture: AppFixture): Promise<void> {
 }
 
 function button(label: string): HTMLButtonElement {
-  const match = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.getAttribute("aria-label") === label || candidate.textContent?.trim() === label);
+  // A Commands row also holds its key chips, so it is named by its label span.
+  const match = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.getAttribute("aria-label") === label || candidate.textContent?.trim() === label || candidate.querySelector(".command-row-label > span")?.textContent === label);
   if (!match) throw new Error(`Missing button ${label}`);
   return match;
 }
@@ -374,7 +377,7 @@ describe("mounted App mutation and session ordering", () => {
     const line = container.querySelector(".space-branch");
     expect(line?.querySelector(".space-branch-name")?.textContent).toBe("main");
     expect(line?.querySelector(".space-ahead-behind")?.textContent).toBe("↑2 ↓1");
-    expect(line?.querySelector(".space-ahead-behind")?.getAttribute("aria-label")).toBe("2 ahead, 1 behind origin/main");
+    expect(line?.closest("button")?.getAttribute("aria-label")).toBe("Alpha space, Idle, branch main, 2 ahead, 1 behind");
   });
 
   it("opens Review from the command overlay for the selected single pane", async () => {
@@ -609,7 +612,7 @@ describe("mounted App mutation and session ordering", () => {
     fixture.resolveMutation(0, mutationResponse("session-1", snapshot("session-1")));
     await settle();
 
-    expect(container.querySelector(".session-state")?.textContent).toBe("loading");
+    expect(container.querySelector(".session-chip")?.textContent).toBe("Resyncing");
     expect(terminal()?.dataset.deferred).toBe("false");
   });
 
@@ -1051,5 +1054,126 @@ describe("Library view presentation lifecycle", () => {
     await settle();
     expect(document.activeElement).toBe(button("Open Library"));
     expect(fixture.snapshotCalls).not.toHaveBeenCalled();
+  });
+});
+
+function press(target: Element | Window, key: string, init: KeyboardEventInit = {}): void {
+  act(() => { target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
+}
+
+function prefix(target: Element | Window, key: string, init: KeyboardEventInit = {}): void {
+  press(target, "b", { ctrlKey: true });
+  press(target, key, init);
+}
+
+describe("keyboard prefix in the workbench", () => {
+  it("opens the Library from a focused terminal with Ctrl+B i and returns focus to that terminal on the same key", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    act(() => terminal("pane-1")!.focus());
+
+    prefix(terminal("pane-1")!, "i");
+    await settle();
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+    expect(terminal("pane-1")).toBeNull();
+
+    prefix(document.activeElement!, "i");
+    await settle();
+    expect(container.querySelector('section[aria-label="Library"]')).toBeNull();
+    // The originating terminal attaches with focus allowed; Esc or a click on Close keeps it suppressed.
+    expect(terminal("pane-1")?.dataset.focusOnAttach).toBe("true");
+  });
+
+  it("closes the Library first, then acts, for a pane-scoped command", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    act(() => terminal("pane-1")!.focus());
+    prefix(terminal("pane-1")!, "i");
+    await settle();
+    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+
+    prefix(document.activeElement!, "z");
+    expect(container.querySelector('section[aria-label="Library"]')).toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });
+    expect(fixture.mutateCalls).toHaveBeenCalledWith("session-1", { type: "pane_zoom", pane_id: "pane-1", mode: "toggle" });
+  });
+
+  it("shows a not-bound hint for a key after the prefix that Cockpit does not use", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    prefix(window, "o");
+    expect(container.querySelector(".prefix-indicator")?.textContent).toBe("Ctrl+B o is not bound in Cockpit");
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
+
+  it("lists every Commands row with its key as chips and finds a row by its key", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    prefix(window, "?");
+    await settle();
+    click(button("All commands"));
+    const row = [...container.querySelectorAll<HTMLElement>(".command-row")].find((candidate) => candidate.textContent?.includes("Open Library"))!;
+    expect([...row.querySelectorAll("kbd")].map((chip) => chip.textContent)).toEqual(["Ctrl+B", "i"]);
+    expect(container.querySelector(".command-row")).not.toBeNull();
+    const search = container.querySelector<HTMLInputElement>(".command-search")!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => { setValue.call(search, "swap"); search.dispatchEvent(new Event("input", { bubbles: true })); });
+    const labels = [...container.querySelectorAll(".command-row-label")].map((label) => label.textContent);
+    expect(labels).toEqual(expect.arrayContaining([expect.stringContaining("Swap pane left")]));
+  });
+
+  it("moves a pane chooser selection with Ctrl+N/P", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    openLocalPaneMenu();
+    click(container.querySelector(".context-menu-advanced summary")!);
+    click(button("Move…"));
+    const destination = container.querySelector<HTMLSelectElement>('select[aria-label="Move destination"]')!;
+    expect(destination.value).toBe("");
+    press(destination, "n", { ctrlKey: true });
+    expect(destination.value).toBe("new-tab");
+    press(destination, "n", { ctrlKey: true });
+    expect(destination.value).toBe("new-space");
+    press(destination, "p", { ctrlKey: true });
+    expect(destination.value).toBe("new-tab");
+  });
+
+  it("toggles the sidebar with Ctrl+B b", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const workbench = container.querySelector(".workbench")!;
+    expect(workbench.classList.contains("sidebar-collapsed")).toBe(false);
+    prefix(window, "b");
+    expect(workbench.classList.contains("sidebar-collapsed")).toBe(true);
+    prefix(window, "b");
+    expect(workbench.classList.contains("sidebar-collapsed")).toBe(false);
+  });
+});
+
+describe("pane-scoped prefix commands over the Library", () => {
+  it("shows the pane before a destructive confirmation names it", async () => {
+    const fixture = new AppFixture();
+    emptyLibrary(fixture);
+    await mount(fixture);
+    act(() => terminal("pane-1")!.focus());
+    const libraryOpenAtConfirm: boolean[] = [];
+    const confirm = vi.spyOn(window, "confirm").mockImplementation((message) => {
+      libraryOpenAtConfirm.push(container.querySelector('section[aria-label="Library"]') !== null && message !== undefined);
+      return false;
+    });
+    try {
+      prefix(terminal("pane-1")!, "i");
+      await settle();
+      expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
+      prefix(document.activeElement!, "x");
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });
+      expect(confirm).toHaveBeenCalledExactlyOnceWith("Close Alpha pane?");
+      expect(libraryOpenAtConfirm).toEqual([false]);
+      expect(fixture.mutateCalls).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });

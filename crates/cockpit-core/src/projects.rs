@@ -43,12 +43,11 @@ use crate::sources::{
 use crate::{InspectionError, ProjectHerdrAdapter};
 use crate::library::LibraryService;
 use cockpit_protocol::library::{LibraryPhaseName, LibraryPhaseState, SpaceTarget, SpaceAddRequest};
-/// sessions, workspaces, tabs, panes, and worktrees; this service only journals
-/// its own effects and the companion association.
 pub struct ProjectService {
     configuration: ProjectConfiguration,
     adapter: Arc<dyn ProjectHerdrAdapter>,
     store: ProjectStore,
+    repository_cache: Arc<crate::repository_cache::RepositoryDiscoveryCache>,
     sources: Option<Arc<SourceService>>,
     shutting_down: AtomicBool,
     cancelled: Mutex<HashSet<String>>,
@@ -117,6 +116,10 @@ impl ProjectService {
             configuration,
             adapter,
             store,
+            repository_cache: Arc::new(crate::repository_cache::RepositoryDiscoveryCache::new(
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(300),
+            )),
             sources: None,
             shutting_down: AtomicBool::new(false),
             cancelled: Mutex::new(HashSet::new()),
@@ -163,9 +166,32 @@ impl ProjectService {
     }
 
     pub async fn repositories(&self) -> Result<RepositoryListResponse, InspectionError> {
-        RepositoryCatalog::new(self.configuration.clone())
-            .list()
-            .await
+        let generation = self.store.mutation_generation();
+        let listed = RepositoryCatalog::new(self.configuration.clone()).list().await?;
+        if self.store.mutation_generation() == generation {
+            self.repository_cache.publish(listed.clone(), generation);
+        }
+        Ok(listed)
+    }
+
+    pub(crate) async fn cached_repositories(&self) -> Result<RepositoryListResponse, InspectionError> {
+        self.repository_cache.list(
+            &RepositoryCatalog::new(self.configuration.clone()),
+            self.store.mutation_generation(),
+        ).await
+    }
+
+    pub(crate) async fn cached_discover_checkout(&self, cwd: &Path) -> Result<RepositoryCandidate, InspectionError> {
+        self.repository_cache.discover(
+            &RepositoryCatalog::new(self.configuration.clone()),
+            cwd,
+            self.store.mutation_generation(),
+        ).await
+    }
+
+    pub fn prewarm_repositories(self: &Arc<Self>) {
+        let service = Arc::clone(self);
+        tokio::spawn(async move { let _ = service.cached_repositories().await; });
     }
 
     pub async fn plan(
@@ -3107,6 +3133,7 @@ mod tests {
             worktree_root: root.join("worktrees").to_string_lossy().into_owned(),
             companion_root: root.join("companions").to_string_lossy().into_owned(),
             state_root: root.join("state").to_string_lossy().into_owned(),
+            cache_root: root.join("cache").to_string_lossy().into_owned(),
             library_root: root.join("library").to_string_lossy().into_owned(),
             branch_template: "{repo}/{task_id}".to_owned(),
             checkout_template: "{repo}-{task_id}".to_owned(),

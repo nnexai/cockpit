@@ -12,7 +12,7 @@ use std::{
     fs::File,
     io::{self, Read},
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 
@@ -101,6 +101,7 @@ pub(crate) struct Store {
     journal: Dir,
     locks: Dir,
     max_items: usize,
+    index_cache: Mutex<Option<((u64, u64, u64, Option<cap_std::time::SystemTime>), Arc<Index>)>>,
     #[cfg(test)]
     pub fault: std::sync::Mutex<Option<&'static str>>,
     #[cfg(test)]
@@ -264,6 +265,7 @@ impl Store {
             locks: open_child(&meta, "locks")?,
             meta,
             max_items,
+            index_cache: Mutex::new(None),
             #[cfg(test)]
             fault: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -318,21 +320,43 @@ impl Store {
     }
     /// Caller holds shared or exclusive library.lock.
     pub fn index(&self) -> Result<Index, InspectionError> {
+        Ok(self.index_shared()?.as_ref().clone())
+    }
+    pub fn index_shared(&self) -> Result<Arc<Index>, InspectionError> {
         if !exists(&self.meta, "index.json")? {
-            return Ok(Index::default());
+            return Ok(Arc::new(Index::default()));
         }
-        let value: serde_json::Value = read_json_bounded(&self.meta, "index.json", MAX_INDEX)
-            .map_err(|e| corrupt(e.message))?;
-        if value.get("schema").and_then(serde_json::Value::as_u64) == Some(1) {
-            return Err(error(
-                "library_layout_outdated",
-                format!(
-                    "Library layout at {} is outdated; delete this Library root and re-add it",
-                    self.path.display()
-                ),
-            ));
+        let metadata = self.meta.symlink_metadata("index.json").map_err(io_error)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_INDEX {
+            return Err(corrupt("Library index is not a bounded regular file"));
         }
-        let index: Index = serde_json::from_value(value).map_err(|e| corrupt(e.to_string()))?;
+        let identity = (
+            cap_fs_ext::MetadataExt::dev(&metadata),
+            cap_fs_ext::MetadataExt::ino(&metadata),
+            metadata.len(),
+            metadata.modified().ok(),
+        );
+        if let Some((cached_identity, index)) = self.index_cache.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+            && *cached_identity == identity {
+            return Ok(Arc::clone(index));
+        }
+        let index: Index = match read_json_bounded(&self.meta, "index.json", MAX_INDEX) {
+            Ok(index) => index,
+            Err(parse_error) => {
+                if let Ok(value) = read_json_bounded::<serde_json::Value>(&self.meta, "index.json", MAX_INDEX)
+                    && value.get("schema").and_then(serde_json::Value::as_u64) == Some(1)
+                {
+                    return Err(error(
+                        "library_layout_outdated",
+                        format!(
+                            "Library layout at {} is outdated; delete this Library root and re-add it",
+                            self.path.display()
+                        ),
+                    ));
+                }
+                return Err(corrupt(parse_error.message));
+            }
+        };
         if index.schema != 2 || index.items.len() > 1_000_000 {
             return Err(corrupt("unsupported or oversized Library index"));
         }
@@ -344,6 +368,8 @@ impl Store {
                 return Err(corrupt("duplicate Library identity or path"));
             }
         }
+        let index = Arc::new(index);
+        *self.index_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((identity, Arc::clone(&index)));
         Ok(index)
     }
     fn commit(&self, index: &mut Index) -> Result<(), InspectionError> {
@@ -818,13 +844,18 @@ impl Store {
     }
     /// Never sweep staging or trash: another host may own unjournaled work.
     fn recover(&self) -> Result<(), InspectionError> {
-        let mut index = self.index()?;
-        for file in self.journal.entries().map_err(io_error)? {
-            let file = file.map_err(io_error)?;
-            let name = file.file_name().to_string_lossy().into_owned();
-            if !name.ends_with(".json") {
-                continue;
+        let mut pending = Vec::new();
+        for entry in self.journal.entries().map_err(io_error)? {
+            let name = entry.map_err(io_error)?.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".json") {
+                pending.push(name);
             }
+        }
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut index = self.index()?;
+        for name in pending {
             let intent: Intent = read_json_bounded(&self.journal, &name, MAX_RECORD)
                 .map_err(|e| corrupt(e.message))?;
             validate_intent(&intent, &name)?;

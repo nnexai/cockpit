@@ -1688,6 +1688,8 @@ pub fn run() {
     );
     let service =
         CockpitService::new(CockpitMode::Normal, inspector.clone()).with_projects(project_service);
+    let warm_projects = service.projects().expect("project operations configured").clone();
+    tauri::async_runtime::spawn(async move { warm_projects.prewarm_repositories(); });
     let shutdown_projects = service
         .projects()
         .expect("project operations configured")
@@ -1766,6 +1768,7 @@ pub fn run() {
             projects::cockpit_workspace_teardown_recoveries,
             context::cockpit_pane_presentation,
             context::cockpit_context_directory,
+            context::cockpit_context_file_index,
             context::cockpit_context_document,
             context::cockpit_context_open,
             context_search::cockpit_context_search,
@@ -1782,6 +1785,7 @@ pub fn run() {
             library::cockpit_library_replace,
             library::cockpit_library_remove,
             library::cockpit_library_directory,
+            library::cockpit_library_file_index,
             library::cockpit_library_document,
             library::cockpit_library_media,
             library::cockpit_library_space_list,

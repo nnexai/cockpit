@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { LibraryOperation, LibraryReportRow } from "../../protocol/generated/v1";
 import { REPORT_OUTCOMES, reportOutcomeLabel, reportSummary } from "./libraryState";
+import { UiIcon } from "../UiIcon";
 
 /**
  * Provider refresh report (design §4.9). It stays until dismissed or the next
@@ -54,7 +55,7 @@ export function RefreshReport({ operation, verb, error, onCancel, onDismiss, onO
       <button type="button" onClick={onDismiss}>Dismiss</button>
     </div>
     {limitedFollows.map((row, index) => <p key={`${row.follow_id}:${index}`} className="context-notice context-notice-warning library-report-limit" role="status">
-      <span aria-hidden="true">◐</span>
+      <UiIcon name="half-ring" />
       <span>{`${row.title}: ${row.reason ?? "partial"}. Pages past the limit aren't added, and no page is marked removed at source until a refresh reads the whole space.`}</span>
     </p>)}
     {shown && rows.length > 0 ? <div className="library-report-rows">

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cockpit sidebar: before / after</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Mock for planning/ui-polish-2026-09-28/01-sidebar.md. Self-contained; a small inline script renders the
+  same data through a "before" and an "after" renderer so both sides always show identical content, and
+  clones them at 2x (CSS transform, so 2x is a magnified 1x, not a HiDPI render).
+  Tokens are copied from src/app/styles.css :root (lines 8-76). "Before" is reconstructed from the final
+  cascade of styles.css, not screenshot-traced. Fonts fall back to system faces when IBM Plex is missing.
+  The only new token is --chrome-bg.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --app-bg:#0b0e12; --sidebar-bg:#11161e; --surface:#161d27; --surface-raised:#1b2431;
+  --surface-hover:#222e3d; --surface-selected:#23354c; --border:#2b3543; --border-strong:#3b4758;
+  --text-primary:#cdd6f4; --text-secondary:#bac2de; --text-muted:#a6adc8;
+  --accent:#89b4fa; --focus-strong:#89b4fa; --blocked:#f38ba8; --working:#f9e2af; --warning:#f9e2af;
+  --done:#94e2d5; --idle:#a6e3a1; --terminal-bg:#0c1016;
+  --font-sans:"IBM Plex Sans","Noto Sans",sans-serif;
+  --font-mono:"IosevkaTerm Nerd Font Mono","IBM Plex Mono","Noto Sans Mono",monospace;
+  --radius-small:3px; --radius-control:4px; --compact-control-size:28px;
+  --chrome-bg:#121923; /* NEW: the literal the tab bar already repeats four times */
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:24px; background:#080a0d; color:var(--text-primary); font:13px/1.45 var(--font-sans); }
+h1 { font-size:18px; margin:0 0 4px; }
+h2.sec { font-size:14px; margin:36px 0 6px; color:var(--text-secondary); }
+p.note { margin:0 0 12px; color:var(--text-muted); max-width:940px; font-size:12px; }
+.row { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; }
+.cap { font-size:11px; color:var(--text-muted); margin:0 0 6px; } .cap b { color:var(--text-primary); }
+button { font:inherit; color:inherit; }
+code { font-family:var(--font-mono); font-size:11px; color:var(--text-primary); }
+ul.legend { font-size:12px; color:var(--text-secondary); margin:8px 0 0; padding-left:18px; max-width:560px; } ul.legend li { margin:2px 0; }
+
+/* frame: sidebar + seam + mini main area with the tab bar */
+.frame { display:grid; grid-template-columns:var(--sbw) 1px 250px; height:var(--fh,640px); border:1px solid var(--border); background:var(--app-bg); }
+.divider { background:var(--border); }
+.main { display:flex; flex-direction:column; background:var(--terminal-bg); min-width:0; }
+.tabbar { height:41px; flex:0 0 41px; display:flex; align-items:stretch; background:var(--chrome-bg); border-bottom:1px solid var(--border); }
+.tab { display:flex; align-items:center; gap:8px; padding:0 10px; border-right:1px solid #242e3c; font-size:13px; color:var(--text-secondary); }
+.tab.sel { background:var(--accent); color:var(--app-bg); } .tab .n { font-family:var(--font-mono); }
+.spacer { flex:1; }
+/* 2x: magnified 1x. --w/--h are the 1x box. */
+.z { width:calc(var(--w)*2); height:calc(var(--h)*2); overflow:hidden; border:1px solid var(--border); }
+.z > .zi { width:var(--w); height:var(--h); transform:scale(2); transform-origin:0 0; }
+
+/* ============================ BEFORE (reconstructed) ============================ */
+.before .sb { width:224px; height:100%; background:var(--sidebar-bg); border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.before .head { height:41px; flex:0 0 41px; display:flex; align-items:center; padding:0 12px; border-bottom:1px solid var(--border); }
+.before .session { flex:1; min-width:0; height:32px; padding:0; display:flex; align-items:center; gap:9px; border:0; background:transparent; text-align:left; }
+.before .dot { font-size:11px; color:#779c91; } .before .sname { font-size:14px; font-weight:600; flex:1; } .before .sstate { font-size:11px; color:var(--text-muted); }
+.before .sec1 { padding-top:6px; } .before .heading { height:38px; padding:0 13px; display:flex; align-items:center; gap:8px; }
+.before .heading h2 { margin:0; font-size:13px; font-weight:500; text-transform:lowercase; color:var(--text-secondary); }
+.before .heading .count { font-size:11px; color:var(--text-muted); }
+.before .add { margin-left:auto; width:25px; height:25px; border:0; background:transparent; color:var(--text-secondary); font-size:16px; }
+.before .r { position:relative; display:flex; align-items:stretch; min-height:32px; border-left:2px solid transparent; }
+.before .r.sel { border-left-color:var(--accent); background:var(--surface-selected); }
+.before .sel-btn { flex:1; min-width:0; display:flex; align-items:flex-start; gap:8px; padding:7px 4px 7px 12px; border:0; background:transparent; text-align:left; }
+.before .child .sel-btn { padding-left:0; }
+.before .st { width:14px; height:16px; flex:0 0 14px; display:inline-flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-size:13px; line-height:1; color:var(--text-muted); }
+.before .st.idle { color:var(--idle); } .before .st.blocked { color:var(--blocked); } .before .st.working { color:var(--working); } .before .st.done { color:var(--done); }
+.before .lab { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:16px; font-size:13px; font-weight:600; }
+.before .child .lab { font-weight:400; }
+.before .details { min-width:0; flex:1; display:flex; flex-direction:column; gap:2px; }
+.before .branch { font:11px/14px "IBM Plex Mono","Noto Sans Mono",monospace; color:var(--text-muted); }
+.before .chev { width:26px; flex:0 0 26px; height:30px; margin:0 4px 0 0; padding:0; border:0; background:transparent; color:var(--text-muted); display:flex; align-items:center; justify-content:center; }
+.before .conn { position:relative; width:46px; flex:0 0 46px; align-self:stretch; color:var(--text-muted); }
+.before .conn::before { content:""; position:absolute; top:0; bottom:0; left:37px; border-left:1px solid currentColor; }
+.before .conn::after { content:""; position:absolute; top:15px; left:37px; width:8px; border-top:1px solid currentColor; }
+.before .conn.last::before { bottom:auto; height:15px; }
+.before .sec2 { margin-top:26px; border-top:1px solid var(--border); }
+.before .a { display:flex; align-items:flex-start; gap:8px; padding:7px 12px; min-height:31px; border-left:2px solid transparent; }
+.before .a.sel { border-left-color:var(--accent); background:var(--surface-selected); }
+.before .a .loc { font-size:13px; line-height:16px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.before .a .loc .t { color:var(--text-muted); font-weight:400; }
+.before .a .nm { font:13px/14px var(--font-mono); color:var(--text-secondary); }
+.before .toggle { width:36px; height:36px; margin:4px; padding:5px; border:0; border-radius:4px; background:transparent; color:var(--text-secondary); display:flex; align-items:center; justify-content:center; }
+
+/* ============================ AFTER ============================ */
+.after .sb { --edge:14px; --gap:8px; width:var(--sbw,240px); height:100%; background:var(--sidebar-bg); border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.after .head { height:41px; flex:0 0 41px; display:flex; align-items:center; padding:0 6px; border-bottom:1px solid var(--border); background:var(--chrome-bg); }
+.after .session { flex:1; min-width:0; height:30px; padding:0 8px; display:flex; align-items:center; gap:8px; border:0; border-radius:var(--radius-control); background:transparent; text-align:left; cursor:pointer; }
+.after .session:hover, .after .session.is-hover { background:var(--surface-hover); }
+.after .session.is-focus { outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.after .sname { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; line-height:20px; font-weight:600; }
+.after .chip { flex:0 0 auto; padding:0 5px; border:1px solid currentColor; border-radius:var(--radius-small); font-size:11px; line-height:16px; }
+.after .chip.warn { color:var(--warning); } .after .chip.bad { color:var(--blocked); }
+.after .caret { margin-left:auto; width:14px; height:14px; flex:0 0 14px; color:var(--text-muted); }
+.after .sec1 { flex:0 1 auto; min-height:134px; display:flex; flex-direction:column; }
+.after .sec2 { flex:1 1 0; min-height:137px; padding-top:8px; border-top:1px solid var(--border); display:flex; flex-direction:column; }
+.after .heading { height:32px; flex:0 0 32px; padding:0 8px 0 var(--edge); display:flex; align-items:center; gap:8px; }
+.after .heading h2 { margin:0; font-size:13px; line-height:16px; font-weight:500; text-transform:lowercase; color:var(--text-secondary); }
+.after .heading .count { font-size:11px; line-height:16px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.after .add { margin-left:auto; width:24px; height:24px; padding:0; border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.after .add:hover { background:var(--surface-hover); color:var(--text-primary); }
+.after .add svg { width:16px; height:16px; }
+.after .list { flex:1 1 auto; min-height:0; overflow:auto; padding:0 0 8px; scrollbar-width:thin; scrollbar-color:var(--border-strong) transparent; }
+/* row: 32px single line, 48px with a sublabel; 2px gap between rows; full bleed, square (ui-design-direction.md:77) */
+.after .r { position:relative; display:flex; align-items:flex-start; min-height:32px; margin-bottom:2px; }
+.after .r:hover, .after .r.is-hover { background:var(--surface-hover); }
+.after .r:active { background:var(--surface-selected); }
+.after .r.sel { background:var(--surface-selected); }
+.after .r.sel::before, .after .r.pending::before { content:""; position:absolute; left:0; top:8px; bottom:8px; width:3px; border-radius:var(--radius-small); background:var(--accent); }
+.after .r.pending { background:var(--surface-hover); } .after .r.pending::before { background:var(--text-muted); }
+.after .sel-btn { flex:1; min-width:0; display:flex; align-items:flex-start; gap:var(--gap); padding:7px 8px 7px 14px; border:0; background:transparent; text-align:left; cursor:pointer; color:var(--text-secondary); }
+.after .r.is-focus .sel-btn { outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.after .child .sel-btn { padding-left:0; }
+.after .details { min-width:0; flex:1; display:flex; flex-direction:column; gap:2px; }
+.after .lab { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:18px; font-weight:600; color:var(--text-primary); }
+.after .child .lab { font-weight:400; color:var(--text-secondary); } .after .child.sel .lab { color:var(--text-primary); }
+.after .lab .t { font-weight:400; color:var(--text-muted); }
+.after .sub { display:flex; gap:6px; min-width:0; font:11px/14px var(--font-mono); color:var(--text-muted); white-space:nowrap; }
+.after .sub .bn { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.after .sub .ab { flex:0 0 auto; color:var(--idle); }
+.after .sub .w { flex:0 0 auto; } .after .sub .w.blocked { color:var(--blocked); font-weight:600; } .after .sub .w.done { color:var(--done); font-weight:600; }
+.after .sub .ag { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.after .r.sel .sub { color:var(--text-secondary); }
+.after .chev { width:24px; height:24px; flex:0 0 24px; margin:4px 8px 0 0; padding:0; border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-muted); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.after .chev:hover { background:var(--border-strong); color:var(--text-primary); } .after .chev svg { width:14px; height:14px; }
+/* status badge: one SVG, 18px (16px on children) */
+.g { display:inline-flex; width:var(--px,18px); height:var(--px,18px); flex:0 0 var(--px,18px); }
+.g svg { width:100%; height:100%; display:block; }
+.g.blocked { color:var(--blocked); } .g.done { color:var(--done); } .g.working { color:var(--working); } .g.idle { color:var(--idle); } .g.unknown { color:var(--text-muted); } .g.live { color:var(--idle); } .g.warn { color:var(--warning); }
+.after .child .g { margin-top:1px; }
+/* connectors: trunk under the parent badge centre (x=23 from the sidebar edge), 1px --border-strong, rounded last elbow */
+.after .conn { position:relative; width:34px; flex:0 0 34px; align-self:stretch; pointer-events:none; }
+.after .conn::before { content:""; position:absolute; left:23px; top:-2px; bottom:-2px; border-left:1px solid var(--border-strong); }
+.after .conn::after { content:""; position:absolute; left:23px; top:16px; width:8px; border-top:1px solid var(--border-strong); }
+.after .conn.last::before { bottom:auto; height:17px; width:9px; border-bottom:1px solid var(--border-strong); border-bottom-left-radius:6px; }
+.after .conn.last::after { display:none; }
+.after .empty { margin:0; padding:2px 14px 8px; font-size:12px; line-height:16px; color:var(--text-muted); }
+.after .skel { display:flex; align-items:center; gap:var(--gap); height:32px; padding:0 8px; } .after .skel i { width:18px; height:18px; border-radius:50%; background:var(--surface-raised); } .after .skel u { height:8px; background:var(--surface-raised); border-radius:2px; }
+.after .note { margin:0 0 2px; padding:6px 12px 6px 40px; font-size:11px; line-height:14px; color:var(--text-secondary); border-left:2px solid var(--blocked); }
+.after .toggle { width:28px; height:28px; margin:6px; border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-secondary); display:flex; align-items:center; justify-content:center; } .after .toggle svg { width:16px; height:16px; }
+.sbbox { width:var(--w,240px); border:1px solid var(--border); background:var(--sidebar-bg); }
+table.tbl { border-collapse:collapse; font-size:12px; } table.tbl td, table.tbl th { padding:6px 12px; border:1px solid var(--border); text-align:left; vertical-align:middle; }
+.chars { font:13px/1 var(--font-mono); display:inline-flex; width:14px; height:16px; align-items:center; justify-content:center; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <!-- Status badges, 18x18: tinted disc (16%; idle 10%) + a distinct shape, 1.5 stroke, in the state colour. -->
+  <symbol id="s-blocked" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M6.25 6.25l5.5 5.5M11.75 6.25l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="s-done" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M5.5 9.5l2.6 2.6 4.6-5.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="s-working" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><circle cx="9" cy="9" r="3.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5.25a3.75 3.75 0 0 0 0 7.5z" fill="currentColor"/></symbol>
+  <symbol id="s-idle" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".10"/><circle cx="9" cy="9" r="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="s-unknown" viewBox="0 0 18 18"><circle cx="9" cy="9" r="2.5" fill="currentColor" fill-opacity=".75"/></symbol>
+  <symbol id="s-live" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><circle cx="9" cy="9" r="3.5" fill="currentColor"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-sidebar" viewBox="0 0 24 24"><path d="M9 4v16M3 4h18v16H3Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sidebar-open" viewBox="0 0 24 24"><path d="M9 4v16M3 4h18v16H3ZM5.5 8.5h1.5M5.5 12h1.5M5.5 15.5h1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+
+<h1>Sidebar: before / after</h1>
+<p class="note">Both sides render the same data (the screenshot's names, plus states, branches and a second agent so every status shape appears). 1x is real size; 2x is a CSS magnification of 1x. The after sidebar is 240&nbsp;px wide (proposed default; minimum stays 224). Hover rows to see hover fill.</p>
+
+<h2 class="sec">1x</h2>
+<div class="row" id="frames1x"></div>
+
+<h2 class="sec">2x detail: header + Spaces</h2>
+<div class="row" id="z-spaces"></div>
+<h2 class="sec">2x detail: Agents</h2>
+<div class="row" id="z-agents"></div>
+
+<h2 class="sec">Status states, side by side (before glyph, after badge; 1x and 2x; in Space, child and agent rows)</h2>
+<div id="matrix"></div>
+
+<h2 class="sec">After: row states (all rows keep their rectangle in every state)</h2>
+<p class="note">The accent bar is a pseudo-element pill inside the row; focus is an inset outline; hover and selected change fill only. Pending shows a neutral bar until Herdr confirms.</p>
+<div class="row" id="states"></div>
+
+<h2 class="sec">After: header states</h2>
+<div class="row" id="headers"></div>
+
+<h2 class="sec">After: empty, loading, error</h2>
+<div class="row" id="empties"></div>
+
+<h2 class="sec">After: width behaviour (224 minimum, 240 default, 360 maximum)</h2>
+<div class="row" id="widths"></div>
+
+<script>
+const WORD={blocked:'Blocked',done:'Done',working:'Working',idle:'Idle',unknown:'Unknown'};
+const CH={blocked:'×',done:'✓',working:'◐',idle:'○',unknown:'·'};
+const $=(s)=>document.querySelector(s);
+const ico=(n,c='')=>`<svg class="${c}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+const sg=(st,px=18)=>`<span class="g ${st}" style="--px:${px}px"><svg aria-hidden="true"><use href="#s-${st}"/></svg></span>`;
+
+/* ---------- data (screenshot names) ---------- */
+const SPACES=[
+ {k:'top',name:'system',st:'idle'},
+ {k:'parent',name:'cockpit',st:'working',branch:'main',ab:'↑14',sel:true,open:true},
+ {k:'child',raw:'cockpit/cockpit/SCRUM-142-inline-browser-pointer',name:'SCRUM-142-inline-browser-pointer',st:'blocked',last:true},
+ {k:'parent',name:'lilygo-t3',st:'done',open:true},
+ {k:'child',raw:'worktree-brave-forest-7518',name:'brave-forest-7518',st:'idle'},
+ {k:'child',raw:'worktree-brave-stone-13f0',name:'brave-stone-13f0',st:'unknown',last:true},
+ {k:'top',name:'main',st:'idle',branch:'main'},
+];
+const AGENTS=[
+ {space:'cockpit',tab:'design',ag:'omp',st:'blocked'},
+ {space:'lilygo-t3',tab:'1',ag:'claude',st:'done'},
+ {space:'cockpit',tab:'main',ag:'omp',st:'working',sel:true},
+ {space:'cockpit',tab:'meta',ag:'omp',st:'idle'},
+ {space:'system',tab:'1',ag:'omp',st:'idle'},
+];
+
+/* ---------- BEFORE renderer ---------- */
+const B={
+ row(o){const cls=`r${o.k==='child'?' child':''}${o.sel?' sel':''}`;
+  const conn=o.k==='child'?`<span class="conn${o.last?' last':''}"></span>`:'';
+  const chev=o.k==='parent'?`<button class="chev">${ico(o.open===false?'right':'down')}</button>`:'';
+  const br=(o.branch&&o.k!=='child')?`<span class="branch">${o.branch}${o.ab?' '+o.ab:''}</span>`:'';
+  return `<div class="${cls}">${conn}<button class="sel-btn"><span class="st ${o.st}">${CH[o.st]}</span><span class="details"><span class="lab">${o.raw||o.name}</span>${br}</span></button>${chev}</div>`;},
+ agent(o){return `<div class="a${o.sel?' sel':''}"><span class="st ${o.st}">${CH[o.st]}</span><span class="details"><span class="loc">${o.space}<span class="t"> · ${o.tab}</span></span><span class="nm">${o.ag}</span></span></div>`;},
+ head(){return `<header class="head"><button class="session"><span class="dot">●</span><span class="sname">default</span><span class="sstate">Session</span>${ico('down')}</button></header>`;},
+ sec1(d){return `<section class="sec1"><div class="heading"><h2>spaces</h2><span class="count">${d.length}</span><button class="add">+</button></div><div>${d.map(B.row).join('')}</div></section>`;},
+ sec2(d){return `<section class="sec2"><div class="heading"><h2>agents</h2><span class="count">${d.length}</span></div><div>${d.map(B.agent).join('')}</div></section>`;},
+ sidebar(){return `<aside class="sb">${B.head()}${B.sec1(SPACES)}${B.sec2(AGENTS)}</aside>`;},
+};
+B.ico=()=>'';
+
+/* ---------- AFTER renderer ---------- */
+const A={
+ row(o){const px=o.k==='child'?16:18;
+  const cls=['r',o.k==='child'?'child':'',o.sel?'sel':'',o.pending?'pending':'',o.hover?'is-hover':'',o.focus?'is-focus':''].filter(Boolean).join(' ');
+  const conn=o.k==='child'?`<span class="conn${o.last?' last':''}"></span>`:'';
+  const sub=(o.branch&&o.k!=='child')?`<span class="sub"><span class="bn">${o.branch}</span>${o.ab?`<span class="ab">${o.ab}</span>`:''}</span>`:'';
+  const chev=o.k==='parent'?`<button class="chev" aria-label="${o.open===false?'Expand':'Collapse'} ${o.name}">${ico(o.open===false?'right':'down')}</button>`:'';
+  return `<div class="${cls}"${o.pending?' aria-busy="true"':''}>${conn}<button class="sel-btn"${o.sel?' aria-current="true"':''} title="${o.raw||o.name}">${sg(o.st,px)}<span class="details"><span class="lab">${o.name}</span>${sub}</span></button>${chev}</div>`;},
+ agent(o){const cls=['r',o.sel?'sel':'',o.pending?'pending':'',o.hover?'is-hover':'',o.focus?'is-focus':''].filter(Boolean).join(' ');
+  return `<div class="${cls}"><button class="sel-btn"${o.sel?' aria-current="true"':''}>${sg(o.st)}<span class="details"><span class="lab"><span>${o.space}</span><span class="t"> · ${o.tab}</span></span><span class="sub"><span class="w ${o.st}">${WORD[o.st]}</span><span>·</span><span class="ag">${o.ag}</span></span></span></button></div>`;},
+ mark(sym,cls){return `<span class="g ${cls}" style="--px:18px"><svg aria-hidden="true"><use href="#s-${sym}"/></svg></span>`;},
+ head(o={}){const m={live:['live','live'],loading:['working','warn'],stale:['idle','warn'],off:['blocked','blocked']}[o.s||'live'];
+  const chip=o.chip?`<span class="chip ${o.s==='off'?'bad':'warn'}">${o.chip}</span>`:'';
+  return `<header class="head"><button class="session${o.hover?' is-hover':''}${o.focus?' is-focus':''}" aria-label="Switch session, current ${o.name||'default'}">${A.mark(m[0],m[1])}<span class="sname">${o.name||'default'}</span>${chip}${ico('down','caret')}</button></header>`;},
+ sec1(d,extra=''){return `<section class="sec1"><div class="heading"><h2>spaces</h2><span class="count">${d.length}</span><button class="add" aria-label="Set up a task Space">${ico('plus')}</button></div><div class="list">${extra}${d.map(A.row).join('')}</div></section>`;},
+ sec2(d){return `<section class="sec2"><div class="heading"><h2>agents</h2><span class="count">${d.length}</span></div><div class="list">${d.map(A.agent).join('')}</div></section>`;},
+ sidebar(){return `<aside class="sb">${A.head()}${A.sec1(SPACES)}${A.sec2(AGENTS)}</aside>`;},
+};
+
+const tabs=(toggle)=>`<div class="tabbar">${toggle}<div class="tab sel"><span class="n">1</span>main</div><div class="tab"><span class="n">2</span>meta</div><div class="tab"><span class="n">3</span>design</div><span class="spacer"></span></div>`;
+const beforeToggle=`<button class="toggle">${'<svg width="16" height="16"><use href="#i-sidebar"/></svg>'}</button>`;
+const afterToggle=`<button class="toggle" title="Hide sidebar (Ctrl+B b)" aria-expanded="true"><svg><use href="#i-sidebar-open"/></svg></button>`;
+const frame=(cls,sbw,sb,toggle)=>`<div class="${cls}"><div class="frame" style="--sbw:${sbw}px">${sb}<div class="divider"></div><div class="main">${tabs(toggle)}</div></div></div>`;
+const cap=(t)=>`<p class="cap">${t}</p>`;
+const z=(inner,w,h,cls)=>`<div class="${cls}"><div class="z" style="--w:${w}px;--h:${h}px"><div class="zi">${inner}</div></div></div>`;
+
+/* 1x frames */
+$('#frames1x').innerHTML=
+ `<div>${cap('<b>Before</b> (reconstructed from the final cascade)')}${frame('before',224,B.sidebar(),beforeToggle)}
+  <ul class="legend"><li>Glyphs are 13&nbsp;px text characters in a 14&nbsp;px box; <code>·</code> is about 3&nbsp;px. They do not read as status.</li><li>Rows are flat, 30-32&nbsp;px, full bleed, with no gap; agents are 46&nbsp;px and repeat <code>omp</code>.</li><li>Connector is brighter than every border; child names carry <code>worktree-</code> or repeat the repository.</li></ul></div>`+
+ `<div>${cap('<b>After</b> (recommended)')}${frame('after',240,A.sidebar(),afterToggle)}
+  <ul class="legend"><li>18&nbsp;px tinted status badge with a distinct shape; children use 16&nbsp;px.</li><li>Full-bleed square rows (per the direction doc), 2&nbsp;px apart, 32&nbsp;px / 48&nbsp;px; selected = fill + 3&nbsp;px accent pill.</li><li>Header mark, lowercase section label and every parent/top-level badge share x=14; their labels share x=40 (child badge x=34, label x=58).</li><li>Agents keep two lines: <code>space · tab</code> over <code>State · agent</code>. Agents sit directly under Spaces with 8&nbsp;px above and below the divider.</li></ul></div>`;
+
+/* 2x details */
+$('#z-spaces').innerHTML=
+ z(`<div class="before">${'<aside class="sb" style="height:auto">'+B.head()+B.sec1(SPACES)+'</aside>'}</div>`,224,330,'before')
+ .replace('class="before"','class="before"')+
+ z(`<div class="after">${'<aside class="sb" style="height:auto">'+A.head()+A.sec1(SPACES)+'</aside>'}</div>`,240,330,'after');
+$('#z-agents').innerHTML=
+ z(`<div class="before"><aside class="sb" style="height:auto"><div style="border-top:0">${B.sec2(AGENTS).replace('class="sec2"','class="sec2" style="margin-top:0;border-top:0"')}</div></aside></div>`,224,250,'before')+
+ z(`<div class="after"><aside class="sb" style="height:auto">${A.sec2(AGENTS).replace('class="sec2"','class="sec2" style="border-top:0"')}</aside></div>`,240,250,'after');
+
+/* status matrix */
+const ROWS=['blocked','done','working','idle','unknown'];
+const ctx={
+ blocked:['Space','failing-build'],done:['Space','release'],working:['Space','cockpit'],idle:['Space','system'],unknown:['Space','notes']};
+$('#matrix').innerHTML=`<table class="tbl"><tr><th>State</th><th>Before 1x</th><th>Before 2x</th><th>After 1x</th><th>After 2x</th><th>After in Space row</th><th>After in child row</th><th>After in agent row</th></tr>`+
+ ROWS.map(st=>{
+  const big=(html,w,h)=>`<div class="z" style="--w:${w}px;--h:${h}px;border:0"><div class="zi">${html}</div></div>`;
+  const bef=`<span class="chars" style="color:var(${st==='unknown'?'--text-muted':'--'+st})">${CH[st]}</span>`;
+  const aft=sg(st);
+  const sp=A.row({k:'top',name:ctx[st][1],st});
+  const ch=A.row({k:'child',name:ctx[st][1],st,last:true});
+  const ag=A.agent({space:'cockpit',tab:'main',ag:'omp',st});
+  const sb=(h)=>`<div class="after"><div class="sbbox" style="--w:240px"><div class="list" style="padding:2px 0 0;overflow:visible">${h}</div></div></div>`;
+  return `<tr><td>${st}${st==='unknown'?' / no agent':''}</td><td>${bef}</td><td>${big(bef,14,16)}</td><td><div class="after">${aft}</div></td><td><div class="after">${big(aft,18,18)}</div></td><td>${sb(sp)}</td><td>${sb(ch)}</td><td>${sb(ag)}</td></tr>`;
+ }).join('')+`</table><p class="note" style="margin-top:8px">2x cells are magnified 1x. "unknown / no agent" is deliberately the quietest mark (a 5&nbsp;px dot with no disc): absence recedes, presence pops.</p>`;
+
+/* row states */
+const sbox=(inner,w=240)=>`<div class="after"><div class="sbbox" style="--w:${w}px"><div class="list" style="padding:6px 0 4px;overflow:visible">${inner}</div></div></div>`;
+$('#states').innerHTML=
+ `<div>${cap('Space rows')}${sbox([
+   A.row({k:'top',name:'rest',st:'idle'}),A.row({k:'top',name:'hover',st:'idle',hover:true}),A.row({k:'top',name:'keyboard focus (inset ring)',st:'idle',focus:true}),
+   A.row({k:'top',name:'pending: waiting for Herdr',st:'working',pending:true}),A.row({k:'top',name:'selected (confirmed)',st:'idle',sel:true}),A.row({k:'top',name:'selected + focus + blocked',st:'blocked',sel:true,focus:true})].join(''))}</div>`+
+ `<div>${cap('Parent, children, collapsed parent, branch line')}${sbox([
+   A.row({k:'parent',name:'cockpit',st:'working',branch:'main',ab:'↑14',sel:true,open:true}),
+   A.row({k:'child',name:'SCRUM-142-inline-browser-pointer',raw:'cockpit/cockpit/SCRUM-142-inline-browser-pointer',st:'blocked'}),
+   A.row({k:'child',name:'brave-stone-13f0',st:'done',last:true}),
+   A.row({k:'parent',name:'lilygo-t3',st:'blocked',branch:'develop',open:false}),
+   A.row({k:'top',name:'notes',st:'unknown'})].join(''))}
+   <p class="note" style="margin-top:6px">Collapsed <b>lilygo-t3</b> shows the most urgent hidden worktree state (unchanged Herdr rollup).</p></div>`+
+ `<div>${cap('Agent rows (two lines; attention order)')}${sbox([
+   A.agent({space:'cockpit',tab:'design',ag:'omp',st:'blocked'}),A.agent({space:'lilygo-t3',tab:'1',ag:'claude',st:'done'}),
+   A.agent({space:'cockpit',tab:'main',ag:'omp',st:'working',sel:true}),A.agent({space:'cockpit',tab:'meta',ag:'omp',st:'idle',hover:true}),
+   A.agent({space:'a-very-long-space-name-that-overflows',tab:'tab',ag:'omp',st:'idle'})].join(''))}</div>`;
+
+/* headers */
+const hbox=(h,w=240)=>`<div class="after"><div class="sbbox" style="--w:${w}px">${h}</div></div>`;
+$('#headers').innerHTML=[['Live',A.head()],['Hover',A.head({hover:true})],['Focus',A.head({hover:true,focus:true})],['Resyncing',A.head({s:'loading',chip:'Resyncing'})],['Stale',A.head({s:'stale',chip:'Stale'})],['Disconnected, long name',A.head({s:'off',chip:'Offline',name:'polish-vdh8d5ee-long-session'})]]
+ .map(([c,h])=>`<div>${cap(c)}${hbox(h)}</div>`).join('');
+
+/* empties */
+const skel=(w)=>`<div class="skel"><i></i><u style="width:${w}%"></u></div>`;
+$('#empties').innerHTML=
+ `<div>${cap('Loading, no snapshot: neutral rows, no shimmer')}<div class="after"><div class="sbbox"><section class="sec1" style="min-height:0"><div class="heading"><h2>spaces</h2></div><div class="list" style="overflow:visible">${[44,62,38,55,47,33].map(skel).join('')}</div></section></div></div></div>`+
+ `<div>${cap('Loaded, nothing to list')}<div class="after"><div class="sbbox"><section class="sec1" style="min-height:0"><div class="heading"><h2>spaces</h2><span class="count">0</span><button class="add" aria-label="Set up a task Space">${ico('plus')}</button></div><p class="empty">No Spaces in this session</p></section><section class="sec2" style="min-height:0"><div class="heading"><h2>agents</h2><span class="count">0</span></div><p class="empty">No agents detected</p></section></div></div></div>`+
+ `<div>${cap('Row-local mutation error, directly under the row')}${sbox(A.row({k:'top',name:'system',st:'idle'})+`<p class="note" role="status">Move was not applied. Herdr kept the Space order.</p>`+A.row({k:'top',name:'main',st:'idle'}))}</div>`;
+
+/* widths */
+const wrow=()=>A.row({k:'parent',name:'acme-platform',st:'working',branch:'feature/very-long-branch-name-here',ab:'↑2 ↓1',open:true})+A.row({k:'child',name:'SCRUM-1234-rework-the-inline-browser-pointer-delivery',st:'idle',last:true})+A.agent({space:'acme-platform',tab:'rework-inline-browser',ag:'claude-code',st:'blocked'});
+$('#widths').innerHTML=[224,240,360].map(w=>`<div>${cap(w+' px')}${sbox(wrow(),w)}</div>`).join('');
+</script>
+</body>
+</html>

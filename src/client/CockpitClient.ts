@@ -133,11 +133,14 @@ import type {
   PanePresentation,
   ContextDirectoryRequest,
   ContextDirectory,
+  ContextFileIndexRequest,
+  ContextFileIndex,
   ContextDocumentRequest,
   ContextDocument,
   LibraryAttachmentRequest,
   LibraryAddRequest,
   LibraryDirectoryRequest,
+  LibraryFileIndexRequest,
   LibraryDocumentRequest,
   LibraryListing,
   LibraryMediaRequest,
@@ -238,14 +241,17 @@ export type {
   ContextDirectoryRequest,
   ContextDocument,
   ContextDocumentRequest,
+  ContextFileIndex,
+  ContextFileIndexRequest,
   ContextMedia,
   ContextMediaRequest,
   FocusRequest,
   LibraryAttachmentRequest,
   LibraryAddRequest,
   LibraryDirectoryRequest,
-  LibraryDocumentRequest,
+  LibraryFileIndexRequest,
   LibraryListing,
+  LibraryDocumentRequest,
   LibraryMediaRequest,
   LibraryOperation,
   LibraryRefreshRequest,
@@ -297,6 +303,7 @@ export interface CockpitClient {
   workspaceTeardownRecoveries(sessionId: string): Promise<WorkspaceTeardownRecoveryList>;
   inspectPane(sessionId: string, paneId: string, signal?: AbortSignal): Promise<PanePresentation>;
   contextDirectory(sessionId: string, paneId: string, request: ContextDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
+  contextFileIndex(sessionId: string, paneId: string, request: ContextFileIndexRequest, signal?: AbortSignal): Promise<ContextFileIndex>;
   contextDocument(sessionId: string, paneId: string, request: ContextDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
   reviewSnapshot(sessionId: string, paneId: string, request: ReviewSnapshotRequest, signal?: AbortSignal): Promise<ReviewSnapshot>;
   reviewFile(sessionId: string, paneId: string, request: ReviewFileRequest, signal?: AbortSignal): Promise<ReviewFileDiff>;
@@ -334,6 +341,7 @@ export interface CockpitClient {
   libraryReplace(request: LibraryReplaceRequest): Promise<LibraryOperation>;
   libraryRemove(request: LibraryRemoveRequest): Promise<LibraryListing>;
   libraryDirectory(request: LibraryDirectoryRequest, signal?: AbortSignal): Promise<ContextDirectory>;
+  libraryFileIndex(request: LibraryFileIndexRequest, signal?: AbortSignal): Promise<ContextFileIndex>;
   libraryDocument(request: LibraryDocumentRequest, signal?: AbortSignal): Promise<ContextDocument>;
   libraryMedia(request: LibraryMediaRequest, signal?: AbortSignal): Promise<ContextMedia>;
   sessions(): Promise<SessionListResponse>;

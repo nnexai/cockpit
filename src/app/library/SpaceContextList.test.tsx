@@ -57,8 +57,8 @@ it("shows one aggregate row per followed space, and each row's Update writes onl
     await act(async () => root.render(<Harness />));
     await settle();
     expect([...host.querySelectorAll(".context-source-title")].map((title) => title.textContent)).toEqual(["OPS · Operations · 5 pages", "SD · Software Development · 5 pages"]);
-    expect(chips("SD")).toEqual(["↑ Library newer: 1 new, 1 changed pages"]);
-    expect(chips("OPS")).toEqual(["↑ Library newer: 1 new, 1 changed pages", "✎ 1 page edited in Space"]);
+    expect(chips("SD")).toEqual(["Library newer: 1 new, 1 changed pages"]);
+    expect(chips("OPS")).toEqual(["Library newer: 1 new, 1 changed pages", "1 page edited in Space"]);
     expect([...entry("SD").querySelectorAll(".context-source-chip:not(.library-state)")].map((chip) => chip.textContent)).toEqual(["Confluence", "followed space"]);
     // Both follows count toward `Update all`; neither row offers item-only actions.
     expect([...host.querySelectorAll("button")].map((button) => button.textContent)).toContain("Update all (2)");
@@ -69,10 +69,10 @@ it("shows one aggregate row per followed space, and each row's Update writes onl
     expect(client.librarySpaceUpdate).toHaveBeenCalledTimes(1);
     expect(client.librarySpaceUpdate).toHaveBeenCalledWith({ target, scope: { scope: "selection", item_ids: [], follow_ids: ["follow:sd"] }, replace_edited: [] });
     // The reread shows SD current; OPS still has its new and changed pages and its own Update.
-    expect(chips("SD")).toEqual(["✓ Up to date"]);
+    expect(chips("SD")).toEqual(["Up to date"]);
     expect(entry("SD").textContent).toContain("SD · Software Development · 6 pages");
     expect(entry("SD").querySelector("button")).toBeNull();
-    expect(chips("OPS")).toEqual(["↑ Library newer: 1 new, 1 changed pages", "✎ 1 page edited in Space"]);
+    expect(chips("OPS")).toEqual(["Library newer: 1 new, 1 changed pages", "1 page edited in Space"]);
     expect([...entry("OPS").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Update"]);
     expect([...host.querySelectorAll("button")].map((button) => button.textContent)).toContain("Update all (1)");
   } finally {

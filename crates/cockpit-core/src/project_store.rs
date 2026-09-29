@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -150,6 +150,7 @@ pub struct ExecutionLease {
 #[derive(Debug, Clone)]
 pub struct ProjectStore {
     root_dir: Arc<Dir>,
+    mutation_generation: Arc<AtomicU64>,
 }
 
 impl ProjectStore {
@@ -157,10 +158,18 @@ impl ProjectStore {
         let (_, root_dir) = prepare_root(root.as_ref(), "state")?;
         Ok(Self {
             root_dir: Arc::new(root_dir),
+            mutation_generation: Arc::new(AtomicU64::new(0)),
         })
     }
     pub(crate) fn state_dir(&self) -> &Dir {
         self.root_dir.as_ref()
+    }
+    pub(crate) fn mutation_generation(&self) -> u64 {
+        self.mutation_generation.load(Ordering::Acquire)
+    }
+
+    fn bump_mutation_generation(&self) {
+        self.mutation_generation.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Acquire a lock in this store for a sibling persistence module.
@@ -310,6 +319,7 @@ impl ProjectStore {
                 map_io(error, "state_write")
             }
         })?;
+        self.bump_mutation_generation();
         Ok(operation)
     }
 
@@ -449,6 +459,7 @@ impl ProjectStore {
             return Err(map_io(error, "companion_publish"));
         }
         drop(temporary_dir);
+        self.bump_mutation_generation();
         Ok(root_path.join(id))
     }
 
@@ -661,6 +672,7 @@ impl ProjectStore {
                 map_io(error, "companion_manifest")
             }
         })?;
+        self.bump_mutation_generation();
         Ok(companion_root.as_ref().to_path_buf().join(id))
     }
 
@@ -702,7 +714,9 @@ impl ProjectStore {
             } else {
                 map_io(error, "companion_remove")
             }
-        })
+        })?;
+        self.bump_mutation_generation();
+        Ok(())
     }
 
     pub(crate) fn read_teardown_receipt(
@@ -1249,6 +1263,9 @@ pub(crate) fn atomic_write_bytes(dir: &Dir, name: &str, bytes: &[u8]) -> io::Res
         .create_new(true)
         .follow(cap_fs_ext::FollowSymlinks::No);
     let mut file = dir.open_with(&tmp, &options)?;
+    #[cfg(unix)]
+    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(0o600))
+        .map_err(io::Error::from)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     match dir.symlink_metadata(name) {

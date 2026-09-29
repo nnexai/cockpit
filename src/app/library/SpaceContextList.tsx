@@ -4,6 +4,7 @@ import type { ErrorResponse, LibraryOperation, ProjectProvider, SpaceAddAttempt,
 import { SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "./LibraryConfirmDialog";
 import { errorText, pageCount, providerFamily, type LibrarySpace } from "./libraryState";
 import { spaceCopyChip, spaceFollowPresentation, type SpaceCopyAction } from "./spaceCopyPresentation";
+import { PendingPill, StatePill } from "./StatePill";
 import { useLibraryOperation, type SpaceListingState } from "./useLibraryOperation";
 import "./library.css";
 
@@ -211,8 +212,8 @@ function AttemptEntry({ client, space, attempt, onFocusLeaving, onDismissed }: {
     </div>
     <div className="context-source-summary">
       {pending
-        ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />Adding…</span>
-        : <span className="context-source-chip library-state is-blocked"><span aria-hidden="true">✕</span> Not added — Retry</span>}
+        ? <PendingPill word="Adding…" />
+        : <StatePill shape="close" tone="blocked" word="Not added — Retry" />}
     </div>
     {attempt.state === "failed" && !pending ? <p id={failureId} className="context-source-diagnostic" role="alert">{spaceAddFailure(attempt.error, space.label)}</p> : null}
     {failure ? <p className="context-source-diagnostic" role="alert">{failure}</p> : null}
@@ -280,8 +281,8 @@ function CopyEntry({ client, space, row, providers, listing, updatingAll, onFocu
     <div className="context-source-summary">
       {kindChips(row, providers).map((label) => <span key={label} className="context-source-chip">{label}</span>)}
       {working
-        ? <span className="context-source-chip library-state is-muted"><span className="library-spinner" aria-hidden="true" />Updating…</span>
-        : chips.map((chip) => <span key={chip.word} className={`context-source-chip library-state is-${chip.tone}`}><span aria-hidden="true">{chip.glyph}</span> {chip.word}</span>)}
+        ? <PendingPill word="Updating…" />
+        : chips.map((chip) => <StatePill key={chip.word} shape={chip.shape} tone={chip.tone} word={chip.word} />)}
     </div>
     {notice ? <p className="context-source-diagnostic">{notice}</p> : null}
     {note && !working ? <p className="context-source-diagnostic" role={conflict || update.error || update.unconfirmed || outcome?.failed ? "alert" : "status"}>{note}</p> : null}

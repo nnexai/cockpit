@@ -13,59 +13,152 @@
 }
 .library-view:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 .library-view.is-full-screen { height: 100vh; margin: 0; border: 0; }
+.library-view .context-viewer { min-height: 0; flex: 1 1 auto; }
+
+/* Title row (design §4.2): icon, `Library`, count, Close. */
 .library-view-header {
   display: flex;
+  height: 36px;
   min-height: 36px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
-  padding: 4px 10px 4px 14px;
+  gap: 8px;
+  padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--sidebar-bg);
 }
-/* Same treatment as the sidebar section headings. */
-.library-view-header h2 {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: lowercase;
-}
-.library-view-path {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: text;
-}
-.library-view-close {
+.library-view-icon { display: inline-flex; color: var(--accent); }
+.library-view-icon .ui-icon { width: var(--icon-size); height: var(--icon-size); }
+.library-view-header h2 { margin: 0; color: var(--text-primary); font-size: var(--font-size-sm); font-weight: 600; letter-spacing: 0; }
+.library-view-summary { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--font-size-2xs); text-overflow: ellipsis; white-space: nowrap; }
+
+/* Button system (design §4.1): ghost, bordered, and the one primary per surface. */
+.library-icon-button,
+.library-ghost {
+  position: relative;
+  display: inline-flex;
+  height: 28px;
   min-height: 28px;
-  padding: 3px 10px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-control);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.library-icon-button,
+.library-ghost.is-icon { width: 28px; padding: 0; }
+.library-icon-button:hover:not(:disabled),
+.library-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.library-icon-button[aria-pressed="true"],
+.library-icon-button[aria-expanded="true"],
+.library-ghost[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-primary); }
+.library-icon-button[aria-expanded="true"] .ui-icon,
+.library-ghost[aria-pressed="true"] .ui-icon { color: var(--accent); }
+.library-icon-button:focus-visible,
+.library-ghost:focus-visible,
+.library-button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+.library-icon-button:disabled,
+.library-ghost:disabled,
+.library-button:disabled { cursor: default; opacity: .6; }
+.library-icon-button .ui-icon,
+.library-ghost .ui-icon,
+.library-button .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); color: inherit; }
+
+.library-button {
+  display: inline-flex;
+  height: 28px;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--text-primary);
+  font-size: var(--font-size-control);
+  white-space: nowrap;
   cursor: pointer;
 }
-.library-view-close:hover { background: var(--surface-hover); }
-.library-view .context-viewer { min-height: 0; flex: 1 1 auto; }
+.library-button:hover:not(:disabled) { background: var(--surface-hover); }
+.library-button.is-icon { width: 28px; padding: 0; }
+.library-button.is-panel { height: 24px; min-height: 24px; padding: 0 8px; font-size: var(--font-size-2xs); }
+.library-button.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+}
+.library-button.is-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, var(--surface-raised)); }
 
-/* Tree rows reuse `.context-tree-row`; groups are plain labels. */
+/* Toolbar (design §4.3): one 36 px rule for the Library root; Review and other roots keep viewer.css. */
+.context-viewer.is-library { --viewer-document-inset: 24px; }
+.context-viewer.is-library .context-toolbar { height: 36px; min-height: 36px; flex-wrap: nowrap; gap: 2px; padding: 0 6px; overflow: hidden; }
+.context-viewer.is-library .context-toolbar .library-ghost {
+  height: 28px;
+  min-height: 28px;
+  gap: 6px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-control);
+}
+.context-viewer.is-library .context-toolbar .library-ghost.is-icon { width: 28px; padding: 0; }
+.context-viewer.is-library .context-toolbar .library-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.context-viewer.is-library .context-toolbar .library-ghost[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-primary); }
+.context-viewer.is-library .context-toolbar .library-ghost .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); }
+.context-viewer.is-library .context-toolbar .library-ghost[aria-pressed="true"] .ui-icon { color: var(--accent); }
+.context-viewer.is-library .context-toolbar .library-ghost:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.library-toolbar-rule { width: 1px; height: 16px; flex: 0 0 1px; margin: 0 4px; background: var(--border); }
+@container (max-width: 280px) {
+  .context-viewer.is-library .context-toolbar .library-ghost:not(.is-icon) { width: 28px; gap: 0; padding: 0; font-size: 0; }
+}
+
+/* Tree rows (design §4.4): chevron slot, icon slot, label, meta. One height, one indent formula, guides as a background. */
 .library-tree { display: flex; flex-direction: column; }
-.library-tree-group.is-instance .context-tree-name { color: var(--text-secondary); font-weight: 500; }
-.library-tree-group.is-container .context-tree-name { color: var(--text-secondary); }
-.library-tree .context-tree-row:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
-/* Page nodes (design §4.3): the chevron is its own hit target over the row's disclosure slot; the label opens the page. */
+.library-tree .context-tree-row.library-tree-row {
+  height: var(--library-row-height);
+  min-height: var(--library-row-height);
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px);
+  background-color: transparent;
+  background-image: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px 14px);
+  background-position: 14px 0;
+  background-repeat: no-repeat;
+  background-size: calc(var(--depth, 0) * 14px) 100%;
+}
+.library-tree .context-tree-row.library-tree-row:hover { background-color: var(--surface-hover); }
+.library-tree .context-tree-row.library-tree-row.is-selected { border-left-color: var(--accent); background-color: var(--surface-selected); }
+.library-tree .context-tree-row.library-tree-row:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.library-row-chevron { display: grid; width: 16px; flex: 0 0 16px; place-items: center; color: var(--text-muted); }
+.library-row-chevron .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); color: inherit; }
+.library-row-icon { display: grid; width: 20px; flex: 0 0 20px; place-items: center; color: var(--text-secondary); }
+.library-row-icon.is-document { color: var(--accent); }
+.library-row-icon.is-downloaded { color: var(--idle); }
+.library-tree .library-row-icon .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); color: inherit; }
+.library-tree .context-tree-name { color: var(--text-primary); font-weight: 400; }
+.library-tree-group.is-instance .context-tree-name { font-weight: 600; }
+.library-tree-group.is-container .context-tree-name,
+.library-tree-group.is-ancestor .context-tree-name { font-weight: 500; }
+.library-tree-group.is-attachments .context-tree-name { color: var(--text-secondary); }
+.library-tree .context-tree-meta { flex: 0 0 auto; }
+.library-tree .context-tree-meta .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); color: inherit; }
+/* Page nodes: the chevron is its own 24×28 hit target over the row's chevron slot; the label opens the page. */
 .library-page-node { position: relative; }
 .library-page-disclosure {
   position: absolute;
   z-index: 1;
   top: 0;
   bottom: 0;
+  left: calc(4px + var(--depth, 0) * 14px);
   display: grid;
   width: 24px;
   place-items: center;
@@ -77,17 +170,58 @@
   cursor: pointer;
 }
 .library-page-disclosure:hover { background: var(--surface-hover); color: var(--text-primary); }
-.library-page-disclosure .ui-icon { width: 14px; height: 14px; color: inherit; }
+.library-page-disclosure .ui-icon { width: var(--icon-mark); height: var(--icon-mark); color: inherit; }
+.library-skeleton { display: flex; flex-direction: column; }
+.library-skeleton-row { display: block; height: 12px; margin: 8px 12px; border-radius: 3px; background: var(--surface-hover); }
+.library-tree-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; color: var(--text-muted); font-size: var(--font-size-control); }
+.library-empty-select { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); }
+.library-empty-select .ui-icon { width: var(--icon-size); height: var(--icon-size); }
 
-/* State chips: glyph + word, colour only as a supplement (design §4.6, context.css chip pairs). */
+/* Provider tile (design §4.1a): a monogram, not a logo; the header's is 32 px. */
+.library-tile {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  line-height: 1;
+}
+.library-tile.is-wide { letter-spacing: -.02em; }
+.library-tile.is-header { width: 32px; height: 32px; flex-basis: 32px; border-radius: var(--radius-panel); font-size: var(--font-size-sm); }
+.library-tile .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); }
+
+/* State pill (design §4.1a): one construction in the tree, header, Space state and attachments. */
 .library-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .library-state.is-idle { color: var(--idle); }
 .library-state.is-working { color: var(--working); }
 .library-state.is-blocked { color: var(--blocked); }
 .library-state.is-muted { color: var(--text-secondary); }
-.context-source-chip.library-state.is-idle { border-color: color-mix(in srgb, var(--idle) 55%, var(--border)); }
-.context-source-chip.library-state.is-working { border-color: color-mix(in srgb, var(--working) 55%, var(--border)); }
-.context-source-chip.library-state.is-blocked { border-color: color-mix(in srgb, var(--blocked) 55%, var(--border)); }
+.library-pill {
+  --tint: var(--text-secondary);
+  height: 18px;
+  min-width: 0;
+  gap: 3px;
+  padding: 0 6px 0 4px;
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, var(--border));
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  color: var(--tint);
+  font-size: var(--font-size-2xs);
+  font-weight: 500;
+  line-height: 1;
+}
+.library-pill.is-idle { --tint: var(--idle); }
+.library-pill.is-working { --tint: var(--working); }
+.library-pill.is-blocked { --tint: var(--blocked); }
+.library-pill.is-header { height: 22px; gap: 4px; padding: 0 8px 0 6px; font-size: var(--font-size-control); }
+.library-pill > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.library-pill.library-state > .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex: 0 0 var(--icon-mark); color: inherit; }
 
 .library-spinner {
   display: inline-block;
@@ -106,37 +240,45 @@
   .library-spinner::before { content: "…"; }
 }
 
-/* Item header (design §4.4), extending the document header rhythm. */
+/* Item header (design §4.5): a raised band; tile, state line, actions and attachments share one column at the document inset. */
 .library-item-header {
-  display: flex;
+  position: relative;
   flex: 0 0 auto;
-  flex-direction: column;
-  gap: 4px;
-  padding: 18px 24px 10px;
+  padding: 20px var(--viewer-document-inset) 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
   color: var(--text-secondary);
   font-size: var(--font-size-2xs);
 }
+.library-item-column { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.library-item-column > :not(.library-item-notice) { max-width: var(--library-column); }
+.library-item-identity { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.library-item-idtext { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 4px; }
 .library-item-line { display: flex; min-width: 0; align-items: center; gap: 8px; }
-.library-item-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-kind-chip { flex: 0 0 auto; color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+.library-item-path { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 .library-item-id { color: var(--text-muted); }
 .library-item-title {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: var(--font-size-md);
-  font-weight: 500;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
   line-height: var(--line-height-snug);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
+.library-item-state { min-height: 28px; }
 .library-item-phrase { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
-.library-item-state button,
+.library-item-state > .library-button,
+.library-item-state > .library-pill { flex: 0 0 auto; }
+.library-item-facts { flex-wrap: wrap; row-gap: 2px; }
+.library-item-facts .context-source-chip { color: var(--text-primary); }
+.library-item-notice { margin: 4px calc(-1 * var(--viewer-document-inset)) 0; padding-inline: var(--viewer-document-inset); border-top: 1px solid var(--border); }
 .library-report button,
 .library-report-rows button,
-.library-attachments button,
-.library-attachments-heading button:not(.library-attachments-toggle),
 .library-attachment-notice button {
   min-height: 26px;
   padding: 2px 8px;
@@ -147,28 +289,53 @@
   font-size: var(--font-size-control);
   cursor: pointer;
 }
-.library-item-state button:hover:not(:disabled),
 .library-report button:hover:not(:disabled),
 .library-report-rows button:hover:not(:disabled),
-.library-attachments button:hover:not(:disabled),
-.library-attachments-heading button:not(.library-attachments-toggle):hover:not(:disabled),
 .library-attachment-notice button:hover:not(:disabled) { background: var(--surface-hover); }
-.library-item-state button:disabled,
-.library-attachments button:disabled,
-.library-attachments-heading button:disabled,
 .library-attachment-notice button:disabled { cursor: default; opacity: .6; }
-.library-more { display: grid; width: 28px; place-items: center; padding: 3px !important; }
-.library-item-notice { margin: 4px -24px 0; padding-inline: 24px; border-top: 1px solid var(--border); }
-/* `Metadata` and the attachments summary share one line; open metadata takes the full width. */
-.library-item-disclosures { flex-wrap: wrap; column-gap: 16px; row-gap: 4px; }
-.library-item-disclosures > .library-metadata[open] { flex-basis: 100%; }
-.library-metadata > summary { width: fit-content; color: var(--text-muted); cursor: pointer; }
-.library-item-facts { flex-wrap: wrap; row-gap: 2px; }
-.library-item-facts .context-source-chip { color: var(--text-primary); }
-.library-metadata dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 6px 0 0; }
-.library-metadata dt { color: var(--text-muted); }
-.library-metadata dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.library-metadata code { user-select: text; }
+
+/* Details popover (design §4.6): overlays the body, so opening it moves nothing. */
+.library-details { position: relative; flex: 0 0 auto; align-self: flex-start; margin-top: -4px; }
+.library-details-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--working); }
+.library-details-popover {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  top: calc(100% + 4px);
+  right: 0;
+  width: min(480px, calc(100cqw - 16px));
+  max-height: min(60vh, 520px);
+  padding: 4px 0 8px;
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px #0006;
+  color: var(--text-primary);
+  font-size: var(--font-size-2xs);
+}
+.library-details-popover h4 { margin: 8px 12px 2px; color: var(--text-secondary); font-size: var(--font-size-2xs); font-weight: 600; }
+.library-details-popover dl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 4px 8px; margin: 0; padding: 0 12px; }
+.library-details-popover dt { min-height: 20px; color: var(--text-muted); line-height: 20px; }
+.library-details-popover dd { display: flex; min-width: 0; min-height: 20px; align-items: center; gap: 6px; margin: 0; }
+.library-detail-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.library-detail-value.is-mono { font-family: var(--font-mono); }
+.library-detail-human { min-width: 0; line-height: 20px; overflow-wrap: break-word; user-select: text; }
+.library-detail-human.is-unknown { color: var(--text-muted); }
+.library-detail-ago { color: var(--text-muted); }
+.library-copy { display: grid; width: 20px; height: 20px; flex: 0 0 20px; place-items: center; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-muted); cursor: pointer; }
+.library-copy:hover { background: var(--surface-hover); color: var(--text-primary); }
+.library-copy:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+.library-copy .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
+.library-detail-issues { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 12px; list-style: none; }
+.library-detail-issues li { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.library-detail-issue { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: var(--working); font-weight: 500; }
+.library-detail-issue .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
+.library-detail-toggle { display: flex; align-items: center; gap: 4px; margin: 8px 12px 2px; padding: 0; border: 0; background: none; color: var(--text-secondary); font: inherit; font-weight: 600; cursor: pointer; }
+.library-detail-toggle:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 2px; }
+.library-detail-toggle .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
+.library-detail-frontmatter { min-width: 0; margin: 0; font: inherit; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.library-menu-shortcut { margin-left: auto; padding-left: 16px; color: var(--text-muted); font: inherit; }
+.library-menu button { display: flex; align-items: center; }
 
 /* Refresh report strip (design §4.9). */
 .library-report-block { flex: 0 0 auto; }
@@ -243,7 +410,8 @@
 .notice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* Space action beside the item header's state (design §4.4). */
-.library-space-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.library-space-state { display: inline-flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; }
+.library-space-context { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 
 /* Two-phase progress and destination choices (design §4.5, §4.7). */
 .library-progress-steps { display: flex; flex-direction: column; gap: 6px; }
@@ -258,24 +426,32 @@
 .library-progress-files { width: 100%; max-height: 96px; margin: 0; padding: 0 0 0 16px; overflow: auto; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .library-progress-files code { overflow-wrap: anywhere; user-select: text; }
 
-/* Confluence page attachments (design §4.4): metadata until an explicit download.
- * One summary line beside `Metadata`; the table opens on demand, scrolls within
- * a bounded height, and never overlays the document. */
-.library-attachments { display: flex; max-height: min(240px, 35vh); flex-direction: column; gap: 4px; overflow: auto; }
-.library-attachments-heading { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); }
-.library-attachments-heading button:not(.library-attachments-toggle),
-.library-attachments td button { min-height: 22px; padding: 0 8px; }
-.library-attachments-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
-.library-attachments-toggle:hover { color: var(--text-secondary); }
-.library-attachments-toggle .ui-icon { width: 12px; height: 12px; }
-.library-attachments-toggle span { color: var(--text-secondary); }
-.library-attachments table { width: 100%; border-collapse: collapse; }
-.library-attachments th { padding: 2px 10px 2px 0; color: var(--text-muted); font-weight: 400; text-align: left; }
-.library-attachments td { padding: 2px 10px 2px 0; overflow-wrap: anywhere; }
+/* Confluence page attachments (design §4.7): metadata until an explicit download.
+ * One summary control on its own line; the panel opens on demand, scrolls within
+ * a bounded height, and takes the header's column. */
+.library-attachments-line { display: flex; }
+.library-attachments-toggle { display: inline-flex; height: 24px; align-items: center; gap: 4px; padding: 0 8px 0 2px; border: 0; border-radius: var(--radius-control); background: none; color: var(--text-secondary); font: inherit; white-space: nowrap; cursor: pointer; }
+.library-attachments-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
+.library-attachments-toggle:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+.library-attachments-toggle .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
+.library-attachments { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.library-attachments-head { display: flex; min-height: 32px; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.library-attachments-scroll { max-height: min(240px, 35vh); overflow: auto; }
+.library-attachments table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.library-attachments col.is-select { width: 28px; }
+.library-attachments col.is-size { width: 72px; }
+.library-attachments col.is-type { width: 120px; }
+.library-attachments col.is-state { width: 112px; }
+.library-attachments col.is-action { width: 72px; }
+.library-attachments th { height: 24px; padding: 0 8px; color: var(--text-muted); font-weight: 400; text-align: left; }
+.library-attachments td { height: 28px; padding: 0 8px; overflow: hidden; border-top: 1px solid var(--border); text-overflow: ellipsis; white-space: nowrap; }
+.library-attachments th.is-numeric,
+.library-attachments td.is-numeric { text-align: right; font-variant-numeric: tabular-nums; }
 .library-attachments td.library-attachment-name { color: var(--text-primary); user-select: text; }
-.library-attachments td.library-attachment-select { width: 1px; }
-.library-attachments td.library-attachment-action { width: 1px; white-space: nowrap; text-align: right; }
-.library-attachments ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.library-attachments td.library-attachment-type { color: var(--text-muted); }
+.library-attachments td.library-attachment-action { text-align: right; }
+.library-attachments td .library-pill { max-width: 100%; }
+.library-attachments ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 8px 12px; list-style: none; }
 .library-attachments li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .library-attachments li > span:first-child { color: var(--text-primary); overflow-wrap: anywhere; }
 .library-attachment-detail { color: var(--text-muted); }
@@ -302,3 +478,7 @@
 .library-browse-list button { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 2px 10px; background: var(--surface-raised); color: var(--text-primary); font-size: var(--font-size-2xs); cursor: pointer; }
 .library-browse-list button:hover { background: var(--surface-hover); }
 .library-browse .library-refusal .task-setup-link { margin-left: 0; }
+
+/* Body (design §4.8): the header's left edge and column. The viewer's compact rules read a 12 px inset and a 16 px body padding; Library documents take the shared 24 px inset. */
+.context-viewer.is-library .context-markdown-body { max-width: calc(var(--library-column) + 2 * var(--viewer-document-inset)); padding: 20px var(--viewer-document-inset) 30px; }
+.context-viewer.is-library .context-frontmatter { max-width: var(--library-column); }

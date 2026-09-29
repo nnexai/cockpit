@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 
-const TREE_WIDTH_KEY = "cockpit.viewer.treeWidth";
 const WRAP_KEY = "cockpit.viewer.wrap";
-const DEFAULT_TREE_WIDTH = 176;
-const MIN_TREE_WIDTH = 112;
 const MAX_TREE_WIDTH = 640;
 const CHANGE_EVENT = "cockpit-viewer-layout";
+
+/** A file list's stored width, default and lower bound; Review and Context share one, the Library has its own. */
+export type TreeLayout = { key: string; fallback: number; min: number };
+export const VIEWER_TREE: TreeLayout = { key: "cockpit.viewer.treeWidth", fallback: 176, min: 112 };
+export const LIBRARY_TREE: TreeLayout = { key: "cockpit.library.treeWidth", fallback: 296, min: 200 };
 
 function read(key: string): string | null {
   try { return globalThis.localStorage?.getItem(key) ?? null; } catch { return null; }
@@ -16,19 +18,21 @@ function write(key: string, value: string) {
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: key }));
 }
 
-function clampWidth(value: number): number {
-  return Math.round(Math.max(MIN_TREE_WIDTH, Math.min(MAX_TREE_WIDTH, value)));
+function clampWidth(layout: TreeLayout, value: number): number {
+  return Math.round(Math.max(layout.min, Math.min(MAX_TREE_WIDTH, value)));
 }
 
-function storedWidth(): number {
-  const value = Number(read(TREE_WIDTH_KEY));
-  return Number.isFinite(value) && value > 0 ? clampWidth(value) : DEFAULT_TREE_WIDTH;
+function storedWidth(layout: TreeLayout): number {
+  const value = Number(read(layout.key));
+  return Number.isFinite(value) && value > 0 ? clampWidth(layout, value) : layout.fallback;
 }
 
 /** One preference shared by every viewer pane, kept in step across panes. */
 function useSharedPreference<T>(key: string, load: () => T): [T, (next: T, persist?: boolean) => void] {
   const [value, setValue] = useState(load);
   useEffect(() => {
+    // A viewer that changes surface (a pane switching to the Library root) rereads its own preference.
+    setValue(load());
     const reload = (event: Event) => { if (!(event instanceof CustomEvent) || event.detail === key) setValue(load()); };
     window.addEventListener(CHANGE_EVENT, reload);
     return () => window.removeEventListener(CHANGE_EVENT, reload);
@@ -49,8 +53,9 @@ export function useWrapPreference(): [boolean, () => void] {
 }
 
 /** Width of the file list beside a viewer's content, set by its splitter. */
-export function useTreeWidth() {
-  const [width, setWidth] = useSharedPreference(TREE_WIDTH_KEY, storedWidth);
+export function useTreeWidth(layout: TreeLayout = VIEWER_TREE) {
+  const load = useCallback(() => storedWidth(layout), [layout]);
+  const [width, setWidth] = useSharedPreference(layout.key, load);
   const style = { "--viewer-tree-width": `${width}px` } as CSSProperties;
   return { width, setWidth, style };
 }
@@ -58,7 +63,7 @@ export function useTreeWidth() {
 /** Splitter left edge, in step with the grid column in viewer.css. */
 const splitterLeft = (width: number) => `calc(min(${width}px, 60%) - 3px)`;
 
-export function TreeSplitter({ width, onChange }: { width: number; onChange: (width: number, persist?: boolean) => void }) {
+export function TreeSplitter({ width, onChange, layout = VIEWER_TREE }: { width: number; onChange: (width: number, persist?: boolean) => void; layout?: TreeLayout }) {
   const drag = useRef<{ pointer: number; startX: number; startWidth: number; width: number; frame: number } | null>(null);
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -71,7 +76,7 @@ export function TreeSplitter({ width, onChange }: { width: number; onChange: (wi
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
     if (!current || current.pointer !== event.pointerId) return;
-    current.width = clampWidth(current.startWidth + event.clientX - current.startX);
+    current.width = clampWidth(layout, current.startWidth + event.clientX - current.startX);
     if (current.frame) return;
     const splitter = event.currentTarget;
     current.frame = requestAnimationFrame(() => {
@@ -92,14 +97,14 @@ export function TreeSplitter({ width, onChange }: { width: number; onChange: (wi
     const step = event.shiftKey ? 48 : 16;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
-      onChange(clampWidth(width + (event.key === "ArrowRight" ? step : -step)));
+      onChange(clampWidth(layout, width + (event.key === "ArrowRight" ? step : -step)));
     } else if (event.key === "Home") {
       event.preventDefault();
-      onChange(DEFAULT_TREE_WIDTH);
+      onChange(layout.fallback);
     }
   };
   return <div className="viewer-splitter" role="separator" aria-orientation="vertical" aria-label="Resize file list" title="Drag to resize · double-click to reset"
-    tabIndex={0} aria-valuemin={MIN_TREE_WIDTH} aria-valuemax={MAX_TREE_WIDTH} aria-valuenow={width} style={{ left: splitterLeft(width) }}
+    tabIndex={0} aria-valuemin={layout.min} aria-valuemax={MAX_TREE_WIDTH} aria-valuenow={width} style={{ left: splitterLeft(width) }}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
-    onDoubleClick={() => onChange(DEFAULT_TREE_WIDTH)} onKeyDown={onKeyDown} />;
+    onDoubleClick={() => onChange(layout.fallback)} onKeyDown={onKeyDown} />;
 }

@@ -1,12 +1,12 @@
 import type {
-  ContextDirectory, ContextDocument, ContextMedia,
+  ContextDirectory, ContextDocument, ContextMedia, ContextFileIndex, LibraryFileIndexRequest,
   LibraryAddRequest, LibraryAttachmentRequest, LibraryConfluenceSpacesRequest, LibraryConflictFile, LibraryDirectoryRequest, LibraryDocumentRequest,
   LibraryFollowSummary, LibraryItemSummary, LibraryListing, LibraryMediaRequest, LibraryOperation, LibraryRefreshRequest,
   LibraryRemoveRequest, LibraryReplaceRequest, LibraryResolution, LibraryResolveRequest, ProjectDiagnostic,
   SpaceTarget, SpaceContextRequest, SpaceContextListing, SpaceAddRequest, SpaceAttemptsDismissRequest, SpaceUpdateRequest, SpaceRemoveRequest,
 } from "../protocol/generated/v1";
 import { CockpitClientError, validateSessionId, validateResourceId } from "./CockpitClient";
-import { parseContextDirectory, parseContextDocument } from "./contextProtocol";
+import { parseContextDirectory, parseContextDocument, parseContextFileIndex } from "./contextProtocol";
 import { parseContextMedia } from "./contextMediaProtocol";
 // Config limits: library_folder_files <= 100_000 and library_max_items <= 1_000_000.
 const MAX_LIBRARY_FOLDER_FILES = 100_000;
@@ -137,6 +137,15 @@ export function parseLibraryOperationId(value: unknown): string { return id(valu
 export function parseLibraryDirectoryRequest(value: unknown): LibraryDirectoryRequest { const r = record(value); return { path: path(r.path, true), offset: nullable(r.offset, v => integer(v, 0xffffffff)), revision: nullable(r.revision, id) }; }
 export function parseLibraryDocumentRequest(value: unknown): LibraryDocumentRequest { const r = record(value); return { path: path(r.path), expected_revision: nullable(r.expected_revision, id), offset: nullable(r.offset, integer) }; }
 export function parseLibraryMediaRequest(value: unknown): LibraryMediaRequest { const r = record(value); return { path: path(r.path), expected_revision: nullable(r.expected_revision, id) }; }
+export function parseLibraryFileIndexRequest(value: unknown): LibraryFileIndexRequest {
+  const r = record(value);
+  if (r.mode !== "cached" && r.mode !== "fresh") return fail();
+  return { mode: r.mode };
+}
+export function parseLibraryFileIndex(value: unknown): ContextFileIndex {
+  const parsed = parseContextFileIndex(value);
+  return parsed.binding_id === "library" && parsed.root_id.startsWith("library:") ? parsed : fail();
+}
 export function parseLibraryDirectory(value: unknown): ContextDirectory {
   const parsed = parseContextDirectory(value);
   if (parsed.binding_id !== "library" || !parsed.root_id.startsWith("library:") || parsed.entries.length > 10_000) return fail();

@@ -1,40 +1,4 @@
-export type PrefixCommand =
-  | "help" | "new-space" | "rename-space" | "close-space"
-  | "new-tab" | "rename-tab" | "previous-tab" | "next-tab" | "close-tab"
-  | "rename-pane" | "split-right" | "split-down" | "close-pane" | "zoom-pane" | "resize"
-  | "previous-pane" | "next-pane" | "focus-left" | "focus-right" | "focus-up" | "focus-down"
-  | "open-file-picker" | "focus-file-tree" | "focus-file-content"
-  | `select-tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
-
-export function prefixCommandForKey(key: string, shiftKey: boolean): PrefixCommand | null {
-  if (key === "?") return "help";
-  if (shiftKey && key.toLowerCase() === "n") return "new-space";
-  if (shiftKey && key.toLowerCase() === "w") return "rename-space";
-  if (shiftKey && key.toLowerCase() === "d") return "close-space";
-  if (!shiftKey && key === "c") return "new-tab";
-  if (shiftKey && key.toLowerCase() === "t") return "rename-tab";
-  if (!shiftKey && key === "p") return "previous-tab";
-  if (!shiftKey && key === "n") return "next-tab";
-  if (shiftKey && key.toLowerCase() === "x") return "close-tab";
-  if (shiftKey && key.toLowerCase() === "p") return "rename-pane";
-  if (!shiftKey && key === "v") return "split-right";
-  if (!shiftKey && key === "-") return "split-down";
-  if (!shiftKey && key === "x") return "close-pane";
-  if (!shiftKey && key === "z") return "zoom-pane";
-  if (!shiftKey && key === "r") return "resize";
-  if (!shiftKey && key === "o") return "next-pane";
-  if (shiftKey && key.toLowerCase() === "o") return "previous-pane";
-  if (!shiftKey && key === "h") return "focus-left";
-  if (!shiftKey && key === "j") return "focus-down";
-  if (!shiftKey && key === "k") return "focus-up";
-  if (!shiftKey && key === "l") return "focus-right";
-  if (!shiftKey && key === "f") return "open-file-picker";
-  if (!shiftKey && key === "[") return "focus-file-tree";
-  if (!shiftKey && key === "]") return "focus-file-content";
-  if (!shiftKey && /^[1-9]$/.test(key)) return `select-tab-${key}` as PrefixCommand;
-  return null;
-}
-
+import { type PrefixCommand, prefixCommandForKey, unboundPrefixMessage } from "./shortcuts";
 
 function editableTarget(target: EventTarget | null): boolean {
   return target !== null && target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
@@ -47,19 +11,35 @@ export type WorkbenchKeyRouting = {
   runCommand: (command: PrefixCommand) => void;
   setPrefixActive: (active: boolean) => void;
   setCommandsOpen: (open: boolean) => void;
+  /** A key that follows the prefix but has no binding. The key is swallowed; say so. */
+  onUnboundPrefixKey?: (message: string) => void;
 };
 
 function modifierOnlyKey(key: string): boolean {
   return key === "Shift" || key === "Control" || key === "Alt" || key === "Meta";
 }
 
+/**
+ * Modal dialogs the router cannot see in React state: native `<dialog>` and
+ * Library-internal `role="dialog" aria-modal` sections. The narrow sidebar
+ * drawer is such a dialog too, but the prefix must keep working inside it.
+ */
+const MODAL_DIALOG = 'dialog[open], [role="dialog"][aria-modal="true"]:not(#cockpit-sidebar)';
+
+/**
+ * The window-level (capture) router for the `Ctrl+B` prefix. Order, per the
+ * keyboard design: composing → (reserved: Herdr magic escape) → armed `Esc` →
+ * modal → arm / bare `?` → armed key lookup. With a terminal or the inline
+ * browser surface focused it consumes `Ctrl+B` and the one key after it, nothing
+ * else; plain `Tab` and `Shift+Tab` only mean anything as that next key.
+ */
 export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
   if (event.isComposing) return;
   const target = typeof HTMLElement !== "undefined" && event.target instanceof HTMLElement ? event.target : null;
-  const modalOpen = routing.modalOpen || Boolean(target?.closest("dialog[open]"));
+  const modalOpen = routing.modalOpen || Boolean(target?.closest(MODAL_DIALOG));
   const browserFocused = Boolean(target?.closest(".browser-pane"));
-  const remoteBrowserInput = Boolean(target?.closest("[data-browser-input]"));
-  const prefixSafe = remoteBrowserInput || (!browserFocused && (!editableTarget(target) || Boolean(target?.closest(".terminal-host"))));
+  // The remote page's surface arms the prefix like a terminal does; the URL field, note editor and other browser chrome do not.
+  const prefixSafe = Boolean(target?.closest(".terminal-host, .browser-surface")) || (!browserFocused && !editableTarget(target));
   if (event.key === "Escape" && routing.prefixActive) {
     routing.setPrefixActive(false);
     if (!modalOpen && prefixSafe) {
@@ -69,8 +49,9 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
     return;
   }
   if (modalOpen) return;
+  const plainCtrlB = event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b";
   if (!routing.prefixActive) {
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b" && prefixSafe) {
+    if (plainCtrlB && prefixSafe) {
       event.preventDefault();
       event.stopPropagation();
       routing.setPrefixActive(true);
@@ -84,6 +65,11 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
   }
   if (!prefixSafe) return;
   if (modifierOnlyKey(event.key)) return;
+  // `Ctrl+B Ctrl+B`: disarm and let this key through, so the terminal or page receives a literal Ctrl+B.
+  if (plainCtrlB) {
+    routing.setPrefixActive(false);
+    return;
+  }
   if (event.ctrlKey || event.altKey || event.metaKey) {
     routing.setPrefixActive(false);
     return;
@@ -98,4 +84,5 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
   }
   event.preventDefault();
   routing.setPrefixActive(false);
+  routing.onUnboundPrefixKey?.(unboundPrefixMessage(event.key, event.shiftKey));
 }

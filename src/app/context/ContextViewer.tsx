@@ -14,6 +14,7 @@ import type {
   ContextDirectory,
   ContextDocument,
   ContextEntry,
+  ContextIndexedFile,
   ContextInvalidation,
   ContextKnownRevision,
   ContextRoot,
@@ -33,17 +34,21 @@ import { ContextSearch } from "./ContextSearch";
 import { ContextResources } from "./ContextResources";
 import { splitSourceLines } from "./sourceLines";
 import { FilePicker } from "../input/FilePicker";
-import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
+import { ariaKeyShortcuts, formatShortcut, viewerShortcutAction, withShortcut } from "../input/shortcuts";
+import { FILE_NAVIGATION_EVENT, fileNavigationAction, prepareFileCandidates, type FileNavigationCandidate } from "../input/fileNavigation";
+import { getFileIndex, putFileIndex } from "../input/fileIndexCache";
 import { highlightLines } from "../viewer/highlight";
-import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
+import { LIBRARY_TREE, TreeSplitter, VIEWER_TREE, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
 import { LIBRARY_ROOT_ID, libraryReader, paneReader, type ContextDirectoryRead, type ContextDocumentRead, type ContextReader } from "./contextSource";
 import { AddContextDialog } from "../library/AddContextDialog";
 import { LibraryConfirmDialog, SpaceCopyConfirmDialog, spaceCopyConflict, type SpaceCopyConfirmation } from "../library/LibraryConfirmDialog";
 import { AttachmentReport, LibraryAttachmentNotice, LibraryItemHeader, ProviderFactsLine, type ItemSpaceState } from "../library/LibraryItemHeader";
-import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "../library/LibraryTree";
+import { LibraryDetails } from "../library/LibraryDetails";
+import { LibraryMenu, LibraryTree, attachmentPath, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "../library/LibraryTree";
 import { RefreshReport } from "../library/RefreshReport";
 import { providerFamily, sameSpaceTarget, type LibrarySpace } from "../library/libraryState";
 import { headerSpaceAction, spaceCopyChip, type SpaceCopyActionKind } from "../library/spaceCopyPresentation";
+import { PendingPill } from "../library/StatePill";
 import { spaceAddFailure, spaceCopyActions, spaceUpdateOutcome, spaceUpdateUnconfirmed, useSpaceUpdate } from "../library/SpaceContextList";
 import { announceLibraryChanged, LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryListingState } from "../library/useLibraryOperation";
 import { resolveContextLink } from "./linkResolver";
@@ -177,9 +182,13 @@ const MAX_RETAINED_FILE_STATES = 64;
 const MAX_RETAINED_DIRECTORY_STATES = 128;
 const MAX_RETAINED_EXPANDED_DIRECTORIES = 64;
 const MAX_RETAINED_DOCUMENT_BYTES = 8 * 1024 * 1024;
-const MAX_PICKER_DIRECTORIES = 10_000;
-const PICKER_DIRECTORY_CONCURRENCY = 8;
-const MAX_PICKER_FILES = 10_000;
+type PickerIndexState = {
+  loading: boolean;
+  incomplete: boolean;
+  files: readonly ContextIndexedFile[];
+  mayBeOutOfDate: boolean;
+  failed: boolean;
+};
 
 function retainedDocumentBytes(state: DocumentState | undefined): number {
   const text = state?.document?.text;
@@ -668,7 +677,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [resourcesOpen, setResourcesOpen] = useState(false);
-  const [pickerIndex, setPickerIndex] = useState({ loading: false, incomplete: false, entries: new Map<string, ContextEntry>() });
+  const [pickerIndex, setPickerIndex] = useState<PickerIndexState>({ loading: false, incomplete: false, files: [], mayBeOutOfDate: false, failed: false });
+  const pickerCandidates = useMemo(() => pickerIndex.files.map((file) => ({
+    id: file.path,
+    path: file.path,
+    detail: file.bytes === null ? undefined : `${file.bytes} B`,
+  } satisfies FileNavigationCandidate)), [pickerIndex.files]);
+  const preparedPickerCandidates = useMemo(() => prepareFileCandidates(pickerCandidates), [pickerCandidates]);
   const directoriesRef = useRef(directories);
   directoriesRef.current = directories;
   const directoryRequests = useRef<Record<string, number>>({});
@@ -677,11 +692,11 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const documentRequestSequence = useRef(0);
   const documentController = useRef<AbortController | null>(null);
   const pickerController = useRef<AbortController | null>(null);
+  const pickerTimeout = useRef<number | null>(null);
   const pickerGeneration = useRef(0);
   const viewerRef = useRef<HTMLElement>(null);
   const overview = useFileOverview(viewerRef);
   const overviewId = useId();
-  const tree = useTreeWidth();
   const [wrap, toggleWrap] = useWrapPreference();
   const documentRef = useRef<HTMLElement>(null);
   const treeRef = useRef<HTMLElement>(null);
@@ -697,6 +712,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       documentController.current?.abort();
       documentController.current = null;
       documentRequestSequence.current += 1;
+      if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+      pickerTimeout.current = null;
       pickerController.current?.abort();
       pickerGeneration.current += 1;
     };
@@ -712,6 +729,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const roots = useMemo(() => presentation ? [...presentation.roots, libraryRoot] : [libraryRoot], [libraryRoot, presentation]);
   const root: ContextRoot = libraryChosen || !presentation ? libraryRoot : presentation.roots.find((candidate) => candidate.root_id === rootId) ?? presentation.roots[0];
   const isLibrary = root?.kind === "library";
+  const tree = useTreeWidth(isLibrary ? LIBRARY_TREE : VIEWER_TREE);
   const serverLibraryRootId = serverLibraryRoot?.root_id ?? null;
   const sessionId = presentation?.session_id ?? null;
   const paneId = presentation?.pane_id ?? null;
@@ -730,6 +748,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   currentBindingRef.current = bindingId;
   const currentRootRef = useRef(activeRootId);
   currentRootRef.current = activeRootId;
+  const latestRevisionKeysRef = useRef(new Set<string>());
   const selectedPath = value.rootId === root?.root_id ? value.path : null;
   const selectedKey = root && selectedPath ? keyFor(root.root_id, selectedPath) : null;
   const selectedFileState = selectedKey ? value.files[selectedKey] : undefined;
@@ -737,7 +756,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const selectedDirectory = root ? directories[keyFor(root.root_id, directoryPathForFile)] : undefined;
   const selectedEntry = selectedDirectory?.data?.entries.find((entry) => (entry.path ?? (directoryPathForFile ? `${directoryPathForFile}/${entry.name}` : entry.name)) === selectedPath);
   // Library files are replaced by provider refreshes; always read the current revision.
-  const selectedRevision = isLibrary ? null : selectedEntry?.revision ?? selectedFileState?.revision ?? null;
+  const selectedRevision = isLibrary || Boolean(selectedKey && latestRevisionKeysRef.current.has(selectedKey)) ? null : selectedEntry?.revision ?? selectedFileState?.revision ?? null;
   const documentState = selectedKey ? documents[selectedKey] : undefined;
   const protectedDirectoryKeys = new Set<string>();
   if (root) {
@@ -891,12 +910,14 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     setDocuments({});
     setExpanded(new Set());
     documentRequestSequence.current += 1;
+    if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+    pickerTimeout.current = null;
     pickerController.current?.abort();
     pickerGeneration.current += 1;
     setResourcesOpen(false);
     setPickerOpen(false);
     overview.reset();
-    setPickerIndex({ loading: false, incomplete: false, entries: new Map() });
+    setPickerIndex({ loading: false, incomplete: false, files: [], mayBeOutOfDate: false, failed: false });
     if (root && value.rootId !== root.root_id) {
       onChange({ ...value, rootId: root.root_id, path: null });
     }
@@ -944,6 +965,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   const openFile = (path: string, revision: string | null) => {
     if (!root) return;
     const fileKey = keyFor(root.root_id, path);
+    if (revision === null) latestRevisionKeysRef.current.add(fileKey);
+    else latestRevisionKeysRef.current.delete(fileKey);
     const next = value.files[fileKey] ?? { rootId: root.root_id, path, mode: "auto" as const, selectionStart: null, selectionEnd: null, scrollTop: 0, revision };
     const files = { ...value.files };
     delete files[fileKey];
@@ -952,6 +975,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     while (keys.length > MAX_RETAINED_FILE_STATES) {
       const oldest = keys.shift();
       if (oldest === undefined) break;
+      latestRevisionKeysRef.current.delete(oldest);
       delete files[oldest];
     }
     onChange({ ...value, rootId: root.root_id, path, files });
@@ -970,72 +994,82 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   }, []);
   const closeFilePicker = useCallback(() => {
     pickerController.current?.abort();
+    if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+    pickerTimeout.current = null;
     pickerController.current = null;
     pickerGeneration.current += 1;
     setPickerOpen(false);
-    setPickerIndex({ loading: false, incomplete: false, entries: new Map() });
+    setPickerIndex({ loading: false, incomplete: false, files: [], mayBeOutOfDate: false, failed: false });
   }, []);
   const openFilePicker = useCallback(() => {
     if (!root || !reader) return;
     pickerController.current?.abort();
     const controller = new AbortController();
+    if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+    pickerTimeout.current = null;
     pickerController.current = controller;
     const generation = ++pickerGeneration.current;
     const requestIdentity = identityKey;
+    const cacheKey = `${bindingId}\u0000${root.root_id}`;
+    let freshSettled = false;
+    const cachedIndex = getFileIndex(cacheKey);
+    const cachedFiles = cachedIndex?.files ?? [];
     setPickerOpen(true);
-    setPickerIndex({ loading: true, incomplete: false, entries: new Map() });
-    void (async () => {
-      const pending = [""];
-      const visited = new Set<string>();
-      const entries = new Map<string, ContextEntry>();
-      let incomplete = false;
-      let stale = false;
-      const readDirectory = async (path: string) => {
-        try {
-          let offset: number | undefined;
-          let revision: string | undefined;
-          do {
-            const data = await reader.directory({ root_id: root.root_id, path, offset, revision }, controller.signal);
-            if (controller.signal.aborted || pickerGeneration.current !== generation || requestIdentityRef.current !== requestIdentity || data.binding_id !== bindingId || data.root_id !== root.root_id) { stale = true; return; }
-            incomplete ||= data.truncated;
-            for (const entry of data.entries) {
-              if (!entry.path || entry.path.split("/").includes(".cockpit")) continue;
-              if (entry.kind === "directory") pending.push(entry.path);
-              if (entry.kind === "file" && !entry.refusal) {
-                if (entries.has(entry.path) || entries.size < MAX_PICKER_FILES) entries.set(entry.path, entry);
-                else incomplete = true;
-              }
-            }
-            offset = data.next_offset;
-            revision = data.revision;
-          } while (offset !== undefined && !controller.signal.aborted && entries.size < MAX_PICKER_FILES);
-        } catch {
-          if (controller.signal.aborted || pickerGeneration.current !== generation) { stale = true; return; }
-          incomplete = true;
-        }
-      };
-      // A bounded pool of folder reads: a followed space stores each page as its own folder.
-      const inFlight = new Set<Promise<void>>();
-      let lastPublished = 0;
-      while (!stale && !controller.signal.aborted && (pending.length > 0 || inFlight.size > 0)) {
-        while (pending.length > 0 && inFlight.size < PICKER_DIRECTORY_CONCURRENCY && visited.size < MAX_PICKER_DIRECTORIES && entries.size < MAX_PICKER_FILES) {
-          const path = pending.shift()!;
-          if (visited.has(path)) continue;
-          visited.add(path);
-          const read: Promise<void> = readDirectory(path).finally(() => inFlight.delete(read));
-          inFlight.add(read);
-        }
-        if (inFlight.size === 0) break;
-        await Promise.race(inFlight);
-        if (!stale && Date.now() - lastPublished > 100) {
-          lastPublished = Date.now();
-          setPickerIndex({ loading: true, incomplete, entries: new Map(entries) });
-        }
-      }
-      if (stale) return;
-      if (pending.some((path) => !visited.has(path)) || visited.size >= MAX_PICKER_DIRECTORIES || entries.size >= MAX_PICKER_FILES) incomplete = true;
-      if (!controller.signal.aborted && pickerGeneration.current === generation && requestIdentityRef.current === requestIdentity) setPickerIndex({ loading: false, incomplete, entries });
-    })();
+    setPickerIndex({ loading: true, incomplete: cachedIndex?.truncated ?? false, files: cachedFiles, mayBeOutOfDate: cachedFiles.length > 0, failed: false });
+    const current = () => !controller.signal.aborted
+      && pickerGeneration.current === generation
+      && requestIdentityRef.current === requestIdentity
+      && currentRootRef.current === root.root_id;
+    const samePaths = (left: readonly ContextIndexedFile[], right: readonly ContextIndexedFile[]) =>
+      left.length === right.length && left.every((file, index) => file.path === right[index]?.path);
+    pickerTimeout.current = window.setTimeout(() => {
+      pickerTimeout.current = null;
+      if (!current()) return;
+      freshSettled = true;
+      controller.abort();
+      setPickerIndex((previous) => ({
+        ...previous,
+        loading: false,
+        mayBeOutOfDate: previous.files.length > 0,
+        failed: true,
+      }));
+    }, 10_000);
+    void reader.fileIndex(root.root_id, "cached", controller.signal).then((result) => {
+      if (!current() || freshSettled || result.state !== "cached") return;
+      putFileIndex(cacheKey, result.files, result.truncated);
+      setPickerIndex((previous) => ({
+        loading: previous.failed ? false : true,
+        incomplete: result.truncated,
+        files: samePaths(previous.files, result.files) ? previous.files : result.files,
+        mayBeOutOfDate: true,
+        failed: previous.failed,
+      }));
+    }).catch(() => undefined);
+    void reader.fileIndex(root.root_id, "fresh", controller.signal).then((result) => {
+      if (!current()) return;
+      if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+      pickerTimeout.current = null;
+      if (result.state !== "fresh") throw new Error("File index response is not fresh.");
+      freshSettled = true;
+      putFileIndex(cacheKey, result.files, result.truncated);
+      setPickerIndex((previous) => ({
+        loading: false,
+        incomplete: result.truncated,
+        files: samePaths(previous.files, result.files) ? previous.files : result.files,
+        mayBeOutOfDate: false,
+        failed: false,
+      }));
+    }).catch(() => {
+      if (!current()) return;
+      if (pickerTimeout.current !== null) window.clearTimeout(pickerTimeout.current);
+      pickerTimeout.current = null;
+      setPickerIndex((previous) => ({
+        ...previous,
+        loading: false,
+        mayBeOutOfDate: previous.files.length > 0,
+        failed: true,
+      }));
+    });
   }, [bindingId, identityKey, reader, root]);
   const toggleDirectory = (entry: ContextEntry) => {
     if (!root || !entry.path || entry.kind !== "directory") return;
@@ -1290,7 +1324,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     if (!text) return null;
     return <div ref={spaceCopyNoticeRef} className={`context-notice${failure ? " context-notice-error" : chip.tone === "working" ? " context-notice-warning" : ""}`} role={failure ? "alert" : "status"}
       onFocus={() => { spaceCopyNoticeFocused.current = true; }} onBlur={(event) => { if (event.relatedTarget) spaceCopyNoticeFocused.current = false; }}>
-      <strong>{working ? <span className="library-spinner" aria-hidden="true" /> : <span aria-hidden="true">{chip.glyph} </span>}{chip.word}</strong>
+      <strong>{working ? <span className="library-spinner" aria-hidden="true" /> : <UiIcon name={chip.shape} />}{chip.word}</strong>
       <span>{text}</span>
       {/* aria-disabled keeps focus on the pressed button while the update runs. */}
       {actions.map((action) => <button key={action.kind} type="button" aria-disabled={busy} onClick={() => startSpaceCopyAction(openSpaceCopy, action.kind)}>{action.label}</button>)}
@@ -1495,12 +1529,10 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       if (!viewerRef.current?.contains(globalThis.document.activeElement)) return;
       const action = fileNavigationAction(event);
       if (action === "open-picker") openFilePicker();
-      else if (action === "focus-tree") focusTree();
-      else if (action === "focus-content") focusContent();
     };
     window.addEventListener(FILE_NAVIGATION_EVENT, onNavigation);
     return () => window.removeEventListener(FILE_NAVIGATION_EVENT, onNavigation);
-  }, [focusContent, focusTree, openFilePicker]);
+  }, [openFilePicker]);
   const rootDirectory = directories[keyFor(root.root_id, "")];
   const rootEmpty = rootDirectory?.status === "ready" && rootDirectory.data?.entries.length === 0 && rootDirectory.data.next_offset === undefined;
   // Open the folder's guide instead of an empty document area.
@@ -1532,9 +1564,9 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         }
         if (!library.listing) return <div className="context-empty">Loading…</div>;
         if (library.listing.items.length === 0) {
-          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request, Jira issue, Confluence page, or a folder. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add context…</button></div></div>;
+          return <div className="context-empty"><div className="context-empty-message"><strong>The Library is empty</strong><span>Add an issue, merge request, pull request, Jira issue, Confluence page, or a folder. The Library keeps it without a Space or session.</span><button type="button" onClick={() => setLibraryAdd("library")}>Add…</button></div></div>;
         }
-        return <div className="context-empty">Select a Library item to read it.</div>;
+        return <div className="context-empty library-empty-select"><UiIcon name="library" />Select a Library item to read it.</div>;
       }
       if (!selectedPath && rootEmpty) {
         return <div className="context-empty"><div className="context-empty-message"><strong>No files here yet</strong><span>{root.kind === "companion" ? "Add Library context from Resources." : "This directory is empty."}</span>{root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)}>Open Resources</button> : null}</div></div>;
@@ -1575,12 +1607,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       );
       return (
         <>
-          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={documentDetails} space={itemSpace(selectedLibraryItem)} pageUpdate={{ at: metadata.lastModified, by: metadata.lastModifiedBy }} facts={facts.generated ? facts : null} /> : <div className="context-document-header">
+          {selectedLibraryItem ? <LibraryItemHeader item={selectedLibraryItem} providers={library.providers} narrow={overview.narrow} rootCrumb={presentation !== null} pending={pendingItemIds.has(selectedLibraryItem.item_id)} actions={libraryActions} onReplace={(item) => setLibraryConfirm({ kind: "replace", item })} details={<LibraryDetails item={selectedLibraryItem} providers={library.providers} now={Date.now()} document={{ bytes: document.bytes, contentHash: document.content_hash ?? null, mediaType: document.media_type, frontmatter: frontmatter ? splitSourceLines(document.text ?? "").slice(frontmatter.start - 1, frontmatter.end).map((line) => line.raw).join("") : null, diagnostics: document.diagnostics }} root={{ id: root.root_id, kind: root.kind, path: root.path, repositoryId: root.repository_id, companionId: root.companion_id }} pageUpdate={{ at: metadata.lastModified, by: metadata.lastModifiedBy }} />} space={itemSpace(selectedLibraryItem)} pageUpdate={{ at: metadata.lastModified, by: metadata.lastModifiedBy }} facts={facts.generated ? facts : null} /> : <div className="context-document-header">
             {metadata.canonicalId ? <span className="document-source-kind">{metadata.provider ?? "Issue"}</span> : null}<strong title={selectedPath}>{metadata.canonicalId ?? documentName(selectedPath)}</strong>
             {facts.generated ? <ProviderFactsLine facts={facts} now={Date.now()} className="context-document-facts" /> : null}
             {document.truncated ? <span className="context-state-warning">Truncated by preview limit</span> : null}
 
-            {documentDetails}
+            {selectedLibraryItem ? null : documentDetails}
           </div>}
           {renderSpaceCopyNotice()}
           {documentState.status === "error" ? <div className="context-notice context-notice-warning" role="status"><strong>Stale source</strong><span>{documentState.error}</span><button type="button" onClick={refresh}>Refresh</button></div> : null}
@@ -1632,30 +1664,62 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     </div>;
   }
 
+  // Library root toolbar (design §4.3): icon-only view controls, worded Library commands, one rule between them.
+  const presentable = Boolean(document && selectedPath && (isMarkdown(document, selectedPath) || isHtml(document, selectedPath)));
+  const fileMode = selectedFileState?.mode ?? "source";
+  const sourceShown = Boolean(document && selectedPath) && (fileMode === "source" || (fileMode === "auto" && !presentable));
+  const refreshAllDisabled = libraryBusy || !library.listing || library.listing.items.length === 0;
+  const libraryToolbar = <>
+    {roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
+    <button type="button" className="library-ghost is-icon viewer-overview-trigger" aria-pressed={overview.open} aria-controls={overviewId} aria-label={overview.open ? "Hide file tree" : "Show file tree"} aria-keyshortcuts={ariaKeyShortcuts("focus-file-tree")} title={withShortcut(overview.open ? "Hide file tree" : "Show file tree", "focus-file-tree")} onClick={overview.toggle}><UiIcon name="sidebar" /></button>
+    <button type="button" className="library-ghost is-icon viewer-file-picker-trigger" aria-label="Find in Library" aria-keyshortcuts={ariaKeyShortcuts("open-file-picker")} title={withShortcut("Find in Library", "open-file-picker", undefined, "chord")} onClick={openFilePicker}><UiIcon name="search" /></button>
+    {compactToolbar ? null : <>
+      <span className="library-toolbar-rule" aria-hidden="true" />
+      <button type="button" className="library-ghost" title="Add a page, issue, MR/PR or folder to the Library" onClick={() => setLibraryAdd("library")}><UiIcon name="plus" />Add…</button>
+      <button type="button" className="library-ghost" onClick={refreshLibrary} disabled={refreshAllDisabled} title="Refresh every item from its source"><UiIcon name="refresh" />Refresh all</button>
+    </>}
+    <span className="context-toolbar-spacer" />
+    {presentable ? <div className="viewer-segmented" role="group" aria-label="Document presentation"><button type="button" aria-keyshortcuts={ariaKeyShortcuts("toggle-preview")} title={withShortcut("Preview", "toggle-preview")} aria-pressed={selectedFileState?.mode !== "source"} onClick={() => updateFile({ mode: "auto" })}>Preview</button><button type="button" aria-keyshortcuts={ariaKeyShortcuts("toggle-preview")} title={withShortcut("Source", "toggle-preview")} aria-pressed={selectedFileState?.mode === "source"} onClick={() => updateFile({ mode: "source" })}>Source</button></div> : null}
+    {sourceShown ? <button type="button" className="library-ghost is-icon viewer-wrap-toggle" aria-pressed={wrap} aria-label="Wrap long lines" aria-keyshortcuts={ariaKeyShortcuts("toggle-wrap")} onClick={toggleWrap} title={withShortcut(wrap ? "Scroll long lines" : "Wrap long lines", "toggle-wrap")}><UiIcon name="wrap" /></button> : null}
+    <button type="button" className="library-ghost is-icon" aria-label="Library actions" title="Library actions" aria-haspopup="menu" aria-expanded={libraryToolbarMenu !== null} onClick={(event) => setLibraryToolbarMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
+  </>;
+  // Local re-read (not a provider refresh) and the path; the worded commands join them when the toolbar is compact.
+  const libraryMenuEntries: LibraryMenuEntry[] = [
+    ...(compactToolbar ? [
+      { label: "Add…", onSelect: () => setLibraryAdd("library") },
+      { label: "Refresh all", onSelect: refreshLibrary, disabled: refreshAllDisabled },
+      "separator" as const,
+    ] : []),
+    { label: "Reload listing", shortcut: formatShortcut("reload-listing"), onSelect: refresh },
+    { label: "Copy Library folder path", onSelect: () => { if (library.listing) void copyText(library.listing.root.path); }, disabled: !library.listing },
+  ];
+
   return (
-    <section className="context-viewer" aria-label="Context file viewer" ref={viewerRef} onPointerDown={() => { if (!controlAllowed) onRequestControl(); }} onKeyDownCapture={(event) => {
+    <section className={`context-viewer${isLibrary ? " is-library" : ""}`} aria-label="Context file viewer" ref={viewerRef} onPointerDown={() => { if (!controlAllowed) onRequestControl(); }} onKeyDownCapture={(event) => {
       if (isEditingTarget(event.target)) return;
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p") { event.preventDefault(); event.stopPropagation(); openFilePicker(); }
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "1") { event.preventDefault(); focusTree(); }
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "2") { event.preventDefault(); focusContent(); }
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === "KeyZ") { event.preventDefault(); toggleWrap(); }
+      const action = viewerShortcutAction(event);
+      if (action === null) return;
+      event.preventDefault();
+      if (action === "open-file-picker") { event.stopPropagation(); openFilePicker(); }
+      else if (action === "focus-file-tree") focusTree();
+      else if (action === "focus-file-content") focusContent();
+      else if (action === "toggle-wrap") toggleWrap();
+      else if (action === "reload-listing") refresh();
+      else if (action === "toggle-preview" && document && selectedPath && (isMarkdown(document, selectedPath) || isHtml(document, selectedPath))) updateFile({ mode: selectedFileState?.mode === "source" ? "auto" : "source" });
     }}>
       <header className="context-toolbar">
 
+        {isLibrary ? libraryToolbar : <>
         {roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
         <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={overviewId} aria-label="Toggle file overview"><UiIcon name="sidebar" /> Files</button>
         <button type="button" className="viewer-file-picker-trigger" onClick={openFilePicker} aria-label="Choose Context file" title="Choose Context file"><UiIcon name="search" /></button>
         {root.kind === "companion" ? <button type="button" onClick={() => setResourcesOpen(true)} aria-expanded={resourcesOpen}>{spaceListing.listing && spaceListing.listing.behind > 0 ? `Resources · ${spaceListing.listing.behind} behind` : "Resources"}</button> : null}
-        {isLibrary && !compactToolbar ? <>
-          <button type="button" onClick={() => setLibraryAdd("library")}>Add…</button>
-          <button type="button" onClick={refreshLibrary} disabled={libraryBusy || !library.listing || library.listing.items.length === 0} title="Refresh every item from its source">Refresh all</button>
-        </> : null}
-        {isLibrary && compactToolbar ? <button type="button" aria-label="More Library actions" aria-haspopup="menu" aria-expanded={libraryToolbarMenu !== null} onClick={(event) => setLibraryToolbarMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button> : null}
         <span className="context-toolbar-spacer" />
         {document && selectedPath && (isMarkdown(document, selectedPath) || isHtml(document, selectedPath)) ? <div className="viewer-segmented" role="group" aria-label="Document presentation"><button type="button" aria-pressed={selectedFileState?.mode !== "source"} onClick={() => updateFile({ mode: "auto" })}>Preview</button><button type="button" aria-pressed={selectedFileState?.mode === "source"} onClick={() => updateFile({ mode: "source" })}>Source</button></div> : null}
 
         <button type="button" className="viewer-wrap-toggle" aria-pressed={wrap} onClick={toggleWrap} title={wrap ? "Long lines wrap (Alt+Z)" : "Long lines scroll (Alt+Z)"}><UiIcon name="wrap" /><span className="viewer-wrap-label">Wrap</span></button>
         <button type="button" onClick={refresh} aria-label="Refresh Context files" title="Refresh files"><UiIcon name="refresh" /></button>
+        </>}
         {onTerminalView ? <button type="button" onClick={onTerminalView} aria-label="Show terminal" title="Show terminal"><UiIcon name="terminal" /></button> : null}
       </header>
       {isLibrary && attachmentRequest ? <AttachmentReport request={attachmentRequest} operation={attachmentOperation.operation} starting={attachmentOperation.starting} error={attachmentOperation.error}
@@ -1673,7 +1737,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       {linkNotice ? <div className="context-notice context-notice-warning" role="status">{linkNotice}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>
         {overview.narrow && overview.open ? <button type="button" className="viewer-overview-backdrop" aria-label="Close file overview" onClick={overview.close} /> : null}
-        <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label={isLibrary ? "Library items" : "Context files"} ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else if (!isLibrary) onTreeKeyDown(event); }}>
+        <aside id={overviewId} className={`context-tree${overview.open ? " is-overview-open" : ""}`} aria-label={isLibrary ? "Library items" : "Context files"} tabIndex={-1} ref={treeRef} onKeyDown={(event) => { if (event.key === "Escape" && overview.narrow) { event.preventDefault(); event.stopPropagation(); overview.close(); documentRef.current?.focus(); } else if (!isLibrary) onTreeKeyDown(event); }}>
         {root.kind === "companion" ? <details className="viewer-tree-search"><summary><UiIcon name="search" /> Search contents</summary><ContextSearch
           identity={identityKey}
           bindingId={bindingId}
@@ -1686,12 +1750,15 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
           disabled={!controlAllowed}
         /></details> : null}
           {isLibrary ? <>
-            {!library.listing && library.status !== "error" ? <div className="context-tree-status">Loading…</div> : null}
+            {!library.listing && library.status !== "error" ? <div className="library-skeleton" role="status" aria-label="Loading Library">{[0, 1, 2, 3, 4, 5].map((index) => <span key={index} className="library-skeleton-row" style={{ width: `${[72, 58, 64, 48, 60, 52][index]}%` }} />)}</div> : null}
             {library.status === "error" ? <div className="context-tree-error" role="alert">
               <span>Library unavailable: {library.error}. Space context is unaffected.</span>
               <button type="button" onClick={library.reload}>Retry</button>
             </div> : null}
-            {library.listing?.items.length === 0 ? <div className="context-tree-status is-empty">Empty</div> : null}
+            {library.listing?.items.length === 0 ? <div className="library-tree-empty">
+              <span>Nothing in the Library yet</span>
+              <button type="button" className="library-button is-primary" onClick={() => setLibraryAdd("library")}><UiIcon name="plus" />Add…</button>
+            </div> : null}
             {library.listing ? <LibraryTree items={library.listing.items} follows={library.listing.follows} providers={library.providers} selectedItemId={selectedLibraryItem?.item_id ?? null} selectedAttachmentId={selectedAttachmentId} pendingItemIds={pendingItemIds} actions={libraryActions} /> : null}
           </> : null}
           {directories[keyFor(root.root_id, "")]?.status === "loading" ? <div className="context-tree-status">Loading…</div> : null}
@@ -1707,16 +1774,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
             {row.entry.refusal ? <div className="context-tree-refusal">{row.entry.refusal}</div> : null}
           </div>)}
         </aside>
-        {overview.open && !overview.narrow ? <TreeSplitter width={tree.width} onChange={tree.setWidth} /> : null}
+        {overview.open && !overview.narrow ? <TreeSplitter width={tree.width} onChange={tree.setWidth} layout={isLibrary ? LIBRARY_TREE : VIEWER_TREE} /> : null}
         <main className="context-document" ref={documentRef} tabIndex={-1}>
           {renderDocument()}
         </main>
       </div>
       {resourcesOpen && presentation ? <ContextResources client={client} root={root} space={space} spaceListing={spaceListing} onAdd={() => setLibraryAdd("space")} onClose={() => setResourcesOpen(false)} /> : null}
-      {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={[
-        { label: "Add…", onSelect: () => setLibraryAdd("library") },
-        { label: "Refresh all", onSelect: refreshLibrary, disabled: libraryBusy || !library.listing || library.listing.items.length === 0 },
-      ]} /> : null}
+      {libraryToolbarMenu ? <LibraryMenu x={libraryToolbarMenu.x} y={libraryToolbarMenu.y} label="Library actions" onDismiss={() => setLibraryToolbarMenu(null)} entries={libraryMenuEntries} /> : null}
       {libraryAdd ? <AddContextDialog client={client} onClose={() => setLibraryAdd(null)} space={space}
         onOpenItem={(itemId) => { setLibraryOpenRequest(itemId); if (!isLibrary) chooseRoot(libraryRoot); }} defaultDestination={libraryAdd}
         openInSpace={companionRoot ? { companionRootId: companionRoot.root_id, open: (path) => { setResourcesOpen(false); openFile(path, null); } } : null} /> : null}
@@ -1745,7 +1809,7 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
         onReplacing={(operation) => void spaceCopyUpdate.start(async () => operation)}
         onConflict={() => { setSpaceCopyAction({ logicalId: spaceCopyConfirm.row.logical_id, conflict: true }); spaceListing.reload(); }}
         onClose={() => setSpaceCopyConfirm(null)} /> : null}
-      {pickerOpen ? <FilePicker candidates={[...pickerIndex.entries.values()].map((entry) => ({ id: entry.entry_id, path: entry.path!, detail: entry.bytes === null ? undefined : `${entry.bytes} B` } satisfies FileNavigationCandidate))} loading={pickerIndex.loading} incomplete={pickerIndex.incomplete} onChoose={(candidate) => { const entry = pickerIndex.entries.get(candidate.path); if (entry) chooseEntry(entry); closeFilePicker(); focusContent(); }} onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
+      {pickerOpen ? <FilePicker candidates={pickerCandidates} preparedCandidates={preparedPickerCandidates} loading={pickerIndex.loading} incomplete={pickerIndex.incomplete} mayBeOutOfDate={pickerIndex.mayBeOutOfDate} failed={pickerIndex.failed} onChoose={(candidate) => { openFile(candidate.path, null); closeFilePicker(); focusContent(); }} onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
     </section>
   );
 }

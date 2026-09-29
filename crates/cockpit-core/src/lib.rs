@@ -1,4 +1,5 @@
 pub mod browser;
+mod file_index_cache;
 pub mod browser_feedback;
 
 pub mod comments;
@@ -14,6 +15,7 @@ pub mod process;
 pub mod project_adapter;
 mod project_store;
 pub mod project_teardown;
+mod repository_cache;
 pub mod projects;
 pub mod repositories;
 pub mod review;

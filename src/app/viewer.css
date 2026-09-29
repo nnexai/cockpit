@@ -8,6 +8,9 @@
   --viewer-meta-size: var(--font-size-2xs);
   --viewer-meta-line-height: 16px;
   --viewer-document-inset: 24px;
+  --library-column: 768px;
+  --library-row-height: var(--compact-control-size);
+  --icon-mark: 14px;
   --viewer-source-gutter: 4ch;
 }
 

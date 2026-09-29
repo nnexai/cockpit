@@ -23,10 +23,13 @@ import type {
 } from "../protocol/generated/v1";
 import { initialSessionState, sessionReducer, type SessionState } from "./session/sessionStore";
 import { useFocusCoordinator } from "./session/focusCoordinator";
-import { aheadBehindLabel, spaceCheckoutKey, useSpaceGitStatus } from "./session/spaceGitStatus";
+import { spaceCheckoutKey, useSpaceGitStatus } from "./session/spaceGitStatus";
 import { type MutationCoordinatorState, type MutationOperation, useMutationCoordinator } from "./session/mutationCoordinator";
 import { deriveResizeHandles, projectedPaneIds, projectedPaneRect, resizeRequest, tabDropInsertionIndex, type ResizeHandle } from "./layout/layoutProjection";
-import { type PrefixCommand, routeWorkbenchKeydown } from "./input/keymap";
+import { routeWorkbenchKeydown } from "./input/keymap";
+import { SHORTCUTS, SHORTCUT_SEPARATOR, armedPrefixHint, focusSidebarList, formatShortcut, shortcutEntry, withShortcut, type PrefixCommand } from "./input/shortcuts";
+import { trapModalTab, useModalFocus } from "./input/modal";
+import { flushSync } from "react-dom";
 import { dispatchFileNavigation, rankFuzzyMatches } from "./input/fileNavigation";
 import { TerminalPane } from "./TerminalPane";
 import { SetupDialog, setupParentFor } from "./projects/SetupDialog";
@@ -38,25 +41,16 @@ import { LibraryView } from "./library/LibraryView";
 import type { LibrarySpace } from "./library/libraryState";
 import { isGraphicalContext, isGraphicalReview, usePaneRenderers, type PaneRendererState } from "./paneRenderers";
 import { BrowserPane, type BrowserPaneRecoveryRegistration } from "./browser/BrowserPane";
+import { InlineRename } from "./InlineRename";
+import { Sidebar } from "./sidebar/Sidebar";
+import { spaceNotesFromFailures, type ContextAnchor } from "./sidebar/Spaces";
+import type { Agent, Space } from "./sidebar/spaceTree";
 
 type StatusError = { message: string; code?: string };
 type SessionSnapshot = SessionSnapshotResponse;
-type Space = SessionSnapshot["spaces"][number];
 type Tab = SessionSnapshot["tabs"][number];
 type Pane = SessionSnapshot["panes"][number];
-type Agent = SessionSnapshot["agents"][number];
 type Selection = { spaceId: string | null; tabId: string | null; paneId: string | null };
-
-export function spaceDropBeforeId(spaces: Space[], sourceId: string, targetId: string, afterTarget: boolean): string | null | undefined {
-  const sourceIndex = spaces.findIndex((space) => space.id === sourceId);
-  if (sourceIndex < 0 || sourceId === targetId) return undefined;
-  const remaining = spaces.filter((space) => space.id !== sourceId);
-  const targetIndex = remaining.findIndex((space) => space.id === targetId);
-  if (targetIndex < 0) return undefined;
-  const insertionIndex = targetIndex + (afterTarget ? 1 : 0);
-  if (insertionIndex === sourceIndex) return undefined;
-  return remaining[insertionIndex]?.id ?? null;
-}
 
 function describeError(error: unknown, fallback: string): StatusError {
   if (error instanceof Error) {
@@ -64,121 +58,6 @@ function describeError(error: unknown, fallback: string): StatusError {
     return { message: typed.message || fallback, code: typeof typed.operationCode === "string" ? typed.operationCode : typeof typed.code === "string" ? typed.code : undefined };
   }
   return { message: fallback };
-}
-// Herdr's "distinct symbols" status indicators, so state never depends on colour alone.
-function stateGlyph(status: string): string {
-  switch (status.toLowerCase()) {
-    case "blocked": case "error": return "×";
-    case "working": case "running": return "◐";
-    case "done": case "complete": return "✓";
-    case "idle": return "○";
-    default: return "·";
-  }
-}
-function stateClass(status: string): string {
-  switch (status.toLowerCase()) {
-    case "blocked": case "error": return "blocked";
-    case "working": case "running": return "working";
-    case "done": case "complete": return "done";
-    case "idle": return "idle";
-    default: return "unknown";
-  }
-}
-
-function agentStatusPriority(status: string): number {
-  switch (stateClass(status)) {
-    case "blocked": return 4;
-    case "done": return 3;
-    case "working": return 2;
-    case "idle": return 1;
-    default: return 0;
-  }
-}
-
-export function orderAgentsByHerdrPriority(agents: Agent[]): Agent[] {
-  return agents
-    .map((agent, index) => ({ agent, index }))
-    .sort((left, right) => agentStatusPriority(right.agent.status) - agentStatusPriority(left.agent.status)
-      || right.agent.state_change_seq - left.agent.state_change_seq
-      || Number(right.agent.focused) - Number(left.agent.focused)
-      || left.index - right.index)
-    .map(({ agent }) => agent);
-}
-
-export type SpaceTreeRow = {
-  kind: "top-level" | "parent" | "child";
-  space: Space;
-  label: string;
-  branch: string | null;
-  repositoryKey: string | null;
-  expanded: boolean;
-  connector: "├─" | "└─" | null;
-};
-
-export function spaceStatus(status: string): { glyph: string; className: string } {
-  return { glyph: stateGlyph(status), className: stateClass(status) };
-}
-
-/** A collapsed repository row stands for its hidden worktrees, so it shows the most urgent of their states. */
-export function spaceRowStatus(row: SpaceTreeRow, spaces: Space[]): string {
-  if (row.kind !== "parent" || row.expanded || !row.repositoryKey) return row.space.agent_status;
-  return spaces
-    .filter((space) => space.git?.repository_key === row.repositoryKey)
-    .reduce((urgent, space) => agentStatusPriority(space.agent_status) > agentStatusPriority(urgent) ? space.agent_status : urgent, row.space.agent_status);
-}
-
-function worktreeLabel(space: Space): string {
-  const branch = space.git?.branch;
-  return branch ? branch.replace(/^worktree\//, "") : space.label;
-}
-
-export function projectSpaceTree(
-  spaces: Space[],
-  collapsedRepositoryKeys: ReadonlySet<string> = new Set(),
-  selectedSpaceId: string | null = null,
-): SpaceTreeRow[] {
-  const membersByRepository = new Map<string, Space[]>();
-  for (const space of spaces) {
-    const repositoryKey = space.git?.repository_key;
-    if (!repositoryKey) continue;
-    const members = membersByRepository.get(repositoryKey);
-    if (members) members.push(space);
-    else membersByRepository.set(repositoryKey, [space]);
-  }
-
-  const groups = new Map<string, { parent: Space; members: Space[] }>();
-  for (const [repositoryKey, members] of membersByRepository) {
-    const parent = members.find((space) => !space.git?.is_linked_worktree);
-    if (members.length >= 2 && parent) groups.set(repositoryKey, { parent, members });
-  }
-
-  const rows: SpaceTreeRow[] = [];
-  const emittedRepositoryKeys = new Set<string>();
-  for (const space of spaces) {
-    const repositoryKey = space.git?.repository_key ?? null;
-    const group = repositoryKey === null ? undefined : groups.get(repositoryKey);
-    if (repositoryKey === null || !group) {
-      rows.push({ kind: "top-level", space, label: space.label, branch: space.git?.branch ?? null, repositoryKey: null, expanded: true, connector: null });
-      continue;
-    }
-    if (emittedRepositoryKeys.has(repositoryKey)) continue;
-    emittedRepositoryKeys.add(repositoryKey);
-
-    const expanded = !collapsedRepositoryKeys.has(repositoryKey);
-    rows.push({ kind: "parent", space: group.parent, label: group.parent.label, branch: group.parent.git?.branch ?? null, repositoryKey, expanded, connector: null });
-    const children = group.members.filter((member) => member.id !== group.parent.id);
-    const visibleChildren = expanded ? children : children.filter((child) => child.id === selectedSpaceId);
-    visibleChildren.forEach((child, index) => rows.push({
-      kind: "child",
-      label: worktreeLabel(child),
-      space: child,
-      branch: child.git?.branch ?? null,
-      repositoryKey,
-      expanded,
-      connector: index === visibleChildren.length - 1 ? "└─" : "├─",
-    }));
-  }
-  return rows;
 }
 function byId<T extends { id: string }>(items: T[], id: string | null): T | undefined { return id ? items.find((item) => item.id === id) : undefined; }
 function tabsForSpace(tabs: Tab[], spaceId: string | null): Tab[] { return spaceId ? tabs.filter((tab) => tab.space_id === spaceId) : []; }
@@ -285,52 +164,6 @@ export function contextMenuPosition(
   };
 }
 
-export function nextModalFocusIndex(current: number, count: number, shiftKey: boolean): number {
-  if (count <= 0) return -1;
-  if (current < 0) return shiftKey ? count - 1 : 0;
-  return (current + (shiftKey ? count - 1 : 1)) % count;
-}
-
-function useModalFocus<T extends HTMLElement>(onDismiss: () => void): RefObject<T | null> {
-  const ref = useRef<T | null>(null);
-  const opener = useRef<HTMLElement | null>(null);
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
-  useEffect(() => {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = ref.current?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])");
-    focusable?.focus();
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        dismissRef.current();
-      }
-    };
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("keydown", escape);
-      opener.current?.focus();
-    };
-  }, []);
-  return ref;
-}
-
-function trapModalTab(event: ReactKeyboardEvent<HTMLElement>, root: HTMLElement | null): void {
-  if (event.key !== "Tab") return;
-  const controls = [...(root?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])") ?? [])];
-  if (controls.length === 0) return;
-  event.preventDefault();
-  const next = nextModalFocusIndex(controls.indexOf(document.activeElement as HTMLElement), controls.length, event.shiftKey);
-  controls[next]?.focus();
-}
-function InlineRename({ label, ariaLabel, onCommit, onCancel }: { label: string; ariaLabel: string; onCommit: (label: string) => boolean; onCancel: () => void }) {
-  const [value, setValue] = useState(label);
-  return <input className="inline-rename" aria-label={ariaLabel} autoFocus value={value} onChange={(event) => setValue(event.target.value)} onBlur={onCancel} onKeyDown={(event) => {
-    if (event.key === "Escape") { event.preventDefault(); onCancel(); }
-    if (event.key === "Enter") { event.preventDefault(); const next = value.trim(); if (!next) onCancel(); else onCommit(next); }
-  }} />;
-}
-
 function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; children: ReactNode; onDismiss: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -372,103 +205,19 @@ function ContextMenu({ menu, children, onDismiss }: { menu: ContextMenuState; ch
   }}>{children}</div>;
 }
 
-function Spaces({ spaces, gitStatus, selectedSpaceId, editingId, busy, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate }: {
-  spaces: Space[];
-  gitStatus: ReadonlyMap<string, SpaceGitStatus>;
-  selectedSpaceId: string | null;
-  editingId: string | null;
-  busy: boolean;
-  onEdit: (id: string | null) => void;
-  onSelect: (space: Space) => void;
-  onContext: (event: MouseEvent, target: ContextTarget) => void;
-  onSetup: () => void;
-  setupEnabled: boolean;
-  mutate: Mutate;
-}) {
-  const [collapsedRepositoryKeys, setCollapsedRepositoryKeys] = useState<Set<string>>(() => new Set());
-  const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
-  const [dropMark, setDropMark] = useState<DropMark>(null);
-  const [dragMessage, setDragMessage] = useState<string | null>(null);
-  const rows = projectSpaceTree(spaces, collapsedRepositoryKeys, selectedSpaceId);
-  const toggleRepository = (repositoryKey: string) => {
-    setCollapsedRepositoryKeys((current) => {
-      const next = new Set(current);
-      if (next.has(repositoryKey)) next.delete(repositoryKey);
-      else next.add(repositoryKey);
-      return next;
-    });
-  };
-  return <section className="sidebar-section spaces-section" aria-labelledby="spaces-heading">
-    <div className="sidebar-section-heading"><h2 id="spaces-heading">Spaces</h2><span className="section-count">{spaces.length}</span><button type="button" className="space-setup" aria-label="Set up a task Space" title="Set up a task Space" disabled={busy || !setupEnabled} onClick={onSetup}><UiIcon name="plus" /></button></div>
-    {dragMessage ? <p className="resource-inline-status" role="status">{dragMessage}</p> : null}
-    <div className="space-list">{spaces.length === 0 ? <p className="empty-row">No spaces</p> : rows.map((row, index) => {
-      const space = row.space;
-      const status = spaceStatus(spaceRowStatus(row, spaces));
-      const displayLabel = row.label;
-      const git = gitStatus.get(space.id);
-      const branch = row.branch ?? git?.branch ?? null;
-      const position = aheadBehindLabel(git);
-      // Herdr shows the branch under every Space's name except a linked worktree's, which is named for its branch.
-      const showBranch = Boolean(branch && !space.git?.is_linked_worktree && row.kind !== "child");
-      const branchTitle = branch ? (git?.upstream ? `${branch} · ${git.ahead ?? 0} ahead, ${git.behind ?? 0} behind ${git.upstream}` : branch) : null;
-      const side = dropMark?.targetId === space.id ? dropMark.side : null;
-      return <div className={`resource-row space-tree-row space-tree-${row.kind}${showBranch ? " has-branch" : ""} state-${status.className}${space.id === selectedSpaceId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={space.id} draggable={!busy && editingId !== space.id}
-        onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }}
-        onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
-        onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
-        onDragOver={(event) => { if (!busy) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (dragIntent && dragIntent.sourceId !== space.id) setDropMark({ targetId: space.id, side: event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2 ? "after" : "before" }); } }}
-        onDrop={(event) => {
-          if (busy) return;
-          event.preventDefault();
-          const fallback = event.dataTransfer.getData("text/plain");
-          const id = event.dataTransfer.getData("application/x-cockpit-space") || (fallback.startsWith("space:") ? fallback.slice(6) : "");
-          const afterTarget = event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2;
-          const intent = dragIntent?.sourceId === id ? dragIntent : { kind: "space" as const, sourceId: id, order: spaces.map((candidate) => candidate.id) };
-          const unchanged = intent.order.length === spaces.length && intent.order.every((candidate, position) => candidate === spaces[position]?.id);
-          const beforeSpaceId = unchanged ? spaceDropBeforeId(spaces, id, space.id, afterTarget) : undefined;
-          setDropMark(null);
-          if (!unchanged) setDragMessage("Space order changed while dragging. Start again.");
-          else if (beforeSpaceId !== undefined) mutate(`space:${id}`, { type: "space_move_block", space_ids: [id], before_space_id: beforeSpaceId });
-        }}
-        onPointerLeave={() => { if (dropMark?.targetId === space.id) setDropMark(null); }}
-        onPointerMove={(event) => { if (dragIntent && dragIntent.sourceId !== space.id) setDropMark({ targetId: space.id, side: event.clientY >= event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2 ? "after" : "before" }); }}
-        onContextMenu={(event) => onContext(event, { kind: "space", id: space.id })}>
-        {row.kind === "child" ? <span className={`space-connector${rows[index - 1]?.kind === "parent" ? " is-first" : ""}${row.connector === "└─" ? " is-last" : ""}`} aria-hidden="true" /> : null}
-        {editingId === space.id
-          ? <InlineRename label={space.label} ariaLabel={`Rename Space ${space.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`space:${space.id}`, { type: "space_rename", space_id: space.id, label }); if (accepted) onEdit(null); return accepted; }} />
-          : <button type="button" disabled={busy} draggable={!busy} className="resource-select" title={[displayLabel, branchTitle].filter(Boolean).join(" · ")} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-space", space.id); event.dataTransfer.setData("text/plain", `space:${space.id}`); setDragIntent({ kind: "space", sourceId: space.id, order: spaces.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(space)} onDoubleClick={() => onEdit(space.id)}>
-            <span className="resource-icon" title={status.className} aria-hidden="true"><span className="space-state">{status.glyph}</span></span>
-            <span className="space-details"><span className="resource-label">{displayLabel}</span>{showBranch ? <span className="space-branch"><span className="space-branch-name">{branch}</span>{position ? <span className="space-ahead-behind" aria-label={`${git?.ahead ?? 0} ahead, ${git?.behind ?? 0} behind ${git?.upstream ?? "upstream"}`}>{position}</span> : null}</span> : null}</span>
-          </button>}
-        {row.kind === "parent" && row.repositoryKey
-          ? <button type="button" className="space-chevron" disabled={busy} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}`} aria-expanded={row.expanded} onClick={() => toggleRepository(row.repositoryKey!)}><UiIcon name={row.expanded ? "down" : "right"} /></button>
-          : null}
-      </div>;
-    })}</div>
-  </section>;
-}
-function Agents({ agents, spaces, tabs, selection, onSelect }: { agents: Agent[]; spaces: Space[]; tabs: Tab[]; selection: Selection; onSelect: (agent: Agent) => void }) {
-  const orderedAgents = orderAgentsByHerdrPriority(agents);
-  return <section className="sidebar-section agents-section" aria-labelledby="agents-heading"><div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{orderedAgents.length}</span></div><div className="agent-list">{orderedAgents.length === 0 ? <p className="empty-row">Inbox empty</p> : orderedAgents.map((agent) => {
-    const spaceLabel = spaces.find((space) => space.id === agent.space_id)?.label;
-    const tabLabel = tabs.find((tab) => tab.id === agent.tab_id)?.label;
-    const location = [spaceLabel, tabLabel].filter(Boolean).join(" · ");
-    const status = agent.status || "unknown";
-    return <button type="button" className={`agent-row${agent.pane_id === selection.paneId ? " is-selected" : ""} state-${stateClass(status)}`} key={`${agent.pane_id}:${agent.name}`} onClick={() => onSelect(agent)} title={[location, agent.name, status].filter(Boolean).join(" · ")} aria-label={[location, agent.name, status].filter(Boolean).join(", ")}><span className="agent-state" aria-hidden="true">{stateGlyph(status)}</span><span className="agent-details">{location ? <span className="agent-location">{spaceLabel ? <span className="agent-space">{spaceLabel}</span> : null}{spaceLabel && tabLabel ? <span className="agent-tab"> · {tabLabel}</span> : tabLabel ? <span className="agent-tab">{tabLabel}</span> : null}</span> : null}<span className="agent-name">{agent.name}</span></span></button>;
-  })}</div></section>;
-}
-
-function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, libraryOpen, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
   busy: boolean;
   browserOpen: boolean;
+  libraryOpen: boolean;
   onEdit: (id: string | null) => void;
   onSelect: (tab: Tab) => void;
   onContext: (event: MouseEvent, target: ContextTarget) => void;
   onCreate: () => void;
   onBrowserToggle: () => void;
+  onLibraryToggle: () => void;
   onCommands: () => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -477,7 +226,7 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, onEdit, o
   const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
   const [dropMark, setDropMark] = useState<DropMark>(null);
   const [dragMessage, setDragMessage] = useState<string | null>(null);
-  return <nav className="tab-toolbar" aria-label="Tabs"><button type="button" className="tab-sidebar-toggle" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="cockpit-sidebar" onClick={onToggleSidebar}><UiIcon name="sidebar" /></button><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
+  return <nav className="tab-toolbar" aria-label="Tabs"><button type="button" className="tab-icon-button" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} title={withShortcut(sidebarOpen ? "Hide sidebar" : "Show sidebar", "toggle-sidebar")} aria-expanded={sidebarOpen} aria-controls="cockpit-sidebar" onClick={onToggleSidebar}><UiIcon name={sidebarOpen ? "sidebar-open" : "sidebar"} /></button><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
     const displayedNumber = index + 1;
     const redundantLabel = tabLabelIsRedundant(tab.label, displayedNumber);
     const accessibleLabel = redundantLabel ? `Tab ${displayedNumber}` : `Tab ${displayedNumber}: ${tab.label}`;
@@ -504,10 +253,10 @@ function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, onEdit, o
       onContextMenu={(event) => onContext(event, { kind: "tab", id: tab.id })}>
       {editingId === tab.id
         ? <InlineRename label={tab.label} ariaLabel={`Rename tab ${tab.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`tab:${tab.id}`, { type: "tab_rename", tab_id: tab.id, label }); if (accepted) onEdit(null); return accepted; }} />
-        : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
+        : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : tab.label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : tab.label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="tab-number">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{tab.label}</span>}</button>}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title="New tab (Ctrl+B c)" onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><button type="button" className="tab-sidebar-toggle" disabled={busy} aria-label={browserOpen ? "Close browser" : "Open browser"} title={browserOpen ? "Close browser" : "Open browser"} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-strip-action" onClick={onCommands}>Commands</button></div>
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" disabled={busy} aria-label="Browser" aria-pressed={browserOpen} title={withShortcut(browserOpen ? "Close browser" : "Open browser", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
   </nav>;
 }
 
@@ -605,7 +354,7 @@ function PaneView({ pane, label, solo = false, selected, paintedSelected, retain
         <UiIcon name={graphical ? "file" : "terminal"} /><span className="pane-title">{graphical && renderer ? viewerTitle(renderer).title : title}</span>{graphical && renderer && viewerTitle(renderer).subtitle ? <span className="pane-subtitle" title={viewerTitle(renderer).path}>{viewerTitle(renderer).subtitle}</span> : null}
       </button>
       {!solo || graphical ? focusStatus : null}
-      <button type="button" className="pane-header-expand" aria-label="Expand or restore pane" title="Expand / restore pane" onClick={() => mutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" })}><UiIcon name="expand" /></button>
+      <button type="button" className="pane-header-expand" aria-label="Expand or restore pane" title={withShortcut("Expand / restore pane", "zoom-pane")} onClick={() => mutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" })}><UiIcon name="expand" /></button>
     </header>
     {solo && !graphical ? <div className="pane-focus-overlay">{focusStatus}</div> : null}
     {graphical && renderer ? <div ref={graphicalRef} className="graphical-pane"
@@ -671,31 +420,16 @@ const rendererActionDefinitions: RendererActionDefinition[] = [
   { id: "context-down", label: "Open Context below", direction: "down", kind: "context" },
 ];
 
-const prefixCommandActions: Array<{ command: PrefixCommand; label: string; shortcut: string; group: CommandAction["group"] }> = [
-  { command: "new-space", label: "New Space", shortcut: "Ctrl+B Shift+N", group: "Space" },
-  { command: "rename-space", label: "Rename Space", shortcut: "Ctrl+B Shift+W", group: "Space" },
-  { command: "close-space", label: "Close Space", shortcut: "Ctrl+B Shift+D", group: "Space" },
-  { command: "new-tab", label: "New tab", shortcut: "Ctrl+B c", group: "Tab" },
-  { command: "rename-tab", label: "Rename tab", shortcut: "Ctrl+B Shift+T", group: "Tab" },
-  { command: "previous-tab", label: "Previous tab", shortcut: "Ctrl+B p", group: "Tab" },
-  { command: "next-tab", label: "Next tab", shortcut: "Ctrl+B n", group: "Tab" },
-  { command: "close-tab", label: "Close tab", shortcut: "Ctrl+B Shift+X", group: "Tab" },
-  { command: "rename-pane", label: "Rename pane", shortcut: "Ctrl+B Shift+P", group: "Pane" },
-  { command: "split-right", label: "Split pane right", shortcut: "Ctrl+B v", group: "Pane" },
-  { command: "split-down", label: "Split pane below", shortcut: "Ctrl+B -", group: "Pane" },
-  { command: "zoom-pane", label: "Toggle pane zoom", shortcut: "Ctrl+B z", group: "Pane" },
-  { command: "close-pane", label: "Close pane", shortcut: "Ctrl+B x", group: "Pane" },
-  { command: "previous-pane", label: "Previous pane", shortcut: "Ctrl+B Shift+O", group: "Navigate" },
-  { command: "next-pane", label: "Next pane", shortcut: "Ctrl+B o", group: "Navigate" },
-  { command: "focus-left", label: "Focus pane left", shortcut: "Ctrl+B h", group: "Navigate" },
-  { command: "focus-down", label: "Focus pane below", shortcut: "Ctrl+B j", group: "Navigate" },
-  { command: "focus-up", label: "Focus pane above", shortcut: "Ctrl+B k", group: "Navigate" },
-  { command: "focus-right", label: "Focus pane right", shortcut: "Ctrl+B l", group: "Navigate" },
-  { command: "open-file-picker", label: "Open file picker", shortcut: "Ctrl+B f / Ctrl+P", group: "Navigate" },
-  { command: "focus-file-tree", label: "Focus file tree", shortcut: "Ctrl+B [ / Alt+1", group: "Navigate" },
-  { command: "focus-file-content", label: "Focus file content", shortcut: "Ctrl+B ] / Alt+2", group: "Navigate" },
-  { command: "resize", label: "Focus a resize border", shortcut: "Ctrl+B r", group: "Navigate" },
-];
+/** Prefix commands that only move focus or open a surface, so they stay available while a Herdr mutation is pending. */
+const COMMANDS_ALLOWED_WHILE_BUSY: readonly PrefixCommand[] = ["previous-tab", "next-tab", "previous-pane", "next-pane", "focus-left", "focus-right", "focus-up", "focus-down", "resize", "toggle-sidebar", "focus-spaces", "focus-agents", "switch-session", "toggle-library", "open-file-picker"];
+
+/** A shortcut as `kbd` chips: `Ctrl+B` `i` for a sequence, one chip for a chord, alternatives separated by "or". */
+function ShortcutKeys({ text }: { text: string }) {
+  return <span className="command-keys">{text.split(SHORTCUT_SEPARATOR).map((form, index) => <span className="command-key-form" key={form}>
+    {index > 0 ? <span className="command-key-or">or</span> : null}
+    {(form.startsWith("Ctrl+B ") ? ["Ctrl+B", form.slice("Ctrl+B ".length)] : [form]).map((chip) => <kbd key={chip}>{chip}</kbd>)}
+  </span>)}</span>;
+}
 
 function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: { actions: CommandAction[]; statusContent?: ReactNode; onSwitchSession: () => void; onDismiss: () => void }) {
   const ref = useModalFocus<HTMLElement>(onDismiss);
@@ -705,7 +439,7 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
   const [active, setActive] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const normalized = query.trim().toLocaleLowerCase();
-  const primaryIds = ["prefix:zoom-pane", "renderer:review-right", "space:setup", "session:switch"];
+  const primaryIds = ["prefix:zoom-pane", "prefix:toggle-library", "browser:open", "prefix:new-tab", "prefix:split-right", "prefix:switch-session", "renderer:review-right", "prefix:setup-space"];
   const ranked = normalized
     ? rankFuzzyMatches(query, actions, (action) => `${action.label} ${action.shortcut ?? ""} ${action.group}`)
     : actions.map((action, index) => ({ ...action, score: index, matchedIndices: [] as number[] }));
@@ -723,7 +457,8 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (action && !action.disabled) action.run();
   };
   return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={ref} className="command-overlay" role="dialog" aria-modal="true" aria-labelledby="commands-title" onKeyDown={(event) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => filtered.length === 0 ? 0 : (current + (event.key === "ArrowDown" ? 1 : filtered.length - 1)) % filtered.length); return; }
+    const listStep = event.key === "ArrowDown" || (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "n") ? 1 : event.key === "ArrowUp" || (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "p") ? -1 : 0;
+    if (listStep !== 0) { event.preventDefault(); setActive((current) => filtered.length === 0 ? 0 : (current + (listStep === 1 ? 1 : filtered.length - 1)) % filtered.length); return; }
     if (event.key === "Enter" && document.activeElement instanceof HTMLInputElement) { event.preventDefault(); runActive(); return; }
     trapModalTab(event, ref.current);
   }}><header><h2 id="commands-title">Commands</h2><button type="button" onClick={onDismiss} aria-label="Close commands"><UiIcon name="close" /></button></header><div className="command-search-box"><UiIcon name="search" /><input ref={searchRef} className="command-search" aria-label="Find a command" placeholder="Find a command…" autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>{statusContent ? <div className="command-status">{statusContent}</div> : null}<div className="command-list" role="listbox" aria-label="Available commands">{filtered.length === 0 ? <p className="command-empty">No matching commands.</p> : groupOrder.map((group) => {
@@ -731,9 +466,9 @@ function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: 
     if (groupActions.length === 0) return null;
     return <section className="command-group" key={group}><h3>{group}</h3>{groupActions.map((action) => {
       const index = filtered.indexOf(action);
-      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <kbd>{action.shortcut}</kbd> : null}</button>;
+      return <button ref={index === active ? activeRowRef : null} type="button" role="option" aria-selected={index === active} className={`command-row${index === active ? " is-active" : ""}`} key={action.id} disabled={action.disabled} onMouseMove={() => { if (index !== active) setActive(index); }} onClick={() => action.run()}><UiIcon name={action.group === "Pane" ? "terminal" : action.group === "Navigate" ? "grid" : "right"} /><span className="command-row-label"><span>{Array.from(action.label, (character, characterIndex) => action.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</span>{action.disabled && action.reason ? <small title={action.reasonDetail ?? action.reason}>{action.reason}</small> : null}</span>{action.shortcut ? <ShortcutKeys text={action.shortcut} /> : null}</button>;
     })}</section>;
-  })}</div><footer className="command-footer"><span>↑↓ navigate · Enter choose · Esc close</span><button type="button" onClick={() => { setShowAll((value) => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
+  })}</div><footer className="command-footer"><span>↑↓ or Ctrl+N/P navigate · Enter choose · Esc close · type a name or a key</span><button type="button" onClick={() => { setShowAll((value) => !value); setActive(0); }}>{showAll ? "Quick commands" : "All commands"}</button></footer></section></div>;
 }
 
 export function moveDestinationLabel(tab: Tab, spaces: Space[]): string {
@@ -756,7 +491,22 @@ function PaneDialogOverlay({ dialog, panes, tabs, spaces, busy, onDismiss, mutat
     if (dialog.kind === "move" && value.startsWith("tab:")) accepted = mutate(key, { type: "pane_move", pane_id: pane.id, destination: { type: "existing_tab", tab_id: value.slice(4), direction: "right", target_pane_id: null, ratio: null } }, true);
     if (accepted) onDismiss();
   };
-  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay" role="dialog" aria-modal="true" aria-labelledby="chooser-title" onSubmit={(event) => { event.preventDefault(); submit(); }} onKeyDown={(event) => trapModalTab(event, ref.current)}>
+  const onChooserKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
+    if (event.target instanceof HTMLSelectElement && event.ctrlKey && !event.altKey && !event.metaKey
+      && (event.key.toLowerCase() === "n" || event.key.toLowerCase() === "p")) {
+      const choices = [...event.target.options].filter((option) => option.value !== "");
+      if (choices.length > 0) {
+        event.preventDefault();
+        const current = choices.findIndex((option) => option.value === value);
+        const direction = event.key.toLowerCase() === "n" ? 1 : -1;
+        const next = current < 0 ? (direction > 0 ? 0 : choices.length - 1) : (current + direction + choices.length) % choices.length;
+        setValue(choices[next].value);
+      }
+      return;
+    }
+    trapModalTab(event, ref.current);
+  };
+  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay" role="dialog" aria-modal="true" aria-labelledby="chooser-title" onSubmit={(event) => { event.preventDefault(); submit(); }} onKeyDown={onChooserKeyDown}>
     <h2 id="chooser-title">{dialog.kind} pane</h2>
     {dialog.kind === "rename" ? <input aria-label="Pane name" value={value} onChange={(event) => setValue(event.target.value)} /> : <select aria-label={dialog.kind === "swap" ? "Swap target" : "Move destination"} value={value} onChange={(event) => setValue(event.target.value)}><option value="">Choose...</option>{dialog.kind === "swap" ? panes.filter((candidate) => candidate.id !== pane.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title ?? `Pane ${panes.findIndex((item) => item.id === candidate.id) + 1}`}</option>) : <><option value="new-tab">New tab in this space</option><option value="new-space">New space</option>{tabs.filter((tab) => tab.id !== pane.tab_id).map((tab) => <option key={tab.id} value={`tab:${tab.id}`}>{moveDestinationLabel(tab, spaces)}</option>)}</>}</select>}
     <footer><button type="button" onClick={onDismiss}>Cancel</button><button type="submit" disabled={busy || (dialog.kind !== "rename" && !value)}>{dialog.kind}</button></footer>
@@ -784,7 +534,10 @@ function SessionDialogOverlay({ sessions, currentSessionId, onRefresh, onDismiss
     const next = current < 0 ? (direction === 1 ? 0 : filteredSessions.length - 1) : (current + direction + filteredSessions.length) % filteredSessions.length;
     setSessionId(filteredSessions[next].id);
   };
-  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay session-chooser" role="dialog" aria-modal="true" aria-labelledby="session-chooser-title" onSubmit={(event) => { event.preventDefault(); if (sessionId && sessionId !== currentSessionId) onSession(sessionId); onDismiss(); }} onKeyDown={(event) => trapModalTab(event, ref.current)}>
+  return <div className="overlay-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><form ref={ref} className="chooser-overlay session-chooser" role="dialog" aria-modal="true" aria-labelledby="session-chooser-title" onSubmit={(event) => { event.preventDefault(); if (sessionId && sessionId !== currentSessionId) onSession(sessionId); onDismiss(); }} onKeyDown={(event) => {
+    if (event.ctrlKey && !event.altKey && !event.metaKey && (event.key.toLowerCase() === "n" || event.key.toLowerCase() === "p")) { event.preventDefault(); selectRelativeSession(event.key.toLowerCase() === "n" ? 1 : -1); return; }
+    trapModalTab(event, ref.current);
+  }}>
     <h2 id="session-chooser-title">Switch session</h2>
     {sessions.length === 0 ? <div className="empty-choice" role="status">No sessions are available.</div> : <><input className="session-search" aria-label="Find a session" placeholder="Find a session…" autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); selectRelativeSession(event.key === "ArrowDown" ? 1 : -1); } }} /><div className="session-list" role="listbox" aria-label="Session">{filteredSessions.length === 0 ? <p className="empty-choice" role="status">No sessions match.</p> : filteredSessions.map((session) => <button ref={session.id === sessionId ? selectedSessionRef : null} key={session.id} type="button" role="option" aria-selected={session.id === sessionId} data-session-id={session.id} className={`session-choice${session.id === sessionId ? " is-selected" : ""}`} onClick={() => setSessionId(session.id)}><span>{session.label}</span><small>{session.running ? "running" : "stopped"}</small></button>)}</div></>}
     <footer>{sessions.length === 0 ? <button type="button" onClick={() => { void onRefresh().catch(() => undefined); }}>Refresh</button> : null}<button type="button" onClick={onDismiss}>Cancel</button><button type="submit" disabled={!sessionId || sessionId === currentSessionId}>Switch</button></footer>
@@ -846,7 +599,7 @@ function readBrowserSplitRatio(key: string): number {
 
 const SIDEBAR_MIN_WIDTH = 224;
 const SIDEBAR_MAX_WIDTH = 360;
-const SIDEBAR_DEFAULT_WIDTH = 224;
+const SIDEBAR_DEFAULT_WIDTH = 240;
 const SIDEBAR_WIDTH_KEY = "cockpit.sidebar.width";
 const SIDEBAR_COLLAPSED_KEY = "cockpit.sidebar.collapsed";
 
@@ -857,7 +610,8 @@ function isNarrowViewport(): boolean {
 function readSidebarWidth(): number {
   if (typeof window === "undefined") return SIDEBAR_DEFAULT_WIDTH;
   try {
-    const value = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    const stored = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    const value = stored === null ? NaN : Number(stored);
     return Number.isFinite(value) ? Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value)) : SIDEBAR_DEFAULT_WIDTH;
   } catch {
     return SIDEBAR_DEFAULT_WIDTH;
@@ -871,28 +625,6 @@ function readSidebarCollapsed(): boolean {
   } catch {
     return false;
   }
-}
-
-function SidebarHeader({ session, sync, narrow, onSession, onClose, closeRef }: {
-  session: SessionSummary | undefined;
-  sync: SessionState["sync"];
-  narrow: boolean;
-  onSession: () => void;
-  onClose: () => void;
-  closeRef?: RefObject<HTMLButtonElement | null>;
-}) {
-  const stateLabel = sync === "live" ? "live" : sync;
-  return <header className="sidebar-header">
-    <button type="button" className="session-selector" onClick={onSession} aria-label={`Switch session${session ? `, current ${session.label}` : ""}`} title={session?.label ?? "Switch session"}>
-      <span className={`connection-mark ${sync === "live" ? "" : "is-disconnected"}`} aria-hidden="true">●</span>
-      <span className="session-name">{session?.label ?? "No session"}</span>
-      <span className="session-state">{sync === "live" ? "Session" : stateLabel}</span>
-      <span className="session-chevron" aria-hidden="true"><UiIcon name="down" /></span>
-    </button>
-    <div className="sidebar-header-actions">
-      {narrow ? <button ref={closeRef} type="button" className="sidebar-close" onClick={onClose} aria-label="Close sidebar"><UiIcon name="close" /></button> : null}
-    </div>
-  </header>;
 }
 
 function Workbench({ client, state, sessions, selection, controlPaneId, terminalMouseInput, mutations, browserHandoff, onSession, onFocus, onPanePrepared, onRequestControl, onReconnect, onRetry, onRefreshSessions, onOpenSession, onMutate, onRetryMutation }: {
@@ -978,16 +710,47 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const libraryCommandToken = useRef(0);
   // Set when the Library closes; cleared by an explicit local pane, tab or Space action.
   const [attachFocusSuppressed, setAttachFocusSuppressed] = useState(false);
+  // The pane the Library was opened from, so closing it with the toggle key returns focus there (design R2).
+  const libraryOrigin = useRef<{ paneId: string; graphical: boolean } | null>(null);
+  const selectedPaneIdRef = useRef(selection.paneId);
+  selectedPaneIdRef.current = selection.paneId;
   const openLibrary = useCallback((command?: { kind: "refresh" } | { kind: "open"; itemId: string }) => {
+    const active = document.activeElement;
+    libraryOrigin.current = active instanceof HTMLElement && active.closest(".pane-view") && selectedPaneIdRef.current
+      ? { paneId: selectedPaneIdRef.current, graphical: Boolean(active.closest(".graphical-pane")) }
+      : null;
     setLibraryOpen(true);
     // A command belongs to this opening only; reopening must not replay it.
     setLibraryCommand(command ? { ...command, token: ++libraryCommandToken.current } : null);
   }, []);
   const closeLibrary = useCallback(() => {
+    libraryOrigin.current = null;
     setLibraryOpen(false);
     setAttachFocusSuppressed(true);
   }, []);
+  // Closing with the toggle key: the originating pane, if still selected, takes DOM focus back (a terminal once it attaches).
+  const closeLibraryToOrigin = useCallback(() => {
+    const origin = libraryOrigin.current;
+    libraryOrigin.current = null;
+    const returnToPane = origin !== null && origin.paneId === selectedPaneIdRef.current;
+    setLibraryOpen(false);
+    setAttachFocusSuppressed(!returnToPane);
+    if (returnToPane && origin.graphical) {
+      const focusDocument = (attempts: number) => {
+        const document_ = document.querySelector<HTMLElement>(".pane-view.is-selected .context-document, .pane-view.is-selected .review-diff");
+        if (document_) document_.focus({ preventScroll: true });
+        else if (attempts > 0) requestAnimationFrame(() => focusDocument(attempts - 1));
+      };
+      requestAnimationFrame(() => focusDocument(60));
+    }
+  }, []);
   const [prefixActive, setPrefixActive] = useState(false);
+  const [prefixHint, setPrefixHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (prefixHint === null) return;
+    const timer = window.setTimeout(() => setPrefixHint(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [prefixHint]);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
   const browserSizeKey = `${state.sessionId}:${selection.spaceId}`;
@@ -1448,45 +1211,83 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   }, [selection.spaceId, state.sessionId, state.sync]);
   const runCommand = useCallback((command: PrefixCommand) => {
     setBrowserInputActive(false);
+    setPrefixHint(null);
     const space = byId(spaces, selection.spaceId);
     const tab = byId(tabs, selection.tabId);
     const pane = byId(panes, selection.paneId);
+    const execute = () => {
+      if (command === "new-space") onMutate("space:new", { type: "space_create", label: null, cwd: null }, true);
+      if (command === "setup-space" && state.sync === "live") setSetupOpen(true);
+      if (command === "rename-space" && space) beginRename({ kind: "space", id: space.id });
+      if (command === "close-space") closeSpace(space);
+      if (command === "new-tab" && selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true);
+      if (command === "rename-tab" && tab) beginRename({ kind: "tab", id: tab.id });
+      if (command === "close-tab") closeTab(tab);
+      if (command === "rename-pane" && pane) beginRename({ kind: "pane", id: pane.id });
+      if (command === "split-right" && pane) onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true);
+      if (command === "split-down" && pane) onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true);
+      if (command === "close-pane") closePane(pane);
+      if (command === "zoom-pane" && pane) onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" });
+      if (command === "previous-tab" && tab) { const index = tabs.indexOf(tab); if (index > 0) focusTab(tabs[index - 1]); }
+      if (command === "next-tab" && tab) { const index = tabs.indexOf(tab); if (index >= 0 && index < tabs.length - 1) focusTab(tabs[index + 1]); }
+      if (command.startsWith("select-tab-")) { const target = tabs[Number(command.slice("select-tab-".length)) - 1]; if (target) focusTab(target); }
+      if (command === "previous-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index - 1 + panes.length) % panes.length]); }
+      if (command === "next-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index + 1) % panes.length]); }
+      if (["focus-left", "focus-right", "focus-up", "focus-down"].includes(command)) {
+        const direction = command.slice("focus-".length) as PaneFocusDirection;
+        const target = byId(panes, paneIdInDirection(layout, selection.paneId, direction));
+        if (target) focusPane(target);
+      }
+      if (["swap-left", "swap-right", "swap-up", "swap-down"].includes(command) && pane) {
+        const target = byId(panes, paneIdInDirection(layout, pane.id, command.slice("swap-".length) as PaneFocusDirection));
+        if (target) onMutate(`pane:${pane.id}`, { type: "pane_swap", source_pane_id: pane.id, target_pane_id: target.id });
+      }
+      if (command === "open-file-picker") dispatchFileNavigation("open-picker");
+      if (command === "resize" && !mutationBusy) document.querySelector<HTMLElement>(".resize-handle")?.focus();
+      if (command === "switch-session") openSessionChooser();
+      if (command === "toggle-library") { if (libraryOpen) closeLibraryToOrigin(); else openLibrary(); }
+      if (command === "toggle-browser" && selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open");
+      if (command === "toggle-sidebar") {
+        const visible = narrowViewport ? drawerOpen : !sidebarCollapsed;
+        if (narrowViewport) { if (drawerOpen) closeDrawer(); else openDrawer(); } else toggleSidebarCollapsed();
+        // A collapsed sidebar cannot keep focus; the selected tab is a safe target that sends nothing to Herdr.
+        if (visible && !narrowViewport && document.activeElement?.closest("#cockpit-sidebar")) {
+          window.setTimeout(() => document.querySelector<HTMLElement>('.tab-button[aria-selected="true"], .drawer-toggle')?.focus({ preventScroll: true }), 0);
+        }
+      }
+      if (command === "focus-spaces" || command === "focus-agents") {
+        const list = command === "focus-spaces" ? "spaces" : "agents";
+        const visible = narrowViewport ? drawerOpen : !sidebarCollapsed;
+        if (!visible) { if (narrowViewport) openDrawer(); else toggleSidebarCollapsed(); }
+        // The sidebar may still be mounting (and the drawer focuses its close button first): retry until a row holds focus.
+        const attempt = (remaining: number) => {
+          focusSidebarList(list);
+          const focused = document.activeElement;
+          if (remaining > 0 && !(focused?.closest("#cockpit-sidebar") && !focused.matches(".sidebar-close"))) window.setTimeout(() => attempt(remaining - 1), 30);
+        };
+        window.setTimeout(() => attempt(20), visible ? 0 : 60);
+      }
+    };
     if (command === "help") { setCommandsOpen(true); return; }
-    if (mutationBusy && !["previous-tab", "next-tab", "previous-pane", "next-pane", "focus-left", "focus-right", "focus-up", "focus-down", "resize"].includes(command)) return;
-    if (command === "new-space") onMutate("space:new", { type: "space_create", label: null, cwd: null }, true);
-    if (command === "rename-space" && space) beginRename({ kind: "space", id: space.id });
-    if (command === "close-space") closeSpace(space);
-    if (command === "new-tab" && selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true);
-    if (command === "rename-tab" && tab) beginRename({ kind: "tab", id: tab.id });
-    if (command === "close-tab") closeTab(tab);
-    if (command === "rename-pane" && pane) beginRename({ kind: "pane", id: pane.id });
-    if (command === "split-right" && pane) onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "right", ratio: null }, true);
-    if (command === "split-down" && pane) onMutate(`pane:${pane.id}`, { type: "pane_split", pane_id: pane.id, direction: "down", ratio: null }, true);
-    if (command === "close-pane") closePane(pane);
-    if (command === "zoom-pane" && pane) onMutate(`pane:${pane.id}`, { type: "pane_zoom", pane_id: pane.id, mode: "toggle" });
-    if (command === "previous-tab" && tab) { const index = tabs.indexOf(tab); if (index > 0) focusTab(tabs[index - 1]); }
-    if (command === "next-tab" && tab) { const index = tabs.indexOf(tab); if (index >= 0 && index < tabs.length - 1) focusTab(tabs[index + 1]); }
-    if (command.startsWith("select-tab-")) { const target = tabs[Number(command.slice("select-tab-".length)) - 1]; if (target) focusTab(target); }
-    if (command === "previous-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index - 1 + panes.length) % panes.length]); }
-    if (command === "next-pane" && pane) { const index = panes.indexOf(pane); focusPane(panes[(index + 1) % panes.length]); }
-    if (["focus-left", "focus-right", "focus-up", "focus-down"].includes(command)) {
-      const direction = command.slice("focus-".length) as PaneFocusDirection;
-      const target = byId(panes, paneIdInDirection(layout, selection.paneId, direction));
-      if (target) focusPane(target);
+    if (mutationBusy && !COMMANDS_ALLOWED_WHILE_BUSY.includes(command)) return;
+    if (shortcutEntry(command).paneScoped && libraryOpen) {
+      // The command acts on a pane the Library covers: show the pane first, then run, so a confirmation names a visible target.
+      libraryOrigin.current = null;
+      setAttachFocusSuppressed(false);
+      flushSync(() => setLibraryOpen(false));
+      requestAnimationFrame(() => window.setTimeout(execute, 0));
+      return;
     }
-    if (command === "open-file-picker") dispatchFileNavigation("open-picker");
-    if (command === "focus-file-tree") dispatchFileNavigation("focus-tree");
-    if (command === "focus-file-content") dispatchFileNavigation("focus-content");
-    if (command === "resize" && !mutationBusy) document.querySelector<HTMLElement>(".resize-handle")?.focus();
-  }, [spaces, tabs, panes, layout, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen]);
+    execute();
+  }, [spaces, tabs, panes, layout, snapshot, selection.spaceId, selection.tabId, selection.paneId, mutationBusy, modalOpen, libraryOpen, narrowViewport, drawerOpen, sidebarCollapsed, state.sync, browserAction, selectedBrowserPresentation?.associationOpen, closeLibraryToOrigin, openLibrary, openSessionChooser, closeDrawer, openDrawer, toggleSidebarCollapsed]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      routeWorkbenchKeydown(event, { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen });
+      routeWorkbenchKeydown(event, { modalOpen, prefixActive, runCommand, setPrefixActive, setCommandsOpen, onUnboundPrefixKey: setPrefixHint });
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
   }, [prefixActive, runCommand, modalOpen]);
-  const openContext = (event: MouseEvent, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
+  const openContext = (event: ContextAnchor, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
   const dismissMenu = useCallback(() => setMenu(null), []);
   const menuAction = (action: () => boolean | void) => { if (action() !== false) dismissMenu(); };
   const renderMenu = () => {
@@ -1539,21 +1340,24 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   };
   const selectedRenderer = selection.paneId ? renderers.panes[selection.paneId] : undefined;
   const selectedPane = byId(panes, selection.paneId);
-  const commandActions: CommandAction[] = [
-    { id: "space:setup", label: "Set up a Space", group: "Navigate", run: () => { setCommandsOpen(false); setSetupOpen(true); } },
-    ...prefixCommandActions.map(({ command, label, shortcut, group }) => ({
-      id: `prefix:${command}`, label, shortcut, group,
-      disabled: (command.includes("space") && !selectedSpace) || (command.includes("tab") && !selectedTab) || (command.includes("pane") && !selectedPane),
-      reason: command.includes("space") && !selectedSpace ? "Select a Space first" : command.includes("tab") && !selectedTab ? "Select a tab first" : command.includes("pane") && !selectedPane ? "Select a pane first" : undefined,
-      run: () => runCommand(command),
-    })),
-    { id: "session:switch", label: "Switch session…", group: "Navigate", run: () => { void onRefreshSessions().catch(() => undefined).finally(() => setSessionChooserOpen(true)); } },
+  const commandActionRows: CommandAction[] = [
+    ...SHORTCUTS.filter((entry) => entry.prefix && entry.palette !== false).map((entry): CommandAction => {
+      const command = entry.id as PrefixCommand;
+      const reason = entry.needs === "space" && !selectedSpace ? "Select a Space first"
+        : entry.needs === "tab" && !selectedTab ? "Select a tab first"
+        : entry.needs === "pane" && !selectedPane ? "Select a pane first"
+        : command === "setup-space" && state.sync !== "live" ? "Herdr is not live"
+        : undefined;
+      return {
+        id: `prefix:${command}`, label: command === "toggle-library" && libraryOpen ? "Close Library" : entry.label, shortcut: formatShortcut(command), group: entry.group,
+        disabled: reason !== undefined, reason, run: () => runCommand(command),
+      };
+    }),
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: () => setRecoveryOpen(true) },
     { id: "browser:open", label: "Open browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "open"); } },
     { id: "browser:show", label: "Show browser view", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || Boolean(selectedBrowserPresentation.visible) || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "show"); } },
     { id: "browser:hide", label: "Hide browser view", group: "Browser", disabled: !browserVisible, reason: !browserVisible ? "Open the browser view first" : undefined, run: hideBrowser },
     { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
-    { id: "library:open", label: "Open Library", group: "Library", run: () => { if (libraryOpen) closeLibrary(); else openLibrary(); } },
     { id: "library:add", label: "Add to Library…", group: "Library", run: () => setLibraryAddOpen(true) },
     { id: "library:refresh", label: "Refresh Library", group: "Library", run: () => openLibrary({ kind: "refresh" }) },
     ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
@@ -1564,6 +1368,8 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
       return { id: `renderer:${id}`, label, group: "Pane" as const, disabled: mutationBusy || !capability, reason, reasonDetail: detail, run: () => { if (selection.paneId) void renderers.open(selection.paneId, direction, kind === "context" ? undefined : kind); } };
     }),
   ];
+  const browserToggleShortcut = formatShortcut("toggle-browser");
+  const commandActions: CommandAction[] = commandActionRows.map((action) => action.id === "browser:open" || action.id === "browser:close" ? { ...action, shortcut: browserToggleShortcut } : action);
   const commandStatus = <>{browserBusy ? <p role="status">Working on the Space browser…</p> : null}{browserError ? <p role="alert">{browserError.message}</p> : null}</>;
   const renderPaneLayer = (projection: PaneCanvasProjection, incoming: boolean, painted: boolean) => projection.visiblePaneIds.map((paneId, index) => {
     const pane = projection.panes.find((candidate) => candidate.id === paneId);
@@ -1610,19 +1416,28 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const paneInstances = libraryOpen ? [] : projections.flatMap((projection) => renderPaneLayer(projection, projection.key === paneProjection.key, projection.key === paintedProjectionKey));
   // The inline browser stays associated but hidden while the Library covers the work area.
   const browserPresented = browserVisible && !libraryOpen;
+  // Selection chrome follows Herdr's acknowledgement: while a focus request is in flight the sidebar keeps the confirmed row and marks the target as pending.
+  const pendingSpaceId = state.focusPending?.kind === "space" ? state.focusPending.target_id : null;
+  const pendingPaneId = state.focusPending?.kind === "pane" || state.focusPending?.kind === "agent" ? state.focusPending.target_id : null;
+  const sidebarSelectedSpaceId = state.focusPending ? snapshot?.focused_space_id ?? null : selection.spaceId;
+  const sidebarSelectedPaneId = state.focusPending ? snapshot?.focused_pane_id ?? null : selection.paneId;
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
-      <SidebarHeader session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} />
-      <Spaces spaces={spaces} gitStatus={spaceGit} selectedSpaceId={selection.spaceId} editingId={editing?.kind === "space" ? editing.id : null} busy={mutationBusy} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }} onSelect={focusSpace} onContext={openContext} onSetup={() => setSetupOpen(true)} setupEnabled={state.sync === "live" && !modalOpen} mutate={onMutate} />
-      <Agents agents={snapshot?.agents ?? []} spaces={spaces} tabs={allTabs} selection={selection} onSelect={focusAgent} />
+      <Sidebar session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} hasSession={state.sessionId !== null} hasSnapshot={snapshot !== null}
+        spaces={{ spaces, gitStatus: spaceGit, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
+        agents={{ agents: snapshot?.agents ?? [], spaces, tabs: allTabs, selectedPaneId: sidebarSelectedPaneId, pendingPaneId, onSelect: focusAgent }} />
     </aside>
     {!narrowViewport && !sidebarCollapsed ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}
       onKeyDown={(event) => { if (sidebarCollapsed) return; if (event.key === "Home") { event.preventDefault(); updateSidebarWidth(SIDEBAR_DEFAULT_WIDTH); } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateSidebarWidth(sidebarWidth + (event.key === "ArrowLeft" ? -8 : 8)); } }}
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={() => { if (selection.spaceId) void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open"); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
+      {selection.spaceId ? <TabStrip sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={Boolean(selectedBrowserPresentation?.associationOpen)} libraryOpen={libraryOpen} onEdit={(id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={() => {
+        if (!selection.spaceId) return;
+        if (libraryOpen) { closeLibrary(); void browserAction(selection.spaceId, "open"); return; }
+        void browserAction(selection.spaceId, selectedBrowserPresentation?.associationOpen ? "close" : "open");
+      }} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : null}
       <div className="workarea-content">
         {libraryOpen ? <LibraryView client={client} onClose={closeLibrary} command={libraryCommand} space={librarySpace} /> : <div className="pane-canvas" style={{ visibility: !browserVisible || paneCanvasVisible ? "visible" : "hidden", display: browserVisible && browserOnly ? "none" : undefined }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}>
           {paneProjection.panes.length === 0 ? <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div> : paneInstances}
@@ -1644,7 +1459,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     {state.sessionId ? <SetupDialog client={client} sessionId={state.sessionId} open={setupOpen} selectedParent={setupParent} parentSpaceId={selection.spaceId} onClose={() => setSetupOpen(false)} onCompleted={onReconnect} /> : null}
     {state.sessionId ? <TeardownRecoveryPanel client={client} sessionId={state.sessionId} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} /> : null}
     {state.sessionId && teardownSpaceId ? <TeardownDialog client={client} sessionId={state.sessionId} workspaceId={teardownSpaceId} open onClose={() => setTeardownSpaceId(null)} onCompleted={onReconnect} /> : null}
-    {prefixActive ? <div className="prefix-indicator" role="status">Ctrl+B</div> : null}
+    {prefixActive ? <div className="prefix-indicator" role="status"><span>Ctrl+B · {armedPrefixHint()}</span></div> : prefixHint ? <div className="prefix-indicator is-notice" role="status">{prefixHint}</div> : null}
     <RecoveryPanel state={state} mutations={mutations} onReconnect={onReconnect} onRetryMutation={onRetryMutation} />
   </div>;
 }
