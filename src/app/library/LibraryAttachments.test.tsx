@@ -30,8 +30,10 @@ it("downloads only chosen rows, keeps over-limit rows inert, and removes only do
   const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
   try {
     await act(async () => render(page));
-    // Bulk actions live in the panel header: folded, the summary line offers only the toggle.
-    expect(host.querySelector(".library-attachments-line")?.querySelectorAll("button")).toHaveLength(1);
+    // Bulk actions live in the panel header: folded, the state line offers only the toggle.
+    expect(host.querySelectorAll(".library-attachments-toggle")).toHaveLength(1);
+    expect(button("Download all")).toBeUndefined();
+    expect(button("Remove downloaded")).toBeUndefined();
     await act(async () => host.querySelector<HTMLButtonElement>(".library-attachments-toggle")!.click());
     expect(attachments.start).not.toHaveBeenCalled();
     expect(host.querySelector(".library-attachments-head")?.contains(button("Download all"))).toBe(true);
@@ -99,6 +101,29 @@ it.each(["loading", "needs_token", "stored"] as const)("gates a Jira issue's att
     } else {
       expect(button("Provider token…")).toBeUndefined();
     }
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it.each([
+  { access: "needs_token" as const, executable: "jira", provider: "jira", cue: true, menu: true },
+  { access: "stored" as const, executable: "jira", provider: "jira", cue: false, menu: true },
+  { access: null, executable: "confluence", provider: "confluence", cue: false, menu: true },
+  { access: null, executable: "glab", provider: "gitlab", cue: false, menu: false },
+])("offers Provider tokens… for $executable (token $access): cue $cue, menu entry $menu", async ({ access, executable, provider, cue, menu }) => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const credentials = { statuses: null, ensure: vi.fn(), open: vi.fn(), attachmentAccess: vi.fn(() => access) };
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false, attachments: { start: vi.fn(), open: vi.fn(), busy: false, active: null }, credentials };
+  const item: LibraryItemSummary = { ...page, item_id: `${provider}:1`, provider_id: provider, provider_instance: "https://x.test", resource_type: "issue", canonical_id: "OPS-1", container: null, title: "Crash", attachments: [{ ...page.attachments[0]! }] };
+  try {
+    await act(async () => root.render(<LibraryItemHeader item={item} providers={[{ id: provider, base_url: "https://x.test", executable }]} narrow={false} rootCrumb pending={false} actions={actions} onReplace={vi.fn()} details={null} />));
+    const cueButton = host.querySelector<HTMLButtonElement>(".library-token-cue button");
+    expect(cueButton !== null).toBe(cue);
+    if (cueButton) { await act(async () => cueButton.click()); expect(credentials.open).toHaveBeenCalledWith(provider); }
+    await act(async () => host.querySelector<HTMLButtonElement>("button.library-more")!.click());
+    const entry = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((node) => node.textContent === "Provider tokens…");
+    expect(entry !== undefined).toBe(menu);
+    if (entry) { credentials.open.mockClear(); await act(async () => entry.click()); expect(credentials.open).toHaveBeenCalledWith(provider); }
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 

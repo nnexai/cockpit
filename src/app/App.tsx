@@ -714,7 +714,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
   const libraryOrigin = useRef<{ paneId: string; graphical: boolean } | null>(null);
   const selectedPaneIdRef = useRef(selection.paneId);
   selectedPaneIdRef.current = selection.paneId;
-  const openLibrary = useCallback((command?: { kind: "refresh" } | { kind: "open"; itemId: string }) => {
+  const openLibrary = useCallback((command?: { kind: "refresh" } | { kind: "tokens" } | { kind: "open"; itemId: string }) => {
     const active = document.activeElement;
     libraryOrigin.current = active instanceof HTMLElement && active.closest(".pane-view") && selectedPaneIdRef.current
       ? { paneId: selectedPaneIdRef.current, graphical: Boolean(active.closest(".graphical-pane")) }
@@ -1360,6 +1360,7 @@ function Workbench({ client, state, sessions, selection, controlPaneId, terminal
     { id: "browser:close", label: "Close browser for Space", group: "Browser", disabled: !selection.spaceId || browserBusy || !selectedBrowserPresentation?.associationOpen || state.sync !== "live", reason: !selection.spaceId ? "Select a Space first" : !selectedBrowserPresentation?.associationOpen ? "No browser association is open" : state.sync !== "live" ? "Herdr is not live" : undefined, run: () => { if (selection.spaceId) void browserAction(selection.spaceId, "close"); } },
     { id: "library:add", label: "Add to Library…", group: "Library", run: () => setLibraryAddOpen(true) },
     { id: "library:refresh", label: "Refresh Library", group: "Library", run: () => openLibrary({ kind: "refresh" }) },
+    { id: "library:tokens", label: "Provider tokens…", group: "Library", run: () => openLibrary({ kind: "tokens" }) },
     ...rendererActionDefinitions.map(({ id, label, direction, kind }) => {
       const capability = kind === "review" ? selectedRenderer?.presentation.can_open_review : kind === "files" ? selectedRenderer?.presentation.can_open_files : selectedRenderer?.presentation.can_open_context;
       const fallback = kind === "context" ? "Context requires a configured companion directory" : "Select a pane with a configured repository";

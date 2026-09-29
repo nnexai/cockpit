@@ -294,10 +294,14 @@
 .library-item-header.is-narrow .library-item-state { margin-left: 0; }
 .library-item-meta { min-width: 0; color: var(--text-muted); }
 .library-facts-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-item-header.is-narrow .library-facts-text { white-space: normal; }
+/* The eyebrow already names the provider; the tile's 44 px go to the title. */
+.library-item-header.is-narrow .library-tile { display: none; }
+.library-item-header.is-narrow .library-item-top { grid-template-columns: minmax(0, 1fr) auto; }
 .library-item-state { min-height: 28px; flex-wrap: wrap; row-gap: 2px; }
 .library-item-phrase { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 .library-item-state > .library-pill { flex: 0 0 auto; }
-.library-token-cue { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--working); white-space: nowrap; }
+.library-token-cue { display: inline-flex; min-width: 0; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: 2px 6px; color: var(--working); }
 .library-token-cue .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
 .library-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
 .library-link:hover { text-decoration: underline; }
@@ -366,11 +370,11 @@
 /* Refresh report strip (design §4.9). */
 .library-report-block { flex: 0 0 auto; }
 /* The refresh banner is one quiet line: state and summary at the left, ghost text actions at the right, all 24 px. */
-.library-report { min-height: 32px; flex-wrap: wrap; background: var(--surface); font-size: var(--font-size-control); }
-.library-report > strong { color: var(--text-primary); font-weight: 600; }
-.library-report > button { height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
-.library-report > button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
-.library-report > button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.context-notice.library-report { min-height: 32px; flex-wrap: wrap; background: var(--surface); font-size: var(--font-size-control); }
+.context-notice.library-report > strong { color: var(--text-primary); font-weight: 600; }
+.context-notice.library-report > button { height: 24px; min-height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.context-notice.library-report > button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.context-notice.library-report > button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 .library-report-note { color: var(--text-muted); }
 .library-report-error { color: var(--blocked); }
 .library-report-rows {

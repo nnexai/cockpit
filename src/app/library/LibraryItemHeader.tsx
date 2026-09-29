@@ -3,7 +3,7 @@ import type { LibraryAttachment, LibraryAttachmentRequest, LibraryItemSummary, L
 import type { ProviderFacts } from "../context/providerDocument";
 import { UiIcon } from "../UiIcon";
 import { attachmentSummary, instanceHost, isConfluencePage, itemDisplayId, itemKindLabel, libraryFreshness, libraryStateChip, providerFamily, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
-import { ATTACHMENT_STATE, LibraryMenu, attachmentMark, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions } from "./LibraryTree";
+import { ATTACHMENT_STATE, LibraryMenu, attachmentMark, attachmentPath, attachmentProgress, byteSize, downloadableAttachments, itemMenuEntries, menuAnchor, type LibraryAttachmentActions, type LibraryItemActions, type LibraryMenuEntry } from "./LibraryTree";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
 import { headerSpaceAction, type SpaceCopyAction } from "./spaceCopyPresentation";
@@ -38,22 +38,22 @@ export type ItemSpaceState = {
 export type PageUpdate = { at: string | null; by: string | null };
 
 /**
- * An issue's or review's own facts from its generated document's frontmatter:
- * kind and status as chips, then priority, assignee, author and last update.
+ * An issue's or review's own facts from its generated document's frontmatter as
+ * one quiet line: kind, status, priority, assignee, author, last update.
  * Nothing renders when the document reports none of them.
  */
 export function ProviderFactsLine({ facts, now, className }: { facts: ProviderFacts; now: number; className: string }) {
   const updated = relativeTime(facts.updated, now);
-  const meta = [
+  const entries = [
+    facts.itemType || null,
+    facts.status || null,
     facts.priority ? `Priority ${facts.priority}` : null,
     facts.assignee === undefined ? null : facts.assignee ? `Assignee ${facts.assignee}` : "Unassigned",
     facts.author ? `Author ${facts.author}` : null,
   ].filter((entry): entry is string => entry !== null);
-  if (!facts.itemType && !facts.status && meta.length === 0 && !updated) return null;
+  if (entries.length === 0 && !updated) return null;
   return <div className={className}>
-    {facts.itemType ? <span className="context-source-chip library-fact-kind">{facts.itemType}</span> : null}
-    {facts.status ? <span className="context-source-chip library-fact-status">{facts.status}</span> : null}
-    {meta.length > 0 || updated ? <span className="library-item-phrase">{meta.join(" · ")}{updated ? <>{meta.length > 0 ? " · " : ""}<span title={facts.updated ?? undefined}>{`Updated ${updated}`}</span></> : null}</span> : null}
+    <span className="library-facts-text">{entries.join(" · ")}{updated ? <>{entries.length > 0 ? " · " : ""}<span title={facts.updated ?? undefined}>{`Updated ${updated}`}</span></> : null}</span>
   </div>;
 }
 
@@ -66,16 +66,21 @@ function breadcrumb(segments: readonly string[]): string {
 }
 
 /**
- * Library item header (design §4.5): a provider tile beside the kind label,
- * breadcrumb and title, then one state line (pill, freshness phrase, actions)
- * and, for an item with attachments, one summary control that opens the
- * attachments panel (a Jira issue's list is read-only: names, sizes, types). Item facts live in the Details popover (`details`).
+ * Library item header (design §4.5). The title row: a provider tile, the kind
+ * and place as a quiet eyebrow, the title, and the actions at the right edge
+ * (`Refresh`, the Space action, `⋯`, Details `ⓘ`). Under it the item's own
+ * facts (an issue's or review's kind, status, priority, people, update) as one
+ * quiet line, then one state line: the state pill, the freshness phrase, the
+ * item's standing in the Space, a token cue and the attachments toggle, which
+ * opens the attachments panel (a Jira issue's list is read-only: names, sizes,
+ * types). Item facts beyond that live in the Details popover (`details`).
  * The Space actions come from `headerSpaceAction`: `Add to <Space>` (the one
  * primary action), or the copy's `Update in <Space>`, a confirmed replace or
  * removal, and the Library version. Attachments are metadata only until the user
  * explicitly downloads (`Download all`, `Download selected` or a row's
- * `Download`); `Remove downloaded` drops the bytes and keeps the rows. An issue
- * or review adds its provider facts under the title.
+ * `Download`); `Remove downloaded` drops the bytes and keeps the rows. A Jira
+ * issue whose files need a token says so on the state line, and `⋯` offers
+ * `Provider tokens…` for every provider that stores one.
  * `⋯` takes `Refresh`, the Space actions and the attachment bulk actions, and the attachments list stacks, when the pane is ≤ 520 px wide or the header itself is ≤ 640 px (the tree beside an item can leave it that narrow in a wider pane; the attachments table needs about 590 px).
  */
 export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCrumb, pending, actions, onReplace, details, space = null, pageUpdate = null, facts = null }: {
@@ -132,6 +137,17 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
   const credentials = actions.credentials;
   const jira = credentials?.attachmentAccess(item) ?? null;
   const attachments = page || jira === "stored" ? actions.attachments : undefined;
+  // The cue outside the folded attachments panel: this issue's files can't be downloaded until a token is stored.
+  const needsToken = jira === "needs_token" && credentials ? credentials : null;
+  // `Provider tokens…` in `⋯` for every provider that stores one; it stays before the destructive entry.
+  const tokenProvider = credentials && item.provider_id && (family.key === "jira" || family.key === "confluence") ? item.provider_id : null;
+  const menuEntries = (): LibraryMenuEntry[] => {
+    const entries = itemMenuEntries(item, actions, false);
+    if (!credentials || !tokenProvider) return entries;
+    const destructive = entries.lastIndexOf("separator");
+    const tokens = { label: "Provider tokens…", onSelect: () => credentials.open(tokenProvider) };
+    return destructive < 0 ? [...entries, tokens] : [...entries.slice(0, destructive), tokens, ...entries.slice(destructive)];
+  };
   const ensureCredentials = credentials?.ensure;
   useEffect(() => { if (jira === "loading" && item.attachments.length > 0) ensureCredentials?.(); }, [jira, item.attachments.length, ensureCredentials]);
   const downloadable = downloadableAttachments(item);
@@ -184,39 +200,55 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
   useLayoutEffect(() => {
     if (spaceFocused.current && (document.activeElement === null || document.activeElement === document.body)) spaceSlotRef.current?.focus({ preventScroll: true });
   });
-  return <div className="library-item-header" ref={headerRef}>
+  const idText = itemDisplayId(item, providers);
+  // An issue's project key opens its id (`SCRUM` · `SCRUM-6`): say it once.
+  const showPath = !(idText && !chain && !folder && container && idText.startsWith(`${container}-`));
+  const refreshLabel = folder ? "Re-copy" : "Refresh";
+  // aria-disabled keeps focus on the pressed button while the refresh runs.
+  const refreshButton = narrow ? null : <button type="button" className="library-button" aria-disabled={actions.refreshBusy} onClick={() => { if (!actions.refreshBusy) refresh(); }} title={folder ? `Re-copy from ${folder.origin_path}` : undefined}><UiIcon name="refresh" />{refreshLabel}</button>;
+  return <div className={`library-item-header${narrow ? " is-narrow" : ""}`} ref={headerRef}>
     <div className="library-item-column">
-      <div className="library-item-identity">
+      <div className="library-item-top">
         <ProviderMark family={family} size="header" folder={folder !== null} />
         <div className="library-item-idtext">
           <div className="library-item-line library-item-eyebrow">
             <span className="library-kind-chip">{itemKindLabel(item, providers)}</span>
-            <span className="library-item-path" title={chain ? [item.container?.label, ...item.ancestors.map((ancestor) => ancestor.title)].filter(Boolean).join(" › ") : undefined}>{rootCrumb ? <><span>Library</span><span aria-hidden="true"> › </span></> : null}{folder ? "Folders" : chain ? breadcrumb(chain) : container ?? instanceHost(item.provider_instance)}{itemDisplayId(item, providers) ? <span className="library-item-id"> {itemDisplayId(item, providers)}</span> : null}</span>
+            <span className="library-item-dot" aria-hidden="true">·</span>
+            <span className="library-item-path" title={chain ? [item.container?.label, ...item.ancestors.map((ancestor) => ancestor.title)].filter(Boolean).join(" › ") : undefined}>{rootCrumb ? <><span>Library</span><span aria-hidden="true"> › </span></> : null}{showPath ? (folder ? "Folders" : chain ? breadcrumb(chain) : container ?? instanceHost(item.provider_instance)) : null}{idText ? <span className="library-item-id">{showPath ? " " : ""}{idText}</span> : null}</span>
           </div>
           <h2 className="library-item-title" title={item.title}>{item.title}</h2>
         </div>
-        {details}
+        <div className="library-item-actions">
+          {refreshButton}
+          {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
+            {spaceAdding ? <span role="status"><PendingPill word={`Adding to ${space.label}…`} /></span> : null}
+            {spaceUpdating ? <span role="status"><PendingPill word={`Updating ${space.label}…`} /></span> : null}
+            {!spaceAdding && !narrow && addLabel && !spaceFailure ? <button type="button" className="library-button is-primary" title={`Copy this ${page ? "page" : "item"} into Space "${space.label}"`} onClick={space.onAdd}><UiIcon name="plus" />{addLabel}</button> : null}
+            {/* aria-disabled keeps focus on the pressed button, or the confirmation's opener, while the update runs. */}
+            {!spaceAdding && !narrow ? space.actions.map((action) => <button key={action.kind} type="button" className="library-button" aria-disabled={space.busy} onClick={() => space.onAction(action)}>{action.label}</button>) : null}
+          </span> : null}
+          <button type="button" className="library-icon-button library-overflow library-more" aria-label={`More actions for ${item.title}`} title="More actions" aria-haspopup="menu" aria-expanded={menu !== null} onClick={(event) => setMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
+          {details}
+        </div>
       </div>
-      {facts ? <ProviderFactsLine facts={facts} now={now} className="library-item-line library-item-facts" /> : null}
+      {facts ? <ProviderFactsLine facts={facts} now={now} className="library-item-meta" /> : null}
       <div className="library-item-line library-item-state">
         {pending
           ? <PendingPill size="header" word={progress ?? (folder ? "Re-copying…" : "Refreshing…")} />
           : <StatePill size="header" shape={chip.shape} word={chip.word} tone={chip.tone} />}
         <span className="library-item-phrase" title={phraseTitle || undefined}>{folder ? <>Copied{copiedAgo ? ` ${copiedAgo}` : ""} from <code>{folder.origin_path}</code> · {folder.files} files · {folder.bytes >= 1_000_000 ? `${(folder.bytes / 1_000_000).toFixed(1)} MB` : `${folder.bytes} bytes`}{folder.git_working_tree ? " · Git working tree" : ""}</> : phrase}</span>
-        <span className="context-toolbar-spacer" />
-        {narrow ? null : <button type="button" className="library-button" onClick={refresh} disabled={actions.refreshBusy} title={folder ? `Re-copy from ${folder.origin_path}` : undefined}><UiIcon name="refresh" />{folder ? "Re-copy" : "Refresh"}</button>}
-        {space ? <span ref={spaceSlotRef} className="library-space-slot" tabIndex={-1} {...trackSpaceFocus}>
-          {spaceAdding ? <span role="status"><PendingPill word={`Adding to ${space.label}…`} /></span> : null}
-          {spaceUpdating ? <span role="status"><PendingPill word={`Updating ${space.label}…`} /></span> : null}
-          {!spaceAdding && !spaceUpdating && !narrow && spaceStatus ? <span className="library-space-state">
-            {spaceStatus.context ? <span className="library-space-context">{spaceStatus.context}</span> : null}
-            <StatePill shape={spaceStatus.shape} word={spaceStatus.word} tone={spaceStatus.tone} />
-          </span> : null}
-          {!spaceAdding && !narrow && addLabel && !spaceFailure ? <button type="button" className="library-button is-primary" title={`Copy this ${page ? "page" : "item"} into Space "${space.label}"`} onClick={space.onAdd}><UiIcon name="plus" />{addLabel}</button> : null}
-          {/* aria-disabled keeps focus on the pressed button, or the confirmation's opener, while the update runs. */}
-          {!spaceAdding && !narrow ? space.actions.map((action) => <button key={action.kind} type="button" className="library-button" aria-disabled={space.busy} onClick={() => space.onAction(action)}>{action.label}</button>) : null}
+        {space && !spaceAdding && !spaceUpdating && !narrow && spaceStatus ? <span className="library-space-state">
+          {spaceStatus.context ? <span className="library-space-context">{spaceStatus.context}</span> : null}
+          <StatePill shape={spaceStatus.shape} word={spaceStatus.word} tone={spaceStatus.tone} />
         </span> : null}
-        <button type="button" className="library-button is-icon library-more" aria-label={`More actions for ${item.title}`} title="More actions" aria-haspopup="menu" aria-expanded={menu !== null} onClick={(event) => setMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
+        {needsToken ? <span className="library-token-cue" role="status">
+          <UiIcon name="info" />Attachments need a token
+          <button type="button" className="library-link" onClick={() => needsToken.open(item.provider_id ?? "")}>Provider tokens…</button>
+        </span> : null}
+        <span className="context-toolbar-spacer" />
+        {item.attachments.length > 0 ? <button type="button" className="library-attachments-toggle" aria-expanded={attachmentsOpen} aria-controls={attachmentsOpen ? attachmentListId : undefined} onClick={() => setAttachmentsOpenFor(attachmentsOpen ? null : item.item_id)}>
+          <UiIcon name={attachmentsOpen ? "down" : "right"} />{attachmentSummary(item)}
+        </button> : null}
       </div>
       {freshness.notice && !pending ? <div className={`context-notice library-item-notice${item.state === "failed" ? " context-notice-error" : item.state === "conflict" || item.state === "partial" ? " context-notice-warning" : ""}`} role={item.state === "failed" ? "alert" : "status"}>
         <span>{freshness.notice}</span>
@@ -229,11 +261,6 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
       </div> : null}
       {space && space.copyError && !spaceUpdating ? <div className="context-notice context-notice-error library-item-notice" role="alert" {...trackSpaceFocus}>
         <span>{space.copyError}</span>
-      </div> : null}
-      {item.attachments.length > 0 ? <div className="library-attachments-line">
-        <button type="button" className="library-attachments-toggle" aria-expanded={attachmentsOpen} aria-controls={attachmentsOpen ? attachmentListId : undefined} onClick={() => setAttachmentsOpenFor(attachmentsOpen ? null : item.item_id)}>
-          <UiIcon name={attachmentsOpen ? "down" : "right"} />{attachmentSummary(item)}
-        </button>
       </div> : null}
       {item.attachments.length > 0 && attachmentsOpen ? <div className="library-attachments" id={attachmentListId}>
         <div className="library-attachments-head">
@@ -281,7 +308,7 @@ export function LibraryItemHeader({ item, providers, narrow: paneNarrow, rootCru
         </div>
       </div> : null}
     </div>
-    {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${item.title} actions`} entries={itemMenuEntries(item, actions, false)} onDismiss={() => setMenu(null)} /> : null}
+    {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${item.title} actions`} entries={menuEntries()} onDismiss={() => setMenu(null)} /> : null}
   </div>;
 }
 

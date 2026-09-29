@@ -150,7 +150,7 @@ export function retainReviewScrollPosition(current: Record<string, number>, iden
 
 
 /** A request from outside the viewer to act on its Library root once the listing can serve it. */
-export type LibraryCommand = { token: number; kind: "refresh" } | { token: number; kind: "open"; itemId: string };
+export type LibraryCommand = { token: number; kind: "refresh" } | { token: number; kind: "tokens" } | { token: number; kind: "open"; itemId: string };
 
 export type ContextViewerProps = {
   client: CockpitClient;
@@ -1486,8 +1486,13 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
   };
   // Palette commands and `Open in Library` wait until the listing can serve them.
   useEffect(() => {
+    // The token dialog needs no listing: it opens even while the Library is unavailable.
+    if (isLibrary && libraryCommand?.kind === "tokens" && handledLibraryCommand.current !== libraryCommand.token) {
+      handledLibraryCommand.current = libraryCommand.token;
+      providerCredentials.actions.open("");
+    }
     if (!isLibrary || !library.listing) return;
-    if (libraryCommand && handledLibraryCommand.current !== libraryCommand.token) {
+    if (libraryCommand && libraryCommand.kind !== "tokens" && handledLibraryCommand.current !== libraryCommand.token) {
       if (libraryCommand.kind === "refresh") {
         handledLibraryCommand.current = libraryCommand.token;
         if (!libraryBusy) refreshLibrary();
@@ -1722,12 +1727,12 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
     {compactToolbar ? null : <>
       <span className="library-toolbar-rule" aria-hidden="true" />
       <button type="button" className="library-ghost" title="Add a page, issue, MR/PR or folder to the Library" onClick={() => setLibraryAdd("library")}><UiIcon name="plus" />Add…</button>
-      <button type="button" className="library-ghost" onClick={refreshLibrary} disabled={refreshAllDisabled} title="Refresh every item from its source"><UiIcon name="refresh" />Refresh all</button>
+      <button type="button" className="library-ghost" aria-disabled={refreshAllDisabled} onClick={() => { if (!refreshAllDisabled) refreshLibrary(); }} title="Refresh every item from its source"><UiIcon name="refresh" />Refresh all</button>
     </>}
     <span className="context-toolbar-spacer" />
     {presentable ? <div className="viewer-segmented" role="group" aria-label="Document presentation"><button type="button" aria-keyshortcuts={ariaKeyShortcuts("toggle-preview")} title={withShortcut("Preview", "toggle-preview")} aria-pressed={selectedFileState?.mode !== "source"} onClick={() => updateFile({ mode: "auto" })}>Preview</button><button type="button" aria-keyshortcuts={ariaKeyShortcuts("toggle-preview")} title={withShortcut("Source", "toggle-preview")} aria-pressed={selectedFileState?.mode === "source"} onClick={() => updateFile({ mode: "source" })}>Source</button></div> : null}
     {sourceShown ? <button type="button" className="library-ghost is-icon viewer-wrap-toggle" aria-pressed={wrap} aria-label="Wrap long lines" aria-keyshortcuts={ariaKeyShortcuts("toggle-wrap")} onClick={toggleWrap} title={withShortcut(wrap ? "Scroll long lines" : "Wrap long lines", "toggle-wrap")}><UiIcon name="wrap" /></button> : null}
-    <button type="button" className="library-ghost is-icon" aria-label="Library actions" title="Library actions" aria-haspopup="menu" aria-expanded={libraryToolbarMenu !== null} onClick={(event) => setLibraryToolbarMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
+    <button type="button" className="library-ghost is-icon library-overflow" aria-label="Library actions" title="Library actions" aria-haspopup="menu" aria-expanded={libraryToolbarMenu !== null} onClick={(event) => setLibraryToolbarMenu(menuAnchor(event.currentTarget))}><UiIcon name="more" /></button>
   </>;
   // Local re-read (not a provider refresh) and the path; the worded commands join them when the toolbar is compact.
   const libraryMenuEntries: LibraryMenuEntry[] = [
@@ -1736,6 +1741,8 @@ export function ContextViewer({ client, presentation, value, onChange, controlAl
       { label: "Refresh all", onSelect: refreshLibrary, disabled: refreshAllDisabled },
       "separator" as const,
     ] : []),
+    { label: "Provider tokens…", onSelect: () => providerCredentials.actions.open("") },
+    "separator" as const,
     { label: "Reload listing", shortcut: formatShortcut("reload-listing"), onSelect: refresh },
     { label: "Copy Library folder path", onSelect: () => { if (library.listing) void copyText(library.listing.root.path); }, disabled: !library.listing },
   ];
