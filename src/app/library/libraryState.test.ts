@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider, ProviderCredentialStatus } from "../../protocol/generated/v1";
-import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
+import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, nestUnderParents, parseLibraryTime, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -253,5 +253,48 @@ describe("provider token entry points", () => {
     const gitlab = lookupFailure(rejected("source_auth_failed"), "https://gitlab.test/platform/api/-/issues/1", all);
     expect(gitlab.credentialProviderId).toBeUndefined();
     expect(gitlab.detail).toBe("gitlab.test rejected the glab CLI's credentials. Sign in with the CLI, then retry.");
+  });
+});
+
+describe("Jira and Confluence on one host", () => {
+  const site = "https://nnexai.atlassian.net";
+  const shared: ProjectProvider[] = [
+    { id: "confluence", base_url: `${site}/wiki`, executable: "confluence", login: "default" },
+    { id: "jira", base_url: site, executable: "jira" },
+  ];
+  const query: LibraryFollowSummary = {
+    follow_id: "follow:jql", provider_id: "jira", provider_instance: site, source: { kind: "jira_query", jql: "resolution = Unresolved", mode: "live" },
+    include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh", reference_depth: 1,
+  } as LibraryFollowSummary;
+  const issue = (key: string) => item({ item_id: `source:${key}`, provider_id: "jira", provider_instance: site, resource_type: "issue", canonical_id: key, container: { container_id: "SCRUM", label: "SCRUM" }, refs: [{ kind: "follow", follow_id: query.follow_id }] });
+  // A page the query pulled in through a followed reference: it holds the query's follow reference too.
+  const page = item({ item_id: "source:page", provider_id: "confluence", provider_instance: `${site}/wiki`, resource_type: "page", canonical_id: "2621441", title: "Reference page", container: { container_id: "SD", label: "SD · Software Development" }, refs: [{ kind: "follow", follow_id: query.follow_id }] });
+
+  it("keeps a Jira follow under its own provider and never under the Confluence instance on the same host", () => {
+    const tree = libraryTree([issue("SCRUM-1"), page, issue("SCRUM-2")], shared, [query]);
+    expect(tree.map((instance) => [instance.label, instance.providerId, instance.containers.map((container) => [container.label, container.follow?.follow_id ?? null, container.items.map((entry) => entry.item_id)])])).toEqual([
+      ["Confluence · nnexai.atlassian.net", "confluence", [["SD · Software Development", null, ["source:page"]]]],
+      ["Jira · nnexai.atlassian.net", "jira", [["resolution = Unresolved", "follow:jql", ["source:SCRUM-2", "source:SCRUM-1"]]]],
+    ]);
+  });
+
+  it("names the provider by path when a typed link's host serves both", () => {
+    const failure = (input: string) => lookupFailure({ code: "source_auth_failed", message: "no" }, input, shared);
+    expect(failure(`${site}/browse/SCRUM-1`).credentialProviderId).toBe("jira");
+    expect(failure(`${site}/wiki/spaces/SD/pages/2621441/Page`).credentialProviderId).toBe("confluence");
+  });
+});
+
+describe("nesting items under their parent", () => {
+  const node = (id: string, parent: string | null) => item({ item_id: id, parent_item_id: parent, title: id });
+  const shape = (nodes: ReturnType<typeof nestUnderParents>): unknown[] => nodes.map((entry) => entry.children.length ? [entry.item.item_id, shape(entry.children)] : entry.item.item_id);
+
+  it("nests children under their parent in list order, and keeps a child whose parent is elsewhere top-level", () => {
+    expect(shape(nestUnderParents([node("p", null), node("c2", "p"), node("grandchild", "c2"), node("c1", "p"), node("orphan", "not-in-list"), node("solo", null)])))
+      .toEqual([["p", [["c2", ["grandchild"]], "c1"]], "orphan", "solo"]);
+  });
+
+  it("does not lose items in a parent loop or a self-parent", () => {
+    expect(shape(nestUnderParents([node("a", "b"), node("b", "a"), node("self", "self"), node("tail", "a")]))).toEqual([["a", ["tail"]], "b", "self"]);
   });
 });

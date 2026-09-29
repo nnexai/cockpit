@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { LibraryAttachment, LibraryAttachmentAction, LibraryAttachmentRequest, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
-import { attachmentTreeMeta, errorText, followCountText, followTitle, hasFollowRef, isConfluencePage, isKeepable, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type LibraryContainerNode, type LibraryInstanceNode, type StateShape, type StateTone } from "./libraryState";
+import { attachmentTreeMeta, errorText, followCountText, followTitle, hasFollowRef, isConfluencePage, isKeepable, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, nestUnderParents, pageCount, partialText, providerFamily, purgeNotice, type LibraryContainerNode, type LibraryInstanceNode, type LibraryItemNode, type StateShape, type StateTone } from "./libraryState";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
 import type { ProviderCredentialActions } from "./useProviderCredentials";
@@ -216,6 +216,11 @@ function pageItemIds(page: PageNode): string[] {
   return [...(page.item ? [page.item.item_id] : []), ...page.children.flatMap(pageItemIds)];
 }
 
+/** An issue and the subtasks nested under it, as page nodes so both share the page rows' chevron, Enter and attachments. */
+function issueNode(node: LibraryItemNode): PageNode {
+  return { key: node.item.item_id, title: node.item.title, item: node.item, folder: false, children: node.children.map(issueNode) };
+}
+
 type Row =
   | { kind: "instance"; key: string; depth: 0; parent: null; node: LibraryInstanceNode; open: boolean }
   | { kind: "container"; key: string; depth: 1; parent: string; node: LibraryContainerNode; open: boolean }
@@ -279,6 +284,8 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   const [followNotice, setFollowNotice] = useState<{ text: string; failed: boolean } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const focusedRow = useRef<{ key: string; parent: string | null; index: number } | null>(null);
+  // The row that last held focus stays the tree's one tab stop (roving tabindex); until then the selected row, else the first.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const tree = useMemo(() => libraryTree(items, providers, follows), [follows, items, providers]);
   const rows = useMemo(() => {
     const visible: Row[] = [];
@@ -312,22 +319,41 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         visible.push({ kind: "container", key: container.key, depth: 1, parent: instance.key, node: container, open: containerOpen });
         if (!containerOpen) continue;
         if (container.items.every(isConfluencePage)) pushPages(pageForest(container), 2, container.key);
-        // Other issues are leaf rows, but one with attachments gets the same `Attachments (N)` group as a page.
-        else pushPages(container.items.map((item) => ({ key: item.item_id, title: item.title, item, folder: false, children: [] })), 2, container.key);
+        // Other issues nest under their parent (a Jira subtask); one with attachments or subtasks gets a page row, the rest are leaves.
+        else pushPages(nestUnderParents(container.items).map(issueNode), 2, container.key);
       }
     }
     return visible;
   }, [collapsed, tree]);
-  const focusRow = (key: string) => window.requestAnimationFrame(() => {
-    [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === key)?.focus();
-  });
+  const rowElement = (key: string) => [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === key);
+  const focusRow = (key: string) => rowElement(key)?.focus();
+  const tabStopKey = (activeKey !== null && rows.some((row) => row.key === activeKey) ? activeKey : null)
+    ?? rows.find((row) => (row.kind === "item" || row.kind === "page") && row.item.item_id === selectedItemId || row.kind === "attachment" && row.key === selectedAttachmentId)?.key
+    ?? rows[0]?.key ?? null;
+  const tabStopRef = useRef<string | null>(null);
+  tabStopRef.current = tabStopKey;
+  // Focus lost to <body> (a button that disabled itself while its refresh ran, a closed menu or dialog) would leave the arrow keys dead until a click: the first navigation key takes the tab stop back.
+  useEffect(() => {
+    const recover = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+      if (document.activeElement !== null && document.activeElement !== document.body) return;
+      const key = tabStopRef.current;
+      const target = listRef.current && listRef.current.getClientRects().length > 0 && key !== null ? rowElement(key) : undefined;
+      if (!target) return;
+      event.preventDefault();
+      target.focus();
+    };
+    document.addEventListener("keydown", recover);
+    return () => document.removeEventListener("keydown", recover);
+  }, []);
   // A focused row removed by a reread (a removed space or item) leaves focus on the body: hand it to the parent row.
   useLayoutEffect(() => {
     const last = focusedRow.current;
     if (!last || (document.activeElement !== null && document.activeElement !== document.body) || rows.some((row) => row.key === last.key)) return;
     const next = rows.find((row) => row.key === last.parent) ?? rows[Math.min(last.index, rows.length - 1)];
     if (!next) return;
-    [...(listRef.current?.querySelectorAll<HTMLElement>("[data-library-row]") ?? [])].find((element) => element.dataset.libraryRow === next.key)?.focus({ preventScroll: true });
+    rowElement(next.key)?.focus({ preventScroll: true });
   }, [rows]);
   const toggle = (key: string) => setCollapsed((current) => {
     const next = new Set(current);
@@ -436,6 +462,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
     const key = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-library-row]")?.dataset.libraryRow : undefined;
     const index = key === undefined ? -1 : rows.findIndex((row) => row.key === key);
     focusedRow.current = index < 0 ? null : { key: key!, parent: rows[index]!.parent, index };
+    if (index >= 0) setActiveKey(key!);
   };
   // Focus moving elsewhere (a menu, a dialog, another pane) is no longer the tree's to restore.
   const onBlur = (event: FocusEvent<HTMLDivElement>) => { if (event.relatedTarget) focusedRow.current = null; };
@@ -458,7 +485,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
             onMouseDown={(event) => event.preventDefault()} onClick={() => { toggle(row.key); focusRow(row.key); }}>
             <UiIcon name={row.open ? "down" : "right"} />
           </button> : null}
-          <button type="button" data-library-row={row.key} data-context-path={item.document_path ?? undefined}
+          <button type="button" data-library-row={row.key} tabIndex={row.key === tabStopKey ? 0 : -1} data-context-path={item.document_path ?? undefined}
             className={`context-tree-row library-tree-row is-${row.kind}${item.item_id === selectedItemId ? " is-selected" : ""}`}
             aria-current={item.item_id === selectedItemId ? "true" : undefined}
             aria-label={`${itemAccessibleName(item, providers)}${item.purge_after !== null ? ", unreferenced" : ""}${pending ? ", refreshing" : ""}`}
@@ -492,12 +519,12 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
         const selected = attachment.attachment_id === selectedAttachmentId;
         return <div className="context-tree-node" style={depth} key={`attachment:${row.key}`}>
           {attachmentActions
-            ? <button type="button" data-library-row={row.key} data-context-path={attachmentPath(item, attachment) ?? undefined}
+            ? <button type="button" data-library-row={row.key} tabIndex={row.key === tabStopKey ? 0 : -1} data-context-path={attachmentPath(item, attachment) ?? undefined}
               className={`context-tree-row library-tree-row library-attachment-row${selected ? " is-selected" : ""}`}
               aria-current={selected ? "true" : undefined} aria-label={`${attachment.stored_name}, attachment, ${detail}`}
               onClick={() => attachmentActions.open(item, attachment)} onContextMenu={onContextMenu(row)}>{content}</button>
             // Read-only metadata where nothing can download it: arrow keys reach it, with no click, Enter or menu.
-            : <div role="group" tabIndex={-1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ cursor: "default" }}
+            : <div role="group" tabIndex={row.key === tabStopKey ? 0 : -1} data-library-row={row.key} className="context-tree-row library-tree-row library-attachment-row" style={{ cursor: "default" }}
               aria-label={`${attachment.stored_name}, attachment, ${detail}`}>{content}</div>}
         </div>;
       }
@@ -512,7 +539,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
       const instanceNode = row.kind === "instance" ? row.node : null;
       const instanceFamily = instanceNode ? providerFamily(providers, instanceNode.providerId) : null;
       return <div className="context-tree-node" style={depth} key={`${row.kind}:${row.key}`}>
-        <button type="button" data-library-row={row.key} className={`context-tree-row library-tree-row library-tree-group is-${row.kind}`} aria-expanded={row.open}
+        <button type="button" data-library-row={row.key} tabIndex={row.key === tabStopKey ? 0 : -1} className={`context-tree-row library-tree-row library-tree-group is-${row.kind}${follow ? " has-follow" : ""}`} aria-expanded={row.open}
           aria-label={follow ? `${label}, following${partial ? `, partial: ${partial}` : ""}` : folder ? `${label}, folder` : undefined}
           onClick={() => toggle(row.key)} onContextMenu={onContextMenu(row)}>
           <span className="library-row-chevron" aria-hidden="true"><UiIcon name={row.open ? "down" : "right"} /></span>
@@ -521,9 +548,12 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
               : <UiIcon name={row.kind === "attachments" ? "clip" : "folder"} />}
           </span>
           <span className="context-tree-name" title={row.kind === "instance" ? row.node.instance ?? label : label}>{label}</span>
-          {follow ? <StatePill className="context-tree-meta" shape="dot-ring" word="Following" tone="idle" /> : null}
-          {follow?.source.kind === "jira_query" ? <span className="context-tree-meta library-state is-muted">{`${followCountText(follow)} · ${follow.source.mode === "live" ? "Live" : "Accumulate"}`}</span> : null}
-          {follow?.partial ? <StatePill className="context-tree-meta" shape="half-ring" word={`${follow.partial.have} of ${follow.partial.total ?? "?"}`} tone="working" title={partial ?? undefined} /> : null}
+          {/* A follow's state sits on a second line: a long query or space name keeps the whole first line, ellipsised only when it truly overflows. */}
+          {follow ? <span className="library-follow-line">
+            <StatePill className="context-tree-meta" shape="dot-ring" word="Following" tone="idle" />
+            {follow.source.kind === "jira_query" ? <span className="context-tree-meta library-state is-muted">{`${followCountText(follow)} · ${follow.source.mode === "live" ? "Live" : "Accumulate"}`}</span> : null}
+            {follow.partial ? <StatePill className="context-tree-meta" shape="half-ring" word={`${follow.partial.have} of ${follow.partial.total ?? "?"}`} tone="working" title={partial ?? undefined} /> : null}
+          </span> : null}
           {instanceNode?.unavailable ? <StatePill className="context-tree-meta" shape="close" word="Unavailable" tone="blocked" /> : null}
           {meta ? <span className="context-tree-meta library-state is-muted">{meta}</span> : null}
         </button>

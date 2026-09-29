@@ -449,3 +449,159 @@ it("lists a Jira issue's attachments under an Attachments group, and leaves an i
     host.remove();
   }
 });
+
+const site = "https://nnexai.atlassian.net";
+const jiraProviders: ProjectProvider[] = [
+  { id: "confluence", base_url: `${site}/wiki`, executable: "confluence", login: "default" },
+  { id: "jira", base_url: site, executable: "jira" },
+];
+const query: LibraryFollowSummary = {
+  follow_id: "follow:jql", provider_id: "jira", provider_instance: site, source: { kind: "jira_query", jql: "project = SCRUM AND resolution = Unresolved ORDER BY created DESC", mode: "live" },
+  include_attachments: false, item_count: 4, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh",
+} as LibraryFollowSummary;
+
+function issue(number: number, overrides: Partial<LibraryItemSummary> = {}): LibraryItemSummary {
+  return page({
+    item_id: `source:SCRUM-${number}`, provider_id: "jira", provider_instance: site, resource_type: "issue", canonical_id: `SCRUM-${number}`, title: `Issue ${number}`,
+    container: { container_id: "SCRUM", label: "SCRUM" }, refs: [{ kind: "follow", follow_id: query.follow_id }],
+    document_path: `jira/nnexai.atlassian.net/SCRUM/SCRUM-${number}/Issue ${number}.md`, item_path: `jira/nnexai.atlassian.net/SCRUM/SCRUM-${number}`, ...overrides,
+  });
+}
+
+/** SCRUM-2 has subtasks SCRUM-3 and SCRUM-4; SCRUM-1 is a plain issue; SCRUM-5 is a subtask of an issue outside the Library. */
+const parent = issue(2);
+const issues = [issue(1), parent, issue(3, { parent_item_id: parent.item_id }), issue(4, { parent_item_id: parent.item_id }), issue(5, { parent_item_id: "source:SCRUM-9" })];
+
+async function renderTree(items: LibraryItemSummary[], selectedItemId: string | null = null) {
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<LibraryTree items={items} follows={[query]} providers={jiraProviders} selectedItemId={selectedItemId} pendingItemIds={new Set()} actions={actions} />));
+  const rows = () => [...host.querySelectorAll<HTMLElement>("[data-library-row]")];
+  return {
+    actions, host, rows,
+    labels: () => rows().map((row) => row.querySelector(".context-tree-name")?.textContent),
+    row: (name: string) => rows().find((row) => row.querySelector(".context-tree-name")?.textContent === name)!,
+    key: (target: Element, name: string, init: KeyboardEventInit = {}) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true, ...init })); }),
+    stops: () => rows().filter((row) => row.tabIndex === 0).map((row) => row.querySelector(".context-tree-name")?.textContent),
+    dispose: async () => { await act(async () => root.unmount()); host.remove(); },
+  };
+}
+
+it("shows a Jira follow's query in full as its label with the state on its own line, and nests subtasks under their parent issue", async () => {
+  const tree = await renderTree(issues);
+  try {
+    // Subtasks sit under their parent (newest first among siblings, like every issue list); an orphaned subtask stays a top-level row.
+    const jql = "project = SCRUM AND resolution = Unresolved ORDER BY created DESC";
+    expect(tree.labels()).toEqual(["Jira · nnexai.atlassian.net", jql, "SCRUM-5 Issue 5", "SCRUM-2 Issue 2", "SCRUM-4 Issue 4", "SCRUM-3 Issue 3", "SCRUM-1 Issue 1"]);
+    const depths = tree.rows().map((row) => row.closest<HTMLElement>(".context-tree-node")!.style.getPropertyValue("--depth"));
+    expect(depths).toEqual(["0", "1", "2", "2", "3", "3", "2"]);
+    expect(tree.row("SCRUM-2 Issue 2").classList.contains("is-page")).toBe(true);
+    expect(tree.row("SCRUM-3 Issue 3").classList.contains("is-item")).toBe(true);
+    // The follow row keeps the whole query as its name, tooltip included; Following and the count are a separate line.
+    const follow = tree.rows()[1]!;
+    expect(follow.querySelector(".context-tree-name")?.getAttribute("title")).toBe(follow.querySelector(".context-tree-name")?.textContent);
+    expect(follow.querySelector(".context-tree-name")?.textContent).toBe("project = SCRUM AND resolution = Unresolved ORDER BY created DESC");
+    expect(follow.querySelector(".library-follow-line")?.textContent).toBe("Following4 issues · Live");
+    // Collapsing the parent hides only its subtasks.
+    await act(async () => tree.host.querySelector<HTMLButtonElement>(".library-page-disclosure")!.click());
+    expect(tree.labels()).toEqual(["Jira · nnexai.atlassian.net", jql, "SCRUM-5 Issue 5", "SCRUM-2 Issue 2", "SCRUM-1 Issue 1"]);
+  } finally {
+    await tree.dispose();
+  }
+});
+
+it("moves focus with the arrow, Home and End keys, and Left and Right walk to the parent and first child", async () => {
+  const tree = await renderTree(issues);
+  try {
+    const focused = () => document.activeElement?.querySelector(".context-tree-name")?.textContent;
+    tree.row("SCRUM-5 Issue 5").focus();
+    await tree.key(tree.row("SCRUM-5 Issue 5"), "ArrowDown");
+    expect(focused()).toBe("SCRUM-2 Issue 2");
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowDown");
+    expect(focused()).toBe("SCRUM-4 Issue 4");
+    await tree.key(tree.row("SCRUM-4 Issue 4"), "ArrowUp");
+    expect(focused()).toBe("SCRUM-2 Issue 2");
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "End");
+    expect(focused()).toBe("SCRUM-1 Issue 1");
+    await tree.key(tree.row("SCRUM-1 Issue 1"), "ArrowDown");
+    expect(focused()).toBe("SCRUM-1 Issue 1");
+    await tree.key(tree.row("SCRUM-1 Issue 1"), "Home");
+    expect(focused()).toBe("Jira · nnexai.atlassian.net");
+    await tree.key(tree.row("SCRUM-1 Issue 1"), "ArrowUp");
+    // Right on an open parent enters its first child; Left goes back to the parent, then collapses it, then walks up.
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowRight");
+    expect(focused()).toBe("SCRUM-4 Issue 4");
+    await tree.key(tree.row("SCRUM-4 Issue 4"), "ArrowLeft");
+    expect(focused()).toBe("SCRUM-2 Issue 2");
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowLeft");
+    expect(tree.labels()).not.toContain("SCRUM-4 Issue 4");
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "ArrowRight");
+    expect(tree.labels()).toContain("SCRUM-4 Issue 4");
+    await tree.key(tree.row("SCRUM-5 Issue 5"), "ArrowLeft");
+    expect(focused()).toBe("project = SCRUM AND resolution = Unresolved ORDER BY created DESC");
+    // Enter opens an issue but folds a group; Shift+F10 and the Menu key open the row menu with keyboard focus inside it.
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "Enter");
+    expect(tree.actions.open).toHaveBeenCalledWith(parent);
+    await tree.key(tree.row("SCRUM-2 Issue 2"), "F10", { shiftKey: true });
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+    await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    await tree.key(tree.row("SCRUM-1 Issue 1"), "ContextMenu");
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+  } finally {
+    await tree.dispose();
+  }
+});
+
+it("has one tab stop: the row that held focus, else the selected row, else the first", async () => {
+  const tree = await renderTree(issues, "source:SCRUM-3");
+  try {
+    expect(tree.stops()).toEqual(["SCRUM-3 Issue 3"]);
+    tree.row("SCRUM-1 Issue 1").focus();
+    await act(async () => undefined);
+    expect(tree.stops()).toEqual(["SCRUM-1 Issue 1"]);
+    // Folding away the row that was the tab stop (and the selected one) leaves the first row as the stop, never none.
+    await act(async () => tree.row("Jira · nnexai.atlassian.net").click());
+    expect(tree.stops()).toEqual(["Jira · nnexai.atlassian.net"]);
+  } finally {
+    await tree.dispose();
+  }
+  const bare = await renderTree(issues);
+  try {
+    expect(bare.stops()).toEqual(["Jira · nnexai.atlassian.net"]);
+  } finally {
+    await bare.dispose();
+  }
+});
+
+it("takes a navigation key pressed with focus lost on the page back into the tree, and leaves other keys and focused elements alone", async () => {
+  const tree = await renderTree(issues, "source:SCRUM-3");
+  const outside = document.createElement("button");
+  document.body.append(outside);
+  try {
+    const press = (target: EventTarget, name: string) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+    // jsdom has no layout, so the tree counts as shown only when its client rects say so.
+    const layout = vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+    (document.activeElement as HTMLElement | null)?.blur();
+    await press(document.body, "a");
+    expect(document.activeElement).toBe(document.body);
+    await press(document.body, "ArrowDown");
+    expect(document.activeElement).toBe(tree.row("SCRUM-3 Issue 3"));
+    // Focus in another control keeps its own arrow keys.
+    outside.focus();
+    await press(outside, "ArrowDown");
+    expect(document.activeElement).toBe(outside);
+    // A tree that is not shown takes no keys.
+    layout.mockReturnValue([] as unknown as DOMRectList);
+    outside.blur();
+    await press(document.body, "ArrowDown");
+    expect(document.activeElement).toBe(document.body);
+  } finally {
+    vi.restoreAllMocks();
+    outside.remove();
+    await tree.dispose();
+  }
+});

@@ -502,6 +502,34 @@ function compareItems(left: LibraryItemSummary, right: LibraryItemSummary): numb
   return left.title.localeCompare(right.title) || left.item_id.localeCompare(right.item_id);
 }
 
+export type LibraryItemNode = { item: LibraryItemSummary; children: LibraryItemNode[] };
+
+/**
+ * Items nested under the item their `parent_item_id` names (a Jira subtask under its parent issue), in the
+ * order given, which is also every level's sibling order. Only a parent in the same list nests a child: a child
+ * whose parent is elsewhere, or not in the Library, stays a top-level node. A parent chain that loops back to
+ * the child (never produced by a provider) leaves that child top-level rather than dropping the cycle.
+ */
+export function nestUnderParents(items: readonly LibraryItemSummary[]): LibraryItemNode[] {
+  const nodes = new Map<string, LibraryItemNode>(items.map((item) => [item.item_id, { item, children: [] }]));
+  const parentOf = (item: LibraryItemSummary) => item.parent_item_id === null || item.parent_item_id === item.item_id ? undefined : nodes.get(item.parent_item_id);
+  const loops = (item: LibraryItemSummary) => {
+    const seen = new Set<string>();
+    for (let parent = parentOf(item); parent && !seen.has(parent.item.item_id); parent = parentOf(parent.item)) {
+      if (parent.item.item_id === item.item_id) return true;
+      seen.add(parent.item.item_id);
+    }
+    return false;
+  };
+  const roots: LibraryItemNode[] = [];
+  for (const item of items) {
+    const node = nodes.get(item.item_id)!;
+    const parent = parentOf(item);
+    if (parent && !loops(item)) parent.children.push(node); else roots.push(node);
+  }
+  return roots;
+}
+
 /**
  * Library tree ordering (design §4.3): provider instances alphabetically, then
  * `Folders`; containers alphabetically; forge and Jira items by id, newest
@@ -541,8 +569,11 @@ export function libraryTree(items: readonly LibraryItemSummary[], providers: rea
   for (const item of items) {
     const folder = item.kind === "folder_copy";
     const instance = instanceFor(item.provider_id, item.provider_instance, folder);
-    // A Jira issue sits under the first query that follows it, else under its project.
-    const followed = folder ? undefined : jiraFollows.find((follow) => item.refs.some((ref) => ref.kind === "follow" && ref.follow_id === follow.follow_id));
+    // A Jira issue sits under the first query of its own provider instance that follows it, else under its project.
+    // A page or issue another provider pulled in through a followed reference keeps its own provider's place: two
+    // providers can share a host (Jira and Confluence on one Atlassian site), so only the provider id and instance match.
+    const followed = folder ? undefined : jiraFollows.find((follow) => follow.provider_id === item.provider_id && follow.provider_instance === item.provider_instance
+      && item.refs.some((ref) => ref.kind === "follow" && ref.follow_id === follow.follow_id));
     containerFor(instance, folder ? { id: null, label: "" } : followed ? { id: followed.follow_id, label: followTitle(followed) } : itemContainer(item)).items.push(item);
   }
   for (const follow of follows) {
@@ -618,6 +649,22 @@ export function errorText(error: unknown, fallback: string): string {
 }
 
 /**
+ * The configured provider a typed link belongs to when the request did not name one. Providers can share a host
+ * (Jira and Confluence on one Atlassian site), so the link's path decides: the provider whose base URL contains
+ * it, deepest first, else the first on the host.
+ */
+function providerForInput(providers: readonly ProjectProvider[], input: string, host: string): ProjectProvider | undefined {
+  let url: URL | null = null;
+  try { url = new URL(input); } catch { /* not a link */ }
+  const onHost = providers.filter((candidate) => {
+    try { return new URL(candidate.base_url).host === host; } catch { return false; }
+  });
+  const within = url ? onHost.filter((candidate) => urlWithin(candidate.base_url, url)) : [];
+  const basePath = (provider: ProjectProvider) => new URL(provider.base_url).pathname.replace(/\/+$/, "").length;
+  return [...within].sort((left, right) => basePath(right) - basePath(left))[0] ?? onHost[0];
+}
+
+/**
  * Refusal block under the Add field: what failed and what is safe to do next.
  * `selected` is the provider the request named, when the input itself has no host (a Jira key or Confluence page id).
  */
@@ -628,9 +675,7 @@ export function lookupFailure(error: unknown, input: string, providers: readonly
   try { host = new URL(input).host; } catch {
     if (selected) try { host = new URL(selected.base_url).host; } catch { /* a bare key or path is its own label */ }
   }
-  const provider = selected ?? providers.find((candidate) => {
-    try { return new URL(candidate.base_url).host === host; } catch { return false; }
-  });
+  const provider = selected ?? providerForInput(providers, input, host);
   const family = provider ? providerFamily(providers, provider.id) : null;
   const executable = provider ? executableName(provider.executable) : "The provider CLI";
   const confluence = family?.key === "confluence";

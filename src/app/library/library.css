@@ -55,7 +55,7 @@
 .library-icon-button,
 .library-ghost.is-icon { width: 28px; padding: 0; }
 .library-icon-button:hover:not(:disabled),
-.library-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.library-ghost:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--surface-hover); color: var(--text-primary); }
 .library-icon-button[aria-pressed="true"],
 .library-icon-button[aria-expanded="true"],
 .library-ghost[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-primary); }
@@ -66,7 +66,9 @@
 .library-button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .library-icon-button:disabled,
 .library-ghost:disabled,
-.library-button:disabled { cursor: default; opacity: .6; }
+.library-button:disabled,
+.library-ghost[aria-disabled="true"],
+.library-button[aria-disabled="true"] { cursor: default; opacity: .6; }
 .library-icon-button .ui-icon,
 .library-ghost .ui-icon,
 .library-button .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); color: inherit; }
@@ -88,14 +90,14 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.library-button:hover:not(:disabled) { background: var(--surface-hover); }
+.library-button:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--surface-hover); }
 .library-button.is-icon { width: 28px; padding: 0; }
 .library-button.is-panel { height: 24px; min-height: 24px; padding: 0 8px; font-size: var(--font-size-2xs); }
 .library-button.is-primary {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
 }
-.library-button.is-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, var(--surface-raised)); }
+.library-button.is-primary:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--accent) 22%, var(--surface-raised)); }
 
 /* Toolbar (design §4.3): one 36 px rule for the Library root; Review and other roots keep viewer.css. */
 .context-viewer.is-library { --viewer-document-inset: 24px; }
@@ -111,7 +113,7 @@
   font-size: var(--font-size-control);
 }
 .context-viewer.is-library .context-toolbar .library-ghost.is-icon { width: 28px; padding: 0; }
-.context-viewer.is-library .context-toolbar .library-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.context-viewer.is-library .context-toolbar .library-ghost:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--surface-hover); color: var(--text-primary); }
 .context-viewer.is-library .context-toolbar .library-ghost[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-primary); }
 .context-viewer.is-library .context-toolbar .library-ghost .ui-icon { width: var(--icon-size); height: var(--icon-size); flex-basis: var(--icon-size); }
 .context-viewer.is-library .context-toolbar .library-ghost[aria-pressed="true"] .ui-icon { color: var(--accent); }
@@ -151,6 +153,17 @@
 .library-tree-group.is-attachments .context-tree-name { color: var(--text-secondary); }
 .library-tree .context-tree-meta { flex: 0 0 auto; }
 .library-tree .context-tree-meta .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); color: inherit; }
+/* A followed query or space: its name keeps the first line (ellipsised only when it truly overflows, the full text is the tooltip) and its state sits on a second line, so a long query is never squeezed to one letter. */
+.library-tree .context-tree-row.library-tree-row.has-follow {
+  display: grid;
+  grid-template-columns: 16px 20px minmax(0, 1fr);
+  column-gap: 4px;
+  height: auto;
+  padding-block: 4px;
+}
+.library-tree-group.has-follow .context-tree-name { grid-column: 3; grid-row: 1; }
+.library-follow-line { grid-column: 3; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
+.library-follow-line .context-tree-meta { max-width: none; }
 /* Page nodes: the chevron is its own 24×28 hit target over the row's chevron slot; the label opens the page. */
 .library-page-node { position: relative; }
 .library-page-disclosure {
@@ -240,22 +253,23 @@
   .library-spinner::before { content: "…"; }
 }
 
-/* Item header (design §4.5): a raised band; tile, state line, actions and attachments share one column at the document inset. */
+/* Item header (design §4.5): a raised band at the document inset. The title row holds the tile, the eyebrow and title, and the actions at its right edge; the facts and the state line sit under the title, at its left edge. */
 .library-item-header {
   position: relative;
   flex: 0 0 auto;
-  padding: 20px var(--viewer-document-inset) 12px;
+  padding: 16px var(--viewer-document-inset) 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-secondary);
-  font-size: var(--font-size-2xs);
+  font-size: var(--font-size-control);
 }
-.library-item-column { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
-.library-item-column > :not(.library-item-notice) { max-width: var(--library-column); }
-.library-item-identity { display: flex; min-width: 0; align-items: center; gap: 12px; }
-.library-item-idtext { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 4px; }
+.library-item-column { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.library-item-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 12px; }
+.library-item-idtext { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .library-item-line { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.library-item-eyebrow { min-height: 16px; gap: 6px; font-size: var(--font-size-2xs); }
 .library-kind-chip { flex: 0 0 auto; color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+.library-item-dot { flex: 0 0 auto; color: var(--text-muted); }
 .library-item-path { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
 .library-item-id { color: var(--text-muted); }
 .library-item-title {
@@ -270,14 +284,27 @@
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
-.library-item-state { min-height: 28px; }
+/* The tile is 32 px and the controls 28: the 2 px offset centres them on the tile. */
+.library-item-actions { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.library-item-actions > * { flex: 0 0 auto; }
+/* Facts and state start under the title (tile 32 + gap 12); a narrow header uses the full width. */
+.library-item-meta,
+.library-item-state { margin-left: 44px; }
+.library-item-header.is-narrow .library-item-meta,
+.library-item-header.is-narrow .library-item-state { margin-left: 0; }
+.library-item-meta { min-width: 0; color: var(--text-muted); }
+.library-facts-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-item-state { min-height: 28px; flex-wrap: wrap; row-gap: 2px; }
 .library-item-phrase { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
-.library-item-state > .library-button,
 .library-item-state > .library-pill { flex: 0 0 auto; }
-.library-item-facts { flex-wrap: wrap; row-gap: 2px; }
-.library-item-facts .context-source-chip { color: var(--text-primary); }
+.library-token-cue { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--working); white-space: nowrap; }
+.library-token-cue .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
+.library-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.library-link:hover { text-decoration: underline; }
+.library-link:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 2px; }
+/* The overflow dots are 0-length strokes: a heavier stroke keeps them from reading as disabled. */
+.library-overflow .ui-icon { stroke-width: 3; }
 .library-item-notice { margin: 4px calc(-1 * var(--viewer-document-inset)) 0; padding-inline: var(--viewer-document-inset); border-top: 1px solid var(--border); }
-.library-report button,
 .library-report-rows button,
 .library-attachment-notice button {
   min-height: 26px;
@@ -289,13 +316,12 @@
   font-size: var(--font-size-control);
   cursor: pointer;
 }
-.library-report button:hover:not(:disabled),
 .library-report-rows button:hover:not(:disabled),
 .library-attachment-notice button:hover:not(:disabled) { background: var(--surface-hover); }
 .library-attachment-notice button:disabled { cursor: default; opacity: .6; }
 
 /* Details popover (design §4.6): overlays the body, so opening it moves nothing. */
-.library-details { position: relative; flex: 0 0 auto; align-self: flex-start; margin-top: -4px; }
+.library-details { position: relative; flex: 0 0 auto; }
 .library-details-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--working); }
 .library-details-popover {
   position: absolute;
@@ -339,7 +365,12 @@
 
 /* Refresh report strip (design §4.9). */
 .library-report-block { flex: 0 0 auto; }
-.library-report { flex-wrap: wrap; }
+/* The refresh banner is one quiet line: state and summary at the left, ghost text actions at the right, all 24 px. */
+.library-report { min-height: 32px; flex-wrap: wrap; background: var(--surface); font-size: var(--font-size-control); }
+.library-report > strong { color: var(--text-primary); font-weight: 600; }
+.library-report > button { height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.library-report > button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.library-report > button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
 .library-report-note { color: var(--text-muted); }
 .library-report-error { color: var(--blocked); }
 .library-report-rows {
@@ -431,8 +462,7 @@
 /* Confluence page attachments (design §4.7): metadata until an explicit download.
  * One summary control on its own line; the panel opens on demand, scrolls within
  * a bounded height, and takes the header's column. */
-.library-attachments-line { display: flex; }
-.library-attachments-toggle { display: inline-flex; height: 24px; align-items: center; gap: 4px; padding: 0 8px 0 2px; border: 0; border-radius: var(--radius-control); background: none; color: var(--text-secondary); font: inherit; white-space: nowrap; cursor: pointer; }
+.library-attachments-toggle { display: inline-flex; height: 24px; align-items: center; gap: 4px; padding: 0 6px 0 2px; border: 0; border-radius: var(--radius-control); background: none; color: var(--text-secondary); font: inherit; white-space: nowrap; cursor: pointer; }
 .library-attachments-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
 .library-attachments-toggle:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
 .library-attachments-toggle .ui-icon { width: var(--icon-mark); height: var(--icon-mark); flex-basis: var(--icon-mark); }
